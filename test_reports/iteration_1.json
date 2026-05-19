@@ -1,0 +1,96 @@
+{
+  "summary": "Frontend smoke + E2E testing of inteliads Expo web app via Playwright (mobile viewport 390x844). Verified login screen, guest mode, Overview dashboard (all 10 widgets render with REAL EUR data from Supabase), all 5 bottom tabs, More menu sub-screens (Settings, Accounts, Search Terms, Automation, Account), campaign drill-down, and sign-out. 14 of 16 requested flows pass. Two flows have issues: signup success banner not observed and sign-out does not navigate back to /auth/login.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "AuthContext.signOut + root layout",
+        "issue": "Tapping sign-out-btn on /more/account does NOT route user back to /auth/login. URL remains at /more/account and the login screen does not render. Guest flag is cleared in state but the Stack/Slot does not re-evaluate to redirect. The auth state listener path on Expo web likely needs an explicit router.replace('/auth/login') after signOut, or the root _layout redirect on state=='unauthenticated' is not firing in web build.",
+        "testID": "sign-out-btn",
+        "priority": "HIGH"
+      },
+      {
+        "component": "auth/signup.tsx",
+        "issue": "After filling valid signup fields (gmail.com email, 8-char matching password) and tapping signup-submit-btn, the green 'Account created! Please check your email to confirm' banner was NOT observed within 8s. No error text either. Possibly the Supabase signUp call is slow, blocked by RLS, or fails silently because data.session is returned (auto sign-in path) which produces no info banner. Recommend logging res.error / res.needsConfirmation, surfacing a generic success state when neither flag is set, and confirming Supabase email-confirmation policy.",
+        "testID": "signup-submit-btn",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Amazon Accounts list",
+        "issue": "Only 86 account-row testIDs rendered while the app advertises 132 active profiles (Guest banner + Account screen both show 132/132). Likely a query limit / pagination cap in fetchAmazonProfiles. Recommend confirming the FlatList renders all profiles and not just a windowed slice.",
+        "affected_testIDs": ["account-row-{id}", "account-toggle-{id}"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Overview / Net Profit sparkline",
+        "issues": [
+          "X-axis labels on the Net Profit hero chart truncate to 'A...' for every tick when the date range has many points (see first screenshot vs second). Consider thinning labels or rotating, or hiding labels at narrow widths.",
+          "Funnel section: the labels 'Impressions', 'Clicks', 'Orders' overlap with the funnel bars (text rendered behind the colored bar making them partially unreadable). Move labels outside or adjust z-order/contrast."
+        ]
+      }
+    ],
+    "react_native_issues": [
+      {
+        "component": "Global",
+        "issue": "Console floods with 'Unknown event handler property: onStartShouldSetResponder / onResponderGrant / onResponderMove / onResponderRelease / onResponderTerminate / onResponderTerminationRequest. It will be ignored.' on every screen on the web build. Also 'shadow* style props are deprecated. Use boxShadow' and 'props.pointerEvents is deprecated. Use style.pointerEvents' and 'TouchableMixin is deprecated. Please use Pressable.' These are warnings/errors but do not crash; cleaning up will reduce noise."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/01_initial.png",
+    "/app/test_reports/02_overview.png",
+    "/app/test_reports/02b_overview_bottom.png",
+    "/app/test_reports/03_campaigns.png",
+    "/app/test_reports/04_targeting.png",
+    "/app/test_reports/08_campaign_drill.png",
+    "/app/test_reports/pr.png (Products)",
+    "/app/test_reports/set.png (Settings)",
+    "/app/test_reports/acc.png (Accounts)",
+    "/app/test_reports/st.png (Search Terms)",
+    "/app/test_reports/au.png (Automation)",
+    "/app/test_reports/ac.png (Account)",
+    "/app/test_reports/sig.png (Signup attempt)"
+  ],
+  "action_items": [
+    "Fix sign-out redirect: after signOut() & guestMode=false, explicitly router.replace('/auth/login') OR ensure root _layout's auth-state effect runs in web build to swap to /auth route.",
+    "Investigate signup flow: confirm Supabase signUp returns either error or data.session/needsConfirmation; render a clear info banner in BOTH branches (auto-signed-in + confirmation-required). Current code only surfaces the info banner when !data.session.",
+    "Raise the profile list limit (or paginate) on /more/accounts so all 132 amazon_profiles render, matching the 132/132 counter on the Account screen.",
+    "Polish Overview UI: thin/rotate sparkline x-axis labels (currently 'A...' clipping), and fix Funnel label overlap with bars.",
+    "Clean up React Native web warnings: replace shadow* style props with boxShadow, replace deprecated TouchableMixin Touchables with Pressable to silence the onResponder* warnings on web."
+  ],
+  "critical_code_review_comments": [
+    "AuthContext.signOut clears guestMode in state but the public API does NOT call router.replace, so screens deep in the More stack (e.g. /more/account) keep their route after sign-out unless the root layout has a redirect effect; verify this effect fires under Expo Router web.",
+    "signup.tsx: branch when res.needsConfirmation is false silently does nothing — neither success message nor navigation. Suggest navigating to /auth/login (or showing a 'Signed in' toast) in that branch.",
+    "products.tsx and similar list screens use FlatList — verify performance with 300 limit and that all rows render testIDs; the Products tab returned correct ids only after the FlatList rendered first batch."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "skipped", "frontend": "87% (14/16 flows pass)"},
+  "seed_data_creation": "None. All data live from user's Supabase project (anon key).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use Guest mode (testID guest-mode-btn) for entry — Supabase enforces email confirmation. To navigate to sub-screens, TAP through More menu (menu-{key}) — direct URL navigation like page.goto('/more/settings') resets back to '/'. To select bottom tabs by visible text, use `.last` because 'Products' also appears as a Targeting segment toggle. Real data: 132 profiles, EUR primary, 70% royalty default. App URL: https://ads-clarity-ios.preview.emergentagent.com",
+  "passed_flows": [
+    "Login screen renders brand, Welcome back card, email/password inputs, Sign in button, Sign up link, Continue as guest button.",
+    "Guest mode → lands on Overview with net-profit-card visible.",
+    "Overview dashboard: net-profit-card, kpi-spend (€2.2K +11.8%), kpi-sales (€6.7K +21.9%), kpi-orders (409 +20.6%), kpi-acos (32.8% +12.9%), Budget Pace ring, Funnel (1000K imp / 2.5K clicks / 409 orders), performance-chart-card, top-campaigns-card, top-keywords-card (italy/travel ireland/etc), heatmap-card, sync-health-card — all render with real EUR data.",
+    "Campaigns tab navigation works (URL /campaigns).",
+    "Targeting tab: segment-keywords, segment-products, targeting-search all present; rows show match-type pill (PHRASE/BROAD/EXACT), bid, spend, sales, orders, ACOS.",
+    "Products tab: products-search, product-sort-net/spend/sales/acos, product-row-{ASIN} (e.g. B0FSSV2PRT) all present.",
+    "More tab: menu-ad-groups, menu-negative-targeting, menu-search-terms, menu-automation, menu-accounts, menu-settings, menu-account all present. Guest banner shows '132 active profiles'.",
+    "Campaign drill-down: top-campaign-{id} tap → /campaign/{id} with back-btn, Funnel, ACOS, Ad Groups, Top keywords, Advertised products sections.",
+    "TopBar profile-selector-btn and date-range-btn render on Overview.",
+    "Settings screen: royalty-rate-slider, min-bid-input, max-bid-input, cooldown-input, daily-budget-input, target-acos-input all present.",
+    "Accounts list renders 86 account-row + 86 account-toggle entries (concern: 132 expected).",
+    "Search Terms: 61 search-term-add-{id} + 61 search-term-negate-{id} buttons present.",
+    "Automation: renders 'No rules yet' + 'No executions yet' without crashing.",
+    "Account screen: Guest, 132/132 active profiles, EUR, 70% royalty rate all visible; sign-out-btn present."
+  ],
+  "failed_flows": [
+    "Sign-out does not return to /auth/login (URL stays at /more/account).",
+    "Signup success banner not observed after submitting valid gmail.com email + matching 8-char password (no error shown either)."
+  ],
+  "rca_of_issue": "Sign-out: AuthContext.signOut sets state='unauthenticated' but Expo Router web build appears to not re-mount _layout protected routes. Need explicit router.replace('/auth/login') inside signOut OR redirect effect in root _layout that listens to state changes. Signup: When Supabase auto-signs-in (returns data.session truthy), code falls through to a comment-only else branch — no UI feedback. Either Supabase project DID auto-sign-in (silent success) and the test should have detected URL change to '/', OR the call hit a rate-limit/RLS error not properly surfaced."
+}
