@@ -1,0 +1,250 @@
+{
+  "app_name": "inteliads",
+  "design_philosophy": "Smart Clarity - Headline metric + driver breakdown + immediate action + drilldown",
+  "theme_archetype": "Swiss & High-Contrast (Archetype 4) merged with Jewel & Luxury (Archetype 5) for Native iOS 17/18 premium feel",
+  "environment": "React Native (Expo)",
+  "styling_method": "StyleSheet.create() (No CSS/Tailwind)",
+  "color_palette": {
+    "light": {
+      "background_primary": "#F2F2F7",
+      "background_secondary": "#FFFFFF",
+      "background_tertiary": "#E5E5EA",
+      "text_primary": "#000000",
+      "text_secondary": "#3C3C4399",
+      "text_tertiary": "#3C3C434D",
+      "border": "#3C3C432E",
+      "separator": "#3C3C434D",
+      "tone_good": "#34C759",
+      "tone_warning": "#FF9500",
+      "tone_danger": "#FF3B30",
+      "tone_primary": "#007AFF",
+      "tone_product": "#AF52DE",
+      "tone_inactive": "#8E8E93",
+      "chart_grid": "#E5E5EA",
+      "glass_background": "rgba(255, 255, 255, 0.75)"
+    },
+    "dark": {
+      "background_primary": "#000000",
+      "background_secondary": "#1C1C1E",
+      "background_tertiary": "#2C2C2E",
+      "text_primary": "#FFFFFF",
+      "text_secondary": "#EBEBF599",
+      "text_tertiary": "#EBEBF54D",
+      "border": "#38383A",
+      "separator": "#54545899",
+      "tone_good": "#30D158",
+      "tone_warning": "#FF9F0A",
+      "tone_danger": "#FF453A",
+      "tone_primary": "#0A84FF",
+      "tone_product": "#BF5AF2",
+      "tone_inactive": "#98989D",
+      "chart_grid": "#2C2C2E",
+      "glass_background": "rgba(30, 30, 30, 0.75)"
+    }
+  },
+  "typography_scale": {
+    "fontFamily": "System",
+    "largeTitle": { "fontSize": 34, "fontWeight": "800", "letterSpacing": -0.4, "lineHeight": 41 },
+    "title1": { "fontSize": 28, "fontWeight": "700", "letterSpacing": -0.3, "lineHeight": 34 },
+    "title2": { "fontSize": 22, "fontWeight": "700", "letterSpacing": -0.2, "lineHeight": 28 },
+    "title3": { "fontSize": 20, "fontWeight": "600", "letterSpacing": -0.1, "lineHeight": 25 },
+    "headline": { "fontSize": 17, "fontWeight": "600", "letterSpacing": -0.1, "lineHeight": 22 },
+    "body": { "fontSize": 17, "fontWeight": "400", "letterSpacing": -0.1, "lineHeight": 22 },
+    "callout": { "fontSize": 16, "fontWeight": "500", "letterSpacing": -0.1, "lineHeight": 21 },
+    "subhead": { "fontSize": 15, "fontWeight": "400", "letterSpacing": -0.1, "lineHeight": 20 },
+    "footnote": { "fontSize": 13, "fontWeight": "400", "letterSpacing": 0, "lineHeight": 18 },
+    "caption1": { "fontSize": 12, "fontWeight": "500", "letterSpacing": 0, "lineHeight": 16 },
+    "caption2": { "fontSize": 11, "fontWeight": "600", "letterSpacing": 0.5, "lineHeight": 13, "textTransform": "uppercase" },
+    "metric_massive": { "fontSize": 48, "fontWeight": "800", "letterSpacing": -1, "lineHeight": 56 }
+  },
+  "spacing_scale": {
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 40,
+    "4xl": 48,
+    "screen_margin": 16,
+    "card_padding": 16,
+    "row_padding": 12
+  },
+  "radii": {
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "pill": 9999
+  },
+  "shadows": {
+    "light": {
+      "card": {
+        "shadowColor": "#000000",
+        "shadowOffset": { "width": 0, "height": 2 },
+        "shadowOpacity": 0.05,
+        "shadowRadius": 8,
+        "elevation": 2
+      },
+      "floating_action": {
+        "shadowColor": "#000000",
+        "shadowOffset": { "width": 0, "height": 4 },
+        "shadowOpacity": 0.15,
+        "shadowRadius": 12,
+        "elevation": 5
+      }
+    },
+    "dark": {
+      "card": {
+        "shadowColor": "#000000",
+        "shadowOffset": { "width": 0, "height": 4 },
+        "shadowOpacity": 0.3,
+        "shadowRadius": 10,
+        "elevation": 3
+      },
+      "floating_action": {
+        "shadowColor": "#000000",
+        "shadowOffset": { "width": 0, "height": 6 },
+        "shadowOpacity": 0.4,
+        "shadowRadius": 16,
+        "elevation": 6
+      }
+    }
+  },
+  "components": {
+    "KPI_Tile": {
+      "layout": "Column",
+      "backgroundColor": "background_secondary",
+      "borderRadius": "radii.lg",
+      "padding": "spacing_scale.card_padding",
+      "structure": [
+        "Top Row: Metric Label (caption2, text_secondary) + Icon (Ionicons, 16px, tone_inactive)",
+        "Middle Row: Main Value (title2, text_primary)",
+        "Bottom Row: Pill Badge (Delta % vs yesterday/target) + Subtext (footnote, text_tertiary)"
+      ],
+      "interaction": "Reanimated scale on press (0.97)"
+    },
+    "Pill_Badge": {
+      "layout": "Row",
+      "borderRadius": "radii.pill",
+      "paddingVertical": 4,
+      "paddingHorizontal": 8,
+      "alignItems": "center",
+      "logic": "Background color is 15% opacity of the tone color, text is 100% opacity of the tone color. e.g., tone_good_bg + tone_good_text for optimal readability"
+    },
+    "Sparkline": {
+      "library": "react-native-gifted-charts",
+      "type": "LineChart",
+      "specs": {
+        "hideRules": true,
+        "hideYAxisText": true,
+        "hideAxesAndRules": true,
+        "thickness": 2,
+        "color": "tone_primary",
+        "areaChart": true,
+        "startFillColor": "tone_primary (20% opacity)",
+        "endFillColor": "tone_primary (0% opacity)",
+        "height": 40
+      }
+    },
+    "Budget_Ring": {
+      "library": "react-native-gifted-charts",
+      "type": "PieChart",
+      "specs": {
+        "donut": true,
+        "innerRadius": 60,
+        "innerCircleColor": "transparent",
+        "centerLabelComponent": "Title2 Metric + Caption text",
+        "colors": ["tone_good", "background_tertiary"],
+        "logic": "Color shifts to tone_warning at 80% pace, tone_danger at 100%"
+      }
+    },
+    "Funnel": {
+      "structure": "Vertical stacked blocks with dynamic widths",
+      "levels": ["Impressions", "Clicks", "Orders"],
+      "styling": {
+        "borderRadius": "radii.sm",
+        "backgroundColor": "tone_primary (varying opacity per level: 100%, 60%, 30%)",
+        "gap": "spacing_scale.xs"
+      },
+      "animation": "Reanimated entering transition (FadeInUp + Layout)"
+    },
+    "Heatmap": {
+      "structure": "7x24 Grid (Days x Hours)",
+      "cell": {
+        "borderRadius": 4,
+        "backgroundColor": "tone_primary",
+        "opacity": "Dynamic based on metric value (0.1 to 1.0)",
+        "margin": 2
+      }
+    },
+    "Section_Card": {
+      "layout": "Column",
+      "backgroundColor": "background_secondary",
+      "borderRadius": "radii.lg",
+      "padding": "spacing_scale.lg",
+      "marginBottom": "spacing_scale.lg",
+      "shadow": "shadows.card",
+      "header": "Title3 + Action Button (e.g., 'View All' in tone_primary)"
+    },
+    "Swipe_Row": {
+      "library": "react-native-reanimated",
+      "gestures": "react-native-gesture-handler",
+      "layout": "Row, justifyContent: 'space-between', borderBottomWidth: 1",
+      "hidden_actions": {
+        "left": "Pause/Enable (Gray/Green bg, Ionicons pause/play)",
+        "right": "Edit Bid (Blue bg, Ionicons create)"
+      }
+    },
+    "Bottom_Sheet": {
+      "library": "@gorhom/bottom-sheet (recommended) or custom Reanimated Modal",
+      "background": "BlurView (expo-blur) with absolute fill",
+      "sheetBackground": "background_secondary",
+      "handleIndicator": "background_tertiary, width: 40, height: 4, borderRadius: 2",
+      "borderRadius": "radii.xl"
+    }
+  },
+  "screens": {
+    "Overview_Dashboard": {
+      "container": "ScrollView with RefreshControl (tintColor: tone_primary)",
+      "header": "BlurView sticky top. Contains Top-Bar Dropdown (Profile Selector) and Date Range Pill",
+      "layout": [
+        "1. Grid (flexDirection: 'row', flexWrap: 'wrap'): 4 KPI Tiles (Spend, Sales, ACOS, Orders). ACOS uses tone_good if < Target, tone_danger if > Target.",
+        "2. Section_Card: Net Profit Chart. LineChart (react-native-gifted-charts) with Sparkline styling. Massive metric at top.",
+        "3. Section_Card (Row Layout): Budget Pace Ring on left, Funnel visualization on right.",
+        "4. Section_Card: Top Books by Net. List of rows. Row = Asin/Book Icon + Title + Net Profit text.",
+        "5. Section_Card: Best Hours Heatmap."
+      ]
+    },
+    "Campaigns_List": {
+      "header": "Sticky SearchBar + Horizontal ScrollView of Filter Pills (Active, Paused, SP, SB, SD)",
+      "container": "FlatList",
+      "item": "Swipe_Row -> Left: Campaign Name (callout) + Type Pill (SP/SB/SD). Right: ACOS tone indicator dot + Spend/Sales metrics. Subtitle: Daily Budget."
+    },
+    "Campaign_Detail": {
+      "header": "LargeTitle. Status Pill. Back Button.",
+      "layout": [
+        "1. Horizontal ScrollView: Hero KPI Tiles specific to campaign.",
+        "2. Section_Card: Performance Line Chart (Clicks vs Impressions over time).",
+        "3. Section_Card: Placement Split (Top of Search vs Rest of Search vs Product Pages) - stacked bar chart.",
+        "4. Section_Card: Ad Groups List. High density swipe rows."
+      ]
+    },
+    "Tab_Bar": {
+      "component": "BlurView (expo-blur)",
+      "style": "position: 'absolute', bottom: 0, left: 0, right: 0, borderTopWidth: 1, borderTopColor: 'border'",
+      "icons": "Ionicons. Active: tone_primary (filled). Inactive: text_tertiary (outline).",
+      "tabs": ["Overview (pie-chart)", "Campaigns (megaphone)", "Targeting (bullseye)", "Products (cube)", "More (menu)"]
+    }
+  },
+  "guidelines": {
+    "icons": "Use @expo/vector-icons 'Ionicons' for iOS SF-Symbol vibe. Outline variants for inactive/secondary, filled variants for active/primary.",
+    "animations": "Use react-native-reanimated for shared element transitions. All buttons must have an active opacity/scale effect.",
+    "information_density": "Use 'caption1' and 'footnote' aggressively for secondary metrics to keep rows tight. Rely on font-weight and color for hierarchy, not just size.",
+    "safe_areas": "Use react-native-safe-area-context heavily to prevent overlaps with notches, dynamic islands, and bottom home indicators.",
+    "borders": "Instead of heavy shadows in dark mode, use 1px borders (border color) to separate cards and rows. It provides a sharper, premium OLED look."
+  },
+  "testing_requirements": {
+    "data-testid": "All interactive and key informational elements MUST include a 'data-testid' attribute (e.g., 'overview-tab-button', 'campaign-row-123', 'acos-kpi-tile'). Kebab-case, role-based."
+  }
+}
