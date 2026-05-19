@@ -82,3 +82,6 @@ memory/test_credentials.md
 android-sdk/.env
 *.env
 .env
+
+.env
+.env.*
