@@ -1,6 +1,7 @@
 import React from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { SubScreen } from "@/src/components/SubScreen";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useApp } from "@/src/contexts/AppContext";
@@ -9,19 +10,26 @@ import { SectionCard, Pill } from "@/src/components/Primitives";
 
 export default function AccountScreen() {
   const t = useTheme();
-  const { user, signOut } = useAuth();
+  const router = useRouter();
+  const { user, signOut, guestMode } = useAuth();
   const { profiles, selectedProfileIds, primaryCurrency, royaltyRate } = useApp();
 
+  const doSignOut = async () => {
+    await signOut();
+    router.replace("/auth/login");
+  };
+
   const onSignOut = () => {
+    if (Platform.OS === "web") {
+      // window.confirm works synchronously on web; Alert.alert with buttons isn't reliable.
+      // eslint-disable-next-line no-alert
+      const ok = typeof window !== "undefined" && window.confirm("Sign out of inteliads?");
+      if (ok) void doSignOut();
+      return;
+    }
     Alert.alert("Sign out", "Are you sure you want to sign out?", [
       { text: "Cancel", style: "cancel" },
-      {
-        text: "Sign out",
-        style: "destructive",
-        onPress: async () => {
-          await signOut();
-        },
-      },
+      { text: "Sign out", style: "destructive", onPress: () => void doSignOut() },
     ]);
   };
 

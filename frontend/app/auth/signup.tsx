@@ -51,7 +51,7 @@ export default function SignupScreen() {
     } else if (res.needsConfirmation) {
       setInfo("Account created! Please check your email to confirm, then sign in.");
     } else {
-      // Auto-signed in via session
+      setInfo("Account created. Signing you in…");
     }
   }
 
