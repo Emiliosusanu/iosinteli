@@ -10,6 +10,21 @@ const STORAGE_KEYS = {
   selectedProfiles: "inteliads.selectedProfiles",
   dateRange: "inteliads.dateRange",
   royaltyRate: "inteliads.royaltyRate",
+  notifications: "inteliads.notifications",
+};
+
+export interface NotificationPrefs {
+  newOrder: boolean;
+  bookAttention: boolean;
+  campaignSpend: boolean;
+  spendThreshold: number; // % above daily budget that triggers alert
+}
+
+const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
+  newOrder: true,
+  bookAttention: true,
+  campaignSpend: true,
+  spendThreshold: 25,
 };
 
 interface AppContextType {
@@ -25,6 +40,8 @@ interface AppContextType {
   setDateRange: (range: DateRange) => void;
   royaltyRate: number;
   setRoyaltyRate: (rate: number) => void;
+  notifications: NotificationPrefs;
+  setNotifications: (n: NotificationPrefs) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -34,15 +51,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [selectedProfileIds, setSelectedProfileIdsState] = useState<string[]>([]);
   const [dateRange, setDateRangeState] = useState<DateRange>(rangePresets().last30);
   const [royaltyRate, setRoyaltyRateState] = useState<number>(70);
+  const [notifications, setNotificationsState] = useState<NotificationPrefs>(DEFAULT_NOTIFICATIONS);
   const [hydrated, setHydrated] = useState(false);
 
   // Hydrate persisted values
   useEffect(() => {
     (async () => {
-      const [ids, dr, rr] = await Promise.all([
+      const [ids, dr, rr, nf] = await Promise.all([
         storage.getItem(STORAGE_KEYS.selectedProfiles, ""),
         storage.getItem(STORAGE_KEYS.dateRange, ""),
         storage.getItem(STORAGE_KEYS.royaltyRate, 70),
+        storage.getItem(STORAGE_KEYS.notifications, ""),
       ]);
       if (ids && typeof ids === "string") {
         try {
@@ -57,13 +76,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         } catch {}
       }
       if (typeof rr === "number") setRoyaltyRateState(rr);
+      if (nf && typeof nf === "string") {
+        try {
+          const parsed = JSON.parse(nf);
+          if (parsed && typeof parsed === "object") {
+            setNotificationsState({ ...DEFAULT_NOTIFICATIONS, ...parsed });
+          }
+        } catch {}
+      }
       setHydrated(true);
     })();
   }, []);
 
   const { data: profiles = [], isLoading: profilesLoading } = useQuery({
     queryKey: ["amazon-profiles", user?.id ?? "guest"],
-    queryFn: fetchAmazonProfiles,
+    queryFn: () => fetchAmazonProfiles(user?.id),
     enabled: authState === "authenticated",
     staleTime: 60_000,
   });
@@ -108,6 +135,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     void storage.setItem(STORAGE_KEYS.royaltyRate, rate);
   }, []);
 
+  const setNotifications = useCallback((n: NotificationPrefs) => {
+    setNotificationsState(n);
+    void storage.setItem(STORAGE_KEYS.notifications, JSON.stringify(n));
+  }, []);
+
   const selectedProfiles = useMemo(
     () => profiles.filter((p) => selectedProfileIds.includes(p.id)),
     [profiles, selectedProfileIds],
@@ -146,6 +178,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setDateRange,
         royaltyRate,
         setRoyaltyRate,
+        notifications,
+        setNotifications,
       }}
     >
       {children}

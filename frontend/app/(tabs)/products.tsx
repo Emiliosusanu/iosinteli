@@ -13,66 +13,37 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
-import { fetchProductAds } from "@/src/lib/queries";
+import { fetchTopBooksRange } from "@/src/lib/queries";
 import { useApp } from "@/src/contexts/AppContext";
 import { useTheme, acosTone, toneColor } from "@/src/lib/theme";
-import { formatCurrency, formatPercent, formatInt, safeDivide } from "@/src/lib/format";
+import { formatCurrency, formatPercent, formatInt } from "@/src/lib/format";
 import { TopBar } from "@/src/components/TopBar";
-import { Pill, EmptyState } from "@/src/components/Primitives";
+import { EmptyState } from "@/src/components/Primitives";
 
 type Sort = "net" | "spend" | "sales" | "acos";
 
 export default function ProductsScreen() {
   const t = useTheme();
-  const { selectedProfileIds, primaryCurrency, royaltyRate } = useApp();
+  const { selectedProfileIds, primaryCurrency, royaltyRate, dateRange } = useApp();
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<Sort>("net");
   const [refreshing, setRefreshing] = useState(false);
 
-  const { data: ads = [], isLoading, refetch } = useQuery({
-    queryKey: ["products-list", selectedProfileIds],
-    queryFn: () => fetchProductAds(selectedProfileIds, { limit: 300 }),
+  const { data: books = [], isLoading, refetch } = useQuery({
+    queryKey: ["products-range", selectedProfileIds, dateRange.start, dateRange.end, royaltyRate],
+    queryFn: () =>
+      fetchTopBooksRange({
+        profileIds: selectedProfileIds,
+        start: dateRange.start,
+        end: dateRange.end,
+        royaltyRate,
+        limit: 300,
+      }),
     enabled: selectedProfileIds.length > 0,
   });
 
-  // Group product ads by ASIN, summing metrics
-  const grouped = useMemo(() => {
-    const map = new Map<string, any>();
-    for (const ad of ads) {
-      const key = ad.asin || ad.sku || ad.id;
-      const existing = map.get(key) ?? {
-        asin: ad.asin,
-        sku: ad.sku,
-        title: ad.title,
-        image_url: ad.image_url,
-        total_spend: 0,
-        total_sales: 0,
-        total_orders: 0,
-        total_impressions: 0,
-        total_clicks: 0,
-        ad_count: 0,
-        status_enabled: 0,
-      };
-      existing.total_spend += Number(ad.total_spend) || 0;
-      existing.total_sales += Number(ad.total_sales) || 0;
-      existing.total_orders += Number(ad.total_orders) || 0;
-      existing.total_impressions += Number(ad.total_impressions) || 0;
-      existing.total_clicks += Number(ad.total_clicks) || 0;
-      existing.ad_count += 1;
-      if (ad.status === "enabled") existing.status_enabled += 1;
-      if (!existing.title && ad.title) existing.title = ad.title;
-      if (!existing.image_url && ad.image_url) existing.image_url = ad.image_url;
-      map.set(key, existing);
-    }
-    return Array.from(map.values()).map((p) => ({
-      ...p,
-      acos: safeDivide(p.total_spend, p.total_sales) * 100,
-      net: p.total_sales * (royaltyRate / 100) - p.total_spend,
-    }));
-  }, [ads, royaltyRate]);
-
   const filtered = useMemo(() => {
-    let arr = grouped;
+    let arr = books;
     if (search) {
       arr = arr.filter(
         (p) =>
@@ -81,12 +52,12 @@ export default function ProductsScreen() {
           (p.title || "").toLowerCase().includes(search.toLowerCase()),
       );
     }
-    return arr.sort((a, b) => {
+    return [...arr].sort((a, b) => {
       switch (sort) {
         case "spend":
-          return b.total_spend - a.total_spend;
+          return b.spend - a.spend;
         case "sales":
-          return b.total_sales - a.total_sales;
+          return b.sales - a.sales;
         case "acos":
           return (a.acos || Infinity) - (b.acos || Infinity);
         case "net":
@@ -94,7 +65,7 @@ export default function ProductsScreen() {
           return b.net - a.net;
       }
     });
-  }, [grouped, search, sort]);
+  }, [books, search, sort]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -166,87 +137,91 @@ export default function ProductsScreen() {
       ) : (
         <FlatList
           data={filtered}
-          keyExtractor={(item) => item.asin || item.sku}
+          keyExtractor={(item) => item.asin || item.sku || "x"}
           contentContainerStyle={{ padding: 16, paddingBottom: 120 }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />
           }
           ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-          ListEmptyComponent={<EmptyState icon="cube-outline" title="No products" />}
-          renderItem={({ item }) => (
-            <View
-              testID={`product-row-${item.asin || item.sku}`}
-              style={[styles.card, { backgroundColor: t.colors.background_secondary, ...t.shadow.card }]}
-            >
-              <View style={{ flexDirection: "row", gap: 12 }}>
-                <View
-                  style={{
-                    width: 56,
-                    height: 56,
-                    borderRadius: 10,
-                    backgroundColor: t.colors.background_tertiary,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    overflow: "hidden",
-                  }}
-                >
-                  {item.image_url ? (
-                    <Image
-                      source={{ uri: item.image_url }}
-                      style={{ width: 56, height: 56 }}
-                      resizeMode="cover"
-                    />
-                  ) : (
-                    <Ionicons name="book-outline" size={24} color={t.colors.text_tertiary} />
-                  )}
-                </View>
-
-                <View style={{ flex: 1 }}>
-                  <Text
-                    style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "700" }]}
-                    numberOfLines={2}
+          ListEmptyComponent={
+            <EmptyState
+              icon="cube-outline"
+              title="No book performance in range"
+              subtitle="Try a longer date range or different profile filter."
+            />
+          }
+          renderItem={({ item }) => {
+            const tone = acosTone(item.acos, item.breakeven_acos);
+            return (
+              <View
+                testID={`product-row-${item.asin || item.sku}`}
+                style={[styles.card, { backgroundColor: t.colors.background_secondary, ...t.shadow.card }]}
+              >
+                <View style={{ flexDirection: "row", gap: 12 }}>
+                  <View
+                    style={{
+                      width: 56,
+                      height: 72,
+                      borderRadius: 8,
+                      backgroundColor: t.colors.background_tertiary,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      overflow: "hidden",
+                    }}
                   >
-                    {item.title || item.asin || item.sku}
-                  </Text>
-                  <View style={{ flexDirection: "row", gap: 8, marginTop: 4, alignItems: "center" }}>
-                    {item.asin && (
-                      <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>
-                        {item.asin}
-                      </Text>
+                    {item.image_url ? (
+                      <Image
+                        source={{ uri: item.image_url }}
+                        style={{ width: 56, height: 72 }}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <Ionicons name="book-outline" size={24} color={t.colors.text_tertiary} />
                     )}
-                    <Pill
-                      label={`${item.ad_count} ad${item.ad_count > 1 ? "s" : ""}`}
-                      tone={item.status_enabled > 0 ? "good" : "inactive"}
-                    />
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "700" }]}
+                      numberOfLines={2}
+                    >
+                      {item.title || item.asin || item.sku}
+                    </Text>
+                    <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
+                      No. {item.asin || item.sku || "—"}
+                    </Text>
+                    <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}>
+                      Break-even ACOS {item.breakeven_acos.toFixed(0)}%
+                    </Text>
+                  </View>
+
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text
+                      style={[
+                        t.typography.headline,
+                        { color: item.net >= 0 ? t.colors.tone_good : t.colors.tone_danger },
+                      ]}
+                    >
+                      {formatCurrency(item.net, primaryCurrency, { compact: true })}
+                    </Text>
+                    <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>NET</Text>
                   </View>
                 </View>
 
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text
-                    style={[
-                      t.typography.headline,
-                      { color: item.net >= 0 ? t.colors.tone_good : t.colors.tone_danger },
-                    ]}
-                  >
-                    {formatCurrency(item.net, primaryCurrency, { compact: true })}
-                  </Text>
-                  <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>NET</Text>
+                <View style={[styles.metricsRow, { borderTopColor: t.colors.separator, marginTop: 12, paddingTop: 12 }]}>
+                  <Metric label="Spend" value={formatCurrency(item.spend, primaryCurrency, { compact: true })} t={t} />
+                  <Metric label="Sales" value={formatCurrency(item.sales, primaryCurrency, { compact: true })} t={t} />
+                  <Metric label="Orders" value={formatInt(item.orders)} t={t} />
+                  <Metric
+                    label="ACOS"
+                    value={item.sales > 0 ? formatPercent(item.acos) : "—"}
+                    color={toneColor(tone, t.colors)}
+                    t={t}
+                  />
                 </View>
               </View>
-
-              <View style={[styles.metricsRow, { borderTopColor: t.colors.separator, marginTop: 12, paddingTop: 12 }]}>
-                <Metric label="Spend" value={formatCurrency(item.total_spend, primaryCurrency, { compact: true })} t={t} />
-                <Metric label="Sales" value={formatCurrency(item.total_sales, primaryCurrency, { compact: true })} t={t} />
-                <Metric label="Orders" value={formatInt(item.total_orders)} t={t} />
-                <Metric
-                  label="ACOS"
-                  value={item.total_sales > 0 ? formatPercent(item.acos) : "—"}
-                  color={toneColor(acosTone(item.acos), t.colors)}
-                  t={t}
-                />
-              </View>
-            </View>
-          )}
+            );
+          }}
         />
       )}
     </SafeAreaView>

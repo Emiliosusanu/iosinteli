@@ -6,53 +6,54 @@ import {
   ScrollView,
   RefreshControl,
   Dimensions,
-  ActivityIndicator,
+  Image,
   TouchableOpacity,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import {
-  fetchCampaigns,
-  fetchKeywords,
   fetchCampaignMetricsRange,
-  aggregateTotals,
-  toKpiSnapshot,
   aggregateDailyMetrics,
-  fetchProductAds,
   fetchProfileSyncLogs,
+  fetchTopCampaignsRange,
+  fetchTopKeywordsRange,
+  fetchTopBooksRange,
 } from "@/src/lib/queries";
 import { useApp } from "@/src/contexts/AppContext";
+import { useAuth } from "@/src/contexts/AuthContext";
 import { useTheme, acosTone, toneColor } from "@/src/lib/theme";
 import {
   formatCurrency,
-  formatCompact,
   formatPercent,
   formatInt,
+  formatCompact,
   previousRange,
   safeDivide,
   formatDateShort,
 } from "@/src/lib/format";
 import { TopBar } from "@/src/components/TopBar";
 import { KpiTile, SectionCard, EmptyState, Pill, Skeleton, ToneDot } from "@/src/components/Primitives";
-import { NetProfitChart, Funnel, BudgetRing, Heatmap, PerformanceChart, Sparkline } from "@/src/components/Charts";
+import {
+  NetProfitChart,
+  Funnel,
+  BudgetRing,
+  Heatmap,
+  KdpIncomeChart,
+  MiniChart,
+} from "@/src/components/Charts";
 
 const screenWidth = Dimensions.get("window").width;
 
 export default function OverviewScreen() {
   const t = useTheme();
   const router = useRouter();
-  const queryClient = useQueryClient();
-  const { selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, royaltyRate } = useApp();
+  const { guestMode } = useAuth();
+  const { selectedProfileIds, primaryCurrency, dateRange, royaltyRate } = useApp();
   const [refreshing, setRefreshing] = useState(false);
 
-  const campaignsQ = useQuery({
-    queryKey: ["campaigns-overview", selectedProfileIds],
-    queryFn: () => fetchCampaigns(selectedProfileIds, { limit: 200 }),
-    enabled: selectedProfileIds.length > 0,
-  });
-
+  // Date-filtered raw daily metrics (powering main charts + KPI tiles)
   const metricsQ = useQuery({
     queryKey: ["campaign-metrics", selectedProfileIds, dateRange.start, dateRange.end],
     queryFn: () => fetchCampaignMetricsRange(selectedProfileIds, dateRange.start, dateRange.end),
@@ -68,15 +69,42 @@ export default function OverviewScreen() {
     enabled: selectedProfileIds.length > 0,
   });
 
-  const topKeywordsQ = useQuery({
-    queryKey: ["top-keywords", selectedProfileIds],
-    queryFn: () => fetchKeywords(selectedProfileIds, { limit: 5 }),
+  // Date-filtered top performers (replace the old lifetime totals)
+  const topCampaignsQ = useQuery({
+    queryKey: ["top-campaigns-range", selectedProfileIds, dateRange.start, dateRange.end, royaltyRate],
+    queryFn: () =>
+      fetchTopCampaignsRange({
+        profileIds: selectedProfileIds,
+        start: dateRange.start,
+        end: dateRange.end,
+        royaltyRate,
+        limit: 5,
+      }),
     enabled: selectedProfileIds.length > 0,
   });
 
-  const topProductsQ = useQuery({
-    queryKey: ["top-products", selectedProfileIds],
-    queryFn: () => fetchProductAds(selectedProfileIds, { limit: 5 }),
+  const topKeywordsQ = useQuery({
+    queryKey: ["top-keywords-range", selectedProfileIds, dateRange.start, dateRange.end],
+    queryFn: () =>
+      fetchTopKeywordsRange({
+        profileIds: selectedProfileIds,
+        start: dateRange.start,
+        end: dateRange.end,
+        limit: 5,
+      }),
+    enabled: selectedProfileIds.length > 0,
+  });
+
+  const topBooksQ = useQuery({
+    queryKey: ["top-books-range", selectedProfileIds, dateRange.start, dateRange.end, royaltyRate],
+    queryFn: () =>
+      fetchTopBooksRange({
+        profileIds: selectedProfileIds,
+        start: dateRange.start,
+        end: dateRange.end,
+        royaltyRate,
+        limit: 5,
+      }),
     enabled: selectedProfileIds.length > 0,
   });
 
@@ -86,12 +114,11 @@ export default function OverviewScreen() {
     enabled: selectedProfileIds.length > 0,
   });
 
-  const loading = campaignsQ.isLoading || metricsQ.isLoading;
-  const campaigns = campaignsQ.data ?? [];
+  const loading = metricsQ.isLoading;
   const dailyMetrics = aggregateDailyMetrics(metricsQ.data ?? []);
   const prevDailyMetrics = aggregateDailyMetrics(prevMetricsQ.data ?? []);
 
-  // Aggregate KPIs from date-range metrics (preferred over total_*)
+  // Aggregate KPIs from date-range metrics
   const totalsFromMetrics = useMemo(() => {
     const t = dailyMetrics.reduce(
       (acc, m) => ({
@@ -106,7 +133,14 @@ export default function OverviewScreen() {
     const acos = safeDivide(t.spend, t.sales) * 100;
     const roas = safeDivide(t.sales, t.spend);
     const ctr = safeDivide(t.clicks, t.impressions) * 100;
-    return { ...t, acos, roas, ctr, net: t.sales * (royaltyRate / 100) - t.spend };
+    return {
+      ...t,
+      acos,
+      roas,
+      ctr,
+      kdpIncome: t.sales * (royaltyRate / 100),
+      net: t.sales * (royaltyRate / 100) - t.spend,
+    };
   }, [dailyMetrics, royaltyRate]);
 
   const prevTotals = useMemo(() => {
@@ -142,47 +176,45 @@ export default function OverviewScreen() {
     [dailyMetrics, royaltyRate],
   );
 
-  // Performance multi-chart data
-  const perfData = useMemo(() => {
-    const sliced = dailyMetrics.slice(-14);
+  // KDP Income vs Ad Spend chart data
+  const kdpData = useMemo(() => {
+    const sliced = dailyMetrics.slice(-Math.min(dailyMetrics.length, 30));
     return {
       spend: sliced.map((m) => ({ value: m.spend, label: formatDateShort(m.date) })),
-      sales: sliced.map((m) => ({ value: m.sales })),
+      income: sliced.map((m) => ({ value: m.sales * (royaltyRate / 100) })),
+    };
+  }, [dailyMetrics, royaltyRate]);
+
+  // Multi-metric mini charts data
+  const miniSeries = useMemo(() => {
+    const sliced = dailyMetrics.slice(-Math.min(dailyMetrics.length, 14));
+    return {
+      impressions: sliced.map((m) => ({ value: m.impressions })),
+      spend: sliced.map((m) => ({ value: m.spend })),
+      orders: sliced.map((m) => ({ value: m.orders })),
+      acos: sliced.map((m) => ({ value: safeDivide(m.spend, m.sales) * 100 })),
     };
   }, [dailyMetrics]);
 
-  // Budget pace
+  // Budget pace (uses lifetime totals from campaigns; OK because it's a "today" snapshot)
   const totalDailyBudget = useMemo(() => {
-    return campaigns.reduce((sum, c) => sum + (c.budget && c.state === "enabled" ? Number(c.budget) : 0), 0);
-  }, [campaigns]);
+    return (topCampaignsQ.data ?? []).reduce(
+      (sum, c) => sum + (c.budget && c.state === "enabled" ? Number(c.budget) : 0),
+      0,
+    );
+  }, [topCampaignsQ.data]);
   const todaySpend = useMemo(() => {
     const last = dailyMetrics[dailyMetrics.length - 1];
     return last ? last.spend : 0;
   }, [dailyMetrics]);
 
-  // Top performers
-  const topByNet = useMemo(() => {
-    return [...campaigns]
-      .map((c) => ({ ...c, net: c.total_sales * (royaltyRate / 100) - c.total_spend }))
-      .sort((a, b) => b.net - a.net)
-      .slice(0, 5);
-  }, [campaigns, royaltyRate]);
-
-  const topKwByRoas = useMemo(() => {
-    return [...(topKeywordsQ.data ?? [])]
-      .filter((k) => k.total_spend > 0)
-      .sort((a, b) => Number(b.total_roas) - Number(a.total_roas))
-      .slice(0, 5);
-  }, [topKeywordsQ.data]);
-
-  // Best hours heatmap - faux from daily data, since real hour data not in schema we expose
+  // Best hours heatmap (derived from daily orders distributed by typical hour curve)
   const heatmapData = useMemo(() => {
     const grid: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0));
     let maxValue = 0;
     for (const m of dailyMetrics) {
       const d = new Date(m.date);
       const day = d.getDay();
-      // distribute orders across business hours weighted
       const weights = [
         0.5, 0.3, 0.2, 0.2, 0.3, 0.5, 0.8, 1.2, 1.6, 1.8, 1.9, 2.0, 2.1, 2.0, 1.9, 1.8, 1.7, 1.6, 1.5, 1.4, 1.3, 1.1,
         0.9, 0.7,
@@ -202,11 +234,11 @@ export default function OverviewScreen() {
   const onRefresh = async () => {
     setRefreshing(true);
     await Promise.all([
-      campaignsQ.refetch(),
       metricsQ.refetch(),
       prevMetricsQ.refetch(),
+      topCampaignsQ.refetch(),
       topKeywordsQ.refetch(),
-      topProductsQ.refetch(),
+      topBooksQ.refetch(),
       syncLogsQ.refetch(),
     ]);
     setRefreshing(false);
@@ -218,8 +250,12 @@ export default function OverviewScreen() {
         <TopBar title="Overview" />
         <EmptyState
           icon="business-outline"
-          title="No profile selected"
-          subtitle="Select an Amazon advertising profile from the top bar to start exploring your data."
+          title={guestMode ? "No demo data" : "No Amazon profiles linked"}
+          subtitle={
+            guestMode
+              ? "Sign in with your Supabase account to load your own profiles."
+              : "Link an Amazon account in your inteliads web dashboard. Profiles must be enabled in 'user_amazon_profiles'."
+          }
         />
       </SafeAreaView>
     );
@@ -228,14 +264,25 @@ export default function OverviewScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.colors.background_primary }} edges={["top"]}>
       <TopBar title="Overview" />
+
+      {guestMode && (
+        <View
+          style={[
+            styles.demoBanner,
+            { backgroundColor: t.colors.tone_warning + "22", borderBottomColor: t.colors.tone_warning + "33" },
+          ]}
+        >
+          <Ionicons name="information-circle" size={14} color={t.colors.tone_warning} />
+          <Text style={[t.typography.caption1, { color: t.colors.text_primary, marginLeft: 6 }]}>
+            Demo mode · Sign in to view your account data only
+          </Text>
+        </View>
+      )}
+
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={t.colors.tone_primary}
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />
         }
         showsVerticalScrollIndicator={false}
       >
@@ -259,10 +306,15 @@ export default function OverviewScreen() {
                 NET PROFIT · {dateRange.label.toUpperCase()}
               </Text>
               <Text style={[t.typography.metric_massive, { color: t.colors.text_primary, marginTop: 4 }]}>
-                {loading ? <Skeleton width={180} height={36} /> : formatCurrency(totalsFromMetrics.net, primaryCurrency, { compact: true })}
+                {loading ? (
+                  <Skeleton width={180} height={36} />
+                ) : (
+                  formatCurrency(totalsFromMetrics.net, primaryCurrency, { compact: true })
+                )}
               </Text>
               <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                Royalties ({royaltyRate}%) - Ad Spend
+                KDP Income {formatCurrency(totalsFromMetrics.kdpIncome, primaryCurrency, { compact: true })} ·
+                Ad Spend {formatCurrency(totalsFromMetrics.spend, primaryCurrency, { compact: true })}
               </Text>
             </View>
           </View>
@@ -279,7 +331,9 @@ export default function OverviewScreen() {
             <KpiTile
               testID="kpi-spend"
               label="Spend"
-              value={loading ? "—" : formatCurrency(totalsFromMetrics.spend, primaryCurrency, { compact: true })}
+              value={
+                loading ? "—" : formatCurrency(totalsFromMetrics.spend, primaryCurrency, { compact: true })
+              }
               delta={deltas.spend}
               deltaTone={deltas.spend > 0 ? "danger" : "good"}
               icon="trending-down-outline"
@@ -290,7 +344,9 @@ export default function OverviewScreen() {
             <KpiTile
               testID="kpi-sales"
               label="Sales"
-              value={loading ? "—" : formatCurrency(totalsFromMetrics.sales, primaryCurrency, { compact: true })}
+              value={
+                loading ? "—" : formatCurrency(totalsFromMetrics.sales, primaryCurrency, { compact: true })
+              }
               delta={deltas.sales}
               deltaTone={deltas.sales > 0 ? "good" : "danger"}
               icon="trending-up-outline"
@@ -316,9 +372,9 @@ export default function OverviewScreen() {
               label="ACOS"
               value={loading ? "—" : formatPercent(totalsFromMetrics.acos)}
               delta={deltas.acos}
-              deltaTone={acosTone(totalsFromMetrics.acos)}
+              deltaTone={acosTone(totalsFromMetrics.acos, royaltyRate)}
               icon="speedometer-outline"
-              iconColor={toneColor(acosTone(totalsFromMetrics.acos), t.colors)}
+              iconColor={toneColor(acosTone(totalsFromMetrics.acos, royaltyRate), t.colors)}
             />
           </View>
         </View>
@@ -350,129 +406,253 @@ export default function OverviewScreen() {
           </View>
         </View>
 
-        {/* Performance Chart */}
+        {/* KDP Income vs Ad Spend chart */}
         {dailyMetrics.length > 0 && (
-          <SectionCard
-            title="Spend vs Sales"
-            testID="performance-chart-card"
-          >
-            <View style={{ paddingTop: 8 }}>
-              <PerformanceChart
-                spendData={perfData.spend}
-                salesData={perfData.sales}
-                width={screenWidth - 32}
-              />
-              <View style={styles.legend}>
-                <View style={styles.legendItem}>
-                  <View style={[styles.dot, { backgroundColor: t.colors.tone_primary }]} />
-                  <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>Spend</Text>
-                </View>
-                <View style={styles.legendItem}>
-                  <View style={[styles.dot, { backgroundColor: t.colors.tone_good }]} />
-                  <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>Sales</Text>
-                </View>
+          <SectionCard title="KDP Income vs Ad Spend" testID="kdp-income-card">
+            <KdpIncomeChart
+              spendData={kdpData.spend}
+              incomeData={kdpData.income}
+              width={screenWidth - 32}
+            />
+            <View style={styles.legend}>
+              <View style={styles.legendItem}>
+                <View style={[styles.dot, { backgroundColor: t.colors.tone_danger }]} />
+                <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>Ad Spend</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.dot, { backgroundColor: t.colors.tone_good }]} />
+                <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>
+                  KDP Income ({royaltyRate}%)
+                </Text>
               </View>
             </View>
           </SectionCard>
         )}
 
-        {/* Top Campaigns by Net */}
+        {/* Multi-metric mini grid: Impressions / Spend / Orders / ACOS */}
+        {dailyMetrics.length > 0 && (
+          <SectionCard title="Performance · 14 days" testID="multi-metric-card">
+            <View style={styles.metricGrid}>
+              <MetricMiniCard
+                label="Impressions"
+                value={formatCompact(totalsFromMetrics.impressions)}
+                color={t.colors.tone_primary}
+                data={miniSeries.impressions}
+                variant="bar"
+                t={t}
+              />
+              <MetricMiniCard
+                label="Ad Spend"
+                value={formatCurrency(totalsFromMetrics.spend, primaryCurrency, { compact: true })}
+                color={t.colors.tone_danger}
+                data={miniSeries.spend}
+                variant="line"
+                t={t}
+              />
+              <MetricMiniCard
+                label="Orders"
+                value={formatInt(totalsFromMetrics.orders)}
+                color={t.colors.tone_product}
+                data={miniSeries.orders}
+                variant="line"
+                t={t}
+              />
+              <MetricMiniCard
+                label="ACOS"
+                value={formatPercent(totalsFromMetrics.acos)}
+                color={toneColor(acosTone(totalsFromMetrics.acos, royaltyRate), t.colors)}
+                data={miniSeries.acos}
+                variant="line"
+                t={t}
+              />
+            </View>
+          </SectionCard>
+        )}
+
+        {/* Top Performer Books */}
         <SectionCard
-          testID="top-campaigns-card"
-          title="Top campaigns by net"
-          action={{ label: "See all", onPress: () => router.push("/(tabs)/campaigns") }}
+          testID="top-books-card"
+          title="Top books"
+          action={{ label: "See all", onPress: () => router.push("/(tabs)/products") }}
         >
-          {topByNet.length === 0 ? (
-            <EmptyState icon="megaphone-outline" title="No campaigns yet" />
+          {(topBooksQ.data ?? []).length === 0 ? (
+            <EmptyState icon="book-outline" title="No book performance in range" />
           ) : (
-            topByNet.map((c, idx) => (
-              <TouchableOpacity
-                key={c.id}
-                testID={`top-campaign-${c.id}`}
-                onPress={() => router.push(`/campaign/${c.id}`)}
-                style={[
-                  styles.row,
-                  {
-                    borderBottomColor: t.colors.separator,
-                    borderBottomWidth: idx === topByNet.length - 1 ? 0 : StyleSheet.hairlineWidth,
-                  },
-                ]}
-                activeOpacity={0.6}
-              >
-                <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: "row", alignItems: "center" }}>
-                    <ToneDot value={Number(c.total_acos)} />
-                    <Text
-                      style={[t.typography.callout, { color: t.colors.text_primary, marginLeft: 8, flex: 1 }]}
-                      numberOfLines={1}
-                    >
-                      {c.name}
-                    </Text>
-                  </View>
-                  <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginLeft: 16, marginTop: 2 }]}>
-                    Spend {formatCurrency(c.total_spend, primaryCurrency, { compact: true })} · Sales{" "}
-                    {formatCurrency(c.total_sales, primaryCurrency, { compact: true })}
-                  </Text>
-                </View>
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text
+            (topBooksQ.data ?? []).map((b, idx) => {
+              const tone = acosTone(b.acos, b.breakeven_acos);
+              const isLast = idx === (topBooksQ.data?.length ?? 0) - 1;
+              return (
+                <View
+                  key={b.asin || b.sku || idx}
+                  testID={`top-book-${b.asin || b.sku || idx}`}
+                  style={[
+                    styles.bookRow,
+                    {
+                      borderBottomColor: t.colors.separator,
+                      borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+                    },
+                  ]}
+                >
+                  <View
                     style={[
-                      t.typography.callout,
-                      {
-                        color: c.net >= 0 ? t.colors.tone_good : t.colors.tone_danger,
-                        fontWeight: "700",
-                      },
+                      styles.bookImage,
+                      { backgroundColor: t.colors.background_tertiary },
                     ]}
                   >
-                    {formatCurrency(c.net, primaryCurrency, { compact: true })}
-                  </Text>
-                  <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>NET</Text>
+                    {b.image_url ? (
+                      <Image source={{ uri: b.image_url }} style={{ width: 44, height: 56 }} resizeMode="cover" />
+                    ) : (
+                      <Ionicons name="book-outline" size={20} color={t.colors.text_tertiary} />
+                    )}
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text
+                      style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "700" }]}
+                      numberOfLines={1}
+                    >
+                      {b.title || b.asin || b.sku}
+                    </Text>
+                    <Text
+                      style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}
+                      numberOfLines={1}
+                    >
+                      No. {b.asin || b.sku || "—"}
+                    </Text>
+                    <View style={styles.bookKpiRow}>
+                      <BookKpi label="NET" value={formatCurrency(b.net, primaryCurrency, { compact: true })} color={b.net >= 0 ? t.colors.tone_good : t.colors.tone_danger} t={t} />
+                      <BookKpi label="SPEND" value={formatCurrency(b.spend, primaryCurrency, { compact: true })} t={t} />
+                      <BookKpi label="ORD" value={formatInt(b.orders)} t={t} />
+                      <BookKpi
+                        label="ACOS"
+                        value={b.sales > 0 ? formatPercent(b.acos) : "—"}
+                        color={toneColor(tone, t.colors)}
+                        t={t}
+                      />
+                      <BookKpi
+                        label="BE"
+                        value={`${b.breakeven_acos.toFixed(0)}%`}
+                        color={t.colors.text_secondary}
+                        t={t}
+                      />
+                    </View>
+                  </View>
                 </View>
-              </TouchableOpacity>
-            ))
+              );
+            })
           )}
         </SectionCard>
 
-        {/* Top Keywords by ROAS */}
+        {/* Top Campaigns by Net (date-filtered) */}
+        <SectionCard
+          testID="top-campaigns-card"
+          title="Top campaigns"
+          action={{ label: "See all", onPress: () => router.push("/(tabs)/campaigns") }}
+        >
+          {(topCampaignsQ.data ?? []).length === 0 ? (
+            <EmptyState icon="megaphone-outline" title="No campaign data in range" />
+          ) : (
+            (topCampaignsQ.data ?? []).map((c, idx) => {
+              const isLast = idx === (topCampaignsQ.data?.length ?? 0) - 1;
+              return (
+                <TouchableOpacity
+                  key={c.id}
+                  testID={`top-campaign-${c.id}`}
+                  onPress={() => router.push(`/campaign/${c.id}`)}
+                  style={[
+                    styles.row,
+                    {
+                      borderBottomColor: t.colors.separator,
+                      borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+                    },
+                  ]}
+                  activeOpacity={0.6}
+                >
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                      <ToneDot value={c.acos} target={royaltyRate} />
+                      <Text
+                        style={[t.typography.callout, { color: t.colors.text_primary, marginLeft: 8, flex: 1 }]}
+                        numberOfLines={1}
+                      >
+                        {c.name}
+                      </Text>
+                    </View>
+                    <Text
+                      style={[t.typography.caption1, { color: t.colors.text_secondary, marginLeft: 16, marginTop: 2 }]}
+                    >
+                      Spend {formatCurrency(c.spend, primaryCurrency, { compact: true })} · Sales{" "}
+                      {formatCurrency(c.sales, primaryCurrency, { compact: true })} · ACOS{" "}
+                      {c.sales > 0 ? formatPercent(c.acos) : "—"} · BE {royaltyRate}%
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text
+                      style={[
+                        t.typography.callout,
+                        {
+                          color: c.net >= 0 ? t.colors.tone_good : t.colors.tone_danger,
+                          fontWeight: "700",
+                        },
+                      ]}
+                    >
+                      {formatCurrency(c.net, primaryCurrency, { compact: true })}
+                    </Text>
+                    <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>NET</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          )}
+        </SectionCard>
+
+        {/* Top Keywords by ROAS (date-filtered) */}
         <SectionCard
           testID="top-keywords-card"
           title="Top keywords by ROAS"
           action={{ label: "See all", onPress: () => router.push("/(tabs)/targeting") }}
         >
-          {topKwByRoas.length === 0 ? (
-            <EmptyState icon="search-outline" title="No keyword data" />
+          {(topKeywordsQ.data ?? []).length === 0 ? (
+            <EmptyState icon="search-outline" title="No keyword data in range" />
           ) : (
-            topKwByRoas.map((kw, idx) => (
-              <View
-                key={kw.id}
-                style={[
-                  styles.row,
-                  {
-                    borderBottomColor: t.colors.separator,
-                    borderBottomWidth: idx === topKwByRoas.length - 1 ? 0 : StyleSheet.hairlineWidth,
-                  },
-                ]}
-              >
-                <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    <Text style={[t.typography.callout, { color: t.colors.text_primary, flex: 1 }]} numberOfLines={1}>
-                      {kw.keyword_text}
+            (topKeywordsQ.data ?? []).map((kw, idx) => {
+              const isLast = idx === (topKeywordsQ.data?.length ?? 0) - 1;
+              return (
+                <View
+                  key={kw.id}
+                  style={[
+                    styles.row,
+                    {
+                      borderBottomColor: t.colors.separator,
+                      borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+                    },
+                  ]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <Text
+                        style={[t.typography.callout, { color: t.colors.text_primary, flex: 1 }]}
+                        numberOfLines={1}
+                      >
+                        {kw.text}
+                      </Text>
+                      {kw.match_type && <Pill label={kw.match_type} tone="primary" />}
+                    </View>
+                    <Text
+                      style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}
+                    >
+                      Spend {formatCurrency(kw.spend, primaryCurrency, { compact: true })} · ACOS{" "}
+                      {kw.sales > 0 ? formatPercent(kw.acos) : "—"}
                     </Text>
-                    {kw.match_type && <Pill label={kw.match_type} tone="primary" />}
                   </View>
-                  <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                    Spend {formatCurrency(kw.total_spend, primaryCurrency, { compact: true })} · ACOS{" "}
-                    {formatPercent(Number(kw.total_acos))}
-                  </Text>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text style={[t.typography.headline, { color: t.colors.tone_good }]}>
+                      {kw.roas.toFixed(1)}x
+                    </Text>
+                    <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>ROAS</Text>
+                  </View>
                 </View>
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text style={[t.typography.headline, { color: t.colors.tone_good }]}>
-                    {Number(kw.total_roas).toFixed(1)}x
-                  </Text>
-                  <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>ROAS</Text>
-                </View>
-              </View>
-            ))
+              );
+            })
           )}
         </SectionCard>
 
@@ -526,7 +706,8 @@ export default function OverviewScreen() {
                 />
               </View>
               <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 6 }]}>
-                {lastSync.campaigns_synced} campaigns · {lastSync.keywords_synced} keywords · {lastSync.product_ads_synced} products
+                {lastSync.campaigns_synced} campaigns · {lastSync.keywords_synced} keywords ·{" "}
+                {lastSync.product_ads_synced} products
               </Text>
               <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}>
                 Last sync: {new Date(lastSync.started_at).toLocaleString()}
@@ -543,18 +724,91 @@ export default function OverviewScreen() {
   );
 }
 
+function MetricMiniCard({
+  label,
+  value,
+  color,
+  data,
+  variant,
+  t,
+}: {
+  label: string;
+  value: string;
+  color: string;
+  data: { value: number }[];
+  variant: "bar" | "line";
+  t: any;
+}) {
+  const cardWidth = (screenWidth - 32 - 24 - 12) / 2; // card padding + outer gutter
+  return (
+    <View
+      style={[
+        styles.miniCard,
+        { backgroundColor: t.colors.background_tertiary, width: cardWidth, padding: t.spacing.sm },
+      ]}
+    >
+      <Text style={[t.typography.caption2, { color: t.colors.text_secondary }]}>{label.toUpperCase()}</Text>
+      <Text style={[t.typography.title3, { color: color, marginTop: 4 }]} numberOfLines={1}>
+        {value}
+      </Text>
+      <View style={{ marginTop: 4, marginHorizontal: -t.spacing.sm }}>
+        <MiniChart data={data} variant={variant} color={color} width={cardWidth - 4} height={48} />
+      </View>
+    </View>
+  );
+}
+
+function BookKpi({ label, value, color, t }: { label: string; value: string; color?: string; t: any }) {
+  return (
+    <View style={{ flex: 1 }}>
+      <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, fontSize: 9 }]}>{label}</Text>
+      <Text
+        style={[
+          { fontSize: 12, fontWeight: "600", marginTop: 1, color: color || t.colors.text_primary },
+        ]}
+        numberOfLines={1}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   scroll: { padding: 16, paddingBottom: 100 },
+  demoBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   netCard: {},
   netHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   kpiGrid: { flexDirection: "row", gap: 12 },
   kpiCol: { flex: 1 },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-  },
+  row: { flexDirection: "row", alignItems: "center", paddingVertical: 10 },
   legend: { flexDirection: "row", gap: 16, justifyContent: "center", marginTop: 8 },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 4 },
   dot: { width: 8, height: 8, borderRadius: 4 },
+  metricGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  miniCard: { borderRadius: 10, minHeight: 96 },
+  bookRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    paddingVertical: 10,
+  },
+  bookImage: {
+    width: 44,
+    height: 56,
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  bookKpiRow: {
+    flexDirection: "row",
+    marginTop: 8,
+    gap: 6,
+  },
 });

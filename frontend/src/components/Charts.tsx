@@ -193,6 +193,119 @@ export function PerformanceChart({ spendData, salesData, width = 320 }: Performa
   );
 }
 
+// KDP Income vs Ad Spend chart (royalty-adjusted)
+interface KdpIncomeChartProps {
+  spendData: { value: number; label?: string }[];
+  incomeData: { value: number; label?: string }[];
+  width?: number;
+}
+
+export function KdpIncomeChart({ spendData, incomeData, width = 320 }: KdpIncomeChartProps) {
+  const t = useTheme();
+  // Combine into bars (spend, negative) + line (income)
+  return (
+    <BarChart
+      data={spendData}
+      lineData={incomeData}
+      showLine
+      lineConfig={{
+        color: t.colors.tone_good,
+        thickness: 2.5,
+        curved: true,
+        hideDataPoints: true,
+        startFillColor: t.colors.tone_good,
+        endFillColor: t.colors.tone_good,
+        startOpacity: 0.2,
+        endOpacity: 0.0,
+        areaChart: true,
+      }}
+      barWidth={Math.max(8, width / Math.max(spendData.length, 1) - 6)}
+      spacing={3}
+      frontColor={t.colors.tone_danger}
+      gradientColor={t.colors.tone_danger + "80"}
+      noOfSections={4}
+      yAxisColor="transparent"
+      xAxisColor={t.colors.chart_grid}
+      yAxisTextStyle={{ color: t.colors.text_tertiary, fontSize: 9 }}
+      xAxisLabelTextStyle={{ color: t.colors.text_tertiary, fontSize: 9 }}
+      rulesColor={t.colors.chart_grid}
+      rulesType="solid"
+      hideRules={false}
+      height={140}
+      width={width - 40}
+      initialSpacing={3}
+      disableScroll
+      barBorderRadius={2}
+      showGradient
+    />
+  );
+}
+
+// Mini metric chart - bars OR line for a single metric in a small card
+interface MiniChartProps {
+  data: { value: number; label?: string }[];
+  variant: "bar" | "line";
+  color?: string;
+  height?: number;
+  width?: number;
+}
+
+export function MiniChart({ data, variant, color, height = 60, width = 140 }: MiniChartProps) {
+  const t = useTheme();
+  const c = color ?? t.colors.tone_primary;
+  if (!data.length) return <View style={{ height }} />;
+
+  if (variant === "bar") {
+    const max = Math.max(...data.map((d) => d.value), 1);
+    return (
+      <BarChart
+        data={data}
+        height={height}
+        width={width}
+        barWidth={Math.max(3, (width - 16) / data.length - 1)}
+        spacing={1}
+        frontColor={c}
+        hideAxesAndRules
+        hideYAxisText
+        hideRules
+        xAxisColor="transparent"
+        yAxisColor="transparent"
+        noOfSections={2}
+        maxValue={max * 1.1}
+        initialSpacing={2}
+        disableScroll
+        barBorderRadius={1.5}
+      />
+    );
+  }
+
+  return (
+    <LineChart
+      data={data}
+      hideAxesAndRules
+      hideYAxisText
+      hideRules
+      hideDataPoints
+      thickness={2}
+      color={c}
+      areaChart
+      startFillColor={c}
+      endFillColor={c}
+      startOpacity={0.3}
+      endOpacity={0.0}
+      curved
+      adjustToWidth
+      width={width}
+      height={height}
+      initialSpacing={0}
+      endSpacing={0}
+      xAxisColor="transparent"
+      yAxisColor="transparent"
+      disableScroll
+    />
+  );
+}
+
 // Hours heatmap: 7 days x 24 hours grid
 interface HeatmapProps {
   data: number[][]; // [7][24]

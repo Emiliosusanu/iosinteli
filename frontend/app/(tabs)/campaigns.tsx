@@ -14,27 +14,33 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { fetchCampaigns } from "@/src/lib/queries";
+import { fetchTopCampaignsRange } from "@/src/lib/queries";
 import { useApp } from "@/src/contexts/AppContext";
 import { useTheme, acosTone, toneColor } from "@/src/lib/theme";
-import { formatCurrency, formatPercent, formatInt, formatCompact } from "@/src/lib/format";
+import { formatCurrency, formatPercent, formatInt } from "@/src/lib/format";
 import { TopBar } from "@/src/components/TopBar";
 import { Pill, EmptyState, ToneDot } from "@/src/components/Primitives";
-
 type StateFilter = "all" | "enabled" | "paused";
 
 export default function CampaignsScreen() {
   const t = useTheme();
   const router = useRouter();
-  const { selectedProfileIds, primaryCurrency } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, royaltyRate } = useApp();
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const { data: campaigns = [], isLoading, refetch } = useQuery({
-    queryKey: ["campaigns-list", selectedProfileIds],
-    queryFn: () => fetchCampaigns(selectedProfileIds, { limit: 500 }),
+    queryKey: ["campaigns-list-range", selectedProfileIds, dateRange.start, dateRange.end, royaltyRate],
+    queryFn: () =>
+      fetchTopCampaignsRange({
+        profileIds: selectedProfileIds,
+        start: dateRange.start,
+        end: dateRange.end,
+        royaltyRate,
+        limit: 500,
+      }),
     enabled: selectedProfileIds.length > 0,
   });
 
@@ -139,7 +145,7 @@ export default function CampaignsScreen() {
             >
               <View style={styles.cardHeader}>
                 <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
-                  <ToneDot value={Number(item.total_acos)} />
+                  <ToneDot value={item.acos} target={royaltyRate} />
                   <Text
                     style={[t.typography.headline, { color: t.colors.text_primary, marginLeft: 8, flex: 1 }]}
                     numberOfLines={1}
@@ -155,32 +161,30 @@ export default function CampaignsScreen() {
 
               <View style={[styles.metaRow, { marginTop: 6, marginLeft: 16 }]}>
                 {item.type && <Pill label={typeLabel(item.type)} tone="primary" />}
-                {item.targeting_type && (
-                  <Pill
-                    label={item.targeting_type === "auto" ? "AUTO" : "MANUAL"}
-                    tone={item.targeting_type === "auto" ? "product" : "inactive"}
-                  />
-                )}
                 {item.budget && (
                   <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>
                     {formatCurrency(Number(item.budget), primaryCurrency, { compact: true })}/day
                   </Text>
                 )}
+                <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>
+                  BE {royaltyRate}%
+                </Text>
               </View>
 
               <View style={[styles.metricsRow, { borderTopColor: t.colors.separator }]}>
-                <Metric label="Spend" value={formatCurrency(item.total_spend, primaryCurrency, { compact: true })} t={t} />
-                <Metric label="Sales" value={formatCurrency(item.total_sales, primaryCurrency, { compact: true })} t={t} />
-                <Metric label="Orders" value={formatInt(item.total_orders)} t={t} />
+                <Metric label="Spend" value={formatCurrency(item.spend, primaryCurrency, { compact: true })} t={t} />
+                <Metric label="Sales" value={formatCurrency(item.sales, primaryCurrency, { compact: true })} t={t} />
+                <Metric label="Orders" value={formatInt(item.orders)} t={t} />
                 <Metric
                   label="ACOS"
-                  value={item.total_sales > 0 ? formatPercent(Number(item.total_acos)) : "—"}
-                  color={toneColor(acosTone(Number(item.total_acos)), t.colors)}
+                  value={item.sales > 0 ? formatPercent(item.acos) : "—"}
+                  color={toneColor(acosTone(item.acos, royaltyRate), t.colors)}
                   t={t}
                 />
                 <Metric
-                  label="ROAS"
-                  value={item.total_spend > 0 ? `${Number(item.total_roas).toFixed(1)}x` : "—"}
+                  label="NET"
+                  value={formatCurrency(item.net, primaryCurrency, { compact: true })}
+                  color={item.net >= 0 ? t.colors.tone_good : t.colors.tone_danger}
                   t={t}
                 />
               </View>
