@@ -1,228 +1,232 @@
 import React, { useState } from "react";
-import { View, Text, StyleSheet, ScrollView, TextInput, Switch } from "react-native";
+import { View, Text, ScrollView, Linking, type TextStyle } from "react-native";
 import Slider from "@react-native-community/slider";
-import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { SubScreen } from "@/src/components/SubScreen";
 import { useApp } from "@/src/contexts/AppContext";
+import { useAuth } from "@/src/contexts/AuthContext";
 import { useTheme } from "@/src/lib/theme";
-import { SectionCard } from "@/src/components/Primitives";
+import { sendTestNotification } from "@/src/lib/notifications";
+import {
+  ADS_SECTION_FOOTER,
+  APPEARANCE_LABEL,
+  APPEARANCE_VALUE,
+  BID_BOT_ROW_LABEL,
+  BID_BOT_ROW_SUBTITLE,
+  GUEST_SETTINGS_NOTE,
+  IPHONE_ALERTS_LABEL,
+  IPHONE_ALERTS_OFF,
+  IPHONE_ALERTS_SUBTITLE,
+  KDP_PROFIT_LABEL,
+  KDP_PROFIT_VALUE,
+  KDP_SECTION_FOOTER,
+  SPEND_THRESHOLD_CAPTION,
+  TEST_NOTIFICATION_HINT,
+  VIEWING_CUSTOMER_SETTINGS_NOTE,
+  notificationFooter,
+  notificationSwitchAccessibilityLabel,
+  spendThresholdAccessibilityLabel,
+  spendThresholdLabel,
+  testNotificationLabel,
+} from "@/src/lib/settingsContract";
+import { IOSGroupedSection, IOSSettingsRow, IOSSwitchRow } from "@/src/components/ios/Native";
+
+function growType(style: TextStyle): TextStyle {
+  return {
+    fontSize: style.fontSize,
+    fontWeight: style.fontWeight,
+    letterSpacing: style.letterSpacing,
+  };
+}
 
 export default function SettingsScreen() {
   const t = useTheme();
-  const { royaltyRate, setRoyaltyRate, primaryCurrency, notifications, setNotifications } = useApp();
-  const [minBid, setMinBid] = useState("0.10");
-  const [maxBid, setMaxBid] = useState("5.00");
-  const [cooldown, setCooldown] = useState("24");
-  const [dailyBudget, setDailyBudget] = useState("");
+  const router = useRouter();
+  const { guestMode, user } = useAuth();
+  const { notifications, setNotifications, notificationRuntime, adminFilterUserId } = useApp();
+  const [testStatus, setTestStatus] = useState<"idle" | "sending" | "sent" | "blocked">("idle");
+
+  const viewingCustomer = !!adminFilterUserId;
+  const alertsLocked = guestMode;
+  const anyAlertOn = notifications.newOrder || notifications.bookAttention || notifications.campaignSpend;
+  const permissionDenied = notificationRuntime.permission === "denied";
+  const testRowStatus = guestMode ? "guest" : testStatus;
+
+  const handleTestNotification = async () => {
+    if (guestMode) return;
+    if (testStatus === "blocked" || permissionDenied) {
+      void Linking.openSettings();
+      return;
+    }
+    setTestStatus("sending");
+    const ok = await sendTestNotification(user?.id);
+    setTestStatus(ok ? "sent" : "blocked");
+    setTimeout(() => setTestStatus("idle"), 4000);
+  };
 
   return (
     <SubScreen title="Settings">
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
-        <SectionCard title="Royalty / Break-even ACOS">
-          <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginBottom: 8 }]}>
-            Royalty rate drives Net Profit and is your Break-even ACOS. Any ACOS below this value is
-            profitable.
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 120 }}
+        contentInsetAdjustmentBehavior="automatic"
+        keyboardShouldPersistTaps="handled"
+      >
+        {guestMode ? (
+          <Text
+            testID="settings-guest"
+            style={[growType(t.typography.footnote), { color: t.colors.text_secondary, marginHorizontal: 32, marginTop: 16 }]}
+          >
+            {GUEST_SETTINGS_NOTE}
           </Text>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-            <Text style={[t.typography.title2, { color: t.colors.tone_primary, width: 70 }]}>
-              {royaltyRate}%
-            </Text>
-            <View style={{ flex: 1 }}>
-              <Slider
-                testID="royalty-rate-slider"
-                minimumValue={10}
-                maximumValue={100}
-                step={1}
-                value={royaltyRate}
-                onValueChange={setRoyaltyRate}
-                minimumTrackTintColor={t.colors.tone_primary}
-                maximumTrackTintColor={t.colors.background_tertiary}
-              />
-            </View>
-          </View>
-        </SectionCard>
-
-        <SectionCard title="Notifications" testID="notification-settings-card">
-          <NotifRow
-            icon="cart-outline"
-            iconColor={t.colors.tone_good}
-            label="New orders"
-            description="When a new ad-attributed order comes in"
-            value={notifications.newOrder}
-            onChange={(v) => setNotifications({ ...notifications, newOrder: v })}
-            testID="notif-new-order"
-            t={t}
-          />
-          <NotifRow
-            icon="book-outline"
-            iconColor={t.colors.tone_warning}
-            label="Book needs attention"
-            description="ACOS exceeds break-even or sales drop sharply"
-            value={notifications.bookAttention}
-            onChange={(v) => setNotifications({ ...notifications, bookAttention: v })}
-            testID="notif-book-attention"
-            t={t}
-          />
-          <NotifRow
-            icon="trending-up-outline"
-            iconColor={t.colors.tone_danger}
-            label="Campaign elevated spending"
-            description="Spend exceeds daily budget threshold"
-            value={notifications.campaignSpend}
-            onChange={(v) => setNotifications({ ...notifications, campaignSpend: v })}
-            testID="notif-campaign-spend"
-            t={t}
-          />
-          {notifications.campaignSpend && (
-            <View style={{ paddingTop: 4, paddingLeft: 36 }}>
-              <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginBottom: 4 }]}>
-                Trigger above {notifications.spendThreshold}% of daily budget
-              </Text>
-              <Slider
-                testID="notif-spend-threshold-slider"
-                minimumValue={5}
-                maximumValue={100}
-                step={5}
-                value={notifications.spendThreshold}
-                onValueChange={(v) => setNotifications({ ...notifications, spendThreshold: v })}
-                minimumTrackTintColor={t.colors.tone_danger}
-                maximumTrackTintColor={t.colors.background_tertiary}
-              />
-            </View>
-          )}
-        </SectionCard>
-
-        <SectionCard title="Bid guardrails">
-          <FormRow t={t} label="Min bid">
-            <TextInput
-              testID="min-bid-input"
-              value={minBid}
-              onChangeText={setMinBid}
-              keyboardType="decimal-pad"
-              style={[styles.input, { color: t.colors.text_primary, borderColor: t.colors.border }]}
-            />
-          </FormRow>
-          <FormRow t={t} label="Max bid">
-            <TextInput
-              testID="max-bid-input"
-              value={maxBid}
-              onChangeText={setMaxBid}
-              keyboardType="decimal-pad"
-              style={[styles.input, { color: t.colors.text_primary, borderColor: t.colors.border }]}
-            />
-          </FormRow>
-          <FormRow t={t} label="Cooldown (h)">
-            <TextInput
-              testID="cooldown-input"
-              value={cooldown}
-              onChangeText={setCooldown}
-              keyboardType="number-pad"
-              style={[styles.input, { color: t.colors.text_primary, borderColor: t.colors.border }]}
-            />
-          </FormRow>
-        </SectionCard>
-
-        <SectionCard title="Budgets">
-          <FormRow t={t} label={`Daily budget (${primaryCurrency})`}>
-            <TextInput
-              testID="daily-budget-input"
-              value={dailyBudget}
-              onChangeText={setDailyBudget}
-              placeholder="Optional"
-              placeholderTextColor={t.colors.text_tertiary}
-              keyboardType="decimal-pad"
-              style={[styles.input, { color: t.colors.text_primary, borderColor: t.colors.border }]}
-            />
-          </FormRow>
-        </SectionCard>
-
-        <SectionCard title="Preferences">
-          <Text style={[t.typography.footnote, { color: t.colors.text_secondary }]}>
-            Theme follows system settings. Currency, timezone and anomaly thresholds will be customizable in future updates.
+        ) : null}
+        {viewingCustomer ? (
+          <Text
+            testID="settings-viewing-customer"
+            style={[growType(t.typography.footnote), { color: t.colors.text_secondary, marginHorizontal: 32, marginTop: guestMode ? 8 : 16 }]}
+          >
+            {VIEWING_CUSTOMER_SETTINGS_NOTE}
           </Text>
-        </SectionCard>
+        ) : null}
+
+        <View testID="notification-settings-card">
+          <IOSGroupedSection
+            title="Notifications"
+            footer={notificationFooter({
+              guestMode,
+              permission: notificationRuntime.permission,
+              backgroundRegistered: notificationRuntime.backgroundRegistered,
+              anyEnabled: anyAlertOn,
+            })}
+          >
+            {permissionDenied && !guestMode ? (
+              <IOSSettingsRow
+                testID="settings-open-ios-notifications"
+                label={IPHONE_ALERTS_LABEL}
+                value={IPHONE_ALERTS_OFF}
+                subtitle={IPHONE_ALERTS_SUBTITLE}
+                symbol="bell.slash"
+                symbolColor={t.colors.tone_danger}
+                onPress={() => void Linking.openSettings()}
+                accessibilityLabel={`${IPHONE_ALERTS_LABEL}. ${IPHONE_ALERTS_OFF}. ${IPHONE_ALERTS_SUBTITLE}`}
+              />
+            ) : null}
+            <IOSSwitchRow
+              label="New orders"
+              symbol="cart"
+              symbolColor={t.colors.tone_good}
+              value={notifications.newOrder}
+              disabled={alertsLocked}
+              onChange={(v) => setNotifications({ ...notifications, newOrder: v })}
+              testID="notif-new-order"
+              accessibilityLabel={notificationSwitchAccessibilityLabel("New orders", notifications.newOrder)}
+            />
+            <IOSSwitchRow
+              label="Book needs attention"
+              symbol="book"
+              symbolColor={t.colors.tone_warning}
+              value={notifications.bookAttention}
+              disabled={alertsLocked}
+              onChange={(v) => setNotifications({ ...notifications, bookAttention: v })}
+              testID="notif-book-attention"
+              accessibilityLabel={notificationSwitchAccessibilityLabel("Book needs attention", notifications.bookAttention)}
+            />
+            <IOSSwitchRow
+              label="Campaign overspending"
+              symbol="chart.line.uptrend.xyaxis"
+              symbolColor={t.colors.tone_danger}
+              value={notifications.campaignSpend}
+              disabled={alertsLocked}
+              onChange={(v) => setNotifications({ ...notifications, campaignSpend: v })}
+              testID="notif-campaign-spend"
+              accessibilityLabel={notificationSwitchAccessibilityLabel("Campaign overspending", notifications.campaignSpend)}
+            />
+            {notifications.campaignSpend ? (
+              <View
+                accessible
+                accessibilityRole="adjustable"
+                accessibilityLabel={spendThresholdAccessibilityLabel(notifications.spendThreshold)}
+                accessibilityValue={{ text: `${notifications.spendThreshold} percent` }}
+                style={{ paddingHorizontal: 16, paddingBottom: 12 }}
+              >
+                <Text style={[growType(t.typography.footnote), { color: t.colors.text_secondary, marginTop: 8 }]}>
+                  {spendThresholdLabel(notifications.spendThreshold)}
+                </Text>
+                <Slider
+                  testID="notif-spend-threshold-slider"
+                  minimumValue={5}
+                  maximumValue={100}
+                  step={5}
+                  value={notifications.spendThreshold}
+                  disabled={alertsLocked}
+                  onValueChange={(v) => setNotifications({ ...notifications, spendThreshold: v })}
+                  minimumTrackTintColor={t.colors.tone_danger}
+                  maximumTrackTintColor={t.colors.background_tertiary}
+                />
+                <Text style={[growType(t.typography.caption1), { color: t.colors.text_tertiary }]}>
+                  {SPEND_THRESHOLD_CAPTION}
+                </Text>
+              </View>
+            ) : null}
+            <IOSSettingsRow
+              testID="notif-send-test"
+              label={testNotificationLabel(testRowStatus)}
+              symbol={testStatus === "sent" ? "checkmark.circle.fill" : testStatus === "blocked" || permissionDenied ? "exclamationmark.triangle.fill" : "bell"}
+              symbolColor={
+                testStatus === "sent"
+                  ? t.colors.tone_good
+                  : testStatus === "blocked" || permissionDenied
+                    ? t.colors.tone_danger
+                    : t.colors.tone_primary
+              }
+              last
+              accessibilityLabel={testNotificationLabel(testRowStatus)}
+              accessibilityHint={guestMode ? undefined : TEST_NOTIFICATION_HINT}
+              onPress={
+                guestMode || testStatus === "sending"
+                  ? undefined
+                  : handleTestNotification
+              }
+            />
+          </IOSGroupedSection>
+        </View>
+
+        <IOSGroupedSection title="Ads" footer={ADS_SECTION_FOOTER}>
+          <IOSSettingsRow
+            testID="settings-open-bid-bot"
+            label={BID_BOT_ROW_LABEL}
+            subtitle={BID_BOT_ROW_SUBTITLE}
+            symbol="cpu"
+            symbolColor={t.colors.tone_primary}
+            last
+            onPress={() => router.push("/more/bid-bot")}
+            accessibilityLabel={`${BID_BOT_ROW_LABEL}. ${BID_BOT_ROW_SUBTITLE}`}
+          />
+        </IOSGroupedSection>
+
+        <IOSGroupedSection title="Profit data" footer={KDP_SECTION_FOOTER}>
+          <IOSSettingsRow
+            testID="settings-kdp-source"
+            label={KDP_PROFIT_LABEL}
+            value={KDP_PROFIT_VALUE}
+            symbol="book"
+            symbolColor={t.colors.tone_primary}
+            last
+            accessibilityLabel={`${KDP_PROFIT_LABEL}. ${KDP_PROFIT_VALUE}`}
+          />
+        </IOSGroupedSection>
+
+        <IOSGroupedSection title="App">
+          <IOSSettingsRow
+            testID="settings-appearance"
+            label={APPEARANCE_LABEL}
+            value={APPEARANCE_VALUE}
+            symbol="circle.lefthalf.filled"
+            symbolColor={t.colors.text_secondary}
+            last
+            accessibilityLabel={`${APPEARANCE_LABEL}. ${APPEARANCE_VALUE}`}
+          />
+        </IOSGroupedSection>
       </ScrollView>
     </SubScreen>
   );
 }
-
-function NotifRow({
-  icon,
-  iconColor,
-  label,
-  description,
-  value,
-  onChange,
-  testID,
-  t,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  iconColor: string;
-  label: string;
-  description: string;
-  value: boolean;
-  onChange: (v: boolean) => void;
-  testID?: string;
-  t: any;
-}) {
-  return (
-    <View style={[styles.notifRow, { borderBottomColor: t.colors.separator }]}>
-      <View
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 8,
-          backgroundColor: iconColor + "1F",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Ionicons name={icon} size={16} color={iconColor} />
-      </View>
-      <View style={{ flex: 1, marginLeft: 10 }}>
-        <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{label}</Text>
-        <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 1 }]}>
-          {description}
-        </Text>
-      </View>
-      <Switch
-        testID={testID}
-        value={value}
-        onValueChange={onChange}
-        trackColor={{ false: t.colors.background_tertiary, true: t.colors.tone_primary }}
-        thumbColor="#fff"
-      />
-    </View>
-  );
-}
-
-function FormRow({ label, children, t }: { label: string; children: React.ReactNode; t: any }) {
-  return (
-    <View style={styles.row}>
-      <Text style={[t.typography.body, { color: t.colors.text_primary, flex: 1 }]}>{label}</Text>
-      <View style={{ width: 110 }}>{children}</View>
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 8,
-  },
-  input: {
-    height: 36,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    textAlign: "right",
-    fontSize: 15,
-  },
-  notifRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-});

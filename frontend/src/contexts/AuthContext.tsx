@@ -1,7 +1,12 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 import { Session, User } from "@supabase/supabase-js";
+import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 import { storage } from "@/src/utils/storage";
+import { nestLogin, nestLogout } from "@/src/lib/rulesApi";
+import { ADMIN_FILTER_KEY } from "@/src/lib/queries";
+import { clearPersistedQueryCache } from "@/src/lib/queryPersist";
+import { clearNotificationIdentity } from "@/src/lib/notifications";
 
 type AuthState = "loading" | "authenticated" | "unauthenticated";
 
@@ -13,6 +18,7 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   signUp: (email: string, password: string) => Promise<{ error?: string; needsConfirmation?: boolean }>;
   signOut: () => Promise<void>;
+  resetPassword: (email: string) => Promise<{ error?: string }>;
   enterGuestMode: () => void;
 }
 
@@ -20,49 +26,102 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const GUEST_KEY = "inteliads.guestMode";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient();
   const [state, setState] = useState<AuthState>("loading");
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [guestMode, setGuestMode] = useState<boolean>(false);
+  const guestModeRef = useRef(false);
 
   useEffect(() => {
-    (async () => {
-      // Hydrate guest mode flag first
-      const guest = await storage.getItem(GUEST_KEY, false);
-      const isGuest = guest === true;
-      setGuestMode(isGuest);
+    let mounted = true;
+    const fallbackId = setTimeout(() => {
+      if (!mounted) return;
+      void (async () => {
+        const guest = await storage.getItem<boolean>(GUEST_KEY, false);
+        if (!mounted) return;
+        console.warn("[auth] Session hydration timed out; continuing without a live session");
+        setSession(null);
+        setUser(null);
+        if (guest === true) {
+          guestModeRef.current = true;
+          setGuestMode(true);
+          setState("authenticated");
+        } else {
+          setState("unauthenticated");
+        }
+      })();
+    }, 8000);
 
-      const { data: { session: s } } = await supabase.auth.getSession();
-      setSession(s);
-      setUser(s?.user ?? null);
-      setState(s || isGuest ? "authenticated" : "unauthenticated");
+    (async () => {
+      try {
+        // Hydrate guest mode flag first
+        const guest = await storage.getItem<boolean>(GUEST_KEY, false);
+        const isGuest = guest === true;
+        const { data: { session: s }, error: sessionError } = await supabase.auth.getSession();
+        let session = s ?? null;
+        if (sessionError || (session && !session.refresh_token)) {
+          await supabase.auth.signOut({ scope: "local" });
+          session = null;
+        } else if (session) {
+          const { data: { user: liveUser }, error: userError } = await supabase.auth.getUser();
+          if (userError || !liveUser) {
+            await supabase.auth.signOut({ scope: "local" });
+            session = null;
+          }
+        }
+
+        if (!mounted) return;
+        clearTimeout(fallbackId);
+        guestModeRef.current = isGuest && !session;
+        setGuestMode(isGuest && !session);
+        setSession(session);
+        setUser(session?.user ?? null);
+        setState(session || isGuest ? "authenticated" : "unauthenticated");
+      } catch (error) {
+        if (!mounted) return;
+        clearTimeout(fallbackId);
+        console.warn("[auth] Session hydration failed; continuing unauthenticated", error);
+        guestModeRef.current = false;
+        setGuestMode(false);
+        setSession(null);
+        setUser(null);
+        setState("unauthenticated");
+      }
     })();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
       setUser(s?.user ?? null);
-      // Real auth wins over guest mode
       if (s) {
+        guestModeRef.current = false;
         setGuestMode(false);
         void storage.setItem(GUEST_KEY, false);
         setState("authenticated");
-      } else {
-        // After explicit sign-out, drop guest too
-        setState((prev) => (guestMode ? "authenticated" : "unauthenticated"));
+        return;
       }
+      // INITIAL_SESSION(null) races guest hydration — let that IIFE decide.
+      if (event === "INITIAL_SESSION") return;
+      setState(guestModeRef.current ? "authenticated" : "unauthenticated");
     });
 
     return () => {
+      mounted = false;
+      clearTimeout(fallbackId);
       listener.subscription.unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
+    await nestLogin(email, password);
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) return { error: error.message };
+    await queryClient.invalidateQueries({ queryKey: ["nest-token"] });
+    await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+    await queryClient.invalidateQueries({ queryKey: ["amazon-profiles"] });
     return {};
-  }, []);
+  }, [queryClient]);
 
   const signUp = useCallback(async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signUp({ email, password });
@@ -71,13 +130,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    guestModeRef.current = false;
     setGuestMode(false);
     await storage.setItem(GUEST_KEY, false);
-    await supabase.auth.signOut();
+    await storage.removeItem(ADMIN_FILTER_KEY);
+    await clearNotificationIdentity();
+    await nestLogout();
+    let remoteSignOutFailed = false;
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        remoteSignOutFailed = true;
+        await supabase.auth.signOut({ scope: "local" });
+      }
+    } catch {
+      remoteSignOutFailed = true;
+      try {
+        await supabase.auth.signOut({ scope: "local" });
+      } catch {
+        // Continue clearing app-visible state even if Supabase storage is unavailable.
+      }
+    }
+    queryClient.clear();
+    await clearPersistedQueryCache();
+    setSession(null);
+    setUser(null);
     setState("unauthenticated");
+    if (remoteSignOutFailed) {
+      console.warn("[auth] Remote sign out failed; local account state was cleared");
+    }
+  }, [queryClient]);
+
+  const resetPassword = useCallback(async (email: string) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: "https://dashboard.inteliads.io/reset-password",
+    });
+    if (error) return { error: error.message };
+    return {};
   }, []);
 
   const enterGuestMode = useCallback(() => {
+    guestModeRef.current = true;
     setGuestMode(true);
     void storage.setItem(GUEST_KEY, true);
     setState("authenticated");
@@ -85,7 +178,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ state, session, user, guestMode, signIn, signUp, signOut, enterGuestMode }}
+      value={{ state, session, user, guestMode, signIn, signUp, signOut, resetPassword, enterGuestMode }}
     >
       {children}
     </AuthContext.Provider>

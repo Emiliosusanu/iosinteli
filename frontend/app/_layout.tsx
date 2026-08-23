@@ -1,67 +1,199 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Stack, useRouter, useSegments } from "expo-router";
+import * as Notifications from "expo-notifications";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useColorScheme } from "react-native";
+import { QueryClient, QueryClientProvider, keepPreviousData } from "@tanstack/react-query";
+import * as SplashScreen from "expo-splash-screen";
 import { AuthProvider, useAuth } from "@/src/contexts/AuthContext";
 import { AppProvider } from "@/src/contexts/AppContext";
+import { SplashVideo } from "@/src/components/SplashVideo";
+import { hydrateQueryClient, startQueryPersistence } from "@/src/lib/queryPersist";
+import { authRedirectTarget } from "@/src/lib/authContract";
+import { isSafeNotificationHref, parseNotificationPayload, routeForNotification } from "@/src/lib/notificationContract";
+
+// Hold the native splash until our JS is mounted, then hand off to the branded React splash.
+SplashScreen.preventAutoHideAsync().catch(() => {});
+
+// Minimum time the animated logo stays on screen so the brand moment is always seen,
+// even when auth resolves instantly (warm start).
+const MIN_SPLASH_MS = 1600;
+
+// Survives RouteGuard remounts so a consumed tap cannot replay on token refresh.
+const handledNotificationIds = new Set<string>();
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 60_000,
+      // Keep data cached in memory for a day so revisits are instant
+      gcTime: 1000 * 60 * 60 * 24,
       retry: 1,
       refetchOnWindowFocus: false,
+      // Show the previous data while refetching (e.g. when changing date range
+      // or profile) so the UI never flashes empty — feels instant.
+      placeholderData: keepPreviousData,
     },
   },
 });
 
 function RouteGuard({ children }: { children: React.ReactNode }) {
-  const { state } = useAuth();
+  const { state, user } = useAuth();
   const router = useRouter();
   const segments = useSegments();
 
   useEffect(() => {
     if (state === "loading") return;
-    const inAuthGroup = segments[0] === "auth";
-    if (state === "unauthenticated" && !inAuthGroup) {
-      router.replace("/auth/login");
-    } else if (state === "authenticated" && inAuthGroup) {
-      router.replace("/(tabs)");
-    }
+    const next = authRedirectTarget(state, segments as unknown as string[]);
+    if (next) router.replace(next as any);
   }, [state, segments, router]);
+
+  // Route once when the user taps a notification. Consume the OS last-response
+  // so a later auth remount (token refresh, sign-out/in) cannot replay it.
+  useEffect(() => {
+    if (state !== "authenticated") return;
+
+    let cancelled = false;
+    const navigateFor = (response: Notifications.NotificationResponse | null) => {
+      if (!response || cancelled) return;
+      const id = response.notification.request.identifier
+        || String(response.notification.date ?? "");
+      if (!id || handledNotificationIds.has(id)) return;
+      handledNotificationIds.add(id);
+      const payload = parseNotificationPayload(response.notification.request.content.data);
+      const dest = routeForNotification(payload, user?.id ?? null);
+      const href = isSafeNotificationHref(dest.href) ? dest.href : "/(tabs)";
+      if (href === "/(tabs)" || href === "/(tabs)/campaigns" || href === "/(tabs)/products" || href === "/more/settings") {
+        router.replace(href as any);
+      } else {
+        router.push(href as any);
+      }
+    };
+
+    Notifications.getLastNotificationResponseAsync()
+      .then(async (response) => {
+        navigateFor(response);
+        try {
+          await Notifications.clearLastNotificationResponseAsync();
+        } catch {
+          // Native module may be missing in some environments.
+        }
+      })
+      .catch(() => {});
+
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      navigateFor(response);
+      Notifications.clearLastNotificationResponseAsync().catch(() => {});
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, [state, router, user?.id]);
 
   return <>{children}</>;
 }
 
-export default function RootLayout() {
-  const scheme = useColorScheme();
+// Shows the animated logo until both: (a) auth state resolved, and
+// (b) the minimum brand-moment time has elapsed. Handles cold start / force-kill
+// reloads where session hydration takes a moment.
+function SplashGate({ children }: { children: React.ReactNode }) {
+  const { state } = useAuth();
+  const [minElapsed, setMinElapsed] = useState(false);
+  const [reactSplashReady, setReactSplashReady] = useState(false);
+  const hidNative = useRef(false);
+
+  const dismissNative = () => {
+    if (!hidNative.current) {
+      hidNative.current = true;
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  };
+
+  // Hide the native splash once React has painted our branded splash layer.
+  useEffect(() => {
+    if (reactSplashReady) dismissNative();
+  }, [reactSplashReady]);
+
+  // Safety net: ALWAYS dismiss the native splash shortly after mount, even if
+  // the React splash layer never reports ready (e.g. a heavy/failed asset).
+  // Without this, a stuck native splash shows as a blank/black screen.
+  useEffect(() => {
+    const guard = setTimeout(dismissNative, 800);
+    return () => clearTimeout(guard);
+  }, []);
+
+  useEffect(() => {
+    const id = setTimeout(() => setMinElapsed(true), MIN_SPLASH_MS);
+    return () => clearTimeout(id);
+  }, []);
+
+  const ready = state !== "loading" && minElapsed;
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <>
+      {children}
+      <SplashVideo visible={!ready} onReady={() => setReactSplashReady(true)} />
+    </>
+  );
+}
+
+export default function RootLayout() {
+  // Restore the persisted query cache after mounting so a large/corrupt cache
+  // can never block the first React paint. Persistence starts after hydration.
+  useEffect(() => {
+    let mounted = true;
+    let stop: (() => void) | undefined;
+    hydrateQueryClient(queryClient).finally(() => {
+      if (!mounted) return;
+      stop = startQueryPersistence(queryClient);
+    });
+    return () => {
+      mounted = false;
+      stop?.();
+    };
+  }, []);
+
+  return (
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
       <SafeAreaProvider>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
             <AppProvider>
-              <RouteGuard>
-                <StatusBar style={scheme === "dark" ? "light" : "dark"} />
-                <Stack screenOptions={{ headerShown: false, animation: "slide_from_right" }}>
-                  <Stack.Screen name="index" />
-                  <Stack.Screen name="auth/login" />
-                  <Stack.Screen name="auth/signup" />
-                  <Stack.Screen name="(tabs)" />
-                  <Stack.Screen name="campaign/[id]" options={{ presentation: "card" }} />
-                  <Stack.Screen name="more/settings" />
-                  <Stack.Screen name="more/automation" />
-                  <Stack.Screen name="more/accounts" />
-                  <Stack.Screen name="more/negative-targeting" />
-                  <Stack.Screen name="more/search-terms" />
-                  <Stack.Screen name="more/ad-groups" />
-                  <Stack.Screen name="more/account" />
-                </Stack>
-              </RouteGuard>
+              <SplashGate>
+                <RouteGuard>
+                  <StatusBar style="auto" />
+                  <Stack screenOptions={{ headerShown: false, animation: "slide_from_right" }}>
+                    <Stack.Screen name="index" />
+                    <Stack.Screen name="auth/welcome" />
+                    <Stack.Screen name="auth/login" />
+                    <Stack.Screen name="auth/signup" />
+                    <Stack.Screen name="auth/forgot" />
+                    <Stack.Screen name="auth/reset" />
+                    <Stack.Screen name="(tabs)" />
+                    <Stack.Screen name="campaign/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "Campaign" }} />
+                    <Stack.Screen name="product/[asin]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "Book" }} />
+                    <Stack.Screen name="keyword/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "Keyword" }} />
+                    <Stack.Screen name="target/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "Target" }} />
+                    <Stack.Screen name="search-term/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "Search term" }} />
+                    <Stack.Screen name="more/settings" />
+                    <Stack.Screen name="more/automation" />
+                    <Stack.Screen name="more/rule-create" />
+                    <Stack.Screen name="more/accounts" />
+                    <Stack.Screen name="more/negative-targeting" />
+                    <Stack.Screen name="more/search-terms" />
+                    <Stack.Screen name="more/ad-groups" />
+                    <Stack.Screen name="more/ad-group/[id]" />
+                    <Stack.Screen name="more/rule-history" />
+                    <Stack.Screen name="more/rule-detail/[id]" />
+                    <Stack.Screen name="more/sync" />
+                    <Stack.Screen name="more/data-map" />
+                    <Stack.Screen name="more/account" />
+                    <Stack.Screen name="more/bid-bot" />
+                  </Stack>
+                </RouteGuard>
+              </SplashGate>
             </AppProvider>
           </AuthProvider>
         </QueryClientProvider>
