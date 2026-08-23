@@ -25,7 +25,8 @@ Gates confirmed:
 - `DEVICE + ACCESSIBILITY CLOSURE: PASS` — leftover VoiceOver / Ad Groups dark / 16e Targets / mutation-detail labels.
 - `NOTIFICATION INFRASTRUCTURE: PASS` — local alerts + safe routing + token lifecycle. Remote push not implemented.
 - `FINAL RELEASE-WIDE REGRESSION: PASS` — `IOS_FINAL_RELEASE_REGRESSION.md`. UI/UX phase frozen.
-- `INTELIADS IOS RELEASE CANDIDATE: READY` — `IOS_RELEASE_CANDIDATE_READINESS.md`. No commit/upload this pass.
+- `INTELIADS IOS RELEASE CANDIDATE: READY` — `IOS_RELEASE_CANDIDATE_READINESS.md`.
+- `INTELIADS IOS TESTFLIGHT BUILD: UPLOADED` — `IOS_TESTFLIGHT_BUILD_REPORT.md`. Processing pending. Device smoke not run here.
 
 `REMAINING IOS COVERAGE: MAPPED`
 
@@ -778,6 +779,6 @@ BidBot contract pass also touched `frontend/app/more/bid-bot.tsx`, `frontend/src
 
 ## Recommended immediate next workstream
 
-`CREATE RELEASE BRANCH + COMMIT + TESTFLIGHT BUILD`
+`TESTFLIGHT DEVICE SMOKE` after App Store Connect finishes processing 1.0.0 (3). Checklist: `IOS_TESTFLIGHT_SMOKE_CHECKLIST.md`.
 
-Do **not** start it from this file. Do **not** commit `.env`. Remote APNs remains a backend/deployment gap. UI/UX stays frozen. `INTELIADS IOS RELEASE CANDIDATE: READY`.
+Do **not** start App Store review, merge to main, or implement remote APNs from this file. Do **not** commit `.env`. UI/UX stays frozen. `INTELIADS IOS TESTFLIGHT BUILD: UPLOADED`.

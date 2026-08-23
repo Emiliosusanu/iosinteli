@@ -12,12 +12,13 @@ This file must always answer:
 ---
 
 CURRENT
-Release Candidate Readiness
+Release branch + TestFlight upload
 
 STATUS
-Complete — `INTELIADS IOS RELEASE CANDIDATE: READY`
+Complete — `INTELIADS IOS TESTFLIGHT BUILD: UPLOADED` · `TESTFLIGHT PROCESSING: PENDING`
 
 GATE
+`INTELIADS IOS RELEASE CANDIDATE: READY`
 `FINAL RELEASE-WIDE REGRESSION: PASS`
 `NOTIFICATION INFRASTRUCTURE: PASS`
 
@@ -25,10 +26,10 @@ PRESERVED
 `FINAL RELEASE-WIDE REGRESSION: PASS` · `NOTIFICATION INFRASTRUCTURE: PASS` · `DEVICE + ACCESSIBILITY CLOSURE: PASS` · prior UI/contract PASSes (unchanged)
 
 LAST COMPLETED
-Release candidate freeze + TestFlight readiness (plan only; no commit, branch, or upload)
+`feat/ios-release-candidate` commits + Release archive + TestFlight upload of 1.0.0 (3). Main not merged. Branch not pushed.
 
 THIS WORKSTREAM
-Do **not** commit, branch, push, or upload TestFlight from this file.
+Do **not** merge to main, submit App Store review, or implement remote APNs from this file.
 
 MUST NOT
 Redesign UI, implement remote APNs, or commit `.env` / metro-cache / skill trees.
@@ -38,8 +39,9 @@ Redesign UI, implement remote APNs, or commit `.env` / metro-cache / skill trees
 DONE (carried forward)
 [x] Final release-wide regression
 [x] Release Candidate Readiness
+[x] CREATE RELEASE BRANCH + COMMIT + TESTFLIGHT BUILD
 
 REMAINING (ranked; next is first unchecked)
-[ ] CREATE RELEASE BRANCH + COMMIT + TESTFLIGHT BUILD (authorized separately)
+[ ] TESTFLIGHT DEVICE SMOKE after processing (`IOS_TESTFLIGHT_SMOKE_CHECKLIST.md`)
 
-See `IOS_RELEASE_CANDIDATE_READINESS.md`.
+See `IOS_TESTFLIGHT_BUILD_REPORT.md`.

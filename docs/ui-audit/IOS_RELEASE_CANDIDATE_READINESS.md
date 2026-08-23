@@ -6,7 +6,7 @@ Date: 2026-08-23
 
 Hard gate used: `FINAL RELEASE-WIDE REGRESSION: PASS` in `IOS_FINAL_RELEASE_REGRESSION.md` (the recorded phrase; the follow-up alias `INTELIADS IOS RELEASE REGRESSION: PASS` was not a separate file).
 
-This pass did **not** commit, branch, push, or upload TestFlight.
+Readiness gate for this document remains `READY`. Execution is recorded in `IOS_TESTFLIGHT_BUILD_REPORT.md`: branch + commits created; TestFlight **1.0.0 (3)** uploaded and still processing. Main was not merged or pushed.
 
 ---
 
@@ -253,4 +253,4 @@ Current: `main`. Recommended next: `feat/ios-release-candidate`. Not created thi
 
 `INTELIADS IOS RELEASE CANDIDATE: READY`
 
-Next authorized workstream: `CREATE RELEASE BRANCH + COMMIT + TESTFLIGHT BUILD` (still no upload until that pass).
+Execution: `INTELIADS IOS TESTFLIGHT BUILD: UPLOADED`. `TESTFLIGHT PROCESSING: PENDING`. Device smoke is pending user/device install. Do not merge to main from this file.
