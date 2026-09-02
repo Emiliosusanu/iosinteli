@@ -17,7 +17,7 @@ import {
   formatDateShort,
 } from "@/src/lib/format";
 import { formatSyncWhen } from "@/src/lib/syncContract";
-import { toneColor, useTheme } from "@/src/lib/theme";
+import { dashboard, toneColor, useTheme } from "@/src/lib/theme";
 import {
   KDP_IPHONE_BOUNDARY,
   adsMetricFacts,
@@ -421,13 +421,13 @@ const styles = StyleSheet.create({
     paddingBottom: 120,
   },
   contextCard: {
-    borderRadius: 10,
+    borderRadius: dashboard.cardRadius,
     borderCurve: "continuous",
     padding: 14,
     marginBottom: 12,
   },
   sourceCard: {
-    borderRadius: 10,
+    borderRadius: dashboard.cardRadius,
     borderCurve: "continuous",
     padding: 14,
     marginBottom: 12,

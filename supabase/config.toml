@@ -1,0 +1,17 @@
+# Supabase project config for InteliAds.
+# Linked project ref lives in supabase/.temp/project-ref (sjdlkprlkaweyuiaigix).
+project_id = "sjdlkprlkaweyuiaigix"
+
+[functions.send-push]
+# Requires a valid Supabase JWT (the app sends the signed-in user's token).
+verify_jwt = true
+
+[functions.kdp-wake-push]
+# Fleet silent wake — auth is service_role JWT or X-InteliAds-Wake-Secret.
+# Gateway JWT may be the anon key; the function enforces the wake secret.
+verify_jwt = false
+
+[functions.amazon-mobile-session]
+# Mint Supabase session after Amazon OAuth. Auth is Nest JWT in the body
+# (verified via /auth/me); gateway JWT may be anon from the client invoke.
+verify_jwt = false

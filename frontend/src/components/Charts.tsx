@@ -2,9 +2,10 @@ import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { runOnJS } from "react-native-reanimated";
-import * as Haptics from "expo-haptics";
+import { ChartScrubCursor, VerifiedValue } from "./Motion";
+import { playHaptic } from "../lib/hapticPolicy";
 import { PieChart, LineChart, BarChart } from "react-native-gifted-charts";
-import Svg, { Path, Circle, Rect, Line, Text as SvgText, Defs, LinearGradient, Stop } from "react-native-svg";
+import Svg, { Path, Circle, Rect, Line, Text as SvgText, Defs, LinearGradient, Stop, ClipPath, G } from "react-native-svg";
 import { useTheme, toneColor } from "../lib/theme";
 import { formatCompact, formatInt, formatPercent, safeDivide, formatCurrency } from "../lib/format";
 
@@ -23,7 +24,7 @@ function thinLabels<T extends { label?: string }>(data: T[], width: number): T[]
   }));
 }
 
-type ChartPoint = { value: number; label?: string };
+type ChartPoint = { value: number; label?: string; date?: string; sales?: number };
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -89,45 +90,97 @@ function makeAreaPath(points: Array<{ x: number; y: number }>, baselineY: number
   return `${makeLinePath(points)} L ${points[points.length - 1].x.toFixed(2)} ${baselineY.toFixed(2)} L ${points[0].x.toFixed(2)} ${baselineY.toFixed(2)} Z`;
 }
 
-function useChartSelection(count: number, width: number, inset = 10) {
-  const [selectedIndex, setSelectedIndex] = React.useState(Math.max(0, count - 1));
+function buildChartDaySelection(
+  index: number,
+  data: ChartPoint[],
+  royaltiesData?: ChartPoint[],
+  spendData?: ChartPoint[],
+): NonNullable<ChartDaySelection> {
+  const point = data[index];
+  return {
+    index,
+    label: point?.label,
+    date: point?.date,
+    net: point?.value ?? 0,
+    royalties: royaltiesData?.[index]?.value ?? null,
+    spend: spendData?.[index]?.value ?? 0,
+    sales: point?.sales ?? 0,
+  };
+}
+
+function useChartSelection(
+  count: number,
+  width: number,
+  inset = 10,
+  persistSelection = false,
+  onIndexChange?: (index: number | null) => void,
+  controlledIndex?: number | null,
+) {
+  const [uncontrolledIndex, setUncontrolledIndex] = React.useState<number | null>(null);
+  const isControlled = controlledIndex !== undefined;
+  const selectedIndex = isControlled ? controlledIndex : uncontrolledIndex;
+  const onIndexChangeRef = React.useRef(onIndexChange);
+  onIndexChangeRef.current = onIndexChange;
+
+  const emitIndex = React.useCallback((next: number | null) => {
+    onIndexChangeRef.current?.(next);
+  }, []);
+
+  const setIndex = React.useCallback(
+    (next: number | null) => {
+      if (!isControlled) setUncontrolledIndex(next);
+      emitIndex(next);
+    },
+    [emitIndex, isControlled],
+  );
 
   React.useEffect(() => {
-    setSelectedIndex(Math.max(0, count - 1));
-  }, [count]);
+    setIndex(null);
+  }, [count, setIndex]);
 
   const selectByX = React.useCallback(
     (x: number) => {
-      if (count <= 1) {
-        setSelectedIndex(0);
+      if (count <= 0) {
+        setIndex(null);
         return;
       }
-      const plotWidth = Math.max(1, width - inset * 2);
-      const pct = clamp((x - inset) / plotWidth, 0, 1);
-      const next = clamp(Math.round(pct * (count - 1)), 0, count - 1);
-      setSelectedIndex((prev) => {
-        if (prev !== next) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        return next;
-      });
+      const next = count <= 1
+        ? 0
+        : (() => {
+            const plotWidth = Math.max(1, width - inset * 2);
+            const pct = clamp((x - inset) / plotWidth, 0, 1);
+            return clamp(Math.round(pct * (count - 1)), 0, count - 1);
+          })();
+      if (!isControlled) {
+        setUncontrolledIndex((prev) => {
+          if (prev !== next) void playHaptic("select");
+          return next;
+        });
+      } else if (selectedIndex !== next) {
+        void playHaptic("select");
+      }
+      emitIndex(next);
     },
-    [count, inset, width],
+    [count, emitIndex, inset, isControlled, selectedIndex, setIndex, width],
   );
 
-  // Gesture.Pan with directional lock:
-  //   activeOffsetX  → gesture activates after ≥6 px horizontal movement
-  //   failOffsetY    → gesture fails if ≥10 px vertical detected first
-  // This lets the parent ScrollView own vertical scrolls unambiguously.
-  const gesture = React.useMemo(
-    () =>
-      Gesture.Pan()
-        .activeOffsetX([-6, 6])
-        .failOffsetY([-10, 10])
-        .onStart((e) => runOnJS(selectByX)(e.x))
-        .onUpdate((e) => runOnJS(selectByX)(e.x)),
-    [selectByX],
-  );
+  const clearSelection = React.useCallback(() => {
+    setIndex(null);
+  }, [setIndex]);
 
-  return { selectedIndex, gesture };
+  const gesture = React.useMemo(() => {
+    const pan = Gesture.Pan()
+      .activeOffsetX([-6, 6])
+      .failOffsetY([-10, 10])
+      .onStart((e) => runOnJS(selectByX)(e.x))
+      .onUpdate((e) => runOnJS(selectByX)(e.x));
+    if (!persistSelection) {
+      pan.onEnd(() => runOnJS(clearSelection)());
+    }
+    return pan;
+  }, [selectByX, clearSelection, persistSelection]);
+
+  return { selectedIndex, gesture, clearSelection };
 }
 
 function xAxisLabels(_data: ChartPoint[]) {
@@ -320,10 +373,11 @@ interface PerformanceChartProps {
 
 export function PerformanceChart({ spendData, salesData, width = 320, currency, seriesALabel = "spend", seriesBLabel = "sales", formatA, formatB }: PerformanceChartProps) {
   const t = useTheme();
-  if (!spendData.length) return <View style={{ height: 200 }} />;
   const chartWidth = innerChartWidth(width, 0);
   const chartHeight = 150;
   const inset = 14;
+  const { selectedIndex, gesture } = useChartSelection(spendData.length, chartWidth, inset);
+  if (!spendData.length) return <View style={{ height: 200 }} />;
   const baselineY = chartHeight - inset;
 
   // Independent y-scales so a small spend series isn't crushed by large sales spikes
@@ -344,7 +398,6 @@ export function PerformanceChart({ spendData, salesData, width = 320, currency, 
   const spendPoints = scalePoints(spendData, spendMax);
   const salesPoints = scalePoints(salesData, salesMax);
 
-  const { selectedIndex, gesture } = useChartSelection(spendData.length, chartWidth, inset);
   const selectedLabel = spendData[selectedIndex]?.label ?? "—";
   const selectedA = spendData[selectedIndex]?.value ?? 0;
   const selectedB = salesData[selectedIndex]?.value ?? 0;
@@ -570,6 +623,16 @@ export function Heatmap({ data, maxValue }: HeatmapProps) {
 // Net is the hero line (area + thick stroke). Royalties and Ad Spend are drawn
 // as thin reference lines so the author sees, at a glance, whether ads are
 // eating royalties. All three share one y-scale for honest comparison.
+export type ChartDaySelection = {
+  index: number;
+  label?: string;
+  date?: string;
+  net: number;
+  royalties: number | null;
+  spend: number;
+  sales: number;
+} | null;
+
 interface NetProfitChartProps {
   data: ChartPoint[];
   royaltiesData?: ChartPoint[];
@@ -577,10 +640,53 @@ interface NetProfitChartProps {
   width?: number;
   height?: number;
   currency?: string;
+  periodLabel?: string;
+  selectedIndex?: number | null;
+  onDaySelect?: (selection: ChartDaySelection) => void;
 }
 
-export function NetProfitChart({ data, royaltiesData, spendData, width = 320, height = 104, currency }: NetProfitChartProps) {
+export function NetProfitChart({
+  data,
+  royaltiesData,
+  spendData,
+  width = 320,
+  height = 104,
+  currency,
+  periodLabel,
+  selectedIndex: controlledIndex,
+  onDaySelect,
+}: NetProfitChartProps) {
   const t = useTheme();
+  const chartWidth = innerChartWidth(width, 0);
+  const inset = 12;
+  const onDaySelectRef = React.useRef(onDaySelect);
+  onDaySelectRef.current = onDaySelect;
+  const dataRef = React.useRef(data);
+  dataRef.current = data;
+  const royaltiesRef = React.useRef(royaltiesData);
+  royaltiesRef.current = royaltiesData;
+  const spendRef = React.useRef(spendData);
+  spendRef.current = spendData;
+
+  const notifyDaySelect = React.useCallback((index: number | null) => {
+    const cb = onDaySelectRef.current;
+    if (!cb) return;
+    if (index == null) {
+      cb(null);
+      return;
+    }
+    cb(buildChartDaySelection(index, dataRef.current, royaltiesRef.current, spendRef.current));
+  }, []);
+
+  const { selectedIndex, gesture } = useChartSelection(
+    data.length,
+    chartWidth,
+    inset,
+    true,
+    notifyDaySelect,
+    controlledIndex,
+  );
+
   if (data.length === 0) return <View style={{ height: 100 }} />;
 
   // Color by the period TOTAL (matches the hero's Profitable/loss state), not the
@@ -589,67 +695,97 @@ export function NetProfitChart({ data, royaltiesData, spendData, width = 320, he
   const netColor = isPositive ? t.colors.tone_good : t.colors.tone_danger;
   const royColor = t.colors.tone_primary;
   const spendColor = t.colors.tone_warning;
-  const chartWidth = innerChartWidth(width, 0);
   const chartHeight = height;
-  const inset = 12;
   const series = [data, ...(royaltiesData?.length ? [royaltiesData] : []), ...(spendData?.length ? [spendData] : [])];
   const { min, max } = rangeFor(series, true);
   const points = pointsFor(data, chartWidth, chartHeight, min, max, inset);
   const royPoints = royaltiesData?.length ? pointsFor(royaltiesData, chartWidth, chartHeight, min, max, inset) : [];
   const spendPoints = spendData?.length ? pointsFor(spendData, chartWidth, chartHeight, min, max, inset) : [];
   const zeroY = clamp(pointsFor([{ value: 0 }], chartWidth, chartHeight, min, max, inset)[0]?.y ?? chartHeight - inset, inset, chartHeight - inset);
-  const { selectedIndex, gesture } = useChartSelection(data.length, chartWidth, inset);
-  const selected = points[selectedIndex] ?? points[points.length - 1];
-  const selRoy = royaltiesData?.[selectedIndex]?.value;
-  const selSpend = spendData?.[selectedIndex]?.value;
+  const selected = selectedIndex != null ? points[selectedIndex] : null;
+  const selRoy = selectedIndex != null ? royaltiesData?.[selectedIndex]?.value : null;
+  const selSpend = selectedIndex != null ? spendData?.[selectedIndex]?.value : null;
+  const tooltipLabel = selected?.label ?? periodLabel ?? "Period total";
+  const tooltipNet = selected
+    ? formatCurrency(selected.value ?? 0, currency, { compact: true })
+    : "";
+  const cursorX = selected?.x ?? points[points.length - 1]?.x ?? inset;
+  const cursorY = selected?.y ?? points[points.length - 1]?.y ?? chartHeight / 2;
 
   return (
     <GestureDetector gesture={gesture}>
     <View style={{ width: chartWidth, overflow: "hidden" }}>
       <View style={chartStyles.tooltipRow}>
-        <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{selected?.label ?? "Selected day"}</Text>
+        <VerifiedValue
+          value={tooltipLabel}
+          style={[t.typography.caption1, { color: t.colors.text_secondary }]}
+        />
         <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
-          {selRoy != null && (
-            <Text style={[t.typography.caption2, { color: royColor, fontWeight: "700" }]}>{formatCurrency(selRoy, currency, { compact: true })}</Text>
+          {selected && selRoy != null && (
+            <VerifiedValue
+              value={formatCurrency(selRoy, currency, { compact: true })}
+              color={royColor}
+              style={[t.typography.caption2, { fontWeight: "700" }]}
+            />
           )}
-          {selSpend != null && (
-            <Text style={[t.typography.caption2, { color: spendColor, fontWeight: "700" }]}>{formatCurrency(selSpend, currency, { compact: true })}</Text>
+          {selected && selSpend != null && (
+            <VerifiedValue
+              value={formatCurrency(selSpend, currency, { compact: true })}
+              color={spendColor}
+              style={[t.typography.caption2, { fontWeight: "700" }]}
+            />
           )}
-          <Text style={[t.typography.caption1, { color: netColor, fontWeight: "800" }]}>
-            {formatCurrency(selected?.value ?? 0, currency, { compact: true })}
-          </Text>
+          {selected ? (
+            <VerifiedValue
+              value={tooltipNet}
+              color={netColor}
+              style={[t.typography.caption1, { fontWeight: "800" }]}
+            />
+          ) : null}
         </View>
       </View>
-      <Svg width={chartWidth} height={chartHeight + 30}>
-        <Defs>
-          <LinearGradient id="netGradient" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0" stopColor={netColor} stopOpacity={0.42} />
-            <Stop offset="0.6" stopColor={netColor} stopOpacity={0.12} />
-            <Stop offset="1" stopColor={netColor} stopOpacity={0} />
-          </LinearGradient>
-        </Defs>
-        <Line x1={inset} x2={chartWidth - inset} y1={zeroY} y2={zeroY} stroke={t.colors.chart_grid} strokeWidth={1} opacity={0.8} />
-        <Path d={makeAreaPath(points, zeroY)} fill="url(#netGradient)" />
-        {royPoints.length > 0 && (
-          <Path d={makeLinePath(royPoints)} stroke={royColor} strokeWidth={1.5} fill="none" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 4" opacity={0.7} />
-        )}
-        {spendPoints.length > 0 && (
-          <Path d={makeLinePath(spendPoints)} stroke={spendColor} strokeWidth={1.5} fill="none" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 4" opacity={0.7} />
-        )}
-        <Path d={makeLinePath(points)} stroke={netColor} strokeWidth={8} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.14} />
-        <Path d={makeLinePath(points)} stroke={netColor} strokeWidth={3.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-        {selected && (
-          <>
-            <Line x1={selected.x} y1={inset} x2={selected.x} y2={chartHeight - inset} stroke={t.colors.text_tertiary} strokeWidth={1} opacity={0.28} />
-            <Circle cx={selected.x} cy={selected.y} r={5} fill={netColor} stroke={t.colors.background_secondary} strokeWidth={2} />
-          </>
-        )}
-        {xAxisLabels(data).map(({ index, label, key }) => (
-          <SvgText key={key} x={points[index]?.x ?? inset} y={chartHeight + 20} textAnchor={index === 0 ? "start" : index === data.length - 1 ? "end" : "middle"} fontSize={11} fill={t.colors.text_tertiary}>
-            {label}
-          </SvgText>
-        ))}
-      </Svg>
+      <View style={{ width: chartWidth, height: chartHeight + 30 }}>
+        <Svg width={chartWidth} height={chartHeight + 30}>
+          <Defs>
+            <ClipPath id="netPlotClip">
+              <Rect x={inset} y={0} width={Math.max(1, chartWidth - inset * 2)} height={chartHeight + 30} />
+            </ClipPath>
+            <LinearGradient id="netAreaFill" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0%" stopColor={netColor} stopOpacity="0.22" />
+              <Stop offset="100%" stopColor={netColor} stopOpacity="0.02" />
+            </LinearGradient>
+          </Defs>
+          <G clipPath="url(#netPlotClip)">
+          <Line x1={inset} x2={chartWidth - inset} y1={zeroY} y2={zeroY} stroke={t.colors.chart_grid} strokeWidth={1} opacity={0.8} />
+          {royPoints.length > 0 && (
+            <Path d={makeLinePath(royPoints)} stroke={royColor} strokeWidth={1.5} fill="none" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 4" opacity={0.7} />
+          )}
+          {spendPoints.length > 0 && (
+            <Path d={makeLinePath(spendPoints)} stroke={spendColor} strokeWidth={1.5} fill="none" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 4" opacity={0.7} />
+          )}
+          <Path
+            d={makeSmoothAreaPath(points, zeroY)}
+            fill="url(#netAreaFill)"
+            opacity={1}
+          />
+          <Path d={makeSmoothPath(points)} stroke={netColor} strokeWidth={2.75} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          </G>
+          {xAxisLabels(data).map(({ index, label, key }) => (
+            <SvgText key={key} x={points[index]?.x ?? inset} y={chartHeight + 20} textAnchor={index === 0 ? "start" : index === data.length - 1 ? "end" : "middle"} fontSize={11} fill={t.colors.text_tertiary}>
+              {label}
+            </SvgText>
+          ))}
+        </Svg>
+        <ChartScrubCursor
+          x={cursorX}
+          y={cursorY}
+          plotTop={inset}
+          plotBottom={chartHeight - inset}
+          color={netColor}
+          visible={!!selected}
+          stroke={t.colors.background_secondary}
+        />
+      </View>
     </View>
     </GestureDetector>
   );
@@ -721,10 +857,11 @@ interface AdsEngineChartProps {
 
 export function AdsEngineChart({ impressionsData, clicksData, ordersData, acosData, width = 320 }: AdsEngineChartProps) {
   const t = useTheme();
-  if (!impressionsData.length) return <View style={{ height: 200 }} />;
   const chartWidth = innerChartWidth(width, 0);
   const chartHeight = 160;
   const inset = 14;
+  const { selectedIndex, gesture } = useChartSelection(impressionsData.length, chartWidth, inset);
+  if (!impressionsData.length) return <View style={{ height: 200 }} />;
   const baselineY = chartHeight - inset;
 
   const maxClicks = Math.max(...clicksData.map((d) => d.value), 1);
@@ -747,7 +884,6 @@ export function AdsEngineChart({ impressionsData, clicksData, ordersData, acosDa
   const orderPoints  = scalePoints(ordersData, maxOrders);
   const acosPoints   = scalePoints(acosData, maxAcos);
   const imprPoints   = scalePoints(impressionsData, maxImpr);
-  const { selectedIndex, gesture } = useChartSelection(impressionsData.length, chartWidth, inset);
   const selectedLabel = impressionsData[selectedIndex]?.label ?? "—";
   const selectedImpr  = impressionsData[selectedIndex]?.value ?? 0;
   const selectedClicks = clicksData[selectedIndex]?.value ?? 0;
@@ -849,10 +985,11 @@ interface CampaignDailyChartProps {
 
 export function CampaignDailyChart({ impressionsData, spendData, ordersData, acosData, width = 320, currency }: CampaignDailyChartProps) {
   const t = useTheme();
-  if (!impressionsData.length) return <View style={{ height: 210 }} />;
   const chartWidth = innerChartWidth(width, 0);
   const chartHeight = 175;
   const inset = 14;
+  const { selectedIndex, gesture } = useChartSelection(impressionsData.length, chartWidth, inset);
+  if (!impressionsData.length) return <View style={{ height: 210 }} />;
   const baseY = chartHeight - inset;
 
   const maxImpr   = Math.max(...impressionsData.map((d) => d.value), 1);
@@ -875,7 +1012,6 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
   const spendPts  = scale(spendData, maxSpend);
   const orderPts  = scale(ordersData, maxOrders);
   const acosPts   = scale(acosData, maxAcos);
-  const { selectedIndex, gesture } = useChartSelection(impressionsData.length, chartWidth, inset);
   const i = selectedIndex;
   const barStep = (chartWidth - inset * 2) / Math.max(1, impressionsData.length);
   const barW = clamp(barStep * 0.55, 2, 14);
@@ -942,10 +1078,11 @@ interface BusinessTrendChartProps {
 // All series normalized to a shared scale for clarity.
 export function BusinessTrendChart({ royaltiesData, spendData, netData, organicOrdersData, width = 320, currency }: BusinessTrendChartProps) {
   const t = useTheme();
-  if (!royaltiesData.length) return <View style={{ height: 200 }} />;
   const chartWidth = innerChartWidth(width, 0);
   const chartHeight = 170;
   const inset = 14;
+  const { selectedIndex, gesture } = useChartSelection(royaltiesData.length, chartWidth, inset);
+  if (!royaltiesData.length) return <View style={{ height: 200 }} />;
   const { min, max } = rangeFor([royaltiesData, spendData, netData], true);
   const royaltiesPoints = pointsFor(royaltiesData, chartWidth, chartHeight, min, max, inset);
   const spendPoints     = pointsFor(spendData,     chartWidth, chartHeight, min, max, inset);
@@ -964,7 +1101,6 @@ export function BusinessTrendChart({ royaltiesData, spendData, netData, organicO
     pointsFor([{ value: 0 }], chartWidth, chartHeight, min, max, inset)[0]?.y ?? chartHeight - inset,
     inset, chartHeight - inset,
   );
-  const { selectedIndex, gesture } = useChartSelection(royaltiesData.length, chartWidth, inset);
   const selectedLabel = royaltiesData[selectedIndex]?.label ?? "—";
   const selectedNet   = netData[selectedIndex]?.value ?? 0;
   const selectedRoy   = royaltiesData[selectedIndex]?.value ?? 0;

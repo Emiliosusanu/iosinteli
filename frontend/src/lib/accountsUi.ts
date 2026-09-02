@@ -58,4 +58,4 @@ export const PROFILE_SWITCH_ON_HINT =
 export const PROFILE_SWITCH_OFF_HINT = "Enables this Amazon profile for InteliAds.";
 
 export const KDP_SECTION_FOOTER =
-  "Royalties come from the Chrome helper. Linking here only attaches that data to Amazon Ads profiles.";
+  "Royalties come from the Chrome helper and/or the iPhone KDP helper (Settings → Royalty source). Linking here only attaches KDP data to Amazon Ads profiles. This iPhone also refreshes linked KDP and ad spend in the background.";

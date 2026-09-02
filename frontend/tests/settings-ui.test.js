@@ -49,15 +49,17 @@ test("test notification is local and does not claim server push", () => {
   assert.equal(TEST_NOTIFICATION_LABEL, "Send a test on this iPhone");
   assert.match(TEST_NOTIFICATION_BODY, /local test/);
   assert.doesNotMatch(TEST_NOTIFICATION_BODY, /Notifications are working/);
-  assert.match(TEST_NOTIFICATION_HINT, /Does not test server push/);
-  assert.match(notifications, /TEST_NOTIFICATION_BODY/);
+  assert.match(TEST_NOTIFICATION_HINT, /local alert on this iPhone/);
+  assert.match(notifications, /requestServerTestPush/);
+  assert.match(notifications, /scheduleLocalAlert/);
+  assert.match(notifications, /Local first/);
   assert.match(notifications, /scheduleNotificationAsync/);
   assert.doesNotMatch(notifications, /Notifications are working/);
   assert.equal(testNotificationLabel("idle"), TEST_NOTIFICATION_LABEL);
   assert.equal(testNotificationLabel("guest"), "Sign in to send a test");
 });
 
-test("notification copy distinguishes local alerts from remote push", () => {
+test("notification copy describes on-device digest alerts", () => {
   assert.match(
     notificationFooter({
       guestMode: false,
@@ -65,7 +67,7 @@ test("notification copy distinguishes local alerts from remote push", () => {
       backgroundRegistered: true,
       anyEnabled: true,
     }),
-    /not remote push/,
+    /ad spend, orders, and ACoS/,
   );
   assert.match(
     notificationFooter({
@@ -74,16 +76,7 @@ test("notification copy distinguishes local alerts from remote push", () => {
       backgroundRegistered: true,
       anyEnabled: true,
     }),
-    /Campaigns/,
-  );
-  assert.doesNotMatch(
-    notificationFooter({
-      guestMode: false,
-      permission: "granted",
-      backgroundRegistered: true,
-      anyEnabled: true,
-    }),
-    /Taps open Overview/,
+    /KDP net/,
   );
   assert.match(
     notificationFooter({
@@ -108,14 +101,28 @@ test("notification copy distinguishes local alerts from remote push", () => {
   assert.doesNotMatch(spendThresholdLabel(25), /optional daily budget|typed on this screen/);
   assert.match(screen, /SPEND_THRESHOLD_CAPTION/);
   assert.match(SPEND_THRESHOLD_CAPTION, /not a number typed on this screen/);
+  assert.match(screen, /notif-daily-digest/);
+  assert.match(screen, /notif-include-kdp-net/);
 });
 
-test("KDP row is informational and does not claim iPhone collection", () => {
-  assert.equal(KDP_PROFIT_LABEL, "Profit source");
-  assert.equal(KDP_PROFIT_VALUE, "KDP royalties");
-  assert.match(KDP_SECTION_FOOTER, /does not collect KDP/);
+test("KDP royalty source is switchable between Chrome and iPhone", () => {
+  assert.equal(KDP_PROFIT_LABEL, "Royalty source");
   assert.match(KDP_SECTION_FOOTER, /Chrome helper/);
+  assert.match(KDP_SECTION_FOOTER, /this iPhone/);
+  assert.match(KDP_SECTION_FOOTER, /same schedule/);
+  assert.match(KDP_SECTION_FOOTER, /Keychain/);
+  assert.match(KDP_SECTION_FOOTER, /Net Royalties = KDP royalties minus Amazon Ads spend/);
   assert.match(screen, /KDP_SECTION_FOOTER/);
+  // The row now navigates to the picker and shows the live source value.
+  assert.match(screen, /settings-kdp-source/);
+  assert.match(screen, /more\/kdp-source/);
+  assert.match(screen, /kdpSourceValue/);
+  assert.match(screen, /kdpRoyaltySourceValueLabel/);
+  assert.match(screen, /settings-kdp-accounts/);
+  assert.match(screen, /settings-kdp-helper/);
+  assert.match(screen, /settings-plan/);
+  assert.match(screen, /settings-subscription-status/);
+  // Settings screen itself must stay clean of importer internals.
   assert.doesNotMatch(screen, /royaltyRate|setRoyaltyRate|WebView|scraper/);
 });
 

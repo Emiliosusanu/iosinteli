@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -18,15 +17,12 @@ import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import Animated, {
   FadeIn,
   FadeInDown,
-  FadeInUp,
   ZoomIn,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
 } from "react-native-reanimated";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { passwordVisibilityLabel } from "@/src/lib/authContract";
-import { useReduceMotion, useTheme } from "@/src/lib/theme";
+import { dashboard, useReduceMotion, useTheme } from "@/src/lib/theme";
+import { ScreenAmbient } from "@/src/components/ScreenAmbient";
 
 const inteliadsIcon = require("../../../assets/images/icon.png");
 
@@ -52,6 +48,7 @@ export function AuthScreen({ children }: { children: React.ReactNode }) {
   const t = useTheme();
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: t.colors.background_primary }]} edges={["top", "bottom"]}>
+      <ScreenAmbient />
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView
           contentContainerStyle={styles.content}
@@ -231,23 +228,6 @@ export function AuthEye({ on, onPress }: { on: boolean; onPress: () => void }) {
   );
 }
 
-function usePressScale() {
-  const reduceMotion = useReduceMotion();
-  const scale = useSharedValue(1);
-  const style = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
-  return {
-    style,
-    onPressIn() {
-      if (reduceMotion) return;
-      scale.value = withSpring(0.97, { damping: 16, stiffness: 320 });
-    },
-    onPressOut() {
-      if (reduceMotion) return;
-      scale.value = withSpring(1, { damping: 16, stiffness: 320 });
-    },
-  };
-}
-
 export function AuthPrimary({
   label,
   onPress,
@@ -262,30 +242,76 @@ export function AuthPrimary({
   busy?: boolean;
 }) {
   const t = useTheme();
-  const press = usePressScale();
-  const entering = useEntering(FadeInUp.delay(160).duration(280));
+  // Plain RN control — nested Reanimated transform wrappers ate presses on device.
   return (
-    <Animated.View entering={entering}>
-      <Animated.View style={press.style}>
-        <Pressable
-          testID={testID}
-          onPress={() => {
-            if (disabled || busy) return;
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            onPress();
-          }}
-          onPressIn={press.onPressIn}
-          onPressOut={press.onPressOut}
-          disabled={disabled || busy}
-          accessibilityRole="button"
-          accessibilityLabel={label}
-          accessibilityState={{ disabled: !!(disabled || busy), busy: !!busy }}
-          style={[styles.primary, { backgroundColor: t.colors.tone_primary, opacity: disabled || busy ? 0.5 : 1 }]}
-        >
-          <Text style={[t.typography.headline, { color: t.colors.text_inverse }]}>{label}</Text>
-        </Pressable>
-      </Animated.View>
-    </Animated.View>
+    <TouchableOpacity
+      testID={testID}
+      onPress={() => {
+        if (disabled || busy) return;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        onPress();
+      }}
+      disabled={disabled || busy}
+      activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!(disabled || busy), busy: !!busy }}
+      style={[styles.primary, { backgroundColor: t.colors.tone_primary, opacity: disabled || busy ? 0.5 : 1 }]}
+    >
+      <Text style={[t.typography.headline, { color: t.colors.text_inverse }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+/** Amazon-branded primary CTA — matches web Continue with Amazon. */
+export function AuthAmazon({
+  label,
+  onPress,
+  testID,
+  disabled,
+  busy,
+  accessibilityHint,
+}: {
+  label: string;
+  onPress: () => void;
+  testID: string;
+  disabled?: boolean;
+  busy?: boolean;
+  accessibilityHint?: string;
+}) {
+  const t = useTheme();
+  return (
+    <TouchableOpacity
+      testID={testID}
+      onPress={() => {
+        if (disabled || busy) return;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        onPress();
+      }}
+      disabled={disabled || busy}
+      activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={{ disabled: !!(disabled || busy), busy: !!busy }}
+      style={[styles.amazon, { opacity: disabled || busy ? 0.5 : 1 }]}
+    >
+      <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <SFSymbol name="bag" size={18} color="#111111" />
+      </View>
+      <Text style={[t.typography.headline, { color: "#111111" }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+export function AuthDivider({ label }: { label: string }) {
+  const t = useTheme();
+  return (
+    <View style={styles.divider} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      <View style={[styles.dividerLine, { backgroundColor: t.colors.separator }]} />
+      <Text style={[t.typography.footnote, { color: t.colors.text_secondary, paddingHorizontal: 10 }]}>{label}</Text>
+      <View style={[styles.dividerLine, { backgroundColor: t.colors.separator }]} />
+    </View>
   );
 }
 
@@ -305,32 +331,29 @@ export function AuthSecondary({
   accessibilityHint?: string;
 }) {
   const t = useTheme();
-  const press = usePressScale();
-  const entering = useEntering(FadeInUp.delay(220).duration(280));
   return (
-    <Animated.View entering={entering}>
-      <Animated.View style={press.style}>
-        <Pressable
-          testID={testID}
-          onPress={() => {
-            if (disabled) return;
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            onPress();
-          }}
-          onPressIn={press.onPressIn}
-          onPressOut={press.onPressOut}
-          disabled={disabled}
-          accessibilityRole="button"
-          accessibilityLabel={label}
-          accessibilityHint={accessibilityHint}
-          accessibilityState={{ disabled: !!disabled }}
-          style={[styles.secondary, { backgroundColor: t.colors.background_secondary, opacity: disabled ? 0.5 : 1 }]}
-        >
-          {symbol ? <SFSymbol name={ICONS[symbol]} size={18} color={t.colors.text_primary} /> : null}
-          <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>{label}</Text>
-        </Pressable>
-      </Animated.View>
-    </Animated.View>
+    <TouchableOpacity
+      testID={testID}
+      onPress={() => {
+        if (disabled) return;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        onPress();
+      }}
+      disabled={disabled}
+      activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={{ disabled: !!disabled }}
+      style={[styles.secondary, { backgroundColor: t.colors.background_secondary, opacity: disabled ? 0.5 : 1 }]}
+    >
+      {symbol ? (
+        <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+          <SFSymbol name={ICONS[symbol]} size={18} color={t.colors.text_primary} />
+        </View>
+      ) : null}
+      <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -432,7 +455,7 @@ const styles = StyleSheet.create({
   markImage: { width: 40, height: 40, borderRadius: 10 },
   titleBlock: { marginBottom: 22 },
   titleCenter: { alignItems: "center" },
-  group: { borderRadius: 10, borderCurve: "continuous", overflow: "hidden" },
+  group: { borderRadius: dashboard.cardRadius, borderCurve: "continuous", overflow: "hidden" },
   row: {
     minHeight: 52,
     paddingHorizontal: 16,
@@ -450,17 +473,39 @@ const styles = StyleSheet.create({
   eye: { minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center", zIndex: 2 },
   primary: {
     marginTop: 16,
-    minHeight: 50,
-    borderRadius: 10,
+    minHeight: 48,
+    borderRadius: dashboard.metricChipRadius,
     borderCurve: "continuous",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 16,
   },
+  amazon: {
+    marginTop: 4,
+    minHeight: 48,
+    borderRadius: dashboard.metricChipRadius,
+    borderCurve: "continuous",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 16,
+    backgroundColor: "#FF9900",
+  },
+  divider: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 22,
+    marginBottom: 6,
+  },
+  dividerLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+  },
   secondary: {
     marginTop: 10,
-    minHeight: 50,
-    borderRadius: 10,
+    minHeight: 48,
+    borderRadius: dashboard.metricChipRadius,
     borderCurve: "continuous",
     alignItems: "center",
     justifyContent: "center",
@@ -475,7 +520,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: 10,
+    borderRadius: dashboard.chipRadius,
   },
   link: { minHeight: 44, justifyContent: "center" },
   switchRow: {

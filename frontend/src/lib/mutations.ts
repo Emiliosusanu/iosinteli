@@ -1,7 +1,7 @@
 // Nest API writes — same paths the web dashboard uses.
-// Reads stay on Supabase. Do not send the Supabase session JWT here.
+// Reads stay on Supabase RLS. nestApiFetch sends Nest JWT or the Supabase bearer.
 
-import { nestApiFetch, nestApiJson, parseNestError } from "./rulesApi";
+import { nestApiFetch, nestApiJson, nestLogout, parseNestError } from "./rulesApi";
 import type { AmazonProfile } from "./types";
 
 export type EntityState = "enabled" | "paused";
@@ -64,6 +64,8 @@ export interface BidRecommendation {
   engineScore?: number;
   bidDelta?: number;
   status?: string;
+  applicationStatus?: string;
+  expiresAt?: string;
   direction?: string;
 }
 
@@ -246,8 +248,13 @@ export function fetchAmazonConnectUrl() {
   return nestApiJson<AmazonConnectResponse>("/auth/amazon/connect", { method: "GET" }, "Couldn't start Amazon connect.");
 }
 
-export function fetchAmazonLoginUrl() {
-  return nestApiJson<AmazonConnectResponse>("/auth/amazon/login", { method: "GET" }, "Couldn't start Amazon login.");
+export async function fetchAmazonLoginUrl() {
+  await nestLogout();
+  return nestApiJson<AmazonConnectResponse>(
+    "/auth/amazon/login",
+    { method: "GET", allowAnonymous: true },
+    "Couldn't start Amazon login.",
+  );
 }
 
 type NestAmazonProfile = {

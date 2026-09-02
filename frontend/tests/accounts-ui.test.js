@@ -44,6 +44,7 @@ test("row speech includes name, enabled, and view without raw ids", () => {
   );
   assert.equal(profileSwitchAccessibilityLabel("UK Ads", false), "UK Ads. Disabled");
   assert.match(KDP_SECTION_FOOTER, /Chrome helper/);
+  assert.match(KDP_SECTION_FOOTER, /iPhone KDP helper/);
   assert.doesNotMatch(KDP_SECTION_FOOTER, /iPhone collects KDP|Synced/);
   assert.match(DISABLE_CONFIRM_MESSAGE, /does not disconnect Amazon/);
 });
@@ -53,7 +54,8 @@ test("distinct empty and error copy", () => {
   assert.match(screen, /Couldn't load Amazon profiles/);
   assert.match(screen, /No KDP accounts/);
   assert.match(screen, /Couldn't load KDP accounts/);
-  assert.match(screen, /iPhone does not collect KDP/);
+  assert.match(screen, /Royalty source/);
+  assert.doesNotMatch(screen, /iPhone does not collect KDP/);
   assert.doesNotMatch(screen, /No data/);
   assert.match(screen, /accounts-viewing-customer/);
   assert.match(screen, /accounts-guest/);

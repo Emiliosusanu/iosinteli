@@ -6,6 +6,7 @@ import { Stack } from "expo-router";
 import { useTheme } from "../lib/theme";
 import { DateRangeControl } from "./TopBar";
 import { SFSymbol, sfFromIonicon } from "./ios/Native";
+import { ScreenAmbient } from "./ScreenAmbient";
 
 interface SubScreenProps {
   title: string;
@@ -25,12 +26,14 @@ export function SubScreen({ title, children, rightAction, showDateRange = false 
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.colors.background_primary }} edges={["bottom"]}>
-      {/* Native iOS header — back button and title provided by the Stack */}
+      <ScreenAmbient />
+      {/* Native iOS header — back only; page titles removed for denser chrome. */}
       <Stack.Screen
         options={{
           headerShown: true,
-          title,
+          title: "",
           headerBackTitle: "",
+          headerAccessibilityLabel: title,
           headerStyle: { backgroundColor: t.colors.background_primary },
           headerTitleStyle: { color: t.colors.text_primary, fontSize: 17, fontWeight: "600" },
           headerTintColor: t.colors.tone_primary,

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -11,20 +11,33 @@ import {
   Platform,
   UIManager,
 } from "react-native";
-import { Image } from "expo-image";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useQuery } from "@tanstack/react-query";
+import { AppScreen } from "@/src/components/ScreenAmbient";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { markPerf } from "@/src/lib/perf";
+import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { fetchTopBooksRange, type TopBookRow } from "@/src/lib/queries";
+import { BooksReadError, fetchKdpRoyaltiesRange, fetchTopBooksRange, type TopBookRow } from "@/src/lib/queries";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
+import { BookCover } from "@/src/components/BookCover";
+import {
+  formatBreakEvenAcos,
+  hasAuthoritativeBreakEven,
+  isOverBreakEven,
+} from "@/src/lib/kdpTitlePresentation";
 import { useApp } from "@/src/contexts/AppContext";
 import { useTheme, acosTone, toneColor, useReduceMotion } from "@/src/lib/theme";
 import { formatCurrency, formatPercent, formatInt } from "@/src/lib/format";
+import { NET_ROYALTIES_LABEL, netRoyaltiesVoiceOver, resolveBookNet, bookNetIsKnown } from "@/src/lib/netRoyalties";
 import { buildBookColorMap, bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { TopBar } from "@/src/components/TopBar";
 import { EmptyState, RetryState, MetricStrip, FilterChrome, ScreenSpinner, ListCard } from "@/src/components/Primitives";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
+import { isHomeQueryTimeout, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout, queryStillWaiting } from "@/src/lib/queryTimeout";
+import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialReadVersion";
+import { noPeriodPlaceholder } from "@/src/lib/periodQuery";
+import { booksEmptyCopy } from "@/src/lib/booksListActivity";
+import { isIosHelperEnabled } from "@/src/lib/kdp/source";
 
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -32,41 +45,69 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
 
 type Sort = "net" | "spend" | "acos" | "orders";
 
-function emptyCopy(search: string) {
-  if (search.trim()) {
-    return { title: "No matching books", subtitle: "Try a different title or ASIN." };
-  }
-  return { title: "No book data in range", subtitle: "Try a longer date range or different profile filter." };
+function emptyCopy(
+  search: string,
+  opts: { iosHelperOn: boolean; hasLinkedKdp: boolean; hasAccountRoyalties: boolean },
+) {
+  return booksEmptyCopy(search, opts);
+}
+
+function bookAdsReady(item: TopBookRow): boolean {
+  return item.ads_state !== "pending" && item.ads_state !== "missing";
+}
+
+function bookKdpAvailable(item: TopBookRow): boolean {
+  return item.kdp_state !== "missing" && item.royalties != null;
+}
+
+/** Royalties known well enough to compute net (partial coverage still shows a number). */
+function bookKdpReady(item: TopBookRow): boolean {
+  return bookKdpAvailable(item);
 }
 
 function bookStatus(item: TopBookRow, hasBreakEven: boolean): { label: string; tone: "good" | "warning" | "danger" } {
+  if (!bookAdsReady(item)) return { label: "Loading ads", tone: "warning" };
+  if (!bookKdpAvailable(item)) return { label: "Royalties unavailable", tone: "warning" };
+  if (item.kdp_state === "partial") return { label: "Royalties partial", tone: "warning" };
   const spend = Number(item.spend) || 0;
   const orders = Number(item.orders) || 0;
+  // Verdict follows the SAME resolved net as the displayed profit. KDP royalties
+  // can make a book net-positive even with zero ads orders, so the net sign wins
+  // first; "Spending without sales" only applies when net is negative/unknown.
+  const resolved = resolveBookNet(item);
+  if (resolved != null) {
+    if (resolved >= 0) return { label: "Net positive", tone: "good" };
+    if (spend > 0 && orders === 0) return { label: "Spending without sales", tone: "danger" };
+    return { label: "Net negative", tone: "danger" };
+  }
   if (spend > 0 && orders === 0) return { label: "Spending without sales", tone: "danger" };
-  if (item.net >= 0) return { label: "Profitable", tone: "good" };
   if (hasBreakEven && item.acos > item.breakeven_acos) return { label: "Over break-even", tone: "warning" };
-  return { label: "Losing money", tone: "danger" };
+  return { label: "Net negative", tone: "danger" };
 }
 
 function bookA11yLabel(item: TopBookRow, status: { label: string }, currency: string) {
   const title = item.title || item.asin || item.sku || "Untitled book";
-  const royalties = formatCurrency(Number(item.royalties) || 0, currency);
+  const royalties = bookKdpAvailable(item) ? formatCurrency(item.royalties!, currency) : "unavailable";
   const spend = formatCurrency(Number(item.spend) || 0, currency);
   const acos = Number(item.sales) > 0 ? formatPercent(Number(item.acos)) : "not available";
   const orders = formatInt(Number(item.orders) || 0);
-  const profit = formatCurrency(Number(item.net) || 0, currency);
+  const net = bookNetIsKnown(item)
+    ? formatCurrency(resolveBookNet(item)!, currency)
+    : "unavailable";
+  const adsSales = Number(item.sales) > 0 ? formatCurrency(Number(item.sales), currency) : undefined;
   const parts = [
     title,
     status.label,
-    `Royalties ${royalties}`,
-    `Ad spend ${spend}`,
-    `ACoS ${acos}`,
-    `${orders} orders`,
-    `Profit ${profit}`,
+    netRoyaltiesVoiceOver({
+      kdpRoyalties: royalties,
+      adsSpend: spend,
+      netRoyalties: net,
+      adsSales,
+    }),
+    `Amazon Ads ACoS ${acos}`,
+    `${orders} ads orders`,
   ];
-  if (item.breakeven_acos > 0 && item.breakeven_acos < 200) {
-    parts.push(`Break-even ACoS ${formatPercent(item.breakeven_acos, 0)}`);
-  }
+  parts.push(`Break-even ACoS ${formatBreakEvenAcos(item.breakeven_acos)}`);
   return parts.join(". ");
 }
 
@@ -78,23 +119,62 @@ export default function ProductsScreen() {
   const t = useTheme();
   const router = useRouter();
   const reduceMotion = useReduceMotion();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
+  const { selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource } = useApp();
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<Sort>("net");
   const [refreshing, setRefreshing] = useState(false);
 
-  const { data: books = [], isLoading, isError, isRefetching, refetch } = useQuery({
-    queryKey: ["products-range", adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () =>
-      fetchTopBooksRange({
-        profileIds: selectedProfileIds,
-        start: dateRange.start,
-        end: dateRange.end,
-        royaltyRate: 0,
-        limit: 300,
-        filterUserId: adminFilterUserId,
-      }),
+  useEffect(() => {
+    const qa = takePendingQaFilters();
+    if (qa?.booksSort) {
+      setSort(qa.booksSort);
+      console.log(`[inteliads:qa] books filters sort=${qa.booksSort}`);
+    }
+  }, []);
+
+  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end] as const;
+  const overviewBooksWarm = queryClient.getQueryData(
+    [FINANCIAL_QUERY_ROOTS.topBooks, adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
+  ) as TopBookRow[] | undefined;
+
+  const { data: books = [], isPending, isError, isRefetching, isFetching, refetch, error } = useQuery({
+    queryKey: booksKey,
+    queryFn: ({ signal }) => {
+      markPerf("books.query.start");
+      return withQueryTimeout(
+        fetchTopBooksRange({
+          profileIds: selectedProfileIds,
+          start: dateRange.start,
+          end: dateRange.end,
+          royaltyRate: 0,
+          limit: 300,
+          filterUserId: adminFilterUserId,
+          activityDays: 0,
+        }).then((rows) => {
+          markPerf("books.query.end");
+          return rows;
+        }),
+        TARGETING_QUERY_TIMEOUT_MS,
+        signal,
+      );
+    },
     enabled: selectedProfileIds.length > 0,
+    staleTime: 5 * 60_000,
+    gcTime: 12 * 60 * 60_000,
+    placeholderData: () => overviewBooksWarm ?? noPeriodPlaceholder(),
+    retry: false,
+    meta: financialQueryMeta(),
+  });
+
+  const showBlockingSpinner = queryStillWaiting({ isPending, isError, data: books }) && books.length === 0 && !overviewBooksWarm;
+
+  const { data: periodRoyalties } = useQuery({
+    queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, selectedProfileIds, dateRange.start, dateRange.end],
+    queryFn: () => fetchKdpRoyaltiesRange(selectedProfileIds, dateRange.start, dateRange.end),
+    enabled: selectedProfileIds.length > 0 && !showBlockingSpinner && books.length === 0,
+    staleTime: 5 * 60_000,
+    meta: financialQueryMeta(),
   });
 
   const bookColorMap = useMemo(
@@ -122,8 +202,11 @@ export default function ProductsScreen() {
         case "orders":
           return b.orders - a.orders;
         case "net":
-        default:
-          return b.net - a.net;
+        default: {
+          const netA = resolveBookNet(a) ?? Number.NEGATIVE_INFINITY;
+          const netB = resolveBookNet(b) ?? Number.NEGATIVE_INFINITY;
+          return netB - netA;
+        }
       }
     });
   }, [books, search, sort]);
@@ -166,26 +249,33 @@ export default function ProductsScreen() {
     setRefreshing(false);
   };
 
-  const empty = emptyCopy(search);
-  const showSearchCount = search.trim().length > 0 && !isLoading;
+  const hasLinkedKdp = selectedProfiles.some((p) => (p.kdp_account_count ?? 0) > 0);
+  const hasAccountRoyalties = (periodRoyalties?.totalRoyalties ?? 0) > 0;
+  const empty = emptyCopy(search, {
+    iosHelperOn: isIosHelperEnabled(kdpRoyaltySource),
+    hasLinkedKdp,
+    hasAccountRoyalties,
+  });
+  const showSearchCount = search.trim().length > 0 && !showBlockingSpinner;
+
 
   if (selectedProfileIds.length === 0) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: t.colors.background_primary }} edges={["top"]}>
-        <TopBar title="Books" />
+      <AppScreen>
+        <TopBar />
         <EmptyState
           icon="business-outline"
           title={isAdminViewer ? "No Amazon account" : "No account connected"}
           subtitle={isAdminViewer ? "Pick a customer in the profile menu." : "Connect an Amazon account to see your books."}
           action={isAdminViewer ? undefined : { label: "Connect account", onPress: () => router.push("/more/accounts") }}
         />
-      </SafeAreaView>
+      </AppScreen>
     );
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: t.colors.background_primary }} edges={["top"]}>
-      <TopBar title="Books" />
+    <AppScreen>
+      <TopBar />
 
       <FilterChrome>
         <IOSSearchBar
@@ -199,7 +289,7 @@ export default function ProductsScreen() {
           value={sort}
           onChange={applySort}
           options={[
-            { key: "net", label: "Profit" },
+            { key: "net", label: "Net roy." },
             { key: "spend", label: "Spend" },
             { key: "acos", label: "ACoS" },
             { key: "orders", label: "Orders" },
@@ -208,16 +298,23 @@ export default function ProductsScreen() {
         {showSearchCount ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>
             {filtered.length === 1 ? "1 book" : `${filtered.length} books`}
+            {isFetching && books.length > 0 ? " · updating" : ""}
           </Text>
         ) : null}
       </FilterChrome>
 
-      {isLoading && books.length === 0 ? (
+      {showBlockingSpinner ? (
         <ScreenSpinner />
       ) : isError && books.length === 0 ? (
         <RetryState
-          title="Books failed to load"
-          subtitle="Check your connection and try again."
+          title="Couldn't load books"
+          subtitle={
+            isHomeQueryTimeout(error)
+              ? "This is taking longer than usual. Pull to retry."
+              : error instanceof BooksReadError
+                ? "Something went wrong loading your books. Pull to retry."
+                : "Check your connection and try again."
+          }
           onRetry={() => void refetch()}
           retrying={isRefetching}
         />
@@ -230,7 +327,7 @@ export default function ProductsScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />
           }
           ItemSeparatorComponent={ItemSeparator}
-          ListEmptyComponent={<EmptyState icon="cube-outline" title={empty.title} subtitle={empty.subtitle} />}
+          ListEmptyComponent={<EmptyState productIcon="books" title={empty.title} subtitle={empty.subtitle} />}
           renderItem={({ item, index }) => (
             <ProductCard
               item={item}
@@ -241,7 +338,7 @@ export default function ProductsScreen() {
           )}
         />
       )}
-    </SafeAreaView>
+    </AppScreen>
   );
 }
 
@@ -264,20 +361,26 @@ const ProductCard = React.memo(function ProductCard({
   const t = useTheme();
   const reduceMotion = useReduceMotion();
   const scale = useRef(new Animated.Value(1)).current;
-  const [coverFailed, setCoverFailed] = useState(false);
 
-  const tone = acosTone(item.acos, item.breakeven_acos);
-  const netPos = item.net >= 0;
-  const hasBreakEven = item.breakeven_acos > 0 && item.breakeven_acos < 200;
-  const coverUrl = !coverFailed ? item.image_url || fallbackAsinCoverUrl(item.asin || item.sku) : null;
+  const adsReady = bookAdsReady(item);
+  const kdpAvailable = bookKdpAvailable(item);
+  const kdpReady = bookKdpReady(item);
+  const hasBreakEven = hasAuthoritativeBreakEven(item.breakeven_acos);
+  const tone = adsReady ? acosTone(item.acos, hasBreakEven ? item.breakeven_acos : 30) : acosTone(0);
+  const netPos = (() => {
+    const net = resolveBookNet(item);
+    return net != null && net >= 0;
+  })();
+  const resolvedNet = resolveBookNet(item);
+  const amazonCover = fallbackAsinCoverUrl(item.asin || item.sku);
   const status = bookStatus(item, hasBreakEven);
   const statusColor = toneColor(status.tone, t.colors);
-  const acosOver = hasBreakEven && item.acos > 0 ? item.acos > item.breakeven_acos : false;
+  const acosOver = isOverBreakEven(item.acos, item.breakeven_acos);
   const rowKey = item.asin || item.sku || item.book_key;
 
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
-      <ListCard accent={color} testID={rowKey ? `book-row-${rowKey}` : undefined}>
+      <ListCard testID={rowKey ? `book-row-${rowKey}` : undefined}>
         <TouchableOpacity
           activeOpacity={1}
           accessibilityRole="button"
@@ -294,28 +397,13 @@ const ProductCard = React.memo(function ProductCard({
           onPress={() => onOpen(item)}
         >
           <View style={styles.identityRow}>
-            <View
-              accessible={false}
-              importantForAccessibility="no-hide-descendants"
-              style={[styles.coverWrapper, { backgroundColor: color + "16", borderColor: color + "44" }]}
-            >
-              {coverUrl ? (
-                <Image
-                  source={{ uri: coverUrl }}
-                  style={styles.cover}
-                  contentFit="cover"
-                  transition={reduceMotion ? 0 : 200}
-                  cachePolicy="memory-disk"
-                  recyclingKey={item.book_key || item.asin || item.sku || undefined}
-                  onError={() => setCoverFailed(true)}
-                  accessible={false}
-                />
-              ) : (
-                <View style={[styles.cover, styles.coverPlaceholder, { backgroundColor: color + "12" }]}>
-                  <SFSymbol name="book" size={26} color={color} />
-                </View>
-              )}
-            </View>
+            <BookCover
+              uri={item.image_url}
+              fallbackUri={amazonCover}
+              asin={item.asin || item.sku}
+              size="md"
+              recyclingKey={item.book_key || item.asin || item.sku || undefined}
+            />
 
             <View style={styles.titleBlock}>
               <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={3}>
@@ -339,49 +427,52 @@ const ProductCard = React.memo(function ProductCard({
 
             <View style={styles.profitBlock} accessible={false} importantForAccessibility="no">
               <Text
-                style={[t.typography.metric_compact, { color: netPos ? t.colors.tone_good : t.colors.tone_danger }]}
+                style={[t.typography.metric_compact, { color: resolvedNet == null ? t.colors.text_tertiary : netPos ? t.colors.tone_good : t.colors.tone_danger }]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
               >
-                {netPos ? "+" : ""}
-                {formatCurrency(item.net, currency, { compact: true })}
+                {resolvedNet == null ? "—" : `${netPos ? "+" : ""}${formatCurrency(resolvedNet, currency, { compact: true })}`}
               </Text>
-              <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 4 }]}>Profit</Text>
+              <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 4 }]}>{NET_ROYALTIES_LABEL}</Text>
             </View>
           </View>
 
-          {hasBreakEven && item.acos > 0 ? (
+          {adsReady && item.acos > 0 ? (
             <View style={styles.breakEven} accessible={false} importantForAccessibility="no">
               <View style={styles.breakEvenLabels}>
                 <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, flex: 1, flexShrink: 1 }]}>
-                  ACoS {formatPercent(item.acos, 0)} · BE {formatPercent(item.breakeven_acos, 0)}
+                  ACoS {formatPercent(item.acos, 0)} · BE {formatBreakEvenAcos(item.breakeven_acos)}
                 </Text>
-                <Text style={[t.typography.caption2, { color: toneColor(tone, t.colors), fontWeight: "600" }]}>
-                  {acosOver ? "OVER" : "SAFE"}
-                </Text>
+                {hasBreakEven ? (
+                  <Text style={[t.typography.caption2, { color: toneColor(tone, t.colors), fontWeight: "600" }]}>
+                    {acosOver ? "OVER" : "SAFE"}
+                  </Text>
+                ) : null}
               </View>
-              <View style={[styles.breakEvenTrack, { backgroundColor: t.colors.background_tertiary }]}>
-                <View
-                  style={{
-                    height: 6,
-                    borderRadius: 3,
-                    width: `${Math.min(100, (item.acos / item.breakeven_acos) * 100)}%`,
-                    backgroundColor: toneColor(tone, t.colors),
-                  }}
-                />
-              </View>
+              {hasBreakEven ? (
+                <View style={[styles.breakEvenTrack, { backgroundColor: t.colors.background_tertiary }]}>
+                  <View
+                    style={{
+                      height: 6,
+                      borderRadius: 3,
+                      width: `${Math.min(100, (item.acos / item.breakeven_acos) * 100)}%`,
+                      backgroundColor: toneColor(tone, t.colors),
+                    }}
+                  />
+                </View>
+              ) : null}
             </View>
           ) : null}
 
           <View style={[styles.metricsRow, { borderTopColor: t.colors.separator }]} accessible={false} importantForAccessibility="no">
             <MetricStrip
               items={[
-                { label: "Royalties", value: formatCurrency(item.royalties, currency, { compact: true }), color: t.colors.tone_good },
-                { label: "Spend", value: formatCurrency(item.spend, currency, { compact: true }) },
+                { label: "Royalties", value: kdpAvailable ? formatCurrency(item.royalties!, currency, { compact: true }) : "—", color: kdpAvailable ? t.colors.tone_good : t.colors.text_tertiary },
+                { label: "Spend", value: adsReady ? formatCurrency(item.spend, currency, { compact: true }) : "—" },
                 { label: "Orders", value: formatInt(item.orders) },
                 {
                   label: "ACoS",
-                  value: item.sales > 0 ? formatPercent(item.acos) : "—",
+                  value: adsReady && item.sales > 0 ? formatPercent(item.acos) : "—",
                   color: toneColor(tone, t.colors),
                 },
               ]}
@@ -407,23 +498,6 @@ const styles = StyleSheet.create({
     paddingTop: 2,
     minWidth: 72,
     flexShrink: 0,
-  },
-  coverWrapper: {
-    width: 52,
-    height: 70,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    overflow: "hidden",
-    flexShrink: 0,
-  },
-  cover: {
-    ...StyleSheet.absoluteFillObject,
-    width: "100%",
-    height: "100%",
-  },
-  coverPlaceholder: {
-    alignItems: "center",
-    justifyContent: "center",
   },
   statusPill: {
     flexDirection: "row",

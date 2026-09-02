@@ -193,7 +193,7 @@ export default function SearchTermDetailScreen() {
 
         {termQ.isError && !item ? (
           <RetryState
-            title="Search term metrics failed to load"
+            title="Couldn't load search term metrics"
             subtitle="You can still add or negate this term."
             onRetry={() => void termQ.refetch()}
             retrying={termQ.isRefetching}

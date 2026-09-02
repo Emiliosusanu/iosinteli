@@ -8,7 +8,9 @@ import { hasNestToken, NestApiError } from "../lib/rulesApi";
 import { AmazonProfile, DateRange } from "../lib/types";
 import { normalizeDateRange, rangePresets } from "../lib/format";
 import { useAuth } from "./AuthContext";
-import { configureNotifications, runAlertCheck, registerForPushAsync, clearNotificationIdentity } from "../lib/notifications";
+import { configureNotifications, registerForPushAsync, clearNotificationIdentity, installBackgroundSyncWakeHandlers, runAlertCheck } from "../lib/notifications";
+import { DEFAULT_KDP_ROYALTY_SOURCE, normalizeKdpRoyaltySource, type KdpRoyaltySource } from "../lib/kdp/source";
+import { getKdpRoyaltySource, setKdpRoyaltySource as persistKdpRoyaltySource } from "../lib/kdp/sourceStore";
 
 const STORAGE_KEYS = {
   selectedProfiles: "inteliads.selectedProfiles",
@@ -21,7 +23,9 @@ export interface NotificationPrefs {
   newOrder: boolean;
   bookAttention: boolean;
   campaignSpend: boolean;
-  spendThreshold: number; // % above daily budget that triggers alert
+  spendThreshold: number;
+  dailyDigest: boolean;
+  includeKdpNet: boolean;
 }
 
 const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
@@ -29,6 +33,8 @@ const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
   bookAttention: true,
   campaignSpend: true,
   spendThreshold: 25,
+  dailyDigest: true,
+  includeKdpNet: false,
 };
 
 interface AppContextType {
@@ -53,6 +59,8 @@ interface AppContextType {
   setDateRange: (range: DateRange) => void;
   royaltyRate: number;
   setRoyaltyRate: (rate: number) => void;
+  kdpRoyaltySource: KdpRoyaltySource;
+  setKdpRoyaltySource: (source: KdpRoyaltySource) => void;
   notifications: NotificationPrefs;
   setNotifications: (n: NotificationPrefs) => void;
   notificationRuntime: {
@@ -71,6 +79,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [adminFilterUserId, setAdminFilterUserIdState] = useState<string | null>(null);
   const [dateRange, setDateRangeState] = useState<DateRange>(rangePresets().thisMonth);
   const [royaltyRate, setRoyaltyRateState] = useState<number>(0);
+  const [kdpRoyaltySource, setKdpRoyaltySourceState] = useState<KdpRoyaltySource>(DEFAULT_KDP_ROYALTY_SOURCE);
   const [notifications, setNotificationsState] = useState<NotificationPrefs>(DEFAULT_NOTIFICATIONS);
   const [notificationRuntime, setNotificationRuntime] = useState({
     permission: "undetermined" as "granted" | "denied" | "undetermined",
@@ -83,12 +92,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Hydrate persisted values
   useEffect(() => {
     (async () => {
-      const [ids, dr, nf, filterUser] = await Promise.all([
+      const [ids, dr, nf, filterUser, kdpSource] = await Promise.all([
         storage.getItem(STORAGE_KEYS.selectedProfiles, ""),
         storage.getItem(STORAGE_KEYS.dateRange, ""),
         storage.getItem(STORAGE_KEYS.notifications, ""),
         storage.getItem(ADMIN_FILTER_KEY, ""),
+        getKdpRoyaltySource(),
       ]);
+      setKdpRoyaltySourceState(normalizeKdpRoyaltySource(kdpSource));
       if (typeof filterUser === "string" && filterUser.length > 0) {
         setAdminFilterUserIdState(filterUser);
       }
@@ -231,7 +242,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         setNotificationRuntime({ ...runtime, pushRegistered: false });
         if (runtime.permission !== "granted") return;
-        void runAlertCheck("foreground");
         const push = await registerForPushAsync();
         if (cancelled) return;
         setNotificationRuntime({ ...runtime, pushRegistered: !!push.token });
@@ -242,37 +252,51 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [hydrated, notifications, user?.id]);
 
-  // Re-run the alert sweep whenever the app returns to the foreground, and keep
-  // a lightweight heartbeat running while it stays open so alerts surface even
-  // when iOS never wakes the background task. The interval is paused in the
-  // background to avoid wasted work.
+  useEffect(() => {
+    installBackgroundSyncWakeHandlers();
+  }, []);
+
+  // Resume: dual-source refresh (Ads API + linked KDP from cloud), evaluate local
+  // alerts, and invalidate active financial reads so cache paints fast overnight.
   useEffect(() => {
     if (!hydrated || !user?.id) return;
-    let interval: ReturnType<typeof setInterval> | null = null;
-    const stopPolling = () => {
-      if (interval) {
-        clearInterval(interval);
-        interval = null;
-      }
-    };
-    const startPolling = () => {
-      if (interval) return;
-      interval = setInterval(() => void runAlertCheck("foreground"), 5 * 60_000);
-    };
-    if (AppState.currentState === "active") startPolling();
     const sub = AppState.addEventListener("change", (next) => {
       if (next === "active") {
-        void runAlertCheck("foreground");
-        startPolling();
-      } else {
-        stopPolling();
+        void (async () => {
+          const { runDualSourceBackgroundRefresh, backgroundFinancialQueryRoots } = await import(
+            "../lib/backgroundFinancialSync"
+          );
+          await runDualSourceBackgroundRefresh("foreground", { force: true });
+          const { runKdpIosHelperTick } = await import("../lib/kdp/importer");
+          await runKdpIosHelperTick("foreground", { profileIds: selectedProfileIds });
+          void runAlertCheck("foreground");
+          void queryClient.invalidateQueries({
+            predicate: (query) => {
+              const key = query.queryKey[0];
+              return typeof key === "string" && backgroundFinancialQueryRoots().includes(key);
+            },
+            refetchType: "active",
+          });
+        })();
       }
     });
-    return () => {
-      stopPolling();
-      sub.remove();
-    };
-  }, [hydrated, user?.id]);
+    return () => sub.remove();
+  }, [hydrated, queryClient, user?.id, selectedProfileIds]);
+
+  useEffect(() => {
+    if (!hydrated || !user?.id || kdpRoyaltySource !== "extension_ios") return;
+    void import("../lib/notifications").then(async (m) => {
+      await m.ensureBackgroundRefreshRegistered();
+      // Silent KDP wakes need a live APNs token even when alert prefs are off.
+      await m.registerForPushAsync();
+    });
+    const id = setInterval(() => {
+      void import("../lib/kdp/importer").then((m) =>
+        m.runKdpIosHelperTick("interval", { profileIds: selectedProfileIds }),
+      );
+    }, 15 * 60_000);
+    return () => clearInterval(id);
+  }, [hydrated, user?.id, kdpRoyaltySource, selectedProfileIds]);
 
   // Keep local profile selection aligned with the live Supabase-linked profiles.
   useEffect(() => {
@@ -368,11 +392,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     void storage.setItem(STORAGE_KEYS.royaltyRate, rate);
   }, []);
 
+  const setKdpRoyaltySource = useCallback((source: KdpRoyaltySource) => {
+    const next = normalizeKdpRoyaltySource(source);
+    setKdpRoyaltySourceState(next);
+    void persistKdpRoyaltySource(next);
+    // Enabling the iPhone helper kicks onboarding immediately; disabling stops it.
+    void import("../lib/kdp/importer")
+      .then((m) => m.onKdpRoyaltySourceChanged(next))
+      .catch(() => {});
+  }, []);
+
   const setNotifications = useCallback((n: NotificationPrefs) => {
     setNotificationsState(n);
     void storage.setItem(STORAGE_KEYS.notifications, JSON.stringify(n));
     if (user?.id) void saveUserSetting(user.id, "notifications", n);
-    const wants = n.newOrder || n.bookAttention || n.campaignSpend;
+    const wants = n.newOrder || n.bookAttention || n.campaignSpend || n.dailyDigest;
     void configureNotifications(n, { requestPermission: wants });
   }, [user?.id]);
 
@@ -427,6 +461,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setDateRange,
       royaltyRate,
       setRoyaltyRate,
+      kdpRoyaltySource,
+      setKdpRoyaltySource,
       notifications,
       setNotifications,
       notificationRuntime,
@@ -455,6 +491,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setDateRange,
       royaltyRate,
       setRoyaltyRate,
+      kdpRoyaltySource,
+      setKdpRoyaltySource,
       notifications,
       setNotifications,
       notificationRuntime,

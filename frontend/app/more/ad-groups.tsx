@@ -18,14 +18,14 @@ import { useQuery } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { EntityStateSwitch } from "@/src/components/Mutations";
 import { useApp } from "@/src/contexts/AppContext";
-import { useTheme, acosTone, toneColor, useReduceMotion, layout, radii, spacing } from "@/src/lib/theme";
+import { useTheme, acosTone, dashboard, toneColor, useReduceMotion, layout, spacing } from "@/src/lib/theme";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
 import { updateAdGroupState } from "@/src/lib/mutations";
 import { fetchAdGroups } from "@/src/lib/queries";
 import { statusLabel } from "@/src/lib/campaigns";
 import { formatCurrency, formatInt, formatPercent, safeDivide } from "@/src/lib/format";
-import { EmptyState, ToneDot, MetricStrip, FilterChrome, ScreenSpinner, ListCard, RetryState } from "@/src/components/Primitives";
-import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
+import { EmptyState, ToneDot, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard, RetryState } from "@/src/components/Primitives";
+import { IOSSearchBar, IOSSegmentedControl } from "@/src/components/ios/Native";
 
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -172,7 +172,7 @@ export default function AdGroupsScreen() {
   return (
     <SubScreen title="Ad Groups" showDateRange>
       <FilterChrome>
-        <View style={styles.searchRow}>
+        <FilterSearchRow>
           <View style={{ flex: 1, minWidth: 0 }}>
             <IOSSearchBar
               testID="ad-groups-search"
@@ -181,28 +181,14 @@ export default function AdGroupsScreen() {
               onChangeText={setSearch}
             />
           </View>
-          <TouchableOpacity
+          <FilterIconButton
             testID="ad-groups-filter-btn"
-            accessibilityRole="button"
+            active={sortActive}
             accessibilityLabel={sortActive ? `Sort: ${sortLabel}` : "Sort ad groups"}
             accessibilityHint="Opens sort options"
             onPress={() => setFilterOpen(true)}
-            hitSlop={4}
-            style={[
-              styles.filterBtn,
-              {
-                backgroundColor: sortActive ? t.colors.tone_primary + "18" : t.colors.background_tertiary,
-              },
-            ]}
-          >
-            <SFSymbol
-              name="slider.horizontal.3"
-              size={16}
-              color={sortActive ? t.colors.tone_primary : t.colors.text_secondary}
-            />
-            {sortActive ? <View style={[styles.filterDot, { backgroundColor: t.colors.tone_primary }]} /> : null}
-          </TouchableOpacity>
-        </View>
+          />
+        </FilterSearchRow>
         <IOSSegmentedControl
           testID="ad-groups-state-segments"
           value={stateFilter}
@@ -214,20 +200,14 @@ export default function AdGroupsScreen() {
           ]}
         />
         {sortActive ? (
-          <View style={styles.activeFilters}>
-            <TouchableOpacity
+          <ActiveFilterRow>
+            <ActiveFilterChip
               testID="ad-groups-filter-chip-sort"
-              accessibilityRole="button"
+              label={`Sort: ${sortLabel}`}
               accessibilityLabel={`Clear sort. Currently ${sortLabel}`}
               onPress={() => applySort("spend")}
-              style={[styles.filterChip, { backgroundColor: t.colors.tone_primary + "14" }]}
-            >
-              <Text style={[t.typography.caption1, { color: t.colors.tone_primary, fontWeight: "600" }]}>
-                Sort: {sortLabel}
-              </Text>
-              <SFSymbol name="xmark" size={10} color={t.colors.tone_primary} />
-            </TouchableOpacity>
-          </View>
+            />
+          </ActiveFilterRow>
         ) : null}
         {showCount && !isLoading && !(isError && data.length === 0) ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>
@@ -240,7 +220,7 @@ export default function AdGroupsScreen() {
         <ScreenSpinner />
       ) : isError && data.length === 0 ? (
         <RetryState
-          title="Ad groups failed to load"
+          title="Couldn't load ad groups"
           subtitle="Check your connection and try again."
           onRetry={() => void refetch()}
           retrying={isRefetching}
@@ -287,26 +267,13 @@ export default function AdGroupsScreen() {
                 activeOpacity={0.75}
                 onPress={openDetail}
               >
-                <ListCard>
-                  <View style={styles.cardHeader}>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text
-                        style={[t.typography.headline, { color: t.colors.text_primary }]}
-                        numberOfLines={2}
-                      >
-                        {item.name || "Ad Group"}
-                      </Text>
-                      <View style={styles.metaRow}>
-                        <ToneDot value={Number(item.total_acos)} />
-                        <Text style={[t.typography.caption1, { color: toneColor(verdict.tone, t.colors), fontWeight: "600" }]}>
-                          {verdict.label}
-                        </Text>
-                        <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>
-                          {[statusLabel(item.state), contentLabel?.label].filter(Boolean).join(" · ")}
-                        </Text>
-                      </View>
-                    </View>
-                    <View onStartShouldSetResponder={() => true} onTouchEnd={(event) => event.stopPropagation()}>
+                <ListCard compact>
+                  <View style={styles.leadRow}>
+                    <View
+                      onStartShouldSetResponder={() => true}
+                      onTouchEnd={(event) => event.stopPropagation()}
+                      style={styles.switchWell}
+                    >
                       <EntityStateSwitch
                         testID={`ad-group-state-${item.id}`}
                         enabled={item.state === "enabled"}
@@ -317,20 +284,35 @@ export default function AdGroupsScreen() {
                         }}
                       />
                     </View>
-                  </View>
-                  <View style={[styles.metricsRow, { borderTopColor: t.colors.separator }]}>
-                    <MetricStrip
-                      items={[
-                        {
-                          label: "ACoS",
-                          value: item.total_sales > 0 ? formatPercent(Number(item.total_acos)) : "—",
-                          color: toneColor(acosTone(Number(item.total_acos)), t.colors),
-                        },
-                        { label: "Spend", value: formatCurrency(item.total_spend, primaryCurrency, { compact: true }) },
-                        { label: "Sales", value: formatCurrency(item.total_sales, primaryCurrency, { compact: true }) },
-                        { label: "Orders", value: formatInt(item.total_orders) },
-                      ]}
-                    />
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text
+                        style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600" }]}
+                        numberOfLines={1}
+                      >
+                        {item.name || "Ad Group"}
+                      </Text>
+                      <View style={styles.metaRow}>
+                        <ToneDot value={Number(item.total_acos)} />
+                        <Text style={[t.typography.caption2, { color: toneColor(verdict.tone, t.colors), fontWeight: "600" }]}>
+                          {verdict.label}
+                        </Text>
+                        <Text style={[t.typography.caption2, { color: t.colors.text_secondary }]}>
+                          {[statusLabel(item.state), contentLabel?.label].filter(Boolean).join(" · ")}
+                        </Text>
+                      </View>
+                      <DenseMetricLine
+                        items={[
+                          {
+                            label: "ACoS",
+                            value: item.total_sales > 0 ? formatPercent(Number(item.total_acos)) : "—",
+                            color: toneColor(acosTone(Number(item.total_acos)), t.colors),
+                          },
+                          { label: "Spend", value: formatCurrency(item.total_spend, primaryCurrency, { compact: true }) },
+                          { label: "Sales", value: formatCurrency(item.total_sales, primaryCurrency, { compact: true }) },
+                          { label: "Ord", value: formatInt(item.total_orders) },
+                        ]}
+                      />
+                    </View>
                   </View>
                 </ListCard>
               </TouchableOpacity>
@@ -404,39 +386,6 @@ function SortSheetBody({
 }
 
 const styles = StyleSheet.create({
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  filterBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: radii.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  filterDot: {
-    position: "absolute",
-    top: spacing.tight,
-    right: spacing.tight,
-    width: spacing.xs,
-    height: spacing.xs,
-    borderRadius: radii.pill,
-  },
-  activeFilters: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-  },
-  filterChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
-    minHeight: layout.minTap,
-    borderRadius: radii.pill,
-  },
   sheetDone: {
     minHeight: layout.minTap,
     justifyContent: "center",
@@ -444,8 +393,8 @@ const styles = StyleSheet.create({
   },
   filterSheet: { flex: 1 },
   filterSheetAndroid: {
-    borderTopLeftRadius: radii.sheet,
-    borderTopRightRadius: radii.sheet,
+    borderTopLeftRadius: dashboard.cardRadius,
+    borderTopRightRadius: dashboard.cardRadius,
     paddingBottom: spacing.xxl,
   },
   filterOverlay: {
@@ -464,12 +413,14 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.lg,
   },
   cardHeader: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  leadRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  switchWell: { minWidth: 42, alignItems: "flex-start", justifyContent: "center" },
   metaRow: {
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: spacing.tight,
-    marginTop: spacing.xs,
+    gap: 4,
+    marginTop: 2,
   },
   metricsRow: {
     flexDirection: "row",

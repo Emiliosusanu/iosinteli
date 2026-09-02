@@ -27,7 +27,7 @@ export const RULE_ENTITIES: { key: RuleEntity; label: string; icon: keyof typeof
   { key: "ad_group", label: "Ad groups", icon: "layers-outline" },
   { key: "keyword", label: "Keywords", icon: "key-outline" },
   { key: "product_target", label: "Product targets", icon: "cube-outline" },
-  { key: "auto_targeting", label: "Auto targeting", icon: "sparkles-outline" },
+  { key: "auto_targeting", label: "Auto targeting", icon: "options-outline" },
   { key: "search_term", label: "Search terms", icon: "search-outline" },
 ];
 

@@ -9,16 +9,23 @@ import * as SplashScreen from "expo-splash-screen";
 import { AuthProvider, useAuth } from "@/src/contexts/AuthContext";
 import { AppProvider } from "@/src/contexts/AppContext";
 import { SplashVideo } from "@/src/components/SplashVideo";
+import { QaBootstrap } from "@/src/components/QaBootstrap";
+import { KdpHelperHost } from "@/src/components/KdpHelperHost";
 import { hydrateQueryClient, startQueryPersistence } from "@/src/lib/queryPersist";
 import { authRedirectTarget } from "@/src/lib/authContract";
 import { isSafeNotificationHref, parseNotificationPayload, routeForNotification } from "@/src/lib/notificationContract";
+import { resolveDeepLinkHref } from "@/src/lib/deepLinkContract";
+import { markPerf } from "@/src/lib/perf";
+import { debugIngest } from "@/src/lib/debugIngest";
+import * as Linking from "expo-linking";
 
 // Hold the native splash until our JS is mounted, then hand off to the branded React splash.
 SplashScreen.preventAutoHideAsync().catch(() => {});
+markPerf("js_execution");
+markPerf("app.shell");
 
-// Minimum time the animated logo stays on screen so the brand moment is always seen,
-// even when auth resolves instantly (warm start).
-const MIN_SPLASH_MS = 1600;
+// Brand hold only. Do not wait for dashboard network. Valid session/cache can paint after this.
+const MIN_SPLASH_MS = 400;
 
 // Survives RouteGuard remounts so a consumed tap cannot replay on token refresh.
 const handledNotificationIds = new Set<string>();
@@ -63,7 +70,7 @@ function RouteGuard({ children }: { children: React.ReactNode }) {
       handledNotificationIds.add(id);
       const payload = parseNotificationPayload(response.notification.request.content.data);
       const dest = routeForNotification(payload, user?.id ?? null);
-      const href = isSafeNotificationHref(dest.href) ? dest.href : "/(tabs)";
+      const href = isSafeNotificationHref(dest.href) ? dest.href : resolveDeepLinkHref(dest.href);
       if (href === "/(tabs)" || href === "/(tabs)/campaigns" || href === "/(tabs)/products" || href === "/more/settings") {
         router.replace(href as any);
       } else {
@@ -86,9 +93,20 @@ function RouteGuard({ children }: { children: React.ReactNode }) {
       navigateFor(response);
       Notifications.clearLastNotificationResponseAsync().catch(() => {});
     });
+    const linking = Linking.addEventListener("url", ({ url }) => {
+      if (cancelled) return;
+      const href = resolveDeepLinkHref(url);
+      if (href === "/(tabs)" || href === "/(tabs)/campaigns" || href === "/(tabs)/products" || href === "/more/settings") {
+        router.replace(href as any);
+      } else {
+        router.push(href as any);
+      }
+    });
+
     return () => {
       cancelled = true;
       sub.remove();
+      linking.remove();
     };
   }, [state, router, user?.id]);
 
@@ -129,7 +147,21 @@ function SplashGate({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(id);
   }, []);
 
-  const ready = state !== "loading" && minElapsed;
+  // Auth restore already has an 8s fallback. Splash must not cover Home if
+  // that path hangs on getSession/storage. Cached Home is already mounted.
+  const [forceReady, setForceReady] = useState(false);
+  useEffect(() => {
+    const id = setTimeout(() => setForceReady(true), 2_500);
+    return () => clearTimeout(id);
+  }, []);
+
+  const ready = ((state !== "loading" && minElapsed) || forceReady);
+
+  useEffect(() => {
+    // #region agent log
+    debugIngest("app/_layout.tsx:SplashGate", "splash ready state", { ready, authState: state, minElapsed, forceReady }, "A");
+    // #endregion
+  }, [ready, state, minElapsed, forceReady]);
 
   return (
     <>
@@ -145,7 +177,9 @@ export default function RootLayout() {
   useEffect(() => {
     let mounted = true;
     let stop: (() => void) | undefined;
+    markPerf("cache.hydrate.start");
     hydrateQueryClient(queryClient).finally(() => {
+      markPerf("cache.hydrate.end");
       if (!mounted) return;
       stop = startQueryPersistence(queryClient);
     });
@@ -161,6 +195,8 @@ export default function RootLayout() {
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
             <AppProvider>
+              <QaBootstrap />
+              <KdpHelperHost />
               <SplashGate>
                 <RouteGuard>
                   <StatusBar style="auto" />
@@ -172,11 +208,11 @@ export default function RootLayout() {
                     <Stack.Screen name="auth/forgot" />
                     <Stack.Screen name="auth/reset" />
                     <Stack.Screen name="(tabs)" />
-                    <Stack.Screen name="campaign/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "Campaign" }} />
-                    <Stack.Screen name="product/[asin]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "Book" }} />
-                    <Stack.Screen name="keyword/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "Keyword" }} />
-                    <Stack.Screen name="target/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "Target" }} />
-                    <Stack.Screen name="search-term/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "Search term" }} />
+                    <Stack.Screen name="campaign/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "" }} />
+                    <Stack.Screen name="product/[asin]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "" }} />
+                    <Stack.Screen name="keyword/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "" }} />
+                    <Stack.Screen name="target/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "" }} />
+                    <Stack.Screen name="search-term/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "" }} />
                     <Stack.Screen name="more/settings" />
                     <Stack.Screen name="more/automation" />
                     <Stack.Screen name="more/rule-create" />
@@ -191,6 +227,8 @@ export default function RootLayout() {
                     <Stack.Screen name="more/data-map" />
                     <Stack.Screen name="more/account" />
                     <Stack.Screen name="more/bid-bot" />
+                    <Stack.Screen name="more/kdp-source" />
+                    <Stack.Screen name="more/kdp-helper" />
                   </Stack>
                 </RouteGuard>
               </SplashGate>

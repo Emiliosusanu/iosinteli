@@ -4,9 +4,10 @@ import { SFSymbol } from "./ios/Native";
 import { useRouter } from "expo-router";
 import { Funnel, CampaignDailyChart } from "./Charts";
 import { MetricStrip, RetryState, ScreenSpinner, SectionCard } from "./Primitives";
+import { elevatedCardStyle } from "./ScreenAmbient";
 import { formatCurrency, formatDateShort, formatInt, formatPercent, safeDivide } from "../lib/format";
 import type { EntityDailyPoint } from "../lib/queries";
-import { acosTone, layout, radii, spacing, toneColor, useTheme } from "../lib/theme";
+import { acosTone, layout, spacing, toneColor, useTheme } from "../lib/theme";
 
 export function targetingPerfStatus(item: {
   total_spend?: number;
@@ -160,7 +161,7 @@ export function EntityPerformance({
 
   return (
     <>
-      <View style={[styles.metricsCard, { backgroundColor: t.colors.background_secondary }]}>
+      <View style={[styles.metricsCard, elevatedCardStyle(t)]}>
         <Text
           style={[t.typography.caption1, { color: t.colors.text_tertiary, marginBottom: t.spacing.sm }]}
           accessibilityRole="header"
@@ -210,7 +211,7 @@ export function EntityPerformance({
       {dailyError ? (
         <SectionCard title="Daily performance">
           <RetryState
-            title="Trend failed to load"
+            title="Couldn't load trend"
             subtitle="Metrics above are still for this date range."
             onRetry={onRetryDaily ?? (() => undefined)}
           />
@@ -257,7 +258,6 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   metricsCard: {
-    borderRadius: radii.md,
     padding: spacing.card,
     marginBottom: spacing.lg,
   },

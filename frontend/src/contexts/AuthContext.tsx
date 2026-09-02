@@ -7,6 +7,8 @@ import { nestLogin, nestLogout } from "@/src/lib/rulesApi";
 import { ADMIN_FILTER_KEY } from "@/src/lib/queries";
 import { clearPersistedQueryCache } from "@/src/lib/queryPersist";
 import { clearNotificationIdentity } from "@/src/lib/notifications";
+import { markPerf } from "@/src/lib/perf";
+import { debugIngest } from "@/src/lib/debugIngest";
 
 type AuthState = "loading" | "authenticated" | "unauthenticated";
 
@@ -35,12 +37,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
+    let restoreSettled = false;
+
+    const clearStaleAuthCaches = async () => {
+      queryClient.clear();
+      await clearPersistedQueryCache();
+    };
+
     const fallbackId = setTimeout(() => {
-      if (!mounted) return;
+      if (!mounted || restoreSettled) return;
       void (async () => {
         const guest = await storage.getItem<boolean>(GUEST_KEY, false);
-        if (!mounted) return;
+        // Restore may have finished while we awaited storage.
+        if (!mounted || restoreSettled) return;
         console.warn("[auth] Session hydration timed out; continuing without a live session");
+        // #region agent log
+        debugIngest("AuthContext.tsx:fallback", "auth hydration timeout", { guest: guest === true }, "B");
+        // #endregion
         setSession(null);
         setUser(null);
         if (guest === true) {
@@ -55,31 +68,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     (async () => {
       try {
+        markPerf("auth.restore.start");
+        const authT0 = Date.now();
+        // #region agent log
+        debugIngest("AuthContext.tsx:restore", "auth restore start", {}, "B");
+        // #endregion
         // Hydrate guest mode flag first
         const guest = await storage.getItem<boolean>(GUEST_KEY, false);
         const isGuest = guest === true;
         const { data: { session: s }, error: sessionError } = await supabase.auth.getSession();
+        // #region agent log
+        debugIngest("AuthContext.tsx:getSession", "auth getSession done", { ms: Date.now() - authT0, hasSession: !!s, sessionError: !!sessionError }, "B");
+        // #endregion
         let session = s ?? null;
         if (sessionError || (session && !session.refresh_token)) {
           await supabase.auth.signOut({ scope: "local" });
           session = null;
+          await clearStaleAuthCaches();
         } else if (session) {
           const { data: { user: liveUser }, error: userError } = await supabase.auth.getUser();
+          // #region agent log
+          debugIngest("AuthContext.tsx:getUser", "auth getUser done", { ms: Date.now() - authT0, hasLiveUser: !!liveUser, userError: !!userError }, "B");
+          // #endregion
           if (userError || !liveUser) {
             await supabase.auth.signOut({ scope: "local" });
             session = null;
+            await clearStaleAuthCaches();
           }
         }
 
         if (!mounted) return;
+        restoreSettled = true;
         clearTimeout(fallbackId);
         guestModeRef.current = isGuest && !session;
         setGuestMode(isGuest && !session);
         setSession(session);
         setUser(session?.user ?? null);
         setState(session || isGuest ? "authenticated" : "unauthenticated");
+        markPerf("auth.restore.end");
+        // #region agent log
+        debugIngest("AuthContext.tsx:restoreEnd", "auth restore end", { ms: Date.now() - authT0, authenticated: !!(session || isGuest), isGuest }, "B");
+        // #endregion
       } catch (error) {
         if (!mounted) return;
+        restoreSettled = true;
         clearTimeout(fallbackId);
         console.warn("[auth] Session hydration failed; continuing unauthenticated", error);
         guestModeRef.current = false;

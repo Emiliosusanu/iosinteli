@@ -15,7 +15,7 @@ import {
 import { useAuth } from "@/src/contexts/AuthContext";
 import { formatCurrency } from "@/src/lib/format";
 import { SIGN_IN_TO_MUTATE_MESSAGE, userMessageForNestError } from "@/src/lib/rulesApi";
-import { useTheme } from "@/src/lib/theme";
+import { dashboard, useTheme } from "@/src/lib/theme";
 import { promptIOSNumber, SFSymbol } from "./ios/Native";
 import { PrimaryButton, SecondaryButton } from "./Primitives";
 
@@ -30,6 +30,7 @@ export function EntityStateSwitch({
   confirmPause = true,
   noun = "item",
   testID,
+  compact = true,
 }: {
   enabled: boolean;
   onChange: (next: boolean) => void | Promise<void>;
@@ -37,6 +38,8 @@ export function EntityStateSwitch({
   confirmPause?: boolean;
   noun?: string;
   testID?: string;
+  /** Smaller switch for dense list rows (default on). */
+  compact?: boolean;
 }) {
   const t = useTheme();
   const { guestMode } = useAuth();
@@ -59,26 +62,28 @@ export function EntityStateSwitch({
   };
 
   return (
-    <Switch
-      testID={testID}
-      value={enabled}
-      disabled={locked}
-      accessibilityLabel={`${noun} is ${enabled ? "active" : "paused"}${busy ? ". Updating" : ""}`}
-      accessibilityHint="Changing this writes Amazon Ads."
-      accessibilityState={{ disabled: locked, checked: enabled, busy }}
-      onValueChange={(next) => {
-        if (!next && confirmPause) {
-          Alert.alert(`Pause ${noun}?`, "This writes to Amazon Ads.", [
-            { text: "Cancel", style: "cancel" },
-            { text: "Pause", style: "destructive", onPress: () => void apply(false) },
-          ]);
-          return;
-        }
-        void apply(next);
-      }}
-      trackColor={{ false: t.colors.background_tertiary, true: t.colors.tone_good }}
-      ios_backgroundColor={t.colors.background_tertiary}
-    />
+    <View style={compact ? styles.switchCompact : undefined}>
+      <Switch
+        testID={testID}
+        value={enabled}
+        disabled={locked}
+        accessibilityLabel={`${noun} is ${enabled ? "active" : "paused"}${busy ? ". Updating" : ""}`}
+        accessibilityHint="Changing this writes Amazon Ads."
+        accessibilityState={{ disabled: locked, checked: enabled, busy }}
+        onValueChange={(next) => {
+          if (!next && confirmPause) {
+            Alert.alert(`Pause ${noun}?`, "This writes to Amazon Ads.", [
+              { text: "Cancel", style: "cancel" },
+              { text: "Pause", style: "destructive", onPress: () => void apply(false) },
+            ]);
+            return;
+          }
+          void apply(next);
+        }}
+        trackColor={{ false: t.colors.background_tertiary, true: t.colors.tone_good }}
+        ios_backgroundColor={t.colors.background_tertiary}
+      />
+    </View>
   );
 }
 
@@ -222,11 +227,13 @@ export function MutationTap({
   value,
   onPress,
   testID,
+  compact = false,
 }: {
   label: string;
   value: string;
   onPress: () => void;
   testID?: string;
+  compact?: boolean;
 }) {
   const t = useTheme();
   return (
@@ -237,18 +244,40 @@ export function MutationTap({
       accessibilityHint="Opens the editor. Saving writes Amazon Ads."
       onPress={onPress}
       activeOpacity={0.75}
-      style={[styles.tap, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.separator }]}
+      style={[
+        compact ? styles.tapCompact : styles.tap,
+        {
+          backgroundColor: t.colors.glass_background ?? t.colors.background_secondary,
+          borderColor: t.colors.glass_stroke ?? t.colors.separator,
+        },
+      ]}
     >
-      <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{label}</Text>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-        <Text style={[t.typography.body, { color: t.colors.text_secondary }]}>{value}</Text>
-        <SFSymbol name="chevron.right" size={12} color={t.colors.text_tertiary} />
+      {!compact ? (
+        <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{label}</Text>
+      ) : null}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+        {compact ? (
+          <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>{label}</Text>
+        ) : null}
+        <Text
+          style={[
+            compact ? t.typography.caption1 : t.typography.body,
+            { color: compact ? t.colors.text_primary : t.colors.text_secondary, fontVariant: ["tabular-nums"] },
+          ]}
+        >
+          {value}
+        </Text>
+        <SFSymbol name="chevron.right" size={compact ? 10 : 12} color={t.colors.text_tertiary} />
       </View>
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
+  switchCompact: {
+    transform: [{ scaleX: 0.78 }, { scaleY: 0.78 }],
+    marginLeft: -2,
+  },
   backdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.45)",
@@ -257,7 +286,7 @@ const styles = StyleSheet.create({
   },
   center: { width: "100%" },
   sheet: {
-    borderRadius: 18,
+    borderRadius: dashboard.cardRadius,
     padding: 18,
   },
   inputRow: {
@@ -266,7 +295,8 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
+    borderRadius: dashboard.chipRadius,
+    borderCurve: "continuous",
     paddingHorizontal: 12,
     minHeight: 52,
   },
@@ -274,11 +304,22 @@ const styles = StyleSheet.create({
   actions: { flexDirection: "row", justifyContent: "flex-end", gap: 10, marginTop: 18 },
   tap: {
     minHeight: 44,
-    borderRadius: 10,
+    borderRadius: dashboard.chipRadius,
     paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     borderWidth: StyleSheet.hairlineWidth,
+  },
+  tapCompact: {
+    minHeight: 28,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    gap: 4,
   },
 });

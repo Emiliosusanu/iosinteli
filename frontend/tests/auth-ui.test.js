@@ -52,7 +52,7 @@ test("login pending and errors stay generic and keep the form", () => {
   assert.match(login, /LOGIN_SUBTITLE/);
   assert.match(login, /textContentType="username"/);
   assert.match(login, /autoComplete="username"/);
-  assert.equal(LOGIN_SUBTITLE, "Use your InteliAds email and password.");
+  assert.equal(LOGIN_SUBTITLE, "Continue with Amazon, or use your InteliAds email.");
 });
 
 test("signup validation matches the 6-character provider rule and does not invent extra rules", () => {
@@ -86,12 +86,28 @@ test("guest preview is explicit and is not sample Amazon data", () => {
   assert.match(login, /enterGuestMode/);
 });
 
-test("password visibility and Amazon browser handoff stay labeled", () => {
+test("password visibility and Amazon auth-session handoff stay labeled", () => {
   assert.equal(passwordVisibilityLabel(false), "Show password");
   assert.equal(passwordVisibilityLabel(true), "Hide password");
-  assert.match(AMAZON_LOGIN_HINT, /browser/);
+  assert.match(AMAZON_LOGIN_HINT, /Amazon Ads/);
   assert.match(login, /AMAZON_LOGIN_HINT/);
-  assert.match(welcome, /SFSymbol/);
+  assert.match(login, /startAmazonLogin/);
+  assert.match(login, /AuthAmazon/);
+  assert.doesNotMatch(login, /amazonLoginHidden|setAmazonLoginHidden/);
+  assert.match(welcome, /welcome-sign-in/);
+  assert.match(welcome, /Profit by book/);
   assert.doesNotMatch(welcome, /Ionicons/);
   assert.equal(CHECKING_SESSION_LABEL, "Checking session");
+});
+
+test("Sign in CTAs are plain RN touchables (no Reanimated transform wrappers)", () => {
+  const chrome = readFileSync(new URL("../src/components/auth/AuthChrome.tsx", import.meta.url), "utf8");
+  assert.match(chrome, /export function AuthPrimary/);
+  assert.match(chrome, /testID={testID}/);
+  assert.match(chrome, /TouchableOpacity/);
+  // Nested scale wrappers ate presses on physical Sign in.
+  assert.doesNotMatch(chrome, /usePressScale|withSpring|useSharedValue/);
+  assert.doesNotMatch(chrome, /FadeInUp/);
+  assert.match(login, /login-submit-btn/);
+  assert.match(login, /AuthPrimary/);
 });

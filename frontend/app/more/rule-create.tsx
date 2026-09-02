@@ -17,10 +17,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useApp } from "@/src/contexts/AppContext";
-import { useTheme } from "@/src/lib/theme";
+import { dashboard, useTheme } from "@/src/lib/theme";
 import { createOptimizationRule, updateOptimizationRule, deleteOptimizationRule } from "@/src/lib/queries";
 import { SIGN_IN_TO_MUTATE_MESSAGE, userMessageForNestError } from "@/src/lib/rulesApi";
 import { EmptyState, PrimaryButton } from "@/src/components/Primitives";
+import { glassControlStyle } from "@/src/components/ScreenAmbient";
 import {
   RULE_ENTITIES,
   RuleEntity,
@@ -451,7 +452,7 @@ export default function RuleCreateScreen() {
                         { minHeight: t.layout.minTap },
                         active
                           ? { backgroundColor: t.colors.tone_primary, borderColor: t.colors.tone_primary }
-                          : { backgroundColor: t.colors.background_secondary, borderColor: t.colors.border },
+                          : glassControlStyle(t),
                       ]}
                     >
                       <SFSymbol name={sfFromIonicon(e.icon)} size={15} color={active ? t.colors.text_inverse : t.colors.text_secondary} />
@@ -816,10 +817,12 @@ function Chips({
         style={[
           styles.optChip,
           { minHeight: t.layout.minTap },
-          active ? { backgroundColor: t.colors.tone_primary } : { backgroundColor: t.colors.background_tertiary },
+          active
+            ? { backgroundColor: t.colors.background_elevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.colors.tone_primary + "55" }
+            : glassControlStyle(t),
         ]}
       >
-        <Text style={[t.typography.subhead, { fontWeight: "600", color: active ? t.colors.text_inverse : t.colors.text_primary }]}>
+        <Text style={[t.typography.subhead, { fontWeight: "600", color: active ? t.colors.tone_primary : t.colors.text_primary }]}>
           {labelFn ? labelFn(opt) : opt}
         </Text>
       </TouchableOpacity>
@@ -848,7 +851,7 @@ const styles = StyleSheet.create({
   },
   miniInput: {
     minHeight: 44,
-    borderRadius: 10,
+    borderRadius: dashboard.chipRadius,
     paddingHorizontal: 12,
     fontSize: 16,
     textAlign: "center",
@@ -861,11 +864,12 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
+    borderRadius: dashboard.chipRadius,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
   },
-  card: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, padding: 12 },
-  optChip: { paddingHorizontal: 13, paddingVertical: 8, borderRadius: 12, justifyContent: "center" },
+  card: { borderRadius: dashboard.cardRadius, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, padding: 12 },
+  optChip: { paddingHorizontal: 13, paddingVertical: 8, borderRadius: dashboard.chipRadius, borderCurve: "continuous", justifyContent: "center" },
   chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   addRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingLeft: 2 },
   note: { flexDirection: "row", alignItems: "flex-start", borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, padding: 12, marginTop: 6 },

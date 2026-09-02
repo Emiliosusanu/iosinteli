@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
-import { Image } from "expo-image";
+import { BookCover } from "@/src/components/BookCover";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
@@ -12,7 +12,7 @@ import { useApp } from "@/src/contexts/AppContext";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
 import { updateProductTargetManual } from "@/src/lib/mutations";
 import { fetchEntityDailyMetrics, fetchProductTargetById } from "@/src/lib/queries";
-import { describeProductTarget, fallbackAsinCoverUrl } from "@/src/lib/targeting";
+import { describeProductTarget, fallbackAsinCoverUrl, isCategoryTarget, productTargetHeading } from "@/src/lib/targeting";
 import { formatCurrency } from "@/src/lib/format";
 import { layout, radii, spacing, toneColor, useTheme } from "@/src/lib/theme";
 import { enabledSpoken, targetingSpeech } from "@/src/lib/targetingA11y";
@@ -30,7 +30,6 @@ export default function TargetDetailScreen() {
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
   const id = paramId(useLocalSearchParams<{ id: string }>().id);
   const [bidOpen, setBidOpen] = useState(false);
-  const [coverFailed, setCoverFailed] = useState(false);
   const chartWidth = Math.max(240, width - 64);
 
   const targetQ = useQuery({
@@ -46,11 +45,9 @@ export default function TargetDetailScreen() {
   });
 
   const item = targetQ.data;
-  const target = item ? describeProductTarget(item.expression, item.expression_type) : null;
-  const coverUrl = item && target && !coverFailed ? item.image_url || fallbackAsinCoverUrl(target.asin) : null;
-  const displayTitle = item
-    ? item.title || (target?.isAuto ? target.label : target?.asin || target?.label) || "Target"
-    : "Target";
+  const target = item ? describeProductTarget(item.expression, item.expression_type, item.resolved_expression) : null;
+  const displayTitle = item ? productTargetHeading(item) : "Target";
+  const category = item ? isCategoryTarget(item.expression, item.expression_type) : false;
   const status = item ? targetingPerfStatus(item) : null;
   const typeLabel = target
     ? target.isAuto && target.label !== "Auto"
@@ -78,7 +75,7 @@ export default function TargetDetailScreen() {
     return (
       <SubScreen title="Target" showDateRange>
         <RetryState
-          title="Target failed to load"
+          title="Couldn't load target"
           subtitle="Check your connection and try again."
           onRetry={() => void targetQ.refetch()}
           retrying={targetQ.isRefetching}
@@ -102,29 +99,24 @@ export default function TargetDetailScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <SectionCard>
           <View style={styles.headerRow}>
-            <View
+            <EntityStateSwitch
+              testID={`targeting-state-${item.id}`}
+              enabled={item.state === "enabled"}
+              noun="target"
+              onChange={async (next) => {
+                await updateProductTargetManual(item.id, { state: next ? "enabled" : "paused" });
+                await invalidateAds(["target-detail"]);
+              }}
+            />
+            <BookCover
+              uri={item.image_url}
+              fallbackUri={fallbackAsinCoverUrl(target.asin)}
+              asin={target.asin}
+              size="md"
+              placeholder={target.isAuto ? "auto" : category ? "category" : target.asin ? "book" : "cube"}
+              recyclingKey={target.asin || item.id}
               accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-              style={[styles.cover, { backgroundColor: t.colors.background_tertiary, borderColor: t.colors.border }]}
-            >
-              {coverUrl ? (
-                <Image
-                  source={{ uri: coverUrl }}
-                  style={styles.coverImg}
-                  contentFit="cover"
-                  transition={150}
-                  cachePolicy="memory-disk"
-                  recyclingKey={target.asin || item.id}
-                  onError={() => setCoverFailed(true)}
-                />
-              ) : (
-                <SFSymbol
-                  name={target.isAuto ? "sparkles" : target.asin ? "book" : "cube"}
-                  size={22}
-                  color={t.colors.text_secondary}
-                />
-              )}
-            </View>
+            />
             <View style={{ flex: 1, minWidth: 0 }}>
               <View
                 accessible
@@ -161,15 +153,6 @@ export default function TargetDetailScreen() {
                 adGroupName={item.ad_group_name}
               />
             </View>
-            <EntityStateSwitch
-              testID={`targeting-state-${item.id}`}
-              enabled={item.state === "enabled"}
-              noun="target"
-              onChange={async (next) => {
-                await updateProductTargetManual(item.id, { state: next ? "enabled" : "paused" });
-                await invalidateAds(["target-detail"]);
-              }}
-            />
           </View>
 
           <EntityBidControl
@@ -187,7 +170,7 @@ export default function TargetDetailScreen() {
               onPress={() =>
                 router.push({
                   pathname: "/product/[asin]",
-                  params: { asin: target.asin, title: displayTitle, imageUrl: coverUrl ?? "" },
+                  params: { asin: target.asin, title: displayTitle, imageUrl: item.image_url ?? "" },
                 })
               }
               style={styles.bookLink}

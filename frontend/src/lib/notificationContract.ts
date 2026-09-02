@@ -1,23 +1,35 @@
 /** Pure notification routing, preference, and dedup helpers. No Expo / network. */
 
+import { DEEP_LINK_HREFS, isAllowedAppHref } from "./deepLinkContract.ts";
+
 export const NOTIFICATION_EVENTS = {
   test: "test",
   newOrders: "new-orders",
   bookAttention: "book-attention",
   campaignOverspend: "campaign-overspend",
+  periodCompare: "period-compare",
 } as const;
+
+/** Backend is the sole new-order authority. Local evaluators must not generate this type. */
+export const LOCAL_NEW_ORDER_AUTHORITY = false;
 
 export type NotificationEvent = (typeof NOTIFICATION_EVENTS)[keyof typeof NOTIFICATION_EVENTS];
 
 export const NOTIFICATION_ROUTES = {
-  tabs: "/(tabs)",
-  campaigns: "/(tabs)/campaigns",
-  books: "/(tabs)/products",
-  settings: "/more/settings",
+  tabs: DEEP_LINK_HREFS.overview,
+  campaigns: DEEP_LINK_HREFS.campaigns,
+  books: DEEP_LINK_HREFS.books,
+  settings: DEEP_LINK_HREFS.settings,
+  sync: DEEP_LINK_HREFS.sync,
+  bidBot: DEEP_LINK_HREFS.bidBot,
+  rules: DEEP_LINK_HREFS.ruleHistory,
 } as const;
 
 export type NotificationPrefsInput = {
   newOrder?: boolean;
+  dailyReport?: boolean;
+  dailyDigest?: boolean;
+  includeKdpNet?: boolean;
   bookAttention?: boolean;
   campaignSpend?: boolean;
   spendThreshold?: number;
@@ -27,7 +39,13 @@ export type AlertState = {
   day?: string;
   ordersNotified?: number;
   spendAlertDay?: string;
+  spendAlertDays?: Record<string, true>;
   bookAlerts?: Record<string, true>;
+  campaignLeakDays?: Record<string, true>;
+  periodAlertMonth?: string;
+  bookPeriodAlerts?: Record<string, true>;
+  digestDay?: string;
+  lastDigestHour?: number;
 };
 
 export type NotificationPayload = {
@@ -49,6 +67,9 @@ export function preferenceAllowsEvent(prefs: NotificationPrefsInput, event: Noti
   if (event === NOTIFICATION_EVENTS.newOrders) return !!prefs.newOrder;
   if (event === NOTIFICATION_EVENTS.bookAttention) return !!prefs.bookAttention;
   if (event === NOTIFICATION_EVENTS.campaignOverspend) return !!prefs.campaignSpend;
+  if (event === NOTIFICATION_EVENTS.periodCompare) {
+    return !!(prefs.dailyReport || prefs.dailyDigest);
+  }
   return false;
 }
 
@@ -79,9 +100,49 @@ export function bookNeedsAttention(book: {
   return sales > 0 && breakeven > 0 && acos > breakeven * 1.1;
 }
 
+function addCalendarDaysLocal(isoDate: string, days: number): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + days));
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())}`;
+}
+
+function pruneDatedKeysLocal(map: Record<string, true> | undefined, keepDays: string[]): Record<string, true> {
+  const keep = new Set(keepDays);
+  const next: Record<string, true> = {};
+  for (const key of Object.keys(map ?? {})) {
+    if (keep.has(key.slice(0, 10))) next[key] = true;
+  }
+  return next;
+}
+
 export function rollAlertState(state: AlertState, today: string): AlertState {
-  if (state.day === today) return { ...state, bookAlerts: { ...(state.bookAlerts ?? {}) } };
-  return { day: today, ordersNotified: 0, spendAlertDay: undefined, bookAlerts: {} };
+  const yesterday = addCalendarDaysLocal(today, -1);
+  const keepDays = [today, yesterday];
+  if (state.day === today) {
+    return {
+      ...state,
+      bookAlerts: { ...(state.bookAlerts ?? {}) },
+      spendAlertDays: { ...(state.spendAlertDays ?? {}) },
+      campaignLeakDays: { ...(state.campaignLeakDays ?? {}) },
+      bookPeriodAlerts: { ...(state.bookPeriodAlerts ?? {}) },
+      periodAlertMonth: state.periodAlertMonth,
+    };
+  }
+  const spendAlertDays = pruneDatedKeysLocal(state.spendAlertDays, keepDays);
+  if (state.spendAlertDay && keepDays.includes(state.spendAlertDay)) {
+    spendAlertDays[state.spendAlertDay] = true;
+  }
+  return {
+    day: today,
+    ordersNotified: 0,
+    spendAlertDay: spendAlertDays[today] ? today : undefined,
+    spendAlertDays,
+    bookAlerts: {},
+    campaignLeakDays: pruneDatedKeysLocal(state.campaignLeakDays, keepDays),
+    periodAlertMonth: state.periodAlertMonth,
+    bookPeriodAlerts: { ...(state.bookPeriodAlerts ?? {}) },
+  };
 }
 
 export function canNotifyBookToday(state: AlertState, key: string): boolean {
@@ -113,14 +174,7 @@ export function parseNotificationPayload(raw: unknown): NotificationPayload | nu
 }
 
 export function isSafeNotificationHref(href: string): boolean {
-  if (href === NOTIFICATION_ROUTES.tabs) return true;
-  if (href === NOTIFICATION_ROUTES.campaigns) return true;
-  if (href === NOTIFICATION_ROUTES.books) return true;
-  if (href === NOTIFICATION_ROUTES.settings) return true;
-  if (href.startsWith("/product/")) {
-    return safeAsin(href.slice("/product/".length)) != null;
-  }
-  return false;
+  return isAllowedAppHref(href);
 }
 
 export function routeForNotification(
@@ -136,6 +190,9 @@ export function routeForNotification(
   }
   if (payload.event === NOTIFICATION_EVENTS.newOrders || payload.event === NOTIFICATION_EVENTS.campaignOverspend) {
     return { href: NOTIFICATION_ROUTES.campaigns, reason: payload.event };
+  }
+  if (payload.event === NOTIFICATION_EVENTS.periodCompare) {
+    return { href: NOTIFICATION_ROUTES.tabs, reason: payload.event };
   }
   if (payload.event === NOTIFICATION_EVENTS.bookAttention) {
     if (payload.asin) return { href: `/product/${payload.asin}`, reason: "book" };

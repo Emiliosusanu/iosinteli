@@ -63,7 +63,7 @@ export default function KeywordDetailScreen() {
     return (
       <SubScreen title="Keyword" showDateRange>
         <RetryState
-          title="Keyword failed to load"
+          title="Couldn't load keyword"
           subtitle="Check your connection and try again."
           onRetry={() => void keywordQ.refetch()}
           retrying={keywordQ.isRefetching}
@@ -87,6 +87,15 @@ export default function KeywordDetailScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <SectionCard>
           <View style={styles.headerRow}>
+            <EntityStateSwitch
+              testID={`targeting-state-${item.id}`}
+              enabled={item.status === "enabled"}
+              noun="keyword"
+              onChange={async (next) => {
+                await updateKeywordManual(item.id, { status: next ? "enabled" : "paused" });
+                await invalidateAds(["keyword-detail"]);
+              }}
+            />
             <View style={{ flex: 1, minWidth: 0 }}>
               <View
                 accessible
@@ -120,15 +129,6 @@ export default function KeywordDetailScreen() {
                 adGroupName={item.ad_group_name}
               />
             </View>
-            <EntityStateSwitch
-              testID={`targeting-state-${item.id}`}
-              enabled={item.status === "enabled"}
-              noun="keyword"
-              onChange={async (next) => {
-                await updateKeywordManual(item.id, { status: next ? "enabled" : "paused" });
-                await invalidateAds(["keyword-detail"]);
-              }}
-            />
           </View>
 
           <EntityBidControl

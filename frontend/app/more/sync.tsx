@@ -53,7 +53,7 @@ import {
   syncStatusTone,
   syncTypeLabel,
 } from "@/src/lib/syncContract";
-import { useTheme } from "@/src/lib/theme";
+import { dashboard, useTheme } from "@/src/lib/theme";
 import { SFSymbol } from "@/src/components/ios/Native";
 
 type IntradayRow = {
@@ -624,7 +624,8 @@ const styles = StyleSheet.create({
   },
   banner: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
+    borderRadius: dashboard.cardRadius,
+    borderCurve: "continuous",
     paddingHorizontal: 12,
     paddingVertical: 8,
     marginBottom: 10,

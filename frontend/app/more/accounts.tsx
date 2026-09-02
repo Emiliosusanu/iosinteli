@@ -15,13 +15,12 @@ import {
   KeyboardAvoidingView,
 } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import * as WebBrowser from "expo-web-browser";
 import { SubScreen } from "@/src/components/SubScreen";
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
-import { useTheme } from "@/src/lib/theme";
+import { dashboard, useTheme } from "@/src/lib/theme";
+import { startAmazonConnect } from "@/src/lib/amazonAuth";
 import {
-  fetchAmazonConnectUrl,
   fetchKdpAccounts,
   setKdpLinkedProfiles,
   toggleAmazonProfile,
@@ -204,8 +203,13 @@ export default function AmazonAccountsScreen() {
     if (!requireCanMutate()) return;
     setConnectBusy(true);
     try {
-      const { url } = await fetchAmazonConnectUrl();
-      if (url) await WebBrowser.openBrowserAsync(url);
+      const result = await startAmazonConnect();
+      if (result.ok) {
+        await queryClient.invalidateQueries({ queryKey: ["amazon-profiles"] });
+        return;
+      }
+      if (result.cancelled) return;
+      alertMutationError(new Error(result.error), "Couldn't start Amazon connect.");
     } catch (error) {
       alertMutationError(error, "Couldn't start Amazon connect.");
     } finally {
@@ -498,7 +502,7 @@ export default function AmazonAccountsScreen() {
         <IOSGroupedSection title="KDP data" footer={KDP_SECTION_FOOTER}>
           {viewingCustomer ? (
             <Text style={[t.typography.footnote, styles.kdpNote, { color: t.colors.text_secondary }]}>
-              KDP links aren't shown while viewing a customer.
+              {"KDP links aren't shown while viewing a customer."}
             </Text>
           ) : !canMutate ? (
             <Text style={[t.typography.footnote, styles.kdpNote, { color: t.colors.text_secondary }]}>
@@ -510,14 +514,14 @@ export default function AmazonAccountsScreen() {
             <View style={{ padding: 16 }}>
               <RetryState
                 title="Couldn't load KDP accounts"
-                subtitle="KDP collection stays on the Chrome helper."
+                subtitle="Check your connection, then retry. You can also open Settings → Royalty source."
                 onRetry={() => void kdpQ.refetch()}
                 retrying={kdpQ.isFetching}
               />
             </View>
           ) : kdpAccounts.length === 0 ? (
             <Text style={[t.typography.footnote, styles.kdpNote, { color: t.colors.text_secondary }]}>
-              No KDP accounts. Connect KDP with the Chrome helper — iPhone does not collect KDP.
+              No KDP accounts yet. Turn on Royalty source → iPhone helper in Settings, or connect with the Chrome helper — then link Ads profiles here.
             </Text>
           ) : (
             kdpAccounts.map((account, index) => {
@@ -640,7 +644,8 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 10,
+    borderRadius: dashboard.cardRadius,
+    borderCurve: "continuous",
     borderWidth: StyleSheet.hairlineWidth,
   },
   profileRow: {
@@ -690,13 +695,13 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   sheet: {
-    borderRadius: 18,
+    borderRadius: dashboard.cardRadius,
     padding: 18,
   },
   nicknameInput: {
     marginTop: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
+    borderRadius: dashboard.chipRadius,
     paddingHorizontal: 12,
     minHeight: 48,
   },

@@ -21,14 +21,14 @@ import { SubScreen } from "@/src/components/SubScreen";
 import { alertMutationError } from "@/src/components/Mutations";
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
-import { acosTone, layout, radii, spacing, toneColor, useReduceMotion, useTheme } from "@/src/lib/theme";
+import { acosTone, dashboard, layout, spacing, toneColor, useReduceMotion, useTheme } from "@/src/lib/theme";
 import { addSearchTermAsTarget, negateSearchTerm } from "@/src/lib/mutations";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
 import { SIGN_IN_TO_MUTATE_MESSAGE } from "@/src/lib/rulesApi";
 import { fetchSearchTerms } from "@/src/lib/queries";
 import { formatCurrency, formatInt, formatPercent } from "@/src/lib/format";
 import type { SearchTerm } from "@/src/lib/types";
-import { EmptyState, ListCard, MetricStrip, FilterChrome, RetryState, ScreenSpinner, ToneDot } from "@/src/components/Primitives";
+import { EmptyState, ListCard, MetricStrip, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, RetryState, ScreenSpinner, ToneDot } from "@/src/components/Primitives";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
 
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -320,7 +320,7 @@ export default function SearchTermsScreen() {
   return (
     <SubScreen title="Search Terms" showDateRange>
       <FilterChrome>
-        <View style={styles.searchRow}>
+        <FilterSearchRow>
           <View style={{ flex: 1, minWidth: 0 }}>
             <IOSSearchBar
               testID="search-terms-search"
@@ -329,27 +329,14 @@ export default function SearchTermsScreen() {
               onChangeText={setSearch}
             />
           </View>
-          <TouchableOpacity
+          <FilterIconButton
             testID="search-terms-sort-btn"
-            accessibilityRole="button"
+            active={sortActive}
             accessibilityLabel={sortActive ? `Sort: ${sortLabel}` : "Sort search terms"}
             accessibilityHint="Opens sort options"
             onPress={() => setSortOpen(true)}
-            style={[
-              styles.sortBtn,
-              {
-                backgroundColor: sortActive ? t.colors.tone_primary + "18" : t.colors.background_tertiary,
-              },
-            ]}
-          >
-            <SFSymbol
-              name="slider.horizontal.3"
-              size={16}
-              color={sortActive ? t.colors.tone_primary : t.colors.text_secondary}
-            />
-            {sortActive ? <View style={[styles.sortDot, { backgroundColor: t.colors.tone_primary }]} /> : null}
-          </TouchableOpacity>
-        </View>
+          />
+        </FilterSearchRow>
         <IOSSegmentedControl
           testID="search-terms-perf-segments"
           value={perfFilter}
@@ -361,20 +348,14 @@ export default function SearchTermsScreen() {
           ]}
         />
         {sortActive ? (
-          <View style={styles.activeFilters}>
-            <TouchableOpacity
+          <ActiveFilterRow>
+            <ActiveFilterChip
               testID="search-terms-sort-chip"
-              accessibilityRole="button"
+              label={`Sort: ${sortLabel}`}
               accessibilityLabel={`Clear sort. Currently ${sortLabel}`}
               onPress={() => applySort("orders")}
-              style={[styles.filterChip, { backgroundColor: t.colors.tone_primary + "14" }]}
-            >
-              <Text style={[t.typography.caption1, { color: t.colors.tone_primary, fontWeight: "600" }]}>
-                Sort: {sortLabel}
-              </Text>
-              <SFSymbol name="xmark" size={10} color={t.colors.tone_primary} />
-            </TouchableOpacity>
-          </View>
+            />
+          </ActiveFilterRow>
         ) : null}
         {showCount && !listLoading && !listFailed ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>
@@ -387,7 +368,7 @@ export default function SearchTermsScreen() {
         <ScreenSpinner />
       ) : listFailed ? (
         <RetryState
-          title="Search terms failed to load"
+          title="Couldn't load search terms"
           subtitle="Check your connection and try again."
           onRetry={() => void refetch()}
           retrying={isRefetching}
@@ -606,39 +587,6 @@ function SortSheetBody({
 }
 
 const styles = StyleSheet.create({
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  sortBtn: {
-    width: layout.minTap,
-    height: layout.minTap,
-    borderRadius: radii.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sortDot: {
-    position: "absolute",
-    top: spacing.tight,
-    right: spacing.tight,
-    width: spacing.xs,
-    height: spacing.xs,
-    borderRadius: radii.pill,
-  },
-  activeFilters: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-  },
-  filterChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
-    minHeight: layout.minTap,
-    borderRadius: radii.pill,
-  },
   sheetDone: {
     minHeight: layout.minTap,
     justifyContent: "center",
@@ -646,8 +594,8 @@ const styles = StyleSheet.create({
   },
   filterSheet: { flex: 1 },
   filterSheetAndroid: {
-    borderTopLeftRadius: radii.sheet,
-    borderTopRightRadius: radii.sheet,
+    borderTopLeftRadius: dashboard.cardRadius,
+    borderTopRightRadius: dashboard.cardRadius,
     paddingBottom: spacing.xxl,
   },
   filterOverlay: {
@@ -691,7 +639,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 8,
-    borderRadius: 10,
+    borderRadius: dashboard.chipRadius,
     gap: 4,
   },
 });

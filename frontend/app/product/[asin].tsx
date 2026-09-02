@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   FlatList,
   RefreshControl,
@@ -7,10 +7,11 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { Image } from "expo-image";
+import { BookCover } from "@/src/components/BookCover";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { markPerf } from "@/src/lib/perf";
 import * as Haptics from "expo-haptics";
 import { SubScreen } from "@/src/components/SubScreen";
 import {
@@ -25,9 +26,26 @@ import { useApp } from "@/src/contexts/AppContext";
 import { fetchBookCampaignsRange, fetchTopBooksRange, type BookCampaignRow, type TopBookRow } from "@/src/lib/queries";
 import { biddingStrategyLabel, statusLabel } from "@/src/lib/campaigns";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
+import { bookRowMatchesOpenedAsin } from "@/src/lib/kdpBookIdentity";
+import {
+  formatBreakEvenAcos,
+  hasAuthoritativeBreakEven,
+  isOverBreakEven,
+} from "@/src/lib/kdpTitlePresentation";
 import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
-import { acosTone, toneColor, useReduceMotion, useTheme } from "@/src/lib/theme";
+import { acosTone, toneColor, useTheme } from "@/src/lib/theme";
 import { formatCurrency, formatInt, formatPercent, safeDivide } from "@/src/lib/format";
+import {
+  ADS_SALES_LABEL,
+  ADS_SPEND_LABEL,
+  KDP_ROYALTIES_LABEL,
+  NET_ROYALTIES_CAPTION,
+  NET_ROYALTIES_LABEL,
+  netRoyaltiesVoiceOver,
+  resolveBookNet,
+  bookNetIsKnown,
+} from "@/src/lib/netRoyalties";
+import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialReadVersion";
 
 function paramValue(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] ?? "";
@@ -35,24 +53,28 @@ function paramValue(value: string | string[] | undefined): string {
 }
 
 function matchBook(rows: TopBookRow[], asin: string) {
-  const key = asin.toUpperCase();
-  return (
-    rows.find(
-      (row) =>
-        (row.asin || "").toUpperCase() === key ||
-        (row.sku || "").toUpperCase() === key ||
-        (row.book_key || "").toUpperCase() === key,
-    ) ?? null
-  );
+  return rows.find((row) => bookRowMatchesOpenedAsin(row, asin)) ?? null;
 }
 
 function bookStatus(item: TopBookRow, hasBreakEven: boolean): { label: string; tone: "good" | "warning" | "danger" } {
+  if (item.ads_state === "pending" || item.ads_state === "missing") return { label: "Loading ads", tone: "warning" };
+  if (item.kdp_state === "missing" || item.royalties == null) {
+    return { label: "Royalties unavailable", tone: "warning" };
+  }
+  if (item.kdp_state === "partial") return { label: "Royalties partial", tone: "warning" };
   const spend = Number(item.spend) || 0;
   const orders = Number(item.orders) || 0;
+  // Drive the verdict from the SAME resolved net as the big number, so the pill
+  // can never contradict the displayed profit (e.g. green +net with a red pill).
+  const net = resolveBookNet(item);
+  if (net != null) {
+    if (net >= 0) return { label: "Net positive", tone: "good" };
+    if (spend > 0 && orders === 0) return { label: "Spending without sales", tone: "danger" };
+    return { label: "Net negative", tone: "danger" };
+  }
   if (spend > 0 && orders === 0) return { label: "Spending without sales", tone: "danger" };
-  if (item.net >= 0) return { label: "Profitable", tone: "good" };
   if (hasBreakEven && item.acos > item.breakeven_acos) return { label: "Over break-even", tone: "warning" };
-  return { label: "Losing money", tone: "danger" };
+  return { label: "Net negative", tone: "danger" };
 }
 
 function campaignVerdict(item: BookCampaignRow): { label: string; tone: "good" | "warning" | "danger" | "inactive" } {
@@ -83,17 +105,17 @@ function campaignA11yLabel(item: BookCampaignRow, verdict: { label: string }, cu
 export default function ProductCampaignsScreen() {
   const t = useTheme();
   const router = useRouter();
-  const reduceMotion = useReduceMotion();
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
   const params = useLocalSearchParams<{ asin: string; title?: string; imageUrl?: string }>();
   const asin = paramValue(params.asin).toUpperCase();
   const paramTitle = paramValue(params.title);
   const paramImageUrl = paramValue(params.imageUrl);
   const [refreshing, setRefreshing] = useState(false);
-  const [coverFailed, setCoverFailed] = useState(false);
+  const queryClient = useQueryClient();
+  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end] as const;
 
   const booksQ = useQuery({
-    queryKey: ["products-range", adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
+    queryKey: booksKey,
     queryFn: () =>
       fetchTopBooksRange({
         profileIds: selectedProfileIds,
@@ -102,8 +124,12 @@ export default function ProductCampaignsScreen() {
         royaltyRate: 0,
         limit: 300,
         filterUserId: adminFilterUserId,
+        activityDays: 0,
       }),
     enabled: selectedProfileIds.length > 0,
+    staleTime: 5 * 60_000,
+    placeholderData: () => queryClient.getQueryData(booksKey),
+    meta: financialQueryMeta(),
   });
 
   const campaignsQ = useQuery({
@@ -121,10 +147,13 @@ export default function ProductCampaignsScreen() {
   });
 
   const book = useMemo(() => matchBook(booksQ.data ?? [], asin), [booksQ.data, asin]);
+  useEffect(() => {
+    markPerf("book_detail.mount");
+  }, []);
   const campaigns = campaignsQ.data ?? [];
   const title = book?.title || paramTitle || asin;
-  const imageUrl = book?.image_url || paramImageUrl;
-  const coverUrl = !coverFailed ? imageUrl || (asin ? fallbackAsinCoverUrl(asin) : null) : null;
+  const imageUrl = book?.image_url ?? paramImageUrl;
+  const amazonCover = fallbackAsinCoverUrl(asin);
   const bookColor = fallbackBookColor(bookColorKeyFor(book ?? { asin, title }));
 
   const adsTotals = useMemo(() => {
@@ -185,7 +214,8 @@ export default function ProductCampaignsScreen() {
           <BookHeader
             asin={asin}
             title={title}
-            coverUrl={coverUrl}
+            imageUrl={imageUrl}
+            fallbackUri={amazonCover}
             bookColor={bookColor}
             book={book}
             adsTotals={adsTotals}
@@ -196,8 +226,6 @@ export default function ProductCampaignsScreen() {
             campaignsRetrying={campaignsQ.isRefetching}
             onRetryCampaigns={() => void campaignsQ.refetch()}
             currency={primaryCurrency}
-            reduceMotion={reduceMotion}
-            onCoverError={() => setCoverFailed(true)}
           />
         }
         ListEmptyComponent={
@@ -229,7 +257,8 @@ export default function ProductCampaignsScreen() {
 function BookHeader({
   asin,
   title,
-  coverUrl,
+  imageUrl,
+  fallbackUri,
   bookColor,
   book,
   adsTotals,
@@ -240,12 +269,11 @@ function BookHeader({
   campaignsRetrying,
   onRetryCampaigns,
   currency,
-  reduceMotion,
-  onCoverError,
 }: {
   asin: string;
   title: string;
-  coverUrl: string | null;
+  imageUrl?: string | null;
+  fallbackUri?: string | null;
   bookColor: string;
   book: TopBookRow | null;
   adsTotals: { impressions: number; clicks: number; orders: number; spend: number; sales: number };
@@ -256,33 +284,37 @@ function BookHeader({
   campaignsRetrying: boolean;
   onRetryCampaigns: () => void;
   currency: string;
-  reduceMotion: boolean;
-  onCoverError: () => void;
 }) {
   const t = useTheme();
-  const hasBreakEven = !!book && book.breakeven_acos > 0 && book.breakeven_acos < 200;
+  const hasBreakEven = !!book && hasAuthoritativeBreakEven(book.breakeven_acos);
   const status = book ? bookStatus(book, hasBreakEven) : null;
   const statusColor = status ? toneColor(status.tone, t.colors) : t.colors.text_secondary;
-  const netPos = book ? book.net >= 0 : false;
-  const bookTone = book ? acosTone(book.acos, book.breakeven_acos) : acosTone(adsAcos);
-  const acosOver = hasBreakEven && book && book.acos > 0 ? book.acos > book.breakeven_acos : false;
+  const kdpAvailable = !!book && book.kdp_state !== "missing" && book.royalties != null;
+  const netReady = !!book && bookNetIsKnown(book);
+  const resolvedNet = book ? resolveBookNet(book) : null;
+  const netPos = resolvedNet != null && resolvedNet >= 0;
+  const bookTone = book
+    ? acosTone(book.acos, hasBreakEven ? book.breakeven_acos : 30)
+    : acosTone(adsAcos);
+  const acosOver = !!book && isOverBreakEven(book.acos, book.breakeven_acos);
   const showTraffic = adsTotals.impressions > 0 || adsTotals.clicks > 0;
 
+  const adsReady = !!book && book.ads_state !== "pending" && book.ads_state !== "missing";
   const economicsItems = book
     ? [
-        { label: "Royalties", value: formatCurrency(book.royalties, currency, { compact: true }), color: t.colors.tone_good },
-        { label: "Spend", value: formatCurrency(book.spend, currency, { compact: true }) },
-        { label: "Orders", value: formatInt(book.orders) },
+        { label: KDP_ROYALTIES_LABEL, value: kdpAvailable ? formatCurrency(book.royalties!, currency, { compact: true }) : "—", color: kdpAvailable ? t.colors.tone_good : t.colors.text_tertiary },
+        { label: ADS_SPEND_LABEL, value: adsReady ? formatCurrency(book.spend, currency, { compact: true }) : "—" },
+        { label: ADS_SALES_LABEL, value: adsReady ? formatCurrency(book.sales, currency, { compact: true }) : "—" },
         {
-          label: "ACoS",
-          value: book.sales > 0 ? formatPercent(book.acos) : "—",
+          label: "Ads ACoS",
+          value: adsReady && book.sales > 0 ? formatPercent(book.acos) : "—",
           color: toneColor(bookTone, t.colors),
         },
       ]
     : [
-        { label: "Spend", value: formatCurrency(adsTotals.spend, currency, { compact: true }) },
-        { label: "Ad sales", value: formatCurrency(adsTotals.sales, currency, { compact: true }) },
-        { label: "Orders", value: formatInt(adsTotals.orders) },
+        { label: ADS_SPEND_LABEL, value: formatCurrency(adsTotals.spend, currency, { compact: true }) },
+        { label: ADS_SALES_LABEL, value: formatCurrency(adsTotals.sales, currency, { compact: true }) },
+        { label: "Ads orders", value: formatInt(adsTotals.orders) },
         {
           label: "ACoS",
           value: adsTotals.sales > 0 ? formatPercent(adsAcos) : "—",
@@ -292,7 +324,7 @@ function BookHeader({
 
   return (
     <View style={{ marginBottom: 16, gap: 12 }}>
-      <ListCard accent={bookColor} testID="book-detail-identity">
+      <ListCard testID="book-detail-identity">
         <View
           accessible
           accessibilityRole="header"
@@ -301,41 +333,25 @@ function BookHeader({
             title,
             status?.label,
             book
-              ? `Royalties ${formatCurrency(book.royalties, currency)}. Ad spend ${formatCurrency(book.spend, currency)}. ACoS ${book.sales > 0 ? formatPercent(book.acos) : "not available"}. Profit ${formatCurrency(book.net, currency)}`
+              ? `${netRoyaltiesVoiceOver({
+                  kdpRoyalties: kdpAvailable ? formatCurrency(book.royalties!, currency) : "unavailable",
+                  adsSpend: formatCurrency(book.spend, currency),
+                  netRoyalties: netReady && resolvedNet != null ? formatCurrency(resolvedNet, currency) : "unavailable",
+                  adsSales: formatCurrency(book.sales, currency),
+                })}. Amazon Ads ACoS ${book.sales > 0 ? formatPercent(book.acos) : "not available"}`
               : undefined,
           ]
             .filter(Boolean)
             .join(". ")}
         >
           <View style={styles.identityRow}>
-            <View
-              accessible={false}
-              importantForAccessibility="no-hide-descendants"
-              style={[
-                styles.cover,
-                {
-                  width: t.layout.coverWidth,
-                  height: t.layout.coverHeight,
-                  backgroundColor: bookColor + "16",
-                  borderColor: bookColor + "44",
-                },
-              ]}
-            >
-              {coverUrl ? (
-                <Image
-                  source={{ uri: coverUrl }}
-                  style={StyleSheet.absoluteFillObject}
-                  contentFit="cover"
-                  cachePolicy="memory-disk"
-                  transition={reduceMotion ? 0 : 200}
-                  recyclingKey={asin}
-                  onError={onCoverError}
-                  accessible={false}
-                />
-              ) : (
-                <SFSymbol name="book" size={26} color={bookColor} />
-              )}
-            </View>
+            <BookCover
+              uri={imageUrl}
+              fallbackUri={fallbackUri}
+              asin={asin}
+              size="md"
+              recyclingKey={asin}
+            />
 
             <View style={styles.titleBlock}>
               <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={3}>
@@ -352,14 +368,13 @@ function BookHeader({
             {book ? (
               <View style={styles.profitBlock} accessible={false} importantForAccessibility="no">
                 <Text
-                  style={[t.typography.metric_compact, { color: netPos ? t.colors.tone_good : t.colors.tone_danger }]}
+                  style={[t.typography.metric_compact, { color: !netReady ? t.colors.text_tertiary : netPos ? t.colors.tone_good : t.colors.tone_danger }]}
                   numberOfLines={1}
                   adjustsFontSizeToFit
                 >
-                  {netPos ? "+" : ""}
-                  {formatCurrency(book.net, currency, { compact: true })}
+                  {netReady && resolvedNet != null ? `${netPos ? "+" : ""}${formatCurrency(resolvedNet, currency, { compact: true })}` : "—"}
                 </Text>
-                <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 4 }]}>Profit</Text>
+                <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 4 }]}>{NET_ROYALTIES_LABEL}</Text>
               </View>
             ) : null}
           </View>
@@ -369,14 +384,24 @@ function BookHeader({
           <MetricStrip items={economicsItems} />
         </View>
 
-        {hasBreakEven && book && book.acos > 0 ? (
+        {book ? (
+          <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: 10 }]}>
+            {NET_ROYALTIES_CAPTION}
+          </Text>
+        ) : null}
+
+        {book ? (
           <Text
-            style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: 10 }]}
-            accessibilityLabel={`ACoS ${formatPercent(book.acos, 0)} versus break-even ${formatPercent(book.breakeven_acos, 0)}. ${acosOver ? "Over break-even" : "Safe"}`}
+            style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: 6 }]}
+            accessibilityLabel={`ACoS ${book.sales > 0 ? formatPercent(book.acos, 0) : "not available"} versus break-even ${formatBreakEvenAcos(book.breakeven_acos)}. ${hasBreakEven ? (acosOver ? "Over break-even" : "Safe") : "Break-even unavailable"}`}
           >
-            ACoS {formatPercent(book.acos, 0)} · BE {formatPercent(book.breakeven_acos, 0)}
-            {"  "}
-            <Text style={{ color: toneColor(bookTone, t.colors), fontWeight: "600" }}>{acosOver ? "OVER" : "SAFE"}</Text>
+            ACoS {book.sales > 0 ? formatPercent(book.acos, 0) : "—"} · BE {formatBreakEvenAcos(book.breakeven_acos)}
+            {hasBreakEven ? (
+              <>
+                {"  "}
+                <Text style={{ color: toneColor(bookTone, t.colors), fontWeight: "600" }}>{acosOver ? "OVER" : "SAFE"}</Text>
+              </>
+            ) : null}
           </Text>
         ) : null}
 
@@ -394,7 +419,7 @@ function BookHeader({
       {campaignsLoading ? <ScreenSpinner /> : null}
       {campaignsFailed ? (
         <RetryState
-          title="Campaigns failed to load"
+          title="Couldn't load campaigns"
           subtitle="Book identity is still available. Retry to load linked campaigns."
           onRetry={onRetryCampaigns}
           retrying={campaignsRetrying}
@@ -428,7 +453,7 @@ function CampaignRow({
       onPress={onPress}
       style={{ minHeight: t.layout.minTap }}
     >
-      <ListCard accent={accent}>
+      <ListCard>
         <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={2}>
           {item.name}
         </Text>
@@ -493,14 +518,6 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     paddingTop: 2,
     minWidth: 72,
-    flexShrink: 0,
-  },
-  cover: {
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
     flexShrink: 0,
   },
   metaRow: {

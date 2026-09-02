@@ -10,6 +10,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "test:unit": "node --test --experimental-strip-types tests/*.test.js",
+    "test:stress": "bash ./scripts/stress-test-release.sh",
+    "release:testflight": "bash ./scripts/testflight-release.sh",
     "postinstall": "node ./scripts/patch-expo-constants-path.js"
   },
   "dependencies": {

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -13,22 +13,24 @@ import {
   Modal,
   Pressable,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useQuery } from "@tanstack/react-query";
+import { AppScreen } from "@/src/components/ScreenAmbient";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { fetchTopCampaignsRange } from "@/src/lib/queries";
+import { fetchTopCampaignsRange, type TopCampaignRow } from "@/src/lib/queries";
 import { biddingStrategyLabel, shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
 import { useApp } from "@/src/contexts/AppContext";
-import { useTheme, acosTone, toneColor, useReduceMotion, radii, spacing, layout } from "@/src/lib/theme";
+import { useTheme, acosTone, toneColor, useReduceMotion, dashboard, spacing, layout } from "@/src/lib/theme";
 import { formatCurrency, formatPercent, formatInt } from "@/src/lib/format";
 import { updateCampaign, updateCampaignState } from "@/src/lib/mutations";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
 import { TopBar } from "@/src/components/TopBar";
 import { BidBudgetEditor, EntityStateSwitch } from "@/src/components/Mutations";
-import { EmptyState, ToneDot, RetryState, MetricStrip, FilterChrome, ScreenSpinner, ListCard } from "@/src/components/Primitives";
+import { EmptyState, ToneDot, RetryState, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard } from "@/src/components/Primitives";
 import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
+import { withQueryTimeout } from "@/src/lib/queryTimeout";
+import { takePendingQaFilters } from "@/src/lib/qaCommand";
 
 function campaignVerdict(item: any): { label: string; tone: "good" | "warning" | "danger" | "inactive" } {
   const spend = Number(item.spend) || 0;
@@ -73,6 +75,7 @@ const SORT_CONFIG: { key: SortKey; label: string }[] = [
 export default function CampaignsScreen() {
   const t = useTheme();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const reduceMotion = useReduceMotion();
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
   const invalidateAds = useInvalidateAds();
@@ -83,18 +86,44 @@ export default function CampaignsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [budgetEdit, setBudgetEdit] = useState<{ id: string; value: number } | null>(null);
 
-  const { data: campaigns = [], isLoading, isError, isRefetching, refetch } = useQuery({
-    queryKey: ["campaigns-list-range", adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () =>
-      fetchTopCampaignsRange({
-        profileIds: selectedProfileIds,
-        start: dateRange.start,
-        end: dateRange.end,
-        limit: 500,
-        filterUserId: adminFilterUserId,
-      }),
+  useEffect(() => {
+    const qa = takePendingQaFilters();
+    if (!qa) return;
+    if (qa.campaignsState) setStateFilter(qa.campaignsState);
+    if (qa.campaignsSort) setSortKey(qa.campaignsSort);
+    if (qa.campaignsState || qa.campaignsSort) {
+      console.log(
+        `[inteliads:qa] campaigns filters state=${qa.campaignsState ?? "-"} sort=${qa.campaignsSort ?? "-"}`,
+      );
+    }
+  }, []);
+
+  const overviewWarm = queryClient.getQueryData(
+    ["top-campaigns-range-v2", selectedProfileIds, dateRange.start, dateRange.end],
+  ) as TopCampaignRow[] | undefined;
+
+  const { data: campaigns = [], isPending, isError, isRefetching, isFetching, refetch } = useQuery({
+    queryKey: ["campaigns-list-range-v2", adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
+    queryFn: ({ signal }) =>
+      withQueryTimeout(
+        fetchTopCampaignsRange({
+          profileIds: selectedProfileIds,
+          start: dateRange.start,
+          end: dateRange.end,
+          limit: 500,
+          filterUserId: adminFilterUserId,
+        }),
+        undefined,
+        signal,
+      ),
     enabled: selectedProfileIds.length > 0,
+    staleTime: 5 * 60_000,
+    gcTime: 12 * 60 * 60_000,
+    placeholderData: (previous) => previous ?? overviewWarm,
+    retry: false,
   });
+
+  const showBlockingSpinner = isPending && campaigns.length === 0 && !overviewWarm;
 
   const filtered = useMemo(() => {
     let arr = campaigns.filter((c) => {
@@ -148,7 +177,7 @@ export default function CampaignsScreen() {
 
   if (selectedProfileIds.length === 0) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: t.colors.background_primary }} edges={["top"]}>
+      <AppScreen>
         <TopBar title="Campaigns" />
         <EmptyState
           icon="business-outline"
@@ -156,16 +185,16 @@ export default function CampaignsScreen() {
           subtitle={isAdminViewer ? "Pick a customer in the profile menu." : "Connect an Amazon account to see your campaigns."}
           action={isAdminViewer ? undefined : { label: "Connect account", onPress: () => router.push("/more/accounts") }}
         />
-      </SafeAreaView>
+      </AppScreen>
     );
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: t.colors.background_primary }} edges={["top"]}>
+    <AppScreen>
       <TopBar title="Campaigns" />
 
       <FilterChrome>
-        <View style={styles.searchRow}>
+        <FilterSearchRow>
           <View style={{ flex: 1, minWidth: 0 }}>
             <IOSSearchBar
               testID="campaigns-search"
@@ -174,28 +203,14 @@ export default function CampaignsScreen() {
               onChangeText={setSearch}
             />
           </View>
-          <TouchableOpacity
+          <FilterIconButton
             testID="campaigns-filter-btn"
-            accessibilityRole="button"
+            active={sortActive}
             accessibilityLabel={sortActive ? `Sort: ${sortLabel}` : "Sort campaigns"}
             accessibilityHint="Opens sort options"
             onPress={() => setFilterOpen(true)}
-            hitSlop={4}
-            style={[
-              styles.filterBtn,
-              {
-                backgroundColor: sortActive ? t.colors.tone_primary + "18" : t.colors.background_tertiary,
-              },
-            ]}
-          >
-            <SFSymbol
-              name="slider.horizontal.3"
-              size={16}
-              color={sortActive ? t.colors.tone_primary : t.colors.text_secondary}
-            />
-            {sortActive ? <View style={[styles.filterDot, { backgroundColor: t.colors.tone_primary }]} /> : null}
-          </TouchableOpacity>
-        </View>
+          />
+        </FilterSearchRow>
         <IOSSegmentedControl
           testID="campaigns-state-segments"
           value={stateFilter}
@@ -207,33 +222,28 @@ export default function CampaignsScreen() {
           ]}
         />
         {sortActive ? (
-          <View style={styles.activeFilters}>
-            <TouchableOpacity
+          <ActiveFilterRow>
+            <ActiveFilterChip
               testID="campaigns-filter-chip-sort"
-              accessibilityRole="button"
+              label={`Sort: ${sortLabel}`}
               accessibilityLabel={`Clear sort. Currently ${sortLabel}`}
               onPress={() => applySort("top")}
-              style={[styles.filterChip, { backgroundColor: t.colors.tone_primary + "14" }]}
-            >
-              <Text style={[t.typography.caption1, { color: t.colors.tone_primary, fontWeight: "600" }]}>
-                Sort: {sortLabel}
-              </Text>
-              <SFSymbol name="xmark" size={10} color={t.colors.tone_primary} />
-            </TouchableOpacity>
-          </View>
+            />
+          </ActiveFilterRow>
         ) : null}
-        {showCount && !isLoading && !isError ? (
+        {showCount && !showBlockingSpinner && !isError ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>
             {filtered.length === 1 ? "1 campaign" : `${filtered.length} campaigns`}
+            {isFetching && campaigns.length > 0 ? " · updating" : ""}
           </Text>
         ) : null}
       </FilterChrome>
 
-      {isLoading ? (
+      {showBlockingSpinner ? (
         <ScreenSpinner />
       ) : isError && campaigns.length === 0 ? (
         <RetryState
-          title="Campaigns failed to load"
+          title="Couldn't load campaigns"
           subtitle="Check your connection and try again."
           onRetry={() => void refetch()}
           retrying={isRefetching}
@@ -263,24 +273,9 @@ export default function CampaignsScreen() {
                 testID={`campaign-row-${item.id}`}
                 accessibilityLabel={campaignA11yLabel(item, verdict, primaryCurrency)}
               >
-                <ListCard accent={campaignColor}>
-                  <View style={styles.cardHeader}>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text
-                        style={[t.typography.headline, { color: t.colors.text_primary }]}
-                        numberOfLines={2}
-                      >
-                        {item.name}
-                      </Text>
-                      <View style={styles.metaRow}>
-                        <ToneDot value={item.acos} />
-                        <Text style={[t.typography.caption1, { color: toneColor(verdict.tone, t.colors), fontWeight: "600" }]}>
-                          {verdict.label}
-                        </Text>
-                        <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{strategy}</Text>
-                      </View>
-                    </View>
-                    <View onStartShouldSetResponder={() => true}>
+                <ListCard compact>
+                  <View style={styles.leadRow}>
+                    <View onStartShouldSetResponder={() => true} style={styles.switchWell}>
                       <EntityStateSwitch
                         enabled={item.state === "enabled"}
                         noun="campaign"
@@ -291,43 +286,62 @@ export default function CampaignsScreen() {
                         }}
                       />
                     </View>
-                  </View>
-
-                  <View style={styles.campaignMeta}>
-                    <View onStartShouldSetResponder={() => true}>
-                      <TouchableOpacity
-                        testID={`campaign-budget-${item.id}`}
-                        accessibilityLabel={
-                          item.budget != null
-                            ? `Daily budget ${formatCurrency(Number(item.budget), primaryCurrency)}. Edit budget.`
-                            : "No budget. Edit budget."
-                        }
-                        activeOpacity={0.7}
-                        onPress={() => setBudgetEdit({ id: item.id, value: Number(item.budget) || 0 })}
-                      >
-                        <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>
-                          {item.budget != null
-                            ? `${formatCurrency(Number(item.budget), primaryCurrency, { compact: true })}/day`
-                            : "No budget"}
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <View style={styles.titleRow}>
+                        <Text
+                          style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600", flex: 1, minWidth: 0 }]}
+                          numberOfLines={1}
+                        >
+                          {item.name}
                         </Text>
-                      </TouchableOpacity>
+                        <View onStartShouldSetResponder={() => true}>
+                          <TouchableOpacity
+                            testID={`campaign-budget-${item.id}`}
+                            accessibilityLabel={
+                              item.budget != null
+                                ? `Daily budget ${formatCurrency(Number(item.budget), primaryCurrency)}. Edit budget.`
+                                : "No budget. Edit budget."
+                            }
+                            activeOpacity={0.7}
+                            onPress={() => setBudgetEdit({ id: item.id, value: Number(item.budget) || 0 })}
+                            style={[
+                              styles.budgetChip,
+                              {
+                                backgroundColor: t.colors.glass_background,
+                                borderColor: t.colors.glass_stroke,
+                              },
+                            ]}
+                          >
+                            <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>Budget</Text>
+                            <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "600" }]}>
+                              {item.budget != null
+                                ? `${formatCurrency(Number(item.budget), primaryCurrency, { compact: true })}/d`
+                                : "—"}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                      <View style={styles.metaRow}>
+                        <ToneDot value={item.acos} />
+                        <Text style={[t.typography.caption2, { color: toneColor(verdict.tone, t.colors), fontWeight: "600" }]}>
+                          {verdict.label}
+                        </Text>
+                        <Text style={[t.typography.caption2, { color: t.colors.text_secondary }]}>{strategy}</Text>
+                      </View>
+                      <DenseMetricLine
+                        items={[
+                          {
+                            label: "ACoS",
+                            value: item.sales > 0 ? formatPercent(item.acos) : "—",
+                            color: toneColor(acosTone(item.acos), t.colors),
+                          },
+                          { label: "Spend", value: formatCurrency(item.spend, primaryCurrency, { compact: true }) },
+                          { label: "Sales", value: formatCurrency(item.sales, primaryCurrency, { compact: true }) },
+                          { label: "Ord", value: formatInt(item.orders) },
+                        ]}
+                      />
+                      <PlacementSharePills item={item} t={t} />
                     </View>
-                    <PlacementSharePills item={item} t={t} />
-                  </View>
-
-                  <View style={[styles.metricsRow, { borderTopColor: t.colors.separator }]}>
-                    <MetricStrip
-                      items={[
-                        {
-                          label: "ACoS",
-                          value: item.sales > 0 ? formatPercent(item.acos) : "—",
-                          color: toneColor(acosTone(item.acos), t.colors),
-                        },
-                        { label: "Spend", value: formatCurrency(item.spend, primaryCurrency, { compact: true }) },
-                        { label: "Sales", value: formatCurrency(item.sales, primaryCurrency, { compact: true }) },
-                        { label: "Orders", value: formatInt(item.orders) },
-                      ]}
-                    />
                   </View>
                 </ListCard>
               </AnimatedCard>
@@ -374,7 +388,7 @@ export default function CampaignsScreen() {
           </Pressable>
         )}
       </Modal>
-    </SafeAreaView>
+    </AppScreen>
   );
 }
 
@@ -470,39 +484,6 @@ function PlacementSharePills({ item, t }: { item: any; t: any }) {
 }
 
 const styles = StyleSheet.create({
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  filterBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: radii.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  filterDot: {
-    position: "absolute",
-    top: spacing.tight,
-    right: spacing.tight,
-    width: spacing.xs,
-    height: spacing.xs,
-    borderRadius: radii.pill,
-  },
-  activeFilters: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-  },
-  filterChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
-    minHeight: layout.minTap,
-    borderRadius: radii.pill,
-  },
   sheetDone: {
     minHeight: layout.minTap,
     justifyContent: "center",
@@ -510,8 +491,8 @@ const styles = StyleSheet.create({
   },
   filterSheet: { flex: 1 },
   filterSheetAndroid: {
-    borderTopLeftRadius: radii.sheet,
-    borderTopRightRadius: radii.sheet,
+    borderTopLeftRadius: dashboard.cardRadius,
+    borderTopRightRadius: dashboard.cardRadius,
     paddingBottom: spacing.xxl,
   },
   filterOverlay: {
@@ -530,12 +511,24 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.lg,
   },
   cardHeader: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
+  leadRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  switchWell: { minWidth: 42, alignItems: "flex-start", justifyContent: "center" },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   metaRow: {
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: spacing.tight,
-    marginTop: spacing.xs,
+    gap: 4,
+    marginTop: 2,
+  },
+  budgetChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
   campaignMeta: {
     flexDirection: "row",

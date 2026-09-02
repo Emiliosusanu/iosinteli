@@ -1,8 +1,8 @@
 import React from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useTheme } from "@/src/lib/theme";
+import { AppScreen, elevatedCardStyle } from "@/src/components/ScreenAmbient";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useApp } from "@/src/contexts/AppContext";
 import { BrandIcon } from "@/src/components/Primitives";
@@ -25,15 +25,7 @@ export default function MoreScreen() {
   const bannerLabel = moreAccountBannerAccessibilityLabel({ email, caption: bannerCaption });
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: t.colors.background_primary }} edges={["top"]}>
-      <View style={styles.largeTitle}>
-        <Text
-          accessibilityRole="header"
-          style={[t.typography.largeTitle, { color: t.colors.text_primary }]}
-        >
-          More
-        </Text>
-      </View>
+    <AppScreen>
       <ScrollView contentContainerStyle={styles.scroll} contentInsetAdjustmentBehavior="automatic">
         <TouchableOpacity
           testID="menu-account-banner"
@@ -41,7 +33,7 @@ export default function MoreScreen() {
           activeOpacity={0.55}
           accessibilityRole="button"
           accessibilityLabel={bannerLabel}
-          style={[styles.banner, { backgroundColor: t.colors.background_secondary }]}
+          style={[styles.banner, elevatedCardStyle(t)]}
         >
           <View
             accessibilityElementsHidden
@@ -85,23 +77,17 @@ export default function MoreScreen() {
           InteliAds
         </Text>
       </ScrollView>
-    </SafeAreaView>
+    </AppScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  largeTitle: {
-    paddingHorizontal: 16,
-    paddingTop: 4,
-    paddingBottom: 2,
-  },
   scroll: {
     paddingBottom: 120,
   },
   banner: {
     marginHorizontal: 16,
     marginTop: 8,
-    borderRadius: 10,
     minHeight: 44,
     paddingHorizontal: 12,
     paddingVertical: 8,

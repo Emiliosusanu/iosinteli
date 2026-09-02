@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -10,18 +10,28 @@ import {
   Platform,
   Pressable,
 } from "react-native";
-import { Image } from "expo-image";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { BookCover } from "@/src/components/BookCover";
+import { AppScreen } from "@/src/components/ScreenAmbient";
 import { useQuery } from "@tanstack/react-query";
-import { type Href, useRouter } from "expo-router";
-import { fetchKeywords, fetchProductTargets, fetchTopCampaignsRange } from "@/src/lib/queries";
+import { markPerf } from "@/src/lib/perf";
+import { noPeriodPlaceholder, periodQueryKey } from "@/src/lib/periodQuery";
+import { takePendingQaFilters } from "@/src/lib/qaCommand";
+import { isHomeQueryTimeout, queryStillWaiting, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
+import {
+  fetchKeywords,
+  fetchProductTargets,
+  fetchTopCampaignsRange,
+  TARGETING_LIST_LIMIT,
+} from "@/src/lib/queries";
 import { shouldShowActiveOrPausedWithData } from "@/src/lib/campaigns";
 import {
   describeProductTarget,
   extractTargetAsin,
   fallbackAsinCoverUrl,
   isCategoryTarget,
+  productTargetHeading,
 } from "@/src/lib/targeting";
+import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import {
   fetchCampaignApi,
   updateCampaign,
@@ -32,13 +42,14 @@ import {
 import { alertMutationError, BidBudgetEditor, EntityStateSwitch, MutationTap } from "@/src/components/Mutations";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
 import { useApp } from "@/src/contexts/AppContext";
-import { useTheme, acosTone, toneColor, layout, radii, spacing } from "@/src/lib/theme";
+import { useTheme, acosTone, dashboard, toneColor, layout, radii, spacing } from "@/src/lib/theme";
 import { formatCurrency, formatPercent, formatInt } from "@/src/lib/format";
 import { TopBar } from "@/src/components/TopBar";
-import { EmptyState, ToneDot, RetryState, MetricStrip, FilterChrome, ScreenSpinner, ListCard } from "@/src/components/Primitives";
+import { EmptyState, ToneDot, RetryState, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard } from "@/src/components/Primitives";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
 import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { enabledSpoken, matchTypeSpoken, targetingSpeech } from "@/src/lib/targetingA11y";
+import { type Href, useRouter } from "expo-router";
 
 type Segment = "keywords" | "asins" | "auto" | "category" | "placement";
 type SortKey = "spend" | "acos" | "orders";
@@ -49,8 +60,8 @@ const SEGMENTS: { key: Segment; label: string }[] = [
   { key: "keywords", label: "Keywords" },
   { key: "asins", label: "ASINs" },
   { key: "auto", label: "Auto" },
-  { key: "category", label: "Cat" },
-  { key: "placement", label: "Place" },
+  { key: "category", label: "Category" },
+  { key: "placement", label: "Placement" },
 ];
 
 const PERF_FILTERS: { key: PerfFilter; label: string }[] = [
@@ -101,7 +112,7 @@ function searchPlaceholder(segment: Segment) {
 
 function emptyCopy(segment: Segment) {
   if (segment === "keywords") return { icon: "search-outline" as const, title: "No keywords found" };
-  if (segment === "auto") return { icon: "sparkles-outline" as const, title: "No auto targets found" };
+  if (segment === "auto") return { icon: "options-outline" as const, title: "No auto targets found" };
   if (segment === "category") return { icon: "pricetags-outline" as const, title: "No category targets found" };
   if (segment === "placement") return { icon: "layers-outline" as const, title: "No campaigns found" };
   return { icon: "cube-outline" as const, title: "No ASIN targets found" };
@@ -122,7 +133,7 @@ export default function TargetingScreen() {
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
   const [segment, setSegment] = useState<Segment>("keywords");
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<SortKey>("spend");
+  const [sort, setSort] = useState<SortKey>("acos");
   const [perf, setPerf] = useState<PerfFilter>("all");
   const [filterOpen, setFilterOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -140,29 +151,86 @@ export default function TargetingScreen() {
     value: number;
   } | null>(null);
 
+  useEffect(() => {
+    markPerf("targets.mount");
+    const qa = takePendingQaFilters();
+    if (!qa) return;
+    if (qa.targetsSegment) setSegment(qa.targetsSegment);
+    if (qa.targetsPerf) setPerf(qa.targetsPerf);
+    if (qa.targetsSort) setSort(qa.targetsSort);
+    if (qa.targetsSegment || qa.targetsPerf || qa.targetsSort) {
+      console.log(
+        `[inteliads:qa] targets filters segment=${qa.targetsSegment ?? "-"} perf=${qa.targetsPerf ?? "-"} sort=${qa.targetsSort ?? "-"}`,
+      );
+    }
+  }, []);
+
+  const listQueryOpts = {
+    start: dateRange.start,
+    end: dateRange.end,
+    limit: TARGETING_LIST_LIMIT,
+    filterUserId: adminFilterUserId,
+  } as const;
+  const periodKey = periodQueryKey(dateRange, selectedProfileIds);
+  const targetingListCache = {
+    staleTime: 5 * 60_000,
+    gcTime: 12 * 60 * 60_000,
+    placeholderData: noPeriodPlaceholder,
+    retry: 1,
+  } as const;
+
   const keywordsQ = useQuery({
-    queryKey: ["targeting-keywords", adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => fetchKeywords(selectedProfileIds, { start: dateRange.start, end: dateRange.end, filterUserId: adminFilterUserId }),
-    enabled: selectedProfileIds.length > 0 && segment === "keywords",
+    queryKey: ["targeting-keywords", adminFilterUserId ?? "self", periodKey],
+    queryFn: async ({ signal }) => {
+      markPerf("targets.keywords.start");
+      const rows = await withQueryTimeout(
+        fetchKeywords(selectedProfileIds, listQueryOpts),
+        TARGETING_QUERY_TIMEOUT_MS,
+        signal,
+      );
+      markPerf("targets.keywords.end");
+      return rows;
+    },
+    enabled: selectedProfileIds.length > 0,
+    ...targetingListCache,
   });
 
   const productsQ = useQuery({
-    queryKey: ["targeting-products", adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => fetchProductTargets(selectedProfileIds, { start: dateRange.start, end: dateRange.end, filterUserId: adminFilterUserId }),
-    enabled: selectedProfileIds.length > 0 && (segment === "asins" || segment === "auto" || segment === "category"),
+    queryKey: ["targeting-products", adminFilterUserId ?? "self", periodKey],
+    queryFn: async ({ signal }) => {
+      markPerf("targets.products.start");
+      const rows = await withQueryTimeout(
+        fetchProductTargets(selectedProfileIds, listQueryOpts),
+        TARGETING_QUERY_TIMEOUT_MS,
+        signal,
+      );
+      markPerf("targets.products.end");
+      return rows;
+    },
+    enabled: selectedProfileIds.length > 0,
+    ...targetingListCache,
   });
 
   const placementsQ = useQuery({
-    queryKey: ["targeting-placements", adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () =>
-      fetchTopCampaignsRange({
-        profileIds: selectedProfileIds,
-        start: dateRange.start,
-        end: dateRange.end,
-        limit: 500,
-        filterUserId: adminFilterUserId,
-      }),
-    enabled: selectedProfileIds.length > 0 && segment === "placement",
+    queryKey: ["targeting-placements-v2", adminFilterUserId ?? "self", periodKey],
+    queryFn: async ({ signal }) => {
+      markPerf("targets.placements.start");
+      const rows = await withQueryTimeout(
+        fetchTopCampaignsRange({
+          profileIds: selectedProfileIds,
+          start: dateRange.start,
+          end: dateRange.end,
+          limit: TARGETING_LIST_LIMIT,
+          filterUserId: adminFilterUserId,
+        }),
+        TARGETING_QUERY_TIMEOUT_MS,
+        signal,
+      );
+      markPerf("targets.placements.end");
+      return rows;
+    },
+    enabled: selectedProfileIds.length > 0,
+    ...targetingListCache,
   });
 
   const data = useMemo(() => {
@@ -181,7 +249,7 @@ export default function TargetingScreen() {
       rows = (productsQ.data ?? [])
         .filter((p) => shouldShowActiveOrPausedWithData(p as any, p.state))
         .filter((p) => {
-          const described = describeProductTarget(p.expression, p.expression_type);
+          const described = describeProductTarget(p.expression, p.expression_type, p.resolved_expression);
           const category = isCategoryTarget(p.expression, p.expression_type);
           if (segment === "auto") return described.isAuto;
           if (segment === "category") return category;
@@ -189,10 +257,12 @@ export default function TargetingScreen() {
         })
         .filter((p) => {
           if (!needle) return true;
-          const described = describeProductTarget(p.expression, p.expression_type);
+          const described = describeProductTarget(p.expression, p.expression_type, p.resolved_expression);
           return (
             (p.title ?? "").toLowerCase().includes(needle) ||
+            productTargetHeading(p).toLowerCase().includes(needle) ||
             described.label.toLowerCase().includes(needle) ||
+            described.name.toLowerCase().includes(needle) ||
             described.asin.toLowerCase().includes(needle) ||
             extractTargetAsin(p.expression).toLowerCase().includes(needle)
           );
@@ -201,21 +271,50 @@ export default function TargetingScreen() {
 
     rows = rows.filter((row) => matchesPerf(row, perf));
 
-    const effectiveSort = sort ?? "spend";
+    const effectiveSort = sort ?? "acos";
     return [...rows].sort((a: any, b: any) => {
-      const aHas = rowMetrics(a).spend > 0 ? 1 : 0;
-      const bHas = rowMetrics(b).spend > 0 ? 1 : 0;
-      if (aHas !== bHas) return bHas - aHas;
-      if (effectiveSort === "acos") return (rowMetrics(a).acos || Infinity) - (rowMetrics(b).acos || Infinity);
       if (effectiveSort === "orders") return rowMetrics(b).orders - rowMetrics(a).orders;
-      return rowMetrics(b).spend - rowMetrics(a).spend;
+      if (effectiveSort === "spend") return rowMetrics(b).spend - rowMetrics(a).spend;
+      return compareByAcosSpendImpressionsSync(a, b);
     });
   }, [segment, search, sort, perf, keywordsQ.data, productsQ.data, placementsQ.data]);
 
   const activeQuery = segment === "keywords" ? keywordsQ : segment === "placement" ? placementsQ : productsQ;
-  const isLoading = activeQuery.isLoading;
   const isError = activeQuery.isError;
   const isRefetching = activeQuery.isRefetching;
+
+  useEffect(() => {
+    const err = activeQuery.error instanceof Error ? activeQuery.error.message : activeQuery.isError ? "error" : "ok";
+    console.log(
+      `[inteliads:targeting] segment=${segment} period=${dateRange.start}..${dateRange.end} ` +
+        `kw=${keywordsQ.fetchStatus}/${keywordsQ.data?.length ?? "-"} ` +
+        `prod=${productsQ.fetchStatus}/${productsQ.data?.length ?? "-"} ` +
+        `place=${placementsQ.fetchStatus}/${placementsQ.data?.length ?? "-"} active=${err}`,
+    );
+  }, [
+    segment,
+    dateRange.start,
+    dateRange.end,
+    keywordsQ.fetchStatus,
+    keywordsQ.data?.length,
+    productsQ.fetchStatus,
+    productsQ.data?.length,
+    placementsQ.fetchStatus,
+    placementsQ.data?.length,
+    activeQuery.isError,
+    activeQuery.error,
+  ]);
+
+  const showBlockingSpinner =
+    data.length === 0 &&
+    !activeQuery.isPlaceholderData &&
+    !isError &&
+    (queryStillWaiting(activeQuery) || activeQuery.isFetching);
+  const listTruncated =
+    !showBlockingSpinner &&
+    !isError &&
+    Array.isArray(activeQuery.data) &&
+    activeQuery.data.length >= TARGETING_LIST_LIMIT;
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -245,29 +344,29 @@ export default function TargetingScreen() {
 
   if (selectedProfileIds.length === 0) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: t.colors.background_primary }} edges={["top"]}>
-        <TopBar title="Targets" />
+      <AppScreen>
+        <TopBar />
         <EmptyState
           icon="business-outline"
           title={isAdminViewer ? "No Amazon account" : "No account connected"}
           subtitle={isAdminViewer ? "Pick a customer in the profile menu." : "Connect an Amazon account to see targets."}
         />
-      </SafeAreaView>
+      </AppScreen>
     );
   }
 
   const empty = emptyCopy(segment);
   const perfLabel = PERF_FILTERS.find((entry) => entry.key === perf)?.label ?? "All";
-  const sortLabel = SORT_OPTIONS.find((entry) => entry.key === sort)?.label ?? "Spend";
-  const filtersActive = perf !== "all" || sort !== "spend";
+  const sortLabel = SORT_OPTIONS.find((entry) => entry.key === sort)?.label ?? "ACoS";
+  const filtersActive = perf !== "all" || sort !== "acos";
   const filterSummary = [
     perf !== "all" ? perfLabel : null,
-    sort !== "spend" ? `Sort: ${sortLabel}` : null,
+    sort !== "acos" ? `Sort: ${sortLabel}` : null,
   ].filter(Boolean).join(" · ");
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: t.colors.background_primary }} edges={["top"]}>
-      <TopBar title="Targets" />
+    <AppScreen>
+      <TopBar />
 
       <FilterChrome>
         <IOSSegmentedControl
@@ -276,7 +375,7 @@ export default function TargetingScreen() {
           onChange={setSegment}
           options={SEGMENTS.map((s) => ({ key: s.key, label: s.label, testID: `segment-${s.key}` }))}
         />
-        <View style={styles.searchRow}>
+        <FilterSearchRow>
           <View style={{ flex: 1, minWidth: 0 }}>
             <IOSSearchBar
               testID="targeting-search"
@@ -285,78 +384,56 @@ export default function TargetingScreen() {
               onChangeText={setSearch}
             />
           </View>
-          <TouchableOpacity
+          <FilterIconButton
             testID="targeting-filter-btn"
-            accessibilityRole="button"
+            active={filtersActive}
             accessibilityLabel={filtersActive ? `Filters: ${filterSummary}` : "Filters and sort"}
             accessibilityHint="Opens performance and sort options"
             onPress={() => setFilterOpen(true)}
-            hitSlop={4}
-            style={[
-              styles.filterBtn,
-              {
-                backgroundColor: filtersActive ? t.colors.tone_primary + "18" : t.colors.background_tertiary,
-              },
-            ]}
-          >
-            <SFSymbol
-              name="slider.horizontal.3"
-              size={16}
-              color={filtersActive ? t.colors.tone_primary : t.colors.text_secondary}
-            />
-            {filtersActive ? (
-              <View style={[styles.filterDot, { backgroundColor: t.colors.tone_primary }]} />
-            ) : null}
-          </TouchableOpacity>
-        </View>
+          />
+        </FilterSearchRow>
         {filtersActive ? (
-          <View style={styles.activeFilters}>
+          <ActiveFilterRow>
             {perf !== "all" ? (
-              <TouchableOpacity
+              <ActiveFilterChip
                 testID="targeting-filter-chip-perf"
-                accessibilityRole="button"
+                label={perfLabel}
                 accessibilityLabel={`Clear ${perfLabel} filter`}
                 onPress={() => setPerf("all")}
-                style={[styles.filterChip, { backgroundColor: t.colors.tone_primary + "14" }]}
-              >
-                <Text style={[t.typography.caption1, { color: t.colors.tone_primary, fontWeight: "600" }]}>{perfLabel}</Text>
-                <SFSymbol name="xmark" size={10} color={t.colors.tone_primary} />
-              </TouchableOpacity>
+              />
             ) : null}
-            {sort !== "spend" ? (
-              <TouchableOpacity
+            {sort !== "acos" ? (
+              <ActiveFilterChip
                 testID="targeting-filter-chip-sort"
-                accessibilityRole="button"
+                label={`Sort: ${sortLabel}`}
                 accessibilityLabel={`Clear sort. Currently ${sortLabel}`}
-                onPress={() => setSort("spend")}
-                style={[styles.filterChip, { backgroundColor: t.colors.tone_primary + "14" }]}
-              >
-                <Text style={[t.typography.caption1, { color: t.colors.tone_primary, fontWeight: "600" }]}>
-                  Sort: {sortLabel}
-                </Text>
-                <SFSymbol name="xmark" size={10} color={t.colors.tone_primary} />
-              </TouchableOpacity>
+                onPress={() => setSort("acos")}
+              />
             ) : null}
-          </View>
+          </ActiveFilterRow>
         ) : null}
       </FilterChrome>
 
-      {isLoading ? (
+      {showBlockingSpinner ? (
         <ScreenSpinner />
-      ) : isError ? (
+      ) : isError && data.length === 0 ? (
         <RetryState
           title={
             segment === "keywords"
-              ? "Keywords failed to load"
+              ? "Couldn't load keywords"
               : segment === "auto"
-                ? "Auto targets failed to load"
+                ? "Couldn't load auto targets"
                 : segment === "category"
-                  ? "Category targets failed to load"
+                  ? "Couldn't load category targets"
                   : segment === "placement"
-                    ? "Campaigns failed to load"
-                    : "Product targets failed to load"
+                    ? "Couldn't load campaigns"
+                    : "Couldn't load product targets"
           }
-          subtitle="Check your connection and try again."
+          subtitle={
+            isHomeQueryTimeout(activeQuery.error)
+              ? "This range took too long. Try Week instead of Month, or pull to retry."
+              : "Check your connection and try again."
+          }
           onRetry={() => {
             void activeQuery.refetch();
           }}
@@ -387,6 +464,13 @@ export default function TargetingScreen() {
                     : undefined
               }
             />
+          }
+          ListFooterComponent={
+            listTruncated ? (
+              <Text style={[t.typography.footnote, { color: t.colors.text_secondary, textAlign: "center", marginTop: t.spacing.md }]}>
+                Showing top {TARGETING_LIST_LIMIT} by spend for this period.
+              </Text>
+            ) : null
           }
           renderItem={({ item }: any) =>
             segment === "keywords" ? (
@@ -497,7 +581,7 @@ export default function TargetingScreen() {
           </Pressable>
         )}
       </Modal>
-    </SafeAreaView>
+    </AppScreen>
   );
 }
 
@@ -596,40 +680,61 @@ function KeywordRow({
     `Spend ${formatCurrency(Number(item.total_spend) || 0, currency)}`,
   ]);
   return (
-    <ListCard testID={`keywords-row-${item.id}`}>
-      <TouchableOpacity
-        onPress={onPress}
-        activeOpacity={0.7}
-        accessible
-        accessibilityRole="button"
-        accessibilityLabel={rowLabel}
-        accessibilityHint="Opens keyword details"
-      >
-        <View style={styles.cardHeader}>
-          <View style={{ flex: 1, minWidth: 0 }}>
+    <ListCard testID={`keywords-row-${item.id}`} compact>
+      <View style={styles.leadRow}>
+        <ResponderBox>
+          <View style={styles.switchWell}>
+            <EntityStateSwitch
+              testID={`targeting-state-${item.id}`}
+              enabled={item.status === "enabled"}
+              noun="keyword"
+              onChange={async (next) => {
+                await updateKeywordManual(item.id, { status: next ? "enabled" : "paused" });
+                await invalidateAds();
+              }}
+            />
+          </View>
+        </ResponderBox>
+        <TouchableOpacity
+          onPress={onPress}
+          activeOpacity={0.7}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel={rowLabel}
+          accessibilityHint="Opens keyword details"
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          <View style={styles.titleRow}>
             <Text
-              style={[t.typography.headline, { color: t.colors.text_primary }]}
+              style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600", flex: 1, minWidth: 0 }]}
               numberOfLines={1}
             >
               {item.keyword_text ?? "—"}
             </Text>
-            <View style={styles.metaRow}>
-              <ToneDot value={Number(item.total_acos)} />
-              <Text style={[t.typography.caption1, { color: toneColor(status.tone, t.colors), fontWeight: "600" }]}>
-                {status.label}
-              </Text>
-              {item.match_type ? (
-                <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{item.match_type}</Text>
-              ) : null}
-            </View>
+            <ResponderBox>
+              <MutationTap
+                testID={`targeting-bid-${item.id}`}
+                label="Bid"
+                compact
+                value={item.bid_amount ? formatCurrency(Number(item.bid_amount), currency) : "—"}
+                onPress={onEditBid}
+              />
+            </ResponderBox>
           </View>
-        </View>
-        <View style={[styles.metricsRow, { borderTopColor: t.colors.separator, marginTop: t.spacing.md, paddingTop: t.spacing.md }]}>
-          <MetricStrip
+          <View style={styles.metaRow}>
+            <ToneDot value={Number(item.total_acos)} />
+            <Text style={[t.typography.caption2, { color: toneColor(status.tone, t.colors), fontWeight: "600" }]}>
+              {status.label}
+            </Text>
+            {item.match_type ? (
+              <Text style={[t.typography.caption2, { color: t.colors.text_secondary }]}>{item.match_type}</Text>
+            ) : null}
+          </View>
+          <DenseMetricLine
             items={[
               { label: "Spend", value: formatCurrency(Number(item.total_spend), currency, { compact: true }) },
               { label: "Sales", value: formatCurrency(Number(item.total_sales), currency, { compact: true }) },
-              { label: "Orders", value: formatInt(Number(item.total_orders)) },
+              { label: "Ord", value: formatInt(Number(item.total_orders)) },
               {
                 label: "ACoS",
                 value: Number(item.total_sales) > 0 ? formatPercent(Number(item.total_acos)) : "—",
@@ -637,27 +742,8 @@ function KeywordRow({
               },
             ]}
           />
-        </View>
-      </TouchableOpacity>
-      <ResponderBox>
-        <View style={styles.actionsRow}>
-          <EntityStateSwitch
-            testID={`targeting-state-${item.id}`}
-            enabled={item.status === "enabled"}
-            noun="keyword"
-            onChange={async (next) => {
-              await updateKeywordManual(item.id, { status: next ? "enabled" : "paused" });
-              await invalidateAds();
-            }}
-          />
-          <MutationTap
-            testID={`targeting-bid-${item.id}`}
-            label="Bid"
-            value={item.bid_amount ? formatCurrency(Number(item.bid_amount), currency) : "—"}
-            onPress={onEditBid}
-          />
-        </View>
-      </ResponderBox>
+        </TouchableOpacity>
+      </View>
     </ListCard>
   );
 }
@@ -676,11 +762,10 @@ function ProductTargetRow({
   onEditBid: () => void;
 }) {
   const invalidateAds = useInvalidateAds();
-  const [coverFailed, setCoverFailed] = useState(false);
-  const target = describeProductTarget(item.expression, item.expression_type);
-  const coverUrl = !coverFailed ? item.image_url || fallbackAsinCoverUrl(target.asin) : null;
-  const displayTitle = item.title || (target.isAuto ? target.label : target.asin || target.label);
-  const accent = target.asin ? fallbackBookColor(bookColorKeyFor({ asin: target.asin })) : toneColor(target.tone, t.colors);
+  const target = describeProductTarget(item.expression, item.expression_type, item.resolved_expression);
+  const displayTitle = productTargetHeading(item);
+  const category = isCategoryTarget(item.expression, item.expression_type);
+  const coverAsin = target.asin || item.cover_asin || null;
   const sales = Number(item.total_sales) || 0;
   const rowLabel = targetingSpeech([
     displayTitle,
@@ -692,89 +777,88 @@ function ProductTargetRow({
   ]);
 
   return (
-    <ListCard testID={`products-row-${item.id}`} accent={accent}>
-      <TouchableOpacity
-        onPress={onPress}
-        activeOpacity={0.7}
-        accessible
-        accessibilityRole="button"
-        accessibilityLabel={rowLabel}
-        accessibilityHint="Opens target details"
-      >
-        <View style={styles.cardHeader}>
-          <View
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-            style={[styles.cover, { backgroundColor: accent + "14", borderColor: accent + "44" }]}
-          >
-            {coverUrl ? (
-              <Image
-                source={{ uri: coverUrl }}
-                style={styles.coverImg}
-                contentFit="cover"
-                transition={150}
-                cachePolicy="memory-disk"
-                recyclingKey={target.asin || item.id}
-                onError={() => setCoverFailed(true)}
-              />
-            ) : (
-              <SFSymbol name={target.isAuto ? "sparkles" : target.asin ? "book" : "cube"} size={22} color={accent} />
-            )}
+    <ListCard testID={`products-row-${item.id}`} compact>
+      <View style={styles.leadRow}>
+        <ResponderBox>
+          <View style={styles.switchWell}>
+            <EntityStateSwitch
+              testID={`targeting-state-${item.id}`}
+              enabled={item.state === "enabled"}
+              noun="target"
+              onChange={async (next) => {
+                await updateProductTargetManual(item.id, { state: next ? "enabled" : "paused" });
+                await invalidateAds();
+              }}
+            />
           </View>
+        </ResponderBox>
+        <TouchableOpacity
+          onPress={onPress}
+          activeOpacity={0.7}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel={rowLabel}
+          accessibilityHint="Opens target details"
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          <View style={styles.cardHeader}>
+            <BookCover
+              uri={item.image_url}
+              fallbackUri={fallbackAsinCoverUrl(coverAsin)}
+              asin={coverAsin}
+              size="xs"
+              placeholder={target.isAuto ? "auto" : category ? "category" : coverAsin ? "book" : "cube"}
+              recyclingKey={coverAsin || item.id}
+            />
 
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text
-              style={[t.typography.headline, { color: t.colors.text_primary }]}
-              numberOfLines={2}
-            >
-              {displayTitle}
-            </Text>
-            <View style={styles.metaRow}>
-              <ToneDot value={Number(item.total_acos)} />
-              <Text style={[t.typography.caption1, { color: toneColor(target.tone, t.colors) }]}>{target.label}</Text>
-              {target.asin ? (
-                <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]} numberOfLines={1}>
-                  {target.asin}
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <View style={styles.titleRow}>
+                <Text
+                  style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600", flex: 1, minWidth: 0 }]}
+                  numberOfLines={1}
+                >
+                  {displayTitle}
                 </Text>
-              ) : null}
+                <ResponderBox>
+                  <MutationTap
+                    testID={`targeting-bid-${item.id}`}
+                    label="Bid"
+                    compact
+                    value={item.bid ? formatCurrency(Number(item.bid), currency) : "—"}
+                    onPress={onEditBid}
+                  />
+                </ResponderBox>
+              </View>
+              <View style={styles.metaRow}>
+                <ToneDot value={Number(item.total_acos)} />
+                <Text style={[t.typography.caption2, { color: toneColor(target.tone, t.colors) }]}>
+                  {target.isAuto
+                    ? `Auto · ${target.label}`
+                    : category
+                      ? target.asin
+                        ? `Category · ${target.asin}`
+                        : "Category"
+                      : target.asin && displayTitle !== target.asin
+                        ? `${target.label} · ${target.asin}`
+                        : target.label}
+                </Text>
+              </View>
+              <DenseMetricLine
+                items={[
+                  { label: "Spend", value: formatCurrency(Number(item.total_spend), currency, { compact: true }) },
+                  { label: "Sales", value: formatCurrency(Number(item.total_sales), currency, { compact: true }) },
+                  { label: "Ord", value: formatInt(Number(item.total_orders)) },
+                  {
+                    label: "ACoS",
+                    value: Number(item.total_sales) > 0 ? formatPercent(Number(item.total_acos)) : "—",
+                    color: toneColor(acosTone(Number(item.total_acos)), t.colors),
+                  },
+                ]}
+              />
             </View>
           </View>
-        </View>
-
-        <View style={[styles.metricsRow, { borderTopColor: t.colors.separator, marginTop: t.spacing.md, paddingTop: t.spacing.md }]}>
-          <MetricStrip
-            items={[
-              { label: "Spend", value: formatCurrency(Number(item.total_spend), currency, { compact: true }) },
-              { label: "Sales", value: formatCurrency(Number(item.total_sales), currency, { compact: true }) },
-              { label: "Orders", value: formatInt(Number(item.total_orders)) },
-              {
-                label: "ACoS",
-                value: Number(item.total_sales) > 0 ? formatPercent(Number(item.total_acos)) : "—",
-                color: toneColor(acosTone(Number(item.total_acos)), t.colors),
-              },
-            ]}
-          />
-        </View>
-      </TouchableOpacity>
-      <ResponderBox>
-        <View style={styles.actionsRow}>
-          <EntityStateSwitch
-            testID={`targeting-state-${item.id}`}
-            enabled={item.state === "enabled"}
-            noun="target"
-            onChange={async (next) => {
-              await updateProductTargetManual(item.id, { state: next ? "enabled" : "paused" });
-              await invalidateAds();
-            }}
-          />
-          <MutationTap
-            testID={`targeting-bid-${item.id}`}
-            label="Bid"
-            value={item.bid ? formatCurrency(Number(item.bid), currency) : "—"}
-            onPress={onEditBid}
-          />
-        </View>
-      </ResponderBox>
+        </TouchableOpacity>
+      </View>
     </ListCard>
   );
 }
@@ -794,8 +878,9 @@ function PlacementRow({
   onPress: () => void;
   onEdit: (field: PlacementField) => void;
 }) {
+  const coverAsin = item.book_asin ?? null;
   return (
-    <ListCard testID={`placement-row-${item.id}`}>
+    <ListCard testID={`placement-row-${item.id}`} compact>
       <TouchableOpacity
         onPress={onPress}
         activeOpacity={0.7}
@@ -803,17 +888,32 @@ function PlacementRow({
         accessibilityRole="button"
         accessibilityLabel={targetingSpeech([
           item.name ?? "Campaign",
+          item.book_title ?? null,
           "Placement",
           `Spend ${formatCurrency(Number(item.spend) || 0, currency)}`,
         ])}
         accessibilityHint="Opens campaign details"
       >
-        <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={2}>
-          {item.name ?? "Campaign"}
-        </Text>
-        <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 4 }]}>
-          {formatCurrency(Number(item.spend), currency, { compact: true })} spend
-        </Text>
+        <View style={styles.cardHeader}>
+          <BookCover
+            uri={item.book_image_url}
+            fallbackUri={fallbackAsinCoverUrl(coverAsin)}
+            asin={coverAsin}
+            size="xs"
+            placeholder="book"
+            recyclingKey={coverAsin || item.id}
+          />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600" }]} numberOfLines={1}>
+              {item.name ?? "Campaign"}
+            </Text>
+            <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 2 }]} numberOfLines={1}>
+              {[item.book_title, `${formatCurrency(Number(item.spend), currency, { compact: true })} spend`]
+                .filter(Boolean)
+                .join(" · ")}
+            </Text>
+          </View>
+        </View>
       </TouchableOpacity>
       <ResponderBox>
         <View style={styles.placementTaps}>
@@ -822,6 +922,7 @@ function PlacementRow({
               key={field.key}
               testID={`targeting-placement-${field.key}-${item.id}`}
               label={field.label}
+              compact
               value={adjustments ? formatPercent(Number(adjustments[field.key] ?? 0), 0) : "—"}
               onPress={() => onEdit(field.key)}
             />
@@ -833,26 +934,22 @@ function PlacementRow({
 }
 
 const styles = StyleSheet.create({
-  cardHeader: { flexDirection: "row", alignItems: "center" },
+  leadRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  switchWell: { minWidth: 42, alignItems: "flex-start", justifyContent: "center" },
+  cardHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   metaRow: {
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: spacing.tight,
-    marginTop: spacing.xs,
-  },
-  metricsRow: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, gap: spacing.sm },
-  actionsRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: spacing.md,
-    gap: spacing.md,
+    gap: 4,
+    marginTop: 2,
   },
   placementTaps: {
     flexDirection: "row",
-    gap: spacing.sm,
-    marginTop: spacing.md,
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 8,
   },
   cover: {
     width: layout.coverWidth,
@@ -866,45 +963,12 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   coverImg: { width: layout.coverWidth, height: layout.coverHeight },
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  filterBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: radii.md,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  filterDot: {
-    position: "absolute",
-    top: spacing.tight,
-    right: spacing.tight,
-    width: spacing.xs,
-    height: spacing.xs,
-    borderRadius: radii.pill,
-  },
-  activeFilters: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
-  },
-  filterChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderRadius: radii.pill,
-  },
   filterSheet: {
     flex: 1,
   },
   filterSheetAndroid: {
-    borderTopLeftRadius: radii.sheet,
-    borderTopRightRadius: radii.sheet,
+    borderTopLeftRadius: dashboard.cardRadius,
+    borderTopRightRadius: dashboard.cardRadius,
     paddingBottom: spacing.xxl,
   },
   filterOverlay: {

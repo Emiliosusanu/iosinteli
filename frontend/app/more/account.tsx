@@ -5,7 +5,7 @@ import * as WebBrowser from "expo-web-browser";
 import { SubScreen } from "@/src/components/SubScreen";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useApp } from "@/src/contexts/AppContext";
-import { useTheme } from "@/src/lib/theme";
+import { dashboard, useTheme } from "@/src/lib/theme";
 import { BrandIcon } from "@/src/components/Primitives";
 import { IOSButton, IOSGroupedSection, IOSSettingsRow } from "@/src/components/ios/Native";
 import {
@@ -267,7 +267,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginTop: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
+    borderRadius: dashboard.cardRadius,
     borderCurve: "continuous",
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -276,7 +276,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     padding: 14,
-    borderRadius: 10,
+    borderRadius: dashboard.cardRadius,
     borderCurve: "continuous",
     marginHorizontal: 16,
     marginTop: 12,

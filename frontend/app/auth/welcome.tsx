@@ -10,24 +10,24 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { ScreenAmbient } from "@/src/components/ScreenAmbient";
 import { useRouter } from "expo-router";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
-import type { SFSymbol as SFSymbolName } from "expo-symbols";
-import Reanimated, { FadeIn, FadeInDown, FadeInUp, ZoomIn, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
-import { SFSymbol } from "@/src/components/ios/Native";
-import { useReduceMotion, useTheme } from "@/src/lib/theme";
+import Reanimated, { FadeIn, FadeInDown, FadeInUp, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import { InteliAdsIcon, type InteliAdsIconName } from "@/src/components/InteliAdsIcon";
+import { dashboard, useReduceMotion, useTheme } from "@/src/lib/theme";
 import { storage } from "@/src/utils/storage";
 
 const ONBOARDED_KEY = "inteliads.onboarded";
 const inteliadsIcon = require("../../assets/images/icon.png");
 
-type Slide = { symbol: SFSymbolName; title: string; body: string };
+type Slide = { icon: InteliAdsIconName; title: string; body: string };
 
 const SLIDES: Slide[] = [
-  { symbol: "creditcard", title: "Profit by book", body: "Royalties minus ads." },
-  { symbol: "waveform.path.ecg", title: "Catch waste early", body: "High ACoS and $0 targets in one list." },
-  { symbol: "slider.horizontal.3", title: "Change bids here", body: "Rules stay reviewable." },
+  { icon: "netRoyalties", title: "Profit by book", body: "KDP royalties minus Amazon Ads spend, per title." },
+  { icon: "attention", title: "Catch waste early", body: "High ACoS and $0 targets in one list." },
+  { icon: "bidBot", title: "Change bids here", body: "Rules stay reviewable." },
 ];
 
 export default function WelcomeScreen() {
@@ -69,22 +69,23 @@ export default function WelcomeScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: t.colors.background_primary }]} edges={["top", "bottom"]}>
-      <Reanimated.View entering={enter(FadeIn.duration(320))} style={styles.topBar}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      <ScreenAmbient />
+      <View style={styles.topBar}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }} pointerEvents="none">
           <Image source={inteliadsIcon} style={{ width: 22, height: 22, borderRadius: 6 }} contentFit="contain" />
           <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>InteliAds</Text>
         </View>
         <TouchableOpacity
           testID="welcome-sign-in"
           onPress={() => void finish("/auth/login")}
-          hitSlop={10}
+          hitSlop={12}
           accessibilityRole="button"
           accessibilityLabel="Sign in"
-          style={{ minHeight: 44, justifyContent: "center" }}
+          style={styles.signInHit}
         >
           <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Sign in</Text>
         </TouchableOpacity>
-      </Reanimated.View>
+      </View>
 
       <Animated.FlatList
         ref={listRef as any}
@@ -95,13 +96,11 @@ export default function WelcomeScreen() {
         showsHorizontalScrollIndicator={false}
         onScroll={onScroll}
         scrollEventThrottle={16}
+        style={styles.pager}
         renderItem={({ item }) => (
           <View style={{ width, paddingHorizontal: 28, alignItems: "center", justifyContent: "center", flex: 1 }}>
-            <Reanimated.View
-              entering={enter(ZoomIn.duration(480).springify().damping(14))}
-              style={[styles.iconBubble, { backgroundColor: t.colors.background_secondary }]}
-            >
-              <SFSymbol name={item.symbol} size={34} color={t.colors.tone_primary} />
+            <Reanimated.View entering={enter(FadeIn.duration(280))} style={styles.iconMark}>
+              <InteliAdsIcon name={item.icon} size={dashboard.iconEmpty} color={t.colors.text_primary} />
             </Reanimated.View>
             <Reanimated.Text
               entering={enter(FadeInDown.delay(80).duration(380))}
@@ -168,19 +167,27 @@ export default function WelcomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   topBar: {
+    zIndex: 2,
+    elevation: 2,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
     minHeight: 44,
   },
-  iconBubble: {
-    width: 72,
-    height: 72,
-    borderRadius: 18,
+  signInHit: {
+    minHeight: 44,
+    minWidth: 64,
+    paddingHorizontal: 8,
+    justifyContent: "center",
+    alignItems: "flex-end",
+  },
+  pager: { flex: 1, zIndex: 0 },
+  iconMark: {
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 28,
+    minHeight: 44,
   },
   dots: {
     flexDirection: "row",
@@ -189,12 +196,14 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   footer: {
+    zIndex: 2,
     paddingHorizontal: 16,
     paddingBottom: 12,
   },
   primary: {
-    minHeight: 50,
-    borderRadius: 10,
+    minHeight: 48,
+    borderRadius: dashboard.metricChipRadius,
+    borderCurve: "continuous",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 16,

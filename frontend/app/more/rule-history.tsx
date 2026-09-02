@@ -241,7 +241,7 @@ export default function RuleHistoryScreen() {
                   accessibilityRole="alert"
                   style={[t.typography.footnote, { color: t.colors.tone_danger, marginTop: 4, lineHeight: undefined }]}
                 >
-                  Couldn't refresh. Pull to try again.
+                  {"Couldn't refresh. Pull to try again."}
                 </Text>
               ) : null}
             </View>

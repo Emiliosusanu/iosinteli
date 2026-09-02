@@ -1,11 +1,18 @@
 // Auth + fetch helper for the InteliAds (robo_ads) Nest API.
 //
-// The Nest API issues its OWN JWTs (POST /auth/login → { accessToken, refreshToken }),
-// separate from the Supabase session. So the app logs into the Nest API at sign-in,
-// stores both tokens in the Keychain, and uses the accessToken as a Bearer for
-// mutations — refreshing once via /auth/refresh on a 401.
+// One mobile bearer: prefer a live Nest access JWT (email/password), else the
+// Supabase session access token (Amazon login). Server derives identity from
+// the verified bearer. Nest refresh runs only when the sent token was Nest.
+// hasNestToken() stays Nest-JWT-only so seller reads keep using Supabase RLS.
 
+import {
+  nestSessionFlagAllowsWrites,
+  nestTokenMatchesSupabaseUser,
+  pickMobileApiToken,
+  shouldRefreshNestToken,
+} from "@/src/lib/mobileAuthContract";
 import { storage } from "@/src/utils/storage";
+import { supabase } from "./supabase";
 
 const API_BASE = (process.env.EXPO_PUBLIC_RULES_API_URL ?? "").replace(/\/+$/, "");
 const ACCESS_KEY = "inteliads.rulesApi.accessToken";
@@ -39,9 +46,11 @@ export function rulesApiConfigured(): boolean {
 
 export const nestApiConfigured = rulesApiConfigured;
 
+export type NestRequestInit = RequestInit & { allowAnonymous?: boolean };
+
 async function nestSessionAllowed(): Promise<boolean> {
   if (nestSessionInvalidated) return false;
-  return (await storage.getItem<boolean>(SESSION_VALID_KEY, true)) !== false;
+  return nestSessionFlagAllowsWrites(await storage.getItem<boolean>(SESSION_VALID_KEY, false));
 }
 
 export async function hasNestToken(): Promise<boolean> {
@@ -79,20 +88,29 @@ export async function nestLogin(email: string, password: string): Promise<boolea
       return false;
     }
     const data = await res.json();
-    const accessSaved = data?.accessToken
-      ? await storage.secureSet(ACCESS_KEY, String(data.accessToken))
-      : false;
-    const refreshSaved = data?.refreshToken
-      ? await storage.secureSet(REFRESH_KEY, String(data.refreshToken))
-      : true;
-    if (!accessSaved || !refreshSaved) return false;
-    await storage.setItem(SESSION_VALID_KEY, true);
-    nestSessionInvalidated = false;
-    return true;
+    return storeNestSession(
+      data?.accessToken ? String(data.accessToken) : "",
+      data?.refreshToken ? String(data.refreshToken) : "",
+    );
   } catch {
     console.warn("[nest] login failed");
     return false;
   }
+}
+
+/** Persist Nest JWTs from email login or Amazon OAuth callback. */
+export async function storeNestSession(accessToken: string, refreshToken: string): Promise<boolean> {
+  nestSessionInvalidated = true;
+  await storage.setItem(SESSION_VALID_KEY, false);
+  const access = accessToken.trim();
+  const refresh = refreshToken.trim();
+  if (!access) return false;
+  const accessSaved = await storage.secureSet(ACCESS_KEY, access);
+  const refreshSaved = refresh ? await storage.secureSet(REFRESH_KEY, refresh) : true;
+  if (!accessSaved || !refreshSaved) return false;
+  await storage.setItem(SESSION_VALID_KEY, true);
+  nestSessionInvalidated = false;
+  return true;
 }
 
 export async function nestLogout(): Promise<boolean> {
@@ -124,26 +142,87 @@ async function refreshNestToken(): Promise<string | null> {
   }
 }
 
-export async function nestApiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+async function readSupabaseSession(): Promise<{ accessToken: string | null; userId: string | null }> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  return {
+    accessToken: session?.access_token ?? null,
+    userId: session?.user?.id ?? null,
+  };
+}
+
+async function readSupabaseAccessToken(): Promise<string | null> {
+  return (await readSupabaseSession()).accessToken;
+}
+
+async function refreshSupabaseAccessToken(): Promise<string | null> {
+  const { data, error } = await supabase.auth.refreshSession();
+  if (error) return null;
+  return data.session?.access_token ?? null;
+}
+
+async function resolveMobileApiToken(): Promise<{ token: string; source: "nest" | "supabase" } | null> {
+  const nestAllowed = await nestSessionAllowed();
+  const nestAccessToken = nestAllowed ? await storage.secureGet<string>(ACCESS_KEY, "") : "";
+  const liveSession = await readSupabaseSession();
+  const nestMatches = nestTokenMatchesSupabaseUser({
+    nestAccessToken,
+    supabaseUserId: liveSession.userId,
+  });
+  if (nestAllowed && nestAccessToken && !nestMatches) {
+    await nestLogout();
+  }
+  return pickMobileApiToken({
+    nestSessionAllowed: nestAllowed && nestMatches,
+    nestAccessToken,
+    supabaseAccessToken: liveSession.accessToken,
+  });
+}
+
+export async function nestApiFetch(path: string, init: NestRequestInit = {}): Promise<Response> {
   if (!API_BASE) {
     throw new NestApiError("The InteliAds API isn't configured yet.", 500);
   }
-  if (!(await nestSessionAllowed())) {
+  const { allowAnonymous, ...request } = init;
+  const picked = await resolveMobileApiToken();
+  if (!picked && !allowAnonymous) {
     throw new NestApiError(NEST_REAUTH_MESSAGE, 401);
   }
-  const token = await storage.secureGet<string>(ACCESS_KEY, "");
-  if (!token) {
-    throw new NestApiError(NEST_REAUTH_MESSAGE, 401);
-  }
-  const send = (tk: string) =>
+  const send = (tk?: string) =>
     fetch(`${API_BASE}${path}`, {
-      ...init,
-      headers: { "Content-Type": "application/json", ...(init.headers ?? {}), Authorization: `Bearer ${tk}` },
+      ...request,
+      headers: {
+        "Content-Type": "application/json",
+        ...(request.headers ?? {}),
+        ...(tk ? { Authorization: `Bearer ${tk}` } : {}),
+      },
     });
-  let res = await send(token);
-  if (res.status === 401) {
-    const fresh = await refreshNestToken();
-    if (fresh) res = await send(fresh);
+  let res = await send(picked?.token);
+  if (res.status !== 401) return res;
+  if (shouldRefreshNestToken(picked?.source)) {
+    const freshNest = await refreshNestToken();
+    if (freshNest) {
+      res = await send(freshNest);
+      if (res.status !== 401) return res;
+    }
+    await nestLogout();
+    let supabaseToken = await readSupabaseAccessToken();
+    if (supabaseToken) {
+      res = await send(supabaseToken);
+      if (res.status === 401) {
+        const freshSupabase = await refreshSupabaseAccessToken();
+        if (freshSupabase && freshSupabase !== supabaseToken) res = await send(freshSupabase);
+      }
+    }
+    return res;
+  }
+  if (picked?.source === "supabase") {
+    const freshSupabase = await refreshSupabaseAccessToken();
+    if (freshSupabase) {
+      res = await send(freshSupabase);
+      if (res.status !== 401) return res;
+    }
   }
   return res;
 }
@@ -165,11 +244,13 @@ export async function parseNestError(res: Response, fallback: string): Promise<N
   }
   if (res.status === 402 || errorCode === "NO_PLAN_ACCESS" || errorCode === "NO_SYNC_ACCESS") {
     message = PLAN_MANAGE_MESSAGE;
+  } else if (res.status === 401 && /^unauthorized$/i.test(message.trim())) {
+    message = NEST_REAUTH_MESSAGE;
   }
   return new NestApiError(message, res.status, errorCode);
 }
 
-export async function nestApiJson<T>(path: string, init: RequestInit = {}, fallback = "Couldn't complete that request."): Promise<T> {
+export async function nestApiJson<T>(path: string, init: NestRequestInit = {}, fallback = "Couldn't complete that request."): Promise<T> {
   const res = await nestApiFetch(path, init);
   if (!res.ok) throw await parseNestError(res, fallback);
   if (res.status === 204) return undefined as T;

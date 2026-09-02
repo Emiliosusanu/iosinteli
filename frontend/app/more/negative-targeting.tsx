@@ -11,7 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
-import { useTheme } from "@/src/lib/theme";
+import { dashboard, useTheme } from "@/src/lib/theme";
 import { fetchNegativeKeywords, fetchNegativeProductTargets } from "@/src/lib/queries";
 import { EmptyState, FilterChrome, RetryState, ScreenSpinner } from "@/src/components/Primitives";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
@@ -263,7 +263,7 @@ export default function NegativeTargetingScreen() {
                   accessibilityRole="alert"
                   style={[t.typography.footnote, { color: t.colors.tone_danger, marginTop: 4 }]}
                 >
-                  Couldn't refresh. Pull to try again.
+                  {"Couldn't refresh. Pull to try again."}
                 </Text>
               ) : null}
             </View>
@@ -311,7 +311,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     padding: 12,
-    borderRadius: 10,
+    borderRadius: dashboard.cardRadius,
     borderCurve: "continuous",
     minHeight: 72,
   },

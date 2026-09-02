@@ -43,7 +43,7 @@ export const MORE_GROUPS: MoreGroup[] = [
         label: "Bid bot",
         subtitle: "Recommendations and automation",
         href: "/more/bid-bot",
-        symbol: "cpu",
+        symbol: "slider.horizontal.3",
         color: "tone_primary",
       },
       {
@@ -51,8 +51,8 @@ export const MORE_GROUPS: MoreGroup[] = [
         label: "Rules",
         subtitle: "Automated bid and state changes",
         href: "/more/automation",
-        symbol: "slider.horizontal.3",
-        color: "tone_product",
+        symbol: "arrow.triangle.branch",
+        color: "tone_primary",
       },
       {
         key: "rule-history",
@@ -60,7 +60,7 @@ export const MORE_GROUPS: MoreGroup[] = [
         subtitle: "History of rule runs",
         href: "/more/rule-history",
         symbol: "clock",
-        color: "tone_product",
+        color: "tone_inactive",
       },
       {
         key: "search-terms",
@@ -76,7 +76,7 @@ export const MORE_GROUPS: MoreGroup[] = [
         subtitle: "Browse campaign ad groups",
         href: "/more/ad-groups",
         symbol: "square.stack.3d.up",
-        color: "tone_product",
+        color: "tone_primary",
       },
       {
         key: "negative-targeting",
@@ -105,7 +105,7 @@ export const MORE_GROUPS: MoreGroup[] = [
         subtitle: "Profiles, connection, and KDP links",
         href: "/more/accounts",
         symbol: "building.2",
-        color: "tone_product",
+        color: "tone_primary",
       },
       {
         key: "data-map",

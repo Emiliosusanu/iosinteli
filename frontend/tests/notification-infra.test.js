@@ -19,13 +19,21 @@ import {
   shouldEvaluateAlerts,
   spendExceedsBudget,
 } from "../src/lib/notificationContract.ts";
+import {
+  acosDirection,
+  addCalendarDays,
+  bookAlertLabel,
+  booksWithAcosRise,
+  monthToDateWindows,
+  pickZeroOrderLeaks,
+} from "../src/lib/notificationPeriod.ts";
 
 const notifications = readFileSync(new URL("../src/lib/notifications.ts", import.meta.url), "utf8");
 const layout = readFileSync(new URL("../app/_layout.tsx", import.meta.url), "utf8");
 const auth = readFileSync(new URL("../src/contexts/AuthContext.tsx", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src/contexts/AppContext.tsx", import.meta.url), "utf8");
 
-const prefsOn = { newOrder: true, bookAttention: true, campaignSpend: true, spendThreshold: 25 };
+const prefsOn = { newOrder: true, bookAttention: true, campaignSpend: true, dailyDigest: true, spendThreshold: 25 };
 const prefsOff = { newOrder: false, bookAttention: false, campaignSpend: false, spendThreshold: 25 };
 
 test("disabled preferences do not schedule and threshold is used", () => {
@@ -33,6 +41,9 @@ test("disabled preferences do not schedule and threshold is used", () => {
   assert.equal(preferenceAllowsEvent(prefsOff, NOTIFICATION_EVENTS.bookAttention), false);
   assert.equal(preferenceAllowsEvent(prefsOff, NOTIFICATION_EVENTS.campaignOverspend), false);
   assert.equal(preferenceAllowsEvent(prefsOn, NOTIFICATION_EVENTS.newOrders), true);
+  assert.equal(preferenceAllowsEvent(prefsOn, NOTIFICATION_EVENTS.periodCompare), true);
+  assert.equal(preferenceAllowsEvent(prefsOff, NOTIFICATION_EVENTS.periodCompare), false);
+  assert.equal(preferenceAllowsEvent({ campaignSpend: true }, NOTIFICATION_EVENTS.periodCompare), false);
   assert.equal(spendExceedsBudget(120, 100, 25), false);
   assert.equal(spendExceedsBudget(126, 100, 25), true);
   assert.equal(spendExceedsBudget(110, 100, undefined), false);
@@ -53,6 +64,10 @@ test("routes book and campaign events, and rejects unsafe payloads", () => {
     routeForNotification(buildNotificationPayload(NOTIFICATION_EVENTS.newOrders, user), user),
     { href: NOTIFICATION_ROUTES.campaigns, reason: NOTIFICATION_EVENTS.newOrders },
   );
+  assert.deepEqual(
+    routeForNotification(buildNotificationPayload(NOTIFICATION_EVENTS.periodCompare, user), user),
+    { href: NOTIFICATION_ROUTES.tabs, reason: NOTIFICATION_EVENTS.periodCompare },
+  );
   assert.equal(routeForNotification(null, user).href, NOTIFICATION_ROUTES.tabs);
   assert.equal(
     routeForNotification(parseNotificationPayload({ event: "new-orders", userId: user, url: "/more/bid-bot" }), user).href,
@@ -61,7 +76,7 @@ test("routes book and campaign events, and rejects unsafe payloads", () => {
   assert.equal(parseNotificationPayload({ event: "new-orders", userId: user, url: "https://evil.test" })?.event, "new-orders");
   assert.equal(parseNotificationPayload({ url: "/more/bid-bot" }), null);
   assert.equal(parseNotificationPayload({ event: "new-orders", userId: "" }), null);
-  assert.equal(isSafeNotificationHref("/more/bid-bot"), false);
+  assert.equal(isSafeNotificationHref("/more/bid-bot"), true);
   assert.equal(isSafeNotificationHref("https://evil.test"), false);
   assert.equal(isSafeNotificationHref("/product/../campaign/1"), false);
   assert.equal(isSafeNotificationHref("/product/B0QAASIN01"), true);
@@ -88,6 +103,42 @@ test("same-day dedup window suppresses a second book or overspend stamp", () => 
   const nextDay = rollAlertState(after, "2026-08-24");
   assert.equal(canNotifyBookToday(nextDay, "B0QAASIN01"), true);
   assert.equal(notificationIdentifier(NOTIFICATION_EVENTS.campaignOverspend, "2026-08-23"), "io.inteliads.campaign-overspend.2026-08-23");
+  const keptMonth = rollAlertState(
+    { day: "2026-08-24", periodAlertMonth: "2026-08", campaignLeakDays: { "2026-08-24:Alpha": true } },
+    "2026-08-25",
+  );
+  assert.equal(keptMonth.periodAlertMonth, "2026-08");
+  assert.equal(keptMonth.campaignLeakDays?.["2026-08-24:Alpha"], true);
+});
+
+test("period compare uses last month same days and never invents a book title", () => {
+  assert.deepEqual(monthToDateWindows("2026-08-25"), {
+    thisMonth: { start: "2026-08-01", end: "2026-08-25" },
+    lastMonthSamePeriod: { start: "2026-07-01", end: "2026-07-25" },
+  });
+  assert.equal(addCalendarDays("2026-08-25", -1), "2026-08-24");
+  assert.equal(acosDirection(31, 24), "up");
+  assert.equal(acosDirection(20, 28), "down");
+  assert.deepEqual(
+    pickZeroOrderLeaks([
+      { name: " ", spend: 90, orders: 0 },
+      { name: "Alpha", spend: 12, orders: 0 },
+      { name: "Beta", spend: 40, orders: 0 },
+    ]),
+    [{ name: "Beta", spend: 40 }, { name: "Alpha", spend: 12 }],
+  );
+  assert.equal(bookAlertLabel({ title: "  ", asin: "B0QAASIN01" }), "B0QAASIN01");
+  assert.deepEqual(
+    booksWithAcosRise(
+      [{ asin: "B0QAASIN01", title: "Real Book", acos: 40, sales: 20 }],
+      [{ asin: "B0QAASIN01", acos: 28, sales: 18 }],
+    ),
+    [{ key: "B0QAASIN01", label: "Real Book", currentAcos: 40, priorAcos: 28 }],
+  );
+  assert.doesNotMatch(notifications, /last month same days/);
+  assert.doesNotMatch(notifications, /fetchNamedCampaignTotals/);
+  assert.match(notifications, /runDualSourceBackgroundRefresh/);
+  assert.match(notifications, /resolveBackgroundScope/);
 });
 
 test("alert evaluation requires session and selected profiles, and skips view-as", () => {
@@ -111,6 +162,12 @@ test("token association and sign-out detach live in product code", () => {
   assert.match(app, /requestPermission: false/);
   assert.match(app, /requestPermission: wants/);
   assert.match(notifications, /shouldSetBadge: false/);
-  assert.match(notifications, /Ads-attributed orders/);
+  assert.match(notifications, /LOCAL_NEW_ORDER_AUTHORITY/);
+  assert.match(app, /runDualSourceBackgroundRefresh/);
+  assert.match(app, /runAlertCheck\("foreground"\)/);
+  assert.doesNotMatch(app, /setInterval\(\(\) => void runAlertCheck/);
+  assert.match(notifications, /ALERT_CHECK_COOLDOWN_MS/);
+  assert.match(notifications, /ALERT_CHECK_LAST_RUN_KEY/);
+  assert.match(notifications, /adminFilterUserId: scope\.viewAs/);
   assert.doesNotMatch(notifications, /data: \{ url: "\/\(tabs\)" \}/);
 });

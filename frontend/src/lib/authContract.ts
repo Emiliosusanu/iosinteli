@@ -1,7 +1,8 @@
 export const MIN_PASSWORD_LENGTH = 6;
 
 export const LOGIN_TITLE = "Sign in";
-export const LOGIN_SUBTITLE = "Use your InteliAds email and password.";
+export const LOGIN_SUBTITLE = "Continue with Amazon, or use your InteliAds email.";
+export const LOGIN_EMAIL_DIVIDER = "or sign in with email";
 
 export const SIGNUP_TITLE = "Create account";
 export const SIGNUP_PASSWORD_RULE = "Use at least 6 characters.";
@@ -20,9 +21,9 @@ export const RESET_UPDATED_COPY = "Password updated. You can sign in with it now
 export const GUEST_CTA = "Preview demo";
 export const GUEST_HINT = "Look around without an account. Amazon Ads won't change.";
 
-export const AMAZON_LOGIN_LABEL = "Login with Amazon";
+export const AMAZON_LOGIN_LABEL = "Continue with Amazon";
 export const AMAZON_LOGIN_BUSY = "Opening Amazon…";
-export const AMAZON_LOGIN_HINT = "Opens Amazon in the browser.";
+export const AMAZON_LOGIN_HINT = "Signs in with Amazon Ads, same as the web app.";
 
 export const CHECKING_SESSION_LABEL = "Checking session";
 

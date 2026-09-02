@@ -14,7 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { requireOptionalNativeModule } from "expo-modules-core";
 import { SymbolView, type SFSymbol } from "expo-symbols";
 import { parseDateOnly, toDateString } from "@/src/lib/format";
-import { useTheme } from "@/src/lib/theme";
+import { dashboard, useTheme } from "@/src/lib/theme";
 
 // @expo/ui calls requireNativeView at import time. Loading it before a native
 // rebuild crashes the app. Only evaluate those modules when ExpoUI is linked.
@@ -101,7 +101,7 @@ const ION_TO_SF: Record<string, SFSymbol> = {
   "apps-outline": "square.grid.2x2",
   "bag-check-outline": "bag",
   "key-outline": "key",
-  "sparkles-outline": "sparkles",
+  "sparkles-outline": "slider.horizontal.3",
   "pricetags-outline": "tag",
   "refresh": "arrow.clockwise",
   "sync": "arrow.triangle.2.circlepath",
@@ -109,7 +109,7 @@ const ION_TO_SF: Record<string, SFSymbol> = {
   "checkmark": "checkmark",
   "warning": "exclamationmark.triangle.fill",
   "warning-outline": "exclamationmark.triangle",
-  "sparkles": "sparkles",
+  "sparkles": "slider.horizontal.3",
   "hand-left-outline": "hand.raised",
   "git-branch-outline": "arrow.triangle.branch",
   "add-circle-outline": "plus.circle",
@@ -130,7 +130,7 @@ const ION_TO_SF: Record<string, SFSymbol> = {
   "create-outline": "pencil",
   "flash": "bolt",
   "construct": "wrench.and.screwdriver",
-  "hardware-chip-outline": "cpu",
+  "hardware-chip-outline": "slider.horizontal.3",
   "remove-circle": "minus.circle.fill",
   "close-circle-outline": "xmark.circle",
   "close": "xmark",
@@ -196,40 +196,73 @@ export function IOSSegmentedControl<T extends string>({
   value,
   onChange,
   testID,
+  forceFallback = false,
 }: {
   options: { key: T; label: string; testID?: string }[];
   value: T;
   onChange: (next: T) => void;
   testID?: string;
+  /** Pressable segments — required when XCUITest / accessibility must tap option testIDs. */
+  forceFallback?: boolean;
 }) {
   const t = useTheme();
   const fallback = (
-    <View testID={testID} style={[styles.segmented, { backgroundColor: t.colors.background_tertiary }]}>
+    <View
+      testID={testID}
+      accessibilityRole="tablist"
+      accessibilityLabel={testID === "home-horizon" ? "Reporting horizon" : testID === "home-period" ? "Calendar period" : undefined}
+      style={[
+        styles.segmented,
+        {
+          backgroundColor: t.colors.background_tertiary,
+          borderColor: t.colors.border,
+        },
+      ]}
+    >
       {options.map((option) => {
         const active = option.key === value;
         return (
-          <Pressable
+          <TouchableOpacity
             key={option.key}
             testID={option.testID}
-            onPress={() => onChange(option.key)}
-            style={[styles.segment, active && { backgroundColor: t.colors.background_secondary }]}
+            accessibilityRole="tab"
+            accessibilityLabel={option.label}
+            accessibilityState={{ selected: active }}
+            activeOpacity={0.72}
+            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+            onPress={() => {
+              if (option.key !== value) onChange(option.key);
+            }}
+            style={[
+              styles.segment,
+              active && {
+                backgroundColor: t.colors.background_elevated,
+                borderColor: t.colors.tone_primary + "55",
+              },
+            ]}
           >
-            <Text style={[styles.segmentLabel, { color: active ? t.colors.text_primary : t.colors.text_secondary }]}>
+            <Text
+              accessible={false}
+              importantForAccessibility="no-hide-descendants"
+              style={[styles.segmentLabel, { color: active ? t.colors.text_primary : t.colors.text_secondary }]}
+            >
               {option.label}
             </Text>
-          </Pressable>
+          </TouchableOpacity>
         );
       })}
     </View>
   );
+
+  if (forceFallback) return fallback;
 
   const ui = nativeSwift();
   if (!ui) return fallback;
 
   return (
     <SwiftSafe fallback={fallback}>
-      <View testID={testID} style={{ height: 36, overflow: "hidden" }}>
-        <ui.Host matchContents colorScheme={t.scheme} style={{ height: 36, width: "100%" }}>
+      <View testID={testID} style={{ height: dashboard.controlHeight, overflow: "hidden" }}>
+        <ui.Host matchContents colorScheme={t.scheme} style={{ height: dashboard.controlHeight, width: "100%" }}>
           <ui.Picker
             options={options.map((option) => option.label)}
             selectedIndex={Math.max(0, options.findIndex((option) => option.key === value))}
@@ -431,8 +464,19 @@ export function IOSGroupedSection({
           {title.toUpperCase()}
         </Text>
       ) : null}
-      <View style={[styles.group, { backgroundColor: t.colors.background_secondary, marginHorizontal: inset ? 16 : 0 }]}>
-        {children}
+      <View style={{ marginHorizontal: inset ? 16 : 0, ...t.shadow.card }}>
+        <View
+          style={[
+            styles.group,
+            {
+              backgroundColor: t.colors.background_secondary,
+              marginHorizontal: 0,
+              borderColor: t.colors.glass_stroke,
+            },
+          ]}
+        >
+          {children}
+        </View>
       </View>
       {footer ? (
         <Text
@@ -462,7 +506,16 @@ export function IOSSearchBar({
 }) {
   const t = useTheme();
   return (
-    <View style={[styles.search, { backgroundColor: t.colors.background_tertiary }]}>
+    <View
+      style={[
+        styles.search,
+        {
+          backgroundColor: t.colors.glass_background,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: t.colors.glass_stroke,
+        },
+      ]}
+    >
       <SFSymbol name="magnifyingglass" size={15} color={t.colors.text_tertiary} />
       <TextInput
         testID={testID}
@@ -518,10 +571,12 @@ export function IOSButton({
       accessibilityHint={accessibilityHint}
       accessibilityState={{ disabled: !!isDisabled }}
       activeOpacity={0.85}
-      style={[
+        style={[
         styles.buttonFallback,
         {
-          backgroundColor: prominent ? color : t.colors.background_tertiary,
+          backgroundColor: prominent ? color : t.colors.glass_background,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: prominent ? color : t.colors.glass_stroke,
           opacity: isDisabled ? 0.5 : 1,
           alignSelf: full ? "stretch" : "center",
         },
@@ -650,20 +705,29 @@ export function IOSFormRow({
 const styles = StyleSheet.create({
   segmented: {
     flexDirection: "row",
-    borderRadius: 9,
+    alignItems: "center",
+    borderRadius: dashboard.chipRadius,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
     padding: 2,
+    gap: 2,
+    minHeight: 44,
   },
   segment: {
     flex: 1,
-    minHeight: 32,
-    borderRadius: 7,
+    minHeight: 44,
+    borderRadius: dashboard.chipRadius - 2,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "transparent",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 8,
   },
   segmentLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "600",
+    letterSpacing: -0.1,
   },
   dateFallback: {
     minHeight: 44,
@@ -694,7 +758,9 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   group: {
-    borderRadius: 10,
+    borderRadius: dashboard.cardRadius,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
     overflow: "hidden",
     marginHorizontal: 16,
   },
@@ -705,22 +771,25 @@ const styles = StyleSheet.create({
   search: {
     flexDirection: "row",
     alignItems: "center",
-    height: 36,
-    borderRadius: 10,
+    height: dashboard.headerControl,
+    borderRadius: dashboard.chipRadius,
+    borderCurve: "continuous",
     paddingHorizontal: 10,
     gap: 8,
   },
   searchInput: {
     flex: 1,
-    fontSize: 17,
+    fontSize: 15,
+    fontWeight: "500",
     paddingVertical: 0,
   },
   buttonFallback: {
-    minHeight: 50,
-    borderRadius: 10,
+    minHeight: 48,
+    borderRadius: dashboard.metricChipRadius,
+    borderCurve: "continuous",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
   },
   unavailable: {
     alignItems: "center",

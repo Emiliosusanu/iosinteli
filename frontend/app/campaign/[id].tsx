@@ -8,7 +8,7 @@ import {
   TouchableOpacity,
   RefreshControl,
 } from "react-native";
-import { Image } from "expo-image";
+import { BookCover } from "@/src/components/BookCover";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
@@ -40,7 +40,7 @@ import { SubScreen } from "@/src/components/SubScreen";
 import { biddingStrategyLabel, shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
 import { fetchCampaignApi, updateCampaign, updateCampaignState, type PlacementAdjustments } from "@/src/lib/mutations";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
-import { describeProductTarget, fallbackAsinCoverUrl } from "@/src/lib/targeting";
+import { describeProductTarget, fallbackAsinCoverUrl, productTargetHeading } from "@/src/lib/targeting";
 
 const PLACEMENT_EDITORS: {
   key: keyof PlacementAdjustments;
@@ -260,7 +260,7 @@ export default function CampaignDetail() {
     return (
       <SubScreen title="Campaign" showDateRange>
         <RetryState
-          title="Campaign failed to load"
+          title="Couldn't load campaign"
           subtitle="Check your connection and try again."
           onRetry={() => void campaignQ.refetch()}
           retrying={campaignQ.isRefetching}
@@ -349,6 +349,15 @@ export default function CampaignDetail() {
       >
         <SectionCard>
           <View style={styles.headerRow}>
+            <EntityStateSwitch
+              enabled={c.state === "enabled"}
+              noun="campaign"
+              testID={`campaign-state-${c.id}`}
+              onChange={async (next) => {
+                await updateCampaignState(c.id, next ? "enabled" : "paused");
+                await persistCampaign();
+              }}
+            />
             <View
               style={{ flex: 1, minWidth: 0 }}
               accessible
@@ -371,15 +380,6 @@ export default function CampaignDetail() {
                 ) : null}
               </View>
             </View>
-            <EntityStateSwitch
-              enabled={c.state === "enabled"}
-              noun="campaign"
-              testID={`campaign-state-${c.id}`}
-              onChange={async (next) => {
-                await updateCampaignState(c.id, next ? "enabled" : "paused");
-                await persistCampaign();
-              }}
-            />
           </View>
           <TouchableOpacity
             testID={`campaign-budget-${c.id}`}
@@ -402,7 +402,7 @@ export default function CampaignDetail() {
         <View style={[styles.metricsCard, { backgroundColor: t.colors.background_secondary }]}>
           {heroFailed ? (
             <RetryState
-              title="Performance failed to load"
+              title="Couldn't load performance"
               subtitle="Identity, status, and budget are still available."
               onRetry={() => void dailyMetricsQ.refetch()}
               retrying={dailyMetricsQ.isRefetching}
@@ -476,7 +476,7 @@ export default function CampaignDetail() {
                 />
               ))}
               <RetryState
-                title="Placement performance failed to load"
+                title="Couldn't load placement performance"
                 subtitle="Bid adjustments above are still the confirmed values."
                 onRetry={() => void placementsQ.refetch()}
                 retrying={placementsQ.isRefetching}
@@ -535,7 +535,7 @@ export default function CampaignDetail() {
         {dailyMetricsQ.isError && daily.length === 0 ? (
           <SectionCard title="Daily performance">
             <RetryState
-              title="Trend failed to load"
+              title="Couldn't load trend"
               subtitle="Totals above, if shown, are still for this date range."
               onRetry={() => void dailyMetricsQ.refetch()}
               retrying={dailyMetricsQ.isRefetching}
@@ -601,7 +601,7 @@ export default function CampaignDetail() {
         <SectionCard title={`Ad Groups (${visibleAdGroups.length})`}>
           {adGroupsQ.isError && visibleAdGroups.length === 0 ? (
             <RetryState
-              title="Ad groups failed to load"
+              title="Couldn't load ad groups"
               subtitle="The rest of this campaign is still available."
               onRetry={() => void adGroupsQ.refetch()}
               retrying={adGroupsQ.isRefetching}
@@ -714,7 +714,7 @@ export default function CampaignDetail() {
         ) : targetingFailed ? (
           <SectionCard title="Targeting">
             <RetryState
-              title="Targets failed to load"
+              title="Couldn't load targets"
               subtitle="Campaign performance above is still available."
               onRetry={() => {
                 void keywordsQ.refetch();
@@ -754,7 +754,7 @@ export default function CampaignDetail() {
             </Text>
             {searchTermsQ.isError && (searchTermsQ.data ?? []).length === 0 ? (
               <RetryState
-                title="Search terms failed to load"
+                title="Couldn't load search terms"
                 subtitle="This list uses the last 65 days, not the screen date range."
                 onRetry={() => void searchTermsQ.refetch()}
                 retrying={searchTermsQ.isRefetching}
@@ -801,7 +801,7 @@ export default function CampaignDetail() {
         <SectionCard title={`Advertised Products (${visibleProductAds.length})`}>
           {productAdsQ.isError && visibleProductAds.length === 0 ? (
             <RetryState
-              title="Advertised products failed to load"
+              title="Couldn't load advertised products"
               subtitle="The rest of this campaign is still available."
               onRetry={() => void productAdsQ.refetch()}
               retrying={productAdsQ.isRefetching}
@@ -1010,29 +1010,20 @@ function ProductTargetRow({
   t: any;
   onOpenTarget: (targetId: string) => void;
 }) {
-  const [coverFailed, setCoverFailed] = useState(false);
-  const target = describeProductTarget(pt.expression, pt.expression_type);
+  const target = describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression);
   const fallbackCover = fallbackAsinCoverUrl(target.asin);
-  const coverUrl = !coverFailed ? pt.image_url || fallbackCover : null;
-  const title = pt.title || target.asin || target.label;
+  const title = productTargetHeading(pt);
   const acos = safeDivide(Number(pt.total_spend ?? 0), Number(pt.total_sales ?? 0)) * 100;
   const content = (
     <>
-      <View style={[styles.productThumb, { backgroundColor: t.colors.background_tertiary }]}>
-        {coverUrl ? (
-          <Image
-            source={{ uri: coverUrl }}
-            style={styles.productThumb}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            transition={150}
-            recyclingKey={target.asin || pt.id}
-            onError={() => setCoverFailed(true)}
-          />
-        ) : (
-          <SFSymbol name="cube" size={22} color={t.colors.text_tertiary} />
-        )}
-      </View>
+      <BookCover
+        uri={pt.image_url}
+        fallbackUri={fallbackCover}
+        asin={target.asin}
+        size="xs"
+        placeholder={target.isAuto ? "auto" : target.asin ? "book" : "cube"}
+        recyclingKey={target.asin || pt.id}
+      />
       <View style={{ flex: 1, marginLeft: 10, minWidth: 0 }}>
         <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>
           {title}
@@ -1073,30 +1064,20 @@ function AdvertisedProductRow({
   t: any;
   onOpenBook: (asin: string, title?: string | null, imageUrl?: string | null) => void;
 }) {
-  const [coverFailed, setCoverFailed] = useState(false);
   const fallbackCover = fallbackAsinCoverUrl(pa.asin);
-  const coverUrl = !coverFailed ? pa.image_url || fallbackCover : null;
   const title = pa.title || pa.asin || pa.sku || "Advertised product";
   const acos = safeDivide(Number(pa.total_spend ?? 0), Number(pa.total_sales ?? 0)) * 100;
   const canOpen = Boolean(pa.asin);
 
   const content = (
     <>
-      <View style={[styles.productThumb, { backgroundColor: t.colors.background_tertiary }]}>
-        {coverUrl ? (
-          <Image
-            source={{ uri: coverUrl }}
-            style={styles.productThumb}
-            contentFit="cover"
-            transition={150}
-            cachePolicy="memory-disk"
-            recyclingKey={pa.asin || pa.id}
-            onError={() => setCoverFailed(true)}
-          />
-        ) : (
-          <SFSymbol name="book" size={22} color={t.colors.text_tertiary} />
-        )}
-      </View>
+      <BookCover
+        uri={pa.image_url}
+        fallbackUri={fallbackCover}
+        asin={pa.asin}
+        size="xs"
+        recyclingKey={pa.asin || pa.id}
+      />
       <View style={{ flex: 1, marginLeft: 10, minWidth: 0 }}>
         <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>
           {title}
@@ -1117,7 +1098,7 @@ function AdvertisedProductRow({
       accessibilityRole="button"
       accessibilityLabel={`${title}, ${statusLabel(pa.status)}`}
       style={rowStyle}
-      onPress={() => onOpenBook(pa.asin, pa.title, coverUrl || fallbackCover)}
+      onPress={() => onOpenBook(pa.asin, pa.title, pa.image_url || fallbackCover)}
     >
       {content}
       <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />

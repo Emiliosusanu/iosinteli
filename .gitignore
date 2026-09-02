@@ -85,3 +85,14 @@ android-sdk/.env
 
 .env
 .env.*
+
+# Apple / APNs private keys — never commit
+*.p8
+AuthKey_*.p8
+
+# Metro / generated
+frontend/.metro-cache/
+**/.metro-cache/
+
+# Supabase CLI local link state
+supabase/.temp/

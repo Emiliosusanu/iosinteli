@@ -6,7 +6,7 @@ import { SubScreen } from "@/src/components/SubScreen";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useApp } from "@/src/contexts/AppContext";
-import { useTheme, toneColor } from "@/src/lib/theme";
+import { dashboard, useTheme, toneColor } from "@/src/lib/theme";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
 import { reapplyRuleExecution, revertRuleExecution } from "@/src/lib/mutations";
 import { fetchRuleExecutionEntities, fetchRuleExecutions } from "@/src/lib/queries";
@@ -333,7 +333,7 @@ function Count({
 
 const styles = StyleSheet.create({
   statusPill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, minHeight: 28, justifyContent: "center" },
-  counts: { flexDirection: "row", gap: 12, marginTop: 16, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, padding: 14 },
-  row: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, padding: 12, marginBottom: 8 },
+  counts: { flexDirection: "row", gap: 12, marginTop: 16, borderRadius: dashboard.cardRadius, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, padding: 14 },
+  row: { borderRadius: dashboard.cardRadius, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, padding: 12, marginBottom: 8 },
   actions: { flexDirection: "row", gap: 10, marginTop: 12 },
 });

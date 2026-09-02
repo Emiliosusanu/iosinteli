@@ -4,6 +4,8 @@
 import { nestApiJson } from "./rulesApi";
 import type { Campaign, CampaignMetric, Keyword, MetricsTotals, ProductTarget } from "./types";
 import type { BookCampaignRow, KdpRoyaltyRange, TopBookRow, TopCampaignRow } from "./queries";
+import type { MobileHomeSnapshot } from "./mobileHomeSnapshot";
+import { netRoyaltiesKnown } from "./netRoyalties";
 
 function qs(params: Record<string, string | number | undefined | null>) {
   const search = new URLSearchParams();
@@ -148,6 +150,34 @@ export async function fetchDashboardBootstrap(params: {
   return nestApiJson<DashboardBootstrapResponse>(path, { method: "GET" }, "Couldn't load dashboard.");
 }
 
+export async function fetchMobileOverview(params: {
+  profileIds: string[];
+  filterUserId?: string | null;
+  timeZone?: string | null;
+}): Promise<MobileHomeSnapshot> {
+  const path = `/dashboard/mobile${qs({
+    profileIds: params.profileIds.join(","),
+    filterUserId: params.filterUserId,
+    timeZone: params.timeZone,
+  })}`;
+  return nestApiJson<MobileHomeSnapshot>(path, { method: "GET" }, "Couldn't load Home.");
+}
+
+/** Nest compact snapshot when deployed; null if the route is missing or unusable. */
+export async function tryFetchMobileOverview(params: {
+  profileIds: string[];
+  filterUserId?: string | null;
+  timeZone?: string | null;
+}): Promise<MobileHomeSnapshot | null> {
+  try {
+    const data = await fetchMobileOverview(params);
+    if (data && data.schemaVersion === 1 && data.today?.date) return data;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchAggregatedCampaigns(params: {
   startDate: string;
   endDate: string;
@@ -229,7 +259,7 @@ export function bootstrapToCampaignMetrics(boot: DashboardBootstrapResponse | un
 }
 
 export function bootstrapToRoyalties(boot: DashboardBootstrapResponse | undefined): KdpRoyaltyRange {
-  if (!boot) return { hasKdpData: false, totalRoyalties: 0, totalOrders: 0, daily: [] };
+  if (!boot) return emptyKdpRange();
 
   const fromMetrics = boot.metrics?.metrics.kdpDailyRoyalties ?? [];
   const fromNet = boot.netSeries?.data ?? [];
@@ -248,16 +278,29 @@ export function bootstrapToRoyalties(boot: DashboardBootstrapResponse | undefine
   for (const row of fromNet) add(row.date, n(row.royalties));
   for (const row of fromMetrics) add(row.date, n(row.royalties));
 
-  const daily = Array.from(byDate.values())
-    .filter((row) => row.royalties > 0 || row.orders > 0)
-    .sort((a, b) => a.date.localeCompare(b.date));
+  const daily = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
 
-  const totalRoyalties = boot.metrics?.metrics.kdpRoyalties ?? daily.reduce((sum, row) => sum + row.royalties, 0);
+  const summary = boot.metrics?.metrics;
+  const totalRoyalties = summary?.kdpRoyalties ?? daily.reduce((sum, row) => sum + row.royalties, 0);
+  const coveredDays = Math.max(0, n(summary?.kdpDaysCovered));
+  const daysInRange = Math.max(0, n(summary?.kdpDaysInRange));
+  const hasKdpData = summary?.kdpRoyalties != null || daily.length > 0;
+  const coverage = !hasKdpData
+    ? "missing"
+    : daysInRange > 0 && coveredDays >= daysInRange
+      ? "complete"
+      : "partial";
   return {
-    hasKdpData: daily.length > 0 || n(totalRoyalties) > 0,
+    hasKdpData,
     totalRoyalties: n(totalRoyalties),
     totalOrders: daily.reduce((sum, row) => sum + row.orders, 0),
     daily,
+    coverage,
+    coveredDays,
+    daysInRange,
+    coveredAccountDays: coveredDays,
+    expectedAccountDays: daysInRange,
+    completeness: coverage === "complete" ? "COMPLETE" : coverage === "partial" ? "PARTIAL" : "UNKNOWN",
   };
 }
 
@@ -280,8 +323,10 @@ export function bootstrapToTopBooks(boot: DashboardBootstrapResponse | undefined
       royalties,
       acos: sales > 0 ? (spend / sales) * 100 : n(book.currentAcos),
       roas: spend > 0 ? sales / spend : 0,
-      net: royalties - spend,
+      net: netRoyaltiesKnown(royalties, spend),
       breakeven_acos: n(book.breakEvenAcos),
+      ads_state: "ready" as const,
+      kdp_state: "ready" as const,
     };
   });
 }
@@ -342,12 +387,42 @@ export function previousMetricsToCampaignRows(
 }
 
 export function previousMetricsToRoyalties(prev: MetricsSummary | undefined, endDate: string): KdpRoyaltyRange {
-  const royalties = n(prev?.kdpRoyalties);
+  if (!prev) return emptyKdpRange();
+  const royalties = n(prev.kdpRoyalties);
+  const coveredDays = Math.max(0, n(prev.kdpDaysCovered));
+  const daysInRange = Math.max(0, n(prev.kdpDaysInRange));
+  const hasKdpData = prev.kdpRoyalties != null;
+  const coverage = !hasKdpData
+    ? "missing"
+    : daysInRange > 0 && coveredDays >= daysInRange
+      ? "complete"
+      : "partial";
   return {
-    hasKdpData: royalties > 0,
+    hasKdpData,
     totalRoyalties: royalties,
     totalOrders: 0,
-    daily: royalties > 0 ? [{ date: endDate, royalties, orders: 0 }] : [],
+    daily: hasKdpData ? [{ date: endDate, royalties, orders: 0 }] : [],
+    coverage,
+    coveredDays,
+    daysInRange,
+    coveredAccountDays: coveredDays,
+    expectedAccountDays: daysInRange,
+    completeness: coverage === "complete" ? "COMPLETE" : coverage === "partial" ? "PARTIAL" : "UNKNOWN",
+  };
+}
+
+function emptyKdpRange(): KdpRoyaltyRange {
+  return {
+    hasKdpData: false,
+    totalRoyalties: 0,
+    totalOrders: 0,
+    daily: [],
+    coverage: "missing",
+    coveredDays: 0,
+    daysInRange: 0,
+    coveredAccountDays: 0,
+    expectedAccountDays: 0,
+    completeness: "UNKNOWN",
   };
 }
 

@@ -16,6 +16,25 @@ import {
 } from "./dashboardApi";
 import { NEGATIVE_RESULT_LIMIT } from "./negativeTargeting";
 import { RULE_ACTIVITY_LIMIT } from "./ruleActivityContract";
+import {
+  asinBelongsToLogicalBook,
+  logicalBookAsinsFromDailyRows,
+  primaryAsinFromGroupKey,
+} from "./kdpBookIdentity";
+import { assembleLogicalBookRows, emptyLogicalBook, type LogicalBookAccumulator } from "./kdpBooksRead";
+import { aggregateKdpDailyRows, kdpTrace } from "./kdpRoyaltiesTrace";
+import {
+  calculatorBreakEvenFromKdpTitle,
+  pickUsableCoverUrl,
+} from "./kdpTitlePresentation";
+import {
+  BOOKS_LIST_ACTIVITY_DAYS,
+  bookHasSignalInRange,
+  booksListActivityRange,
+  filterTopBooksByRecentActivity,
+} from "./booksListActivity";
+import { netRoyaltiesKnown } from "./netRoyalties";
+import { extractTargetAsin } from "./targeting";
 
 export const ADMIN_FILTER_KEY = "inteliads.adminFilterUserId";
 import {
@@ -59,18 +78,97 @@ function chunkArray<T>(values: T[], size: number): T[][] {
   return chunks;
 }
 
+export const POSTGREST_PAGE_SIZE = 1000;
+/** Defensive cap so a stuck page cannot loop forever. 2500 × 1000 = 2.5M rows. */
+export const POSTGREST_MAX_PAGES = 2500;
+/** Targets tab: top spenders only — unbounded keyword reads stall on multi-profile accounts. */
+export const TARGETING_LIST_LIMIT = 500;
+
+export class IncompleteReadError extends Error {
+  readonly code = "INCOMPLETE_READ";
+  constructor(message = "PostgREST read exceeded the safety page limit") {
+    super(message);
+    this.name = "IncompleteReadError";
+  }
+}
+
 async function fetchAllPages<T>(
   buildQuery: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>,
-  pageSize = 1000,
+  pageSize = POSTGREST_PAGE_SIZE,
+  opts?: { signal?: AbortSignal; maxPages?: number },
 ): Promise<T[]> {
+  const maxPages = opts?.maxPages ?? POSTGREST_MAX_PAGES;
   const rows: T[] = [];
-  for (let from = 0; ; from += pageSize) {
+  for (let page = 0, from = 0; ; page += 1, from += pageSize) {
+    if (opts?.signal?.aborted) {
+      throw new IncompleteReadError("PostgREST read aborted");
+    }
+    if (page >= maxPages) {
+      throw new IncompleteReadError("PostgREST read exceeded the safety page limit");
+    }
     const to = from + pageSize - 1;
     const { data, error } = await buildQuery(from, to);
     if (error) throw error;
-    const page = data ?? [];
-    rows.push(...page);
-    if (page.length < pageSize) break;
+    const pageRows = data ?? [];
+    rows.push(...pageRows);
+    if (pageRows.length < pageSize) break;
+  }
+  return rows;
+}
+
+export class BooksReadError extends Error {
+  stage: string;
+  code: string;
+  constructor(stage: string, code = "error") {
+    super(`Books ${stage} failed`);
+    this.name = "BooksReadError";
+    this.stage = stage;
+    this.code = String(code || "error").slice(0, 80);
+  }
+}
+
+function booksErrorCode(error: unknown): string {
+  if (error && typeof error === "object") {
+    const record = error as { code?: unknown; message?: unknown };
+    if (record.code) return String(record.code);
+    if (record.message) return String(record.message).slice(0, 80);
+  }
+  return "error";
+}
+
+function logBooksStage(stage: string, error: unknown) {
+  // eslint-disable-next-line no-console
+  console.warn(`[inteliads:books] ${stage}`, booksErrorCode(error));
+}
+
+const BOOKS_IN_CHUNK = 200;
+
+async function fetchRequiredPages<T>(
+  stage: string,
+  buildQuery: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>,
+): Promise<T[]> {
+  try {
+    return await fetchAllPages(buildQuery);
+  } catch (error) {
+    logBooksStage(stage, error);
+    throw new BooksReadError(stage, booksErrorCode(error));
+  }
+}
+
+async function fetchOptionalInPages<T>(
+  stage: string,
+  ids: string[],
+  buildQuery: (chunk: string[], from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>,
+  chunkSize = BOOKS_IN_CHUNK,
+): Promise<T[]> {
+  if (!ids.length) return [];
+  const rows: T[] = [];
+  for (const chunk of chunkArray(ids, chunkSize)) {
+    try {
+      rows.push(...(await fetchAllPages((from, to) => buildQuery(chunk, from, to))));
+    } catch (error) {
+      logBooksStage(stage, error);
+    }
   }
   return rows;
 }
@@ -112,6 +210,31 @@ function addMetricRow(t: MetricsTotals, row: any) {
   t.total_spend += toNumber(row.spend);
 }
 
+async function fetchCampaignMetricRows(
+  campaignIds: string[],
+  start: string,
+  end: string,
+): Promise<Array<{ campaign_id: string; impressions: unknown; clicks: unknown; orders: unknown; spend: unknown; sales: unknown }>> {
+  const rows: Array<{ campaign_id: string; impressions: unknown; clicks: unknown; orders: unknown; spend: unknown; sales: unknown }> = [];
+  if (!campaignIds.length) return rows;
+  for (const chunk of chunkArray(campaignIds, 200)) {
+    rows.push(
+      ...(await fetchAllPages((from, to) =>
+        supabase
+          .from("campaign_metrics")
+          .select("campaign_id,impressions,clicks,orders,spend,sales")
+          .in("campaign_id", chunk)
+          .gte("date", start)
+          .lte("date", end)
+          .order("campaign_id", { ascending: true })
+          .order("date", { ascending: true })
+          .range(from, to),
+      )),
+    );
+  }
+  return rows;
+}
+
 async function fetchMetricTotalsByEntity(
   table: string,
   entityColumn: string,
@@ -121,23 +244,30 @@ async function fetchMetricTotalsByEntity(
 ): Promise<Map<string, MetricsTotals>> {
   const totals = new Map<string, MetricsTotals>();
   if (!ids.length || !start || !end) return totals;
+  const selectColumns = [entityColumn, "impressions", "clicks", "orders", "spend", "sales"].join(",");
 
-  for (const chunk of chunkArray(ids, 500)) {
-    let q = supabase
-      .from(table)
-      .select(`${entityColumn},impressions,clicks,orders,spend,sales`)
-      .in(entityColumn, chunk)
-      .gte("date", start)
-      .lte("date", end);
-    const { data, error } = await q;
-    if (error) throw error;
-
-    for (const row of data ?? []) {
-      const id = (row as any)[entityColumn];
-      if (!id) continue;
-      const current = totals.get(id) ?? emptyTotals();
-      addMetricRow(current, row);
-      totals.set(id, current);
+  // Unordered range reads — faster than sorted entity+date pagination.
+  for (const chunk of chunkArray(ids, 80)) {
+    let from = 0;
+    for (;;) {
+      const { data, error } = await supabase
+        .from(table)
+        .select(selectColumns)
+        .in(entityColumn, chunk)
+        .gte("date", start)
+        .lte("date", end)
+        .range(from, from + POSTGREST_PAGE_SIZE - 1);
+      if (error) throw error;
+      const pageRows = data ?? [];
+      for (const row of pageRows) {
+        const id = row[entityColumn];
+        if (!id) continue;
+        const current = totals.get(String(id)) ?? emptyTotals();
+        addMetricRow(current, row);
+        totals.set(String(id), current);
+      }
+      if (pageRows.length < POSTGREST_PAGE_SIZE) break;
+      from += POSTGREST_PAGE_SIZE;
     }
   }
 
@@ -178,6 +308,15 @@ export interface KdpRoyaltyRange {
   totalRoyalties: number;
   totalOrders: number;
   daily: KdpRoyaltyDay[];
+  coverage: "complete" | "partial" | "missing" | "not_linked";
+  coveredDays: number;
+  daysInRange: number;
+  coveredAccountDays: number;
+  expectedAccountDays: number;
+  /** Account-day completeness vs linked KDP accounts for the requested scope. */
+  completeness?: "COMPLETE" | "PARTIAL" | "UNKNOWN";
+  linkedAccountCount?: number;
+  rawRowCount?: number;
 }
 
 async function fetchLinkedKdpAccountIds(profileIds: string[]): Promise<string[]> {
@@ -213,17 +352,71 @@ async function fetchLinkedKdpAccountIds(profileIds: string[]): Promise<string[]>
   return uniqueStrings([...activeLinkedIds, ...(legacyAccounts ?? []).map((row: any) => row.id)]);
 }
 
+async function fetchLogicalBookAsins(profileIds: string[], openedAsin: string): Promise<string[]> {
+  const opened = String(openedAsin ?? "").trim().toUpperCase();
+  if (!opened) return [];
+
+  const kdpAccountIds = await fetchLinkedKdpAccountIds(profileIds);
+  if (!kdpAccountIds.length) return [opened];
+
+  const { data: openedRows, error: openedErr } = await supabase
+    .from("kdp_book_daily_data")
+    .select("asin, group_key")
+    .in("account_id", kdpAccountIds)
+    .eq("asin", opened);
+  if (openedErr) throw openedErr;
+
+  const groupKeys = uniqueStrings(
+    (openedRows ?? []).map((row: any) => String(row.group_key ?? "").trim()).filter(Boolean),
+  );
+  if (!groupKeys.length) return [opened];
+
+  const { data: siblingRows, error: siblingErr } = await supabase
+    .from("kdp_book_daily_data")
+    .select("asin, group_key")
+    .in("account_id", kdpAccountIds)
+    .in("group_key", groupKeys);
+  if (siblingErr) throw siblingErr;
+
+  return logicalBookAsinsFromDailyRows(opened, siblingRows ?? []);
+}
+
 export async function fetchKdpRoyaltiesRange(
   profileIds: string[],
   startDate: string,
   endDate: string,
 ): Promise<KdpRoyaltyRange> {
+  kdpTrace("KD01_QUERY_START", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    profileCount: profileIds.length,
+  });
   const accountIds = await fetchLinkedKdpAccountIds(profileIds);
-  if (!accountIds.length) return { hasKdpData: false, totalRoyalties: 0, totalOrders: 0, daily: [] };
+  kdpTrace("KD05_SCOPE_FILTER", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    linkedAccounts: accountIds.length,
+    filteredByAdsProfiles: 1,
+  });
+  if (!accountIds.length) {
+    kdpTrace("KD02_QUERY_RETURN", { date: startDate, count: 0, total: 0 });
+    return {
+      hasKdpData: false,
+      totalRoyalties: 0,
+      totalOrders: 0,
+      daily: [],
+      coverage: "not_linked",
+      coveredDays: 0,
+      daysInRange: 0,
+      coveredAccountDays: 0,
+      expectedAccountDays: 0,
+      completeness: "UNKNOWN",
+      linkedAccountCount: 0,
+      rawRowCount: 0,
+    };
+  }
 
   const dailyResult = await supabase
     .from("kdp_daily_data")
-    .select("date, royalties, orders")
+    .select("account_id, date, royalties, orders")
     .in("account_id", accountIds)
     .gte("date", startDate)
     .lte("date", endDate)
@@ -233,7 +426,7 @@ export async function fetchKdpRoyaltiesRange(
     dailyResult.error || !(dailyResult.data ?? []).length
       ? await supabase
           .from("kdp_entries")
-          .select("date, income, orders")
+          .select("account_id, date, income, orders")
           .in("account_id", accountIds)
           .gte("date", startDate)
           .lte("date", endDate)
@@ -242,25 +435,86 @@ export async function fetchKdpRoyaltiesRange(
   if (dailyResult.error && entryResult.error) throw entryResult.error;
   if (!dailyResult.error && (dailyResult.data ?? []).length === 0 && entryResult.error) throw entryResult.error;
 
-  const data = (dailyResult.data ?? []).length ? dailyResult.data : entryResult.data;
-  const royaltyColumn = (dailyResult.data ?? []).length ? "royalties" : "income";
+  const usingDaily = (dailyResult.data ?? []).length > 0;
+  const rawRows = usingDaily
+    ? (dailyResult.data as any[])
+    : ((entryResult.data ?? []) as any[]).map((row) => ({
+        account_id: row.account_id,
+        date: row.date,
+        royalties: row.income,
+        orders: row.orders,
+      }));
 
-  const byDate = new Map<string, KdpRoyaltyDay>();
-  for (const row of data ?? []) {
-    const date = (row as any).date;
-    if (!date) continue;
-    const current = byDate.get(date) ?? { date, royalties: 0, orders: 0 };
-    current.royalties += toNumber((row as any)[royaltyColumn]);
-    current.orders += toNumber((row as any).orders);
-    byDate.set(date, current);
-  }
+  kdpTrace("KD02_QUERY_RETURN", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    source: usingDaily ? "kdp_daily_data" : "kdp_entries",
+  });
+  kdpTrace("KD03_RAW_COUNT", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    count: rawRows.length,
+  });
 
-  const daily = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+  const aggregated = aggregateKdpDailyRows(rawRows, accountIds.length, {
+    start: startDate,
+    end: endDate,
+    source: usingDaily ? "kdp_daily_data" : "kdp_entries",
+  });
+  kdpTrace("KD04_RAW_TOTAL", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    total: Number(aggregated.totalRoyalties.toFixed(2)),
+  });
+  kdpTrace("KD06_SCOPE_COUNT", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    count: aggregated.accountCount,
+    linkedAccounts: accountIds.length,
+  });
+  kdpTrace("KD07_SCOPE_TOTAL", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    total: Number(aggregated.totalRoyalties.toFixed(2)),
+  });
+  kdpTrace("KD08_CURRENCY_NORMALIZE", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    note: "kdp_daily_data_has_no_currency_column",
+  });
+  kdpTrace("KD09_NORMALIZED_TOTAL", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    total: Number(aggregated.totalRoyalties.toFixed(2)),
+  });
+  kdpTrace("KD10_DATE_FILTER", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    start: startDate,
+    end: endDate,
+  });
+  kdpTrace("KD11_DATE_TOTAL", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    total: Number(aggregated.totalRoyalties.toFixed(2)),
+  });
+  kdpTrace("KD12_AGGREGATE", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    count: aggregated.daily.length,
+    total: Number(aggregated.totalRoyalties.toFixed(2)),
+    completeness: aggregated.completeness,
+  });
+
+  kdpTrace("KD15_UI_VALUE", {
+    date: startDate === endDate ? startDate : `${startDate}..${endDate}`,
+    total: Number(aggregated.totalRoyalties.toFixed(2)),
+    completeness: aggregated.completeness,
+  });
+
   return {
-    hasKdpData: daily.length > 0,
-    totalRoyalties: daily.reduce((sum, day) => sum + day.royalties, 0),
-    totalOrders: daily.reduce((sum, day) => sum + day.orders, 0),
-    daily,
+    hasKdpData: aggregated.daily.length > 0,
+    totalRoyalties: aggregated.totalRoyalties,
+    totalOrders: aggregated.totalOrders,
+    daily: aggregated.daily,
+    coverage: aggregated.coverage,
+    coveredDays: aggregated.coveredDays,
+    daysInRange: aggregated.daysInRange,
+    coveredAccountDays: aggregated.coveredAccountDays,
+    expectedAccountDays: aggregated.expectedAccountDays,
+    completeness: aggregated.completeness,
+    linkedAccountCount: accountIds.length,
+    rawRowCount: aggregated.rawCount,
   };
 }
 
@@ -380,7 +634,7 @@ export async function fetchAmazonProfiles(
   if (!linkedIds.length) {
     // Same list the web dashboard uses (Nest + service role). Covers the case
     // where the user JWT cannot read user_amazon_profiles but the account is linked.
-    if (!(await hasNestToken())) return [];
+    // Amazon login sends the Supabase bearer via nestApiFetch; do not require a Nest JWT.
     return fetchNestAmazonProfiles().catch(() => []);
   }
 
@@ -684,8 +938,19 @@ export async function fetchKeywords(
   const rows = opts.limit
     ? ((limitedResult?.data ?? []) as Keyword[])
     : await fetchAllPages<Keyword>((from, to) => buildQuery(from, to));
-  const totals = await fetchMetricTotalsByEntity("keyword_metrics", "keyword_id", rows.map((row) => row.id), opts.start, opts.end);
-  return rows.map((row) => applyMetricTotals(row, opts.start && opts.end ? totals.get(row.id) ?? emptyTotals() : undefined));
+  if (!opts.start || !opts.end) return rows;
+  const totals = await fetchMetricTotalsByEntity(
+    "keyword_metrics",
+    "keyword_id",
+    rows.map((row) => row.id),
+    opts.start,
+    opts.end,
+  ).catch((error) => {
+    // eslint-disable-next-line no-console
+    console.warn("[inteliads:targeting] keyword metrics enrichment failed", error);
+    return new Map<string, MetricsTotals>();
+  });
+  return rows.map((row) => applyMetricTotals(row, totals.get(row.id) ?? emptyTotals()));
 }
 
 export type EntityParentNames = { campaign_name?: string | null; ad_group_name?: string | null };
@@ -834,7 +1099,7 @@ export async function fetchProductTargets(
   } = {},
 ): Promise<ProductTarget[]> {
   if (opts.filterUserId && (await hasNestToken())) {
-    return fetchNestProductTargets({
+    const nestRows = await fetchNestProductTargets({
       filterUserId: opts.filterUserId,
       startDate: opts.start,
       endDate: opts.end,
@@ -844,6 +1109,7 @@ export async function fetchProductTargets(
       state: opts.state,
       limit: opts.limit,
     });
+    return enrichProductTargetDisplay(nestRows, profileIds);
   }
   if (!profileIds.length) return [];
   const buildQuery = (from?: number, to?: number) => {
@@ -866,14 +1132,44 @@ export async function fetchProductTargets(
   const rows = opts.limit
     ? ((limitedResult?.data ?? []) as ProductTarget[])
     : await fetchAllPages<ProductTarget>((from, to) => buildQuery(from, to));
-  const totals = await fetchMetricTotalsByEntity("product_target_metrics", "product_target_id", rows.map((row) => row.id), opts.start, opts.end);
-  const enriched = rows.map((row) => applyMetricTotals(row, opts.start && opts.end ? totals.get(row.id) ?? emptyTotals() : undefined));
+  let totals = new Map<string, MetricsTotals>();
+  if (opts.start && opts.end) {
+    totals = await fetchMetricTotalsByEntity(
+      "product_target_metrics",
+      "product_target_id",
+      rows.map((row) => row.id),
+      opts.start,
+      opts.end,
+    ).catch((error) => {
+      // eslint-disable-next-line no-console
+      console.warn("[inteliads:targeting] product target metrics enrichment failed", error);
+      return new Map<string, MetricsTotals>();
+    });
+  }
+  const enriched = rows.map((row) => applyMetricTotals(row, totals.get(row.id) ?? emptyTotals()));
+  return enrichProductTargetDisplay(enriched, profileIds);
+}
 
-  // Enrich missing ASIN display data from imported ad products first, then KDP titles.
+function productTargetDisplayAsin(row: ProductTarget): string {
+  return (
+    extractTargetAsin(row.resolved_expression) ||
+    extractTargetAsin(row.expression) ||
+    extractAsinFromExpression(row.expression) ||
+    ""
+  );
+}
+
+/** Fill missing book title/cover for ASINs; for Auto/Category use the campaign's advertised product. */
+async function enrichProductTargetDisplay(
+  enriched: ProductTarget[],
+  profileIds: string[],
+): Promise<ProductTarget[]> {
+  if (!enriched.length || !profileIds.length) return enriched;
+
   const rowsNeedingAsinData = enriched.filter((row) => !row.image_url || !row.title);
   if (rowsNeedingAsinData.length) {
     const extractedAsins = uniqueStrings(
-      rowsNeedingAsinData.map((row) => extractAsinFromExpression(row.expression)).filter(Boolean) as string[],
+      rowsNeedingAsinData.map((row) => productTargetDisplayAsin(row)).filter(Boolean),
     );
     if (extractedAsins.length) {
       const { data: adImages } = await supabase
@@ -885,21 +1181,20 @@ export async function fetchProductTargets(
         const imageByAsin = new Map(
           (adImages as any[]).map((a) => [
             String(a.asin ?? "").toUpperCase(),
-            { image_url: a.image_url, title: a.title },
+            { image_url: a.image_url as string | null, title: a.title as string | null },
           ]),
         );
         for (const row of enriched) {
-          const asin = extractAsinFromExpression(row.expression);
+          const asin = productTargetDisplayAsin(row);
           const match = asin ? imageByAsin.get(asin.toUpperCase()) : null;
-          if (match) {
-            if (!row.image_url && match.image_url) (row as any).image_url = match.image_url;
-            if (!row.title && match.title) (row as any).title = match.title;
-          }
+          if (!match) continue;
+          if (!row.image_url && match.image_url) (row as any).image_url = match.image_url;
+          if (!row.title && match.title) (row as any).title = match.title;
         }
       }
 
       const stillMissing = enriched.filter((row) => {
-        const asin = extractAsinFromExpression(row.expression);
+        const asin = productTargetDisplayAsin(row);
         return asin && (!row.image_url || !row.title);
       });
       if (stillMissing.length) {
@@ -912,22 +1207,98 @@ export async function fetchProductTargets(
             .in("asin", extractedAsins);
 
           if (kdpTitles) {
-            const titleByAsin = new Map(
-              (kdpTitles as any[]).map((title) => [
-                String(title.asin ?? "").toUpperCase(),
-                {
-                  title: title.title,
-                  image_url: title.cover_url ?? title.amazon_image_url ?? null,
-                },
-              ]),
-            );
+            const titleByAsin = new Map<string, { title: string | null; image_url: string | null }>();
+            for (const title of kdpTitles as any[]) {
+              const asin = String(title.asin ?? "").toUpperCase();
+              const existing = titleByAsin.get(asin);
+              titleByAsin.set(asin, {
+                title: existing?.title ?? title.title ?? null,
+                image_url: pickUsableCoverUrl(existing?.image_url, title.cover_url, title.amazon_image_url),
+              });
+            }
             for (const row of enriched) {
-              const asin = extractAsinFromExpression(row.expression);
+              const asin = productTargetDisplayAsin(row);
               const match = asin ? titleByAsin.get(asin.toUpperCase()) : null;
               if (!match) continue;
               if (!row.image_url && match.image_url) (row as any).image_url = match.image_url;
               if (!row.title && match.title) (row as any).title = match.title;
             }
+          }
+        }
+      }
+    }
+  }
+
+  // Auto / Category (and any ASIN still bare): cover + title from the campaign's advertised product.
+  const stillNeedCampaignCover = enriched.filter((row) => !row.image_url || !row.title);
+  if (stillNeedCampaignCover.length) {
+    const campaignIds = uniqueStrings(
+      stillNeedCampaignCover.map((row) => row.campaign_id).filter(Boolean) as string[],
+    );
+    if (campaignIds.length) {
+      const { data: campaignAds } = await supabase
+        .from("product_ads")
+        .select("campaign_id, asin, image_url, title")
+        .in("amazon_profile_id", profileIds)
+        .in("campaign_id", campaignIds);
+      if (campaignAds?.length) {
+        const byCampaign = new Map<
+          string,
+          { asin: string | null; image_url: string | null; title: string | null }
+        >();
+        for (const ad of campaignAds as any[]) {
+          const campaignId = String(ad.campaign_id ?? "");
+          if (!campaignId) continue;
+          const current = byCampaign.get(campaignId);
+          const next = {
+            asin: ad.asin ? String(ad.asin).toUpperCase() : null,
+            image_url: (ad.image_url as string | null) ?? null,
+            title: (ad.title as string | null) ?? null,
+          };
+          if (!current) {
+            byCampaign.set(campaignId, next);
+            continue;
+          }
+          // Prefer the first ad that actually has a cover or title.
+          if (!current.image_url && next.image_url) current.image_url = next.image_url;
+          if (!current.title && next.title) current.title = next.title;
+          if (!current.asin && next.asin) current.asin = next.asin;
+        }
+
+        const missingCoverAsins = uniqueStrings(
+          Array.from(byCampaign.values())
+            .filter((v) => v.asin && !v.image_url)
+            .map((v) => v.asin as string),
+        );
+        if (missingCoverAsins.length) {
+          const kdpAccountIds = await fetchLinkedKdpAccountIds(profileIds);
+          if (kdpAccountIds.length) {
+            const { data: kdpTitles } = await supabase
+              .from("kdp_titles")
+              .select("asin, title, cover_url, amazon_image_url")
+              .in("account_id", kdpAccountIds)
+              .in("asin", missingCoverAsins);
+            for (const title of kdpTitles ?? []) {
+              const asin = String((title as any).asin ?? "").toUpperCase();
+              for (const meta of byCampaign.values()) {
+                if (meta.asin !== asin) continue;
+                if (!meta.image_url) {
+                  meta.image_url = pickUsableCoverUrl((title as any).cover_url, (title as any).amazon_image_url);
+                }
+                if (!meta.title && (title as any).title) meta.title = (title as any).title;
+              }
+            }
+          }
+        }
+
+        for (const row of enriched) {
+          if (row.image_url && row.title) continue;
+          const meta = row.campaign_id ? byCampaign.get(row.campaign_id) : null;
+          if (!meta) continue;
+          if (!row.image_url && meta.image_url) (row as any).image_url = meta.image_url;
+          if (!row.title && meta.title) (row as any).title = meta.title;
+          if (!(row as any).cover_asin && meta.asin && !productTargetDisplayAsin(row)) {
+            (row as any).cover_asin = meta.asin;
           }
         }
       }
@@ -997,15 +1368,15 @@ export async function fetchProductAds(
         .in("account_id", kdpAccountIds)
         .in("asin", asins);
 
-      const titleByAsin = new Map(
-        (kdpTitles ?? []).map((title: any) => [
-          String(title.asin ?? "").toUpperCase(),
-          {
-            title: title.title,
-            image_url: title.cover_url ?? title.amazon_image_url ?? null,
-          },
-        ]),
-      );
+      const titleByAsin = new Map<string, { title: string | null; image_url: string | null }>();
+      for (const title of kdpTitles ?? []) {
+        const asin = String((title as any).asin ?? "").toUpperCase();
+        const existing = titleByAsin.get(asin);
+        titleByAsin.set(asin, {
+          title: existing?.title ?? (title as any).title ?? null,
+          image_url: pickUsableCoverUrl(existing?.image_url, (title as any).cover_url, (title as any).amazon_image_url),
+        });
+      }
 
       for (const row of enriched) {
         const match = row.asin ? titleByAsin.get(row.asin.toUpperCase()) : null;
@@ -1288,13 +1659,15 @@ export async function fetchCampaignMetricsRange(
 ): Promise<CampaignMetric[]> {
   if (!profileIds.length) return [];
 
-  // First get campaign IDs for selected profiles
-  const { data: camps, error: cErr } = await supabase
-    .from("campaigns")
-    .select("id")
-    .in("amazon_profile_id", profileIds);
-  if (cErr) throw cErr;
-  const ids = (camps ?? []).map((c: any) => c.id);
+  const campaignIds = await fetchAllPages<{ id: string }>((from, to) =>
+    supabase
+      .from("campaigns")
+      .select("id")
+      .in("amazon_profile_id", profileIds)
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
+  const ids = campaignIds.map((row) => row.id);
   if (!ids.length) return [];
   debugDataScope("campaign-metrics-range", {
     profiles: profileIds.length,
@@ -1304,18 +1677,21 @@ export async function fetchCampaignMetricsRange(
   });
 
   const rows: CampaignMetric[] = [];
-  for (const chunk of chunkArray(ids, 500)) {
-    const { data, error } = await supabase
-      .from("campaign_metrics")
-      .select("*")
-      .in("campaign_id", chunk)
-      .gte("date", startDate)
-      .lte("date", endDate)
-      .order("date", { ascending: true });
-    if (error) throw error;
-    rows.push(...((data ?? []) as CampaignMetric[]));
+  for (const chunk of chunkArray(ids, 200)) {
+    const page = await fetchAllPages<CampaignMetric>((from, to) =>
+      supabase
+        .from("campaign_metrics")
+        .select("id,campaign_id,date,impressions,clicks,ctr,spend,sales,orders,acos,roas,cpc,conversion_rate")
+        .in("campaign_id", chunk)
+        .gte("date", startDate)
+        .lte("date", endDate)
+        .order("date", { ascending: true })
+        .order("campaign_id", { ascending: true })
+        .range(from, to),
+    );
+    rows.push(...page);
   }
-  return rows.sort((a, b) => a.date.localeCompare(b.date));
+  return rows.sort((a, b) => a.date.localeCompare(b.date) || a.campaign_id.localeCompare(b.campaign_id));
 }
 
 export async function fetchCampaignMetricsForCampaign(
@@ -1459,29 +1835,6 @@ function inferTopBookGroupFromCampaignName(
   return best?.key ?? null;
 }
 
-function breakEvenFromKdpTitle({
-  allTimeRoyalties,
-  allTimeKdpOrders,
-  allTimeAdSales,
-  allTimeAdOrders,
-  periodRoyalties,
-  periodSales,
-  fallbackRate,
-}: {
-  allTimeRoyalties: number;
-  allTimeKdpOrders: number;
-  allTimeAdSales: number;
-  allTimeAdOrders: number;
-  periodRoyalties: number;
-  periodSales: number;
-  fallbackRate: number;
-}): number {
-  const royaltyPerCopy = allTimeKdpOrders > 0 ? allTimeRoyalties / allTimeKdpOrders : 0;
-  const salePrice = allTimeAdOrders > 0 ? allTimeAdSales / allTimeAdOrders : 0;
-  const marginBreakEven = royaltyPerCopy > 0 && salePrice > 0 ? (royaltyPerCopy / salePrice) * 100 : 0;
-  if (marginBreakEven > 0) return marginBreakEven;
-  return periodSales > 0 ? (periodRoyalties / periodSales) * 100 : fallbackRate;
-}
 
 export async function fetchPlacementMixRange(
   profileIds: string[],
@@ -1582,6 +1935,8 @@ export interface TopCampaignRow {
   acos: number;
   roas: number;
   net: number; // computed later with royalty rate
+  updated_at?: string | null;
+  metrics_updated_at?: string | null;
   book_key?: string | null;
   book_asin?: string | null;
   book_title?: string | null;
@@ -1676,12 +2031,14 @@ export async function fetchTopCampaignsRange(
   }
   const effectiveRoyaltyRate = royaltyRate > 0 ? royaltyRate : 0;
 
-  const { data: camps, error: cErr } = await supabase
-    .from("campaigns")
-    .select("id, name, type, targeting_type, state, budget, bidding_strategy, amazon_profile_id")
-    .in("amazon_profile_id", profileIds);
-  if (cErr) throw cErr;
-  const campaigns = camps ?? [];
+  const campaigns = await fetchAllPages<any>((from, to) =>
+    supabase
+      .from("campaigns")
+      .select("id, name, type, targeting_type, state, budget, bidding_strategy, amazon_profile_id, updated_at, metrics_updated_at")
+      .in("amazon_profile_id", profileIds)
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
   if (!campaigns.length) return [];
 
   const campaignIds = campaigns.map((c: any) => c.id);
@@ -1697,13 +2054,14 @@ export async function fetchTopCampaignsRange(
     }
   >();
 
-  const { data: productAds, error: productAdsErr } = await supabase
-    .from("product_ads")
-    .select("campaign_id, asin, sku, title, image_url")
-    .in("amazon_profile_id", profileIds);
-  if (productAdsErr) throw productAdsErr;
-
-  const adRows = productAds ?? [];
+  const adRows = await fetchAllPages<any>((from, to) =>
+    supabase
+      .from("product_ads")
+      .select("id, campaign_id, asin, sku, title, image_url")
+      .in("amazon_profile_id", profileIds)
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
   const adAsins = uniqueStrings(
     (adRows as any[])
       .flatMap((ad) => [ad.asin, ad.sku])
@@ -1746,7 +2104,7 @@ export async function fetchTopCampaignsRange(
       bookMetaByKey.set(bookKey, {
         book_asin: current?.book_asin ?? asin,
         book_title: current?.book_title ?? (title as any).title ?? null,
-        book_image_url: current?.book_image_url ?? (title as any).cover_url ?? (title as any).amazon_image_url ?? null,
+        book_image_url: pickUsableCoverUrl(current?.book_image_url, (title as any).cover_url, (title as any).amazon_image_url),
       });
     }
   }
@@ -1800,17 +2158,7 @@ export async function fetchTopCampaignsRange(
     }
   }
 
-  const metrics: any[] = [];
-  for (const chunk of chunkArray(campaignIds, 500)) {
-    const { data, error } = await supabase
-      .from("campaign_metrics")
-      .select("campaign_id,impressions,clicks,orders,spend,sales")
-      .in("campaign_id", chunk)
-      .gte("date", start)
-      .lte("date", end);
-    if (error) throw error;
-    metrics.push(...(data ?? []));
-  }
+  const metrics = await fetchCampaignMetricRows(campaignIds, start, end);
 
   const totals = new Map<string, TopCampaignRow>();
   for (const c of campaigns as any[]) {
@@ -1822,6 +2170,8 @@ export async function fetchTopCampaignsRange(
       state: c.state,
       budget: c.budget,
       bidding_strategy: c.bidding_strategy,
+      updated_at: typeof c.updated_at === "string" ? c.updated_at : null,
+      metrics_updated_at: typeof c.metrics_updated_at === "string" ? c.metrics_updated_at : null,
       ...(campaignBookById.get(c.id) ?? {
         book_key: null,
         book_asin: null,
@@ -1849,11 +2199,12 @@ export async function fetchTopCampaignsRange(
     row.spend += Number(m.spend) || 0;
     row.sales += Number(m.sales) || 0;
   }
- const rows = Array.from(totals.values()).map((r) => ({
+  const rows = Array.from(totals.values()).map((r) => ({
     ...r,
     ...(placementShares.get(r.id) ?? emptyCampaignPlacementShares()),
     acos: r.sales > 0 ? (r.spend / r.sales) * 100 : 0,
     roas: r.spend > 0 ? r.sales / r.spend : 0,
+    // Ads-domain estimate only when a rate is supplied. Not KDP Net Royalties.
     net: r.sales * (effectiveRoyaltyRate / 100) - r.spend,
   }));
 
@@ -1883,13 +2234,16 @@ export async function fetchBookCampaignsRange(
   }
   if (!profileIds.length || !normalizedAsin) return [];
 
-  const { data: campaignsData, error: campaignsErr } = await supabase
-    .from("campaigns")
-    .select("id, name, type, state, budget, bidding_strategy, amazon_profile_id")
-    .in("amazon_profile_id", profileIds);
-  if (campaignsErr) throw campaignsErr;
+  const bookAsins = await fetchLogicalBookAsins(profileIds, normalizedAsin);
 
-  const campaigns = campaignsData ?? [];
+  const campaigns = await fetchAllPages<any>((from, to) =>
+    supabase
+      .from("campaigns")
+      .select("id, name, type, state, budget, bidding_strategy, amazon_profile_id")
+      .in("amazon_profile_id", profileIds)
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
   if (!campaigns.length) return [];
 
   const campaignById = new Map((campaigns as any[]).map((campaign) => [campaign.id, campaign]));
@@ -1902,34 +2256,45 @@ export async function fetchBookCampaignsRange(
     matchSourceByCampaignId.set(campaignId, source);
   };
 
-  const { data: productAds, error: adsErr } = await supabase
-    .from("product_ads")
-    .select("campaign_id, asin, sku")
-    .in("amazon_profile_id", profileIds);
-  if (adsErr) throw adsErr;
+  const productAds = await fetchAllPages<any>((from, to) =>
+    supabase
+      .from("product_ads")
+      .select("id, campaign_id, asin, sku")
+      .in("amazon_profile_id", profileIds)
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
 
-  for (const ad of productAds ?? []) {
+  for (const ad of productAds) {
     const adAsin = String((ad as any).asin ?? "").toUpperCase();
     const adSku = String((ad as any).sku ?? "").toUpperCase();
-    if (adAsin === normalizedAsin || adSku === normalizedAsin) {
+    if (asinBelongsToLogicalBook(adAsin, bookAsins) || asinBelongsToLogicalBook(adSku, bookAsins)) {
       setMatch((ad as any).campaign_id, "product_ad");
     }
   }
 
-  const { data: productTargets, error: targetsErr } = await supabase
-    .from("product_targets")
-    .select("campaign_id, expression")
-    .in("amazon_profile_id", profileIds);
-  if (targetsErr) throw targetsErr;
+  const productTargets = await fetchAllPages<any>((from, to) =>
+    supabase
+      .from("product_targets")
+      .select("id, campaign_id, expression")
+      .in("amazon_profile_id", profileIds)
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
 
-  for (const target of productTargets ?? []) {
+  for (const target of productTargets) {
     const targetAsin = extractAsinFromExpression((target as any).expression);
-    if (targetAsin?.toUpperCase() === normalizedAsin) {
+    if (asinBelongsToLogicalBook(targetAsin, bookAsins)) {
       setMatch((target as any).campaign_id, "product_target");
     }
   }
 
-  const nameCandidates = [{ key: normalizedAsin, asin: normalizedAsin, title: title ?? null, royalties: 1 }];
+  const nameCandidates = bookAsins.map((siblingAsin) => ({
+    key: siblingAsin,
+    asin: siblingAsin,
+    title: siblingAsin === normalizedAsin ? title ?? null : null,
+    royalties: 1,
+  }));
   for (const campaign of campaigns as any[]) {
     if (matchSourceByCampaignId.has(campaign.id)) continue;
     const matched = inferTopBookGroupFromCampaignName(campaign.name ?? null, nameCandidates);
@@ -1962,24 +2327,14 @@ export async function fetchBookCampaignsRange(
     });
   }
 
-  for (const chunk of chunkArray(matchedCampaignIds, 500)) {
-    const { data: metrics, error: metricsErr } = await supabase
-      .from("campaign_metrics")
-      .select("campaign_id,impressions,clicks,orders,spend,sales")
-      .in("campaign_id", chunk)
-      .gte("date", start)
-      .lte("date", end);
-    if (metricsErr) throw metricsErr;
-
-    for (const metric of metrics ?? []) {
-      const row = totals.get((metric as any).campaign_id);
-      if (!row) continue;
-      row.impressions += toNumber((metric as any).impressions);
-      row.clicks += toNumber((metric as any).clicks);
-      row.orders += toNumber((metric as any).orders);
-      row.spend += toNumber((metric as any).spend);
-      row.sales += toNumber((metric as any).sales);
-    }
+  for (const metric of await fetchCampaignMetricRows(matchedCampaignIds, start, end)) {
+    const row = totals.get((metric as any).campaign_id);
+    if (!row) continue;
+    row.impressions += toNumber((metric as any).impressions);
+    row.clicks += toNumber((metric as any).clicks);
+    row.orders += toNumber((metric as any).orders);
+    row.spend += toNumber((metric as any).spend);
+    row.sales += toNumber((metric as any).sales);
   }
 
   return Array.from(totals.values())
@@ -1987,6 +2342,7 @@ export async function fetchBookCampaignsRange(
       ...row,
       acos: row.sales > 0 ? (row.spend / row.sales) * 100 : 0,
       roas: row.spend > 0 ? row.sales / row.spend : 0,
+      // Ads-attributed sales minus spend. Not publisher Net Royalties.
       net: row.sales - row.spend,
       match_source: matchSourceByCampaignId.get(row.id) ?? "campaign_name",
     }))
@@ -2092,79 +2448,196 @@ export interface TopBookRow {
   orders: number;
   spend: number;
   sales: number;
-  royalties: number;
+  royalties: number | null;
   acos: number;
   roas: number;
-  net: number;
+  net: number | null;
   breakeven_acos: number;
+  ads_state?: "ready" | "pending" | "missing";
+  kdp_state?: "ready" | "partial" | "missing";
 }
 
+/** Book keys (group_key / asin / sku) with KDP or Ads signal in the activity window. */
+export async function fetchActiveBookKeysForProfiles(profileIds: string[]): Promise<Set<string>> {
+  if (!profileIds.length) return new Set();
+  let kdpAccountIds: string[] = [];
+  try {
+    kdpAccountIds = await fetchLinkedKdpAccountIds(profileIds);
+  } catch {
+    kdpAccountIds = [];
+  }
+  const { start, end } = booksListActivityRange();
+  return fetchActiveBookKeysInRange(profileIds, start, end, kdpAccountIds);
+}
+
+async function fetchActiveBookKeysInRange(
+  profileIds: string[],
+  start: string,
+  end: string,
+  kdpAccountIds: string[],
+): Promise<Set<string>> {
+  const keys = new Set<string>();
+
+  if (kdpAccountIds.length) {
+    const kdpRows = await fetchOptionalInPages<any>("kdp_book_daily_activity", kdpAccountIds, (chunk, from, to) =>
+      supabase
+        .from("kdp_book_daily_data")
+        .select("asin, group_key, royalties, orders")
+        .in("account_id", chunk)
+        .gte("date", start)
+        .lte("date", end)
+        .order("date", { ascending: true })
+        .order("asin", { ascending: true })
+        .range(from, to),
+    );
+    for (const row of kdpRows) {
+      const royalties = toNumber((row as any).royalties);
+      const orders = toNumber((row as any).orders);
+      if (royalties === 0 && orders === 0) continue;
+      const asin = String((row as any).asin ?? "").trim();
+      const groupKey = String((row as any).group_key ?? "").trim() || asin;
+      if (groupKey) keys.add(groupKey);
+      if (asin) keys.add(asin);
+    }
+  }
+
+  const adRows = await fetchOptionalInPages<any>("product_ads_activity", profileIds, (chunk, from, to) =>
+    supabase
+      .from("product_ads")
+      .select("id, asin, sku")
+      .in("amazon_profile_id", chunk)
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
+  const adById = new Map(adRows.map((ad: any) => [ad.id, ad]));
+  const adIds = uniqueStrings(adRows.map((ad: any) => ad.id));
+  if (adIds.length) {
+    const metrics = await fetchOptionalInPages<any>("product_ad_metrics_activity", adIds, (chunk, from, to) =>
+      supabase
+        .from("product_ad_metrics")
+        .select("product_ad_id, impressions, clicks, orders, spend, sales")
+        .in("product_ad_id", chunk)
+        .gte("date", start)
+        .lte("date", end)
+        .order("product_ad_id", { ascending: true })
+        .order("date", { ascending: true })
+        .range(from, to),
+    );
+    for (const metric of metrics) {
+      const hasMetric =
+        toNumber((metric as any).spend) > 0 ||
+        toNumber((metric as any).sales) > 0 ||
+        toNumber((metric as any).impressions) > 0 ||
+        toNumber((metric as any).clicks) > 0 ||
+        toNumber((metric as any).orders) > 0;
+      if (!hasMetric) continue;
+      const ad = adById.get((metric as any).product_ad_id) as any;
+      const key = ad?.asin || ad?.sku;
+      if (key) keys.add(String(key));
+    }
+  }
+
+  return keys;
+}
+
+async function finalizeTopBooksList(
+  rows: TopBookRow[],
+  profileIds: string[],
+  kdpAccountIds: string[],
+  limit: number,
+  activityDays = BOOKS_LIST_ACTIVITY_DAYS,
+): Promise<TopBookRow[]> {
+  const withSignal = rows.filter(bookHasSignalInRange);
+  if (activityDays <= 0) {
+    return withSignal.slice(0, limit);
+  }
+  const { start, end } = booksListActivityRange();
+  const activeKeys = await fetchActiveBookKeysInRange(profileIds, start, end, kdpAccountIds);
+  if (activeKeys.size === 0 && withSignal.length > 0) {
+    return withSignal.slice(0, limit);
+  }
+  return filterTopBooksByRecentActivity(withSignal, activeKeys).slice(0, limit);
+}
 
 export async function fetchTopBooksRange(
-  opts: RangeOpts & { royaltyRate?: number },
+  opts: RangeOpts & {
+    royaltyRate?: number;
+    onCoreRows?: (rows: TopBookRow[]) => void;
+    /** Rolling activity window for list eligibility. Default 60 days. Set 0 to disable. */
+    activityDays?: number;
+  },
 ): Promise<TopBookRow[]> {
-  const { profileIds, start, end, limit = 5, royaltyRate = 0, filterUserId } = opts;
+  const { profileIds, start, end, limit = 5, filterUserId, activityDays = BOOKS_LIST_ACTIVITY_DAYS } = opts;
   if (!profileIds.length) return [];
+
+  let kdpAccountIds: string[] = [];
+  try {
+    kdpAccountIds = await fetchLinkedKdpAccountIds(profileIds);
+  } catch (error) {
+    if (filterUserId && (await hasNestToken())) {
+      const nestRows = await fetchNestTopBooks({
+        filterUserId,
+        startDate: start,
+        endDate: end,
+        profileIds,
+        limit,
+      });
+      return finalizeTopBooksList(nestRows, profileIds, [], limit, activityDays);
+    }
+    logBooksStage("kdp_account_links", error);
+    throw new BooksReadError("kdp_account_links", booksErrorCode(error));
+  }
+
   if (filterUserId && (await hasNestToken())) {
-    return fetchNestTopBooks({
+    const nestRows = await fetchNestTopBooks({
       filterUserId,
       startDate: start,
       endDate: end,
       profileIds,
       limit,
     });
+    return finalizeTopBooksList(nestRows, profileIds, kdpAccountIds, limit, activityDays);
   }
-  const effectiveRoyaltyRate = royaltyRate > 0 ? royaltyRate : 0;
 
-  const kdpAccountIds = await fetchLinkedKdpAccountIds(profileIds);
   if (kdpAccountIds.length) {
-    const { data: kdpRows, error: kdpErr } = await supabase
-      .from("kdp_book_daily_data")
-      .select("account_id, asin, group_key, royalties, orders")
-      .in("account_id", kdpAccountIds)
-      .gte("date", start)
-      .lte("date", end);
-    if (kdpErr) throw kdpErr;
+    const kdpCoveragePromise = fetchRequiredPages<any>("kdp_daily_coverage", (from, to) =>
+      supabase
+        .from("kdp_daily_data")
+        .select("account_id, date")
+        .in("account_id", kdpAccountIds)
+        .gte("date", start)
+        .lte("date", end)
+        .order("date", { ascending: true })
+        .order("account_id", { ascending: true })
+        .range(from, to),
+    ).catch((error) => {
+      logBooksStage("kdp_coverage", error);
+      return null;
+    });
+    const kdpRows = await fetchRequiredPages<any>("kdp_book_daily_data", (from, to) =>
+      supabase
+        .from("kdp_book_daily_data")
+        .select("account_id, asin, group_key, royalties, orders")
+        .in("account_id", kdpAccountIds)
+        .gte("date", start)
+        .lte("date", end)
+        .order("date", { ascending: true })
+        .order("asin", { ascending: true })
+        .range(from, to),
+    );
 
-    if ((kdpRows ?? []).length) {
+    if (kdpRows.length) {
       const asinToGroup = new Map<string, string>();
-      const groups = new Map<
-        string,
-        {
-          asin: string;
-          asins: Set<string>;
-          royalties: number;
-          orders: number;
-          spend: number;
-          sales: number;
-          impressions: number;
-          clicks: number;
-          title: string | null;
-          image_url: string | null;
-          breakeven_acos_stored: number | null;
-        }
-      >();
+      const groups = new Map<string, LogicalBookAccumulator>();
+      const kdpGroupKeys = new Set<string>();
 
-      for (const row of kdpRows ?? []) {
-        const asin = (row as any).asin as string | null;
+      for (const row of kdpRows) {
+        const asin = String((row as any).asin ?? "").trim();
         if (!asin) continue;
-        const groupKey = ((row as any).group_key as string | null) || asin;
+        const groupKey = String((row as any).group_key ?? "").trim() || asin;
+        kdpGroupKeys.add(groupKey);
         asinToGroup.set(asin, groupKey);
-        const current =
-          groups.get(groupKey) ??
-          {
-            asin,
-            asins: new Set<string>(),
-            royalties: 0,
-            orders: 0,
-            spend: 0,
-            sales: 0,
-            impressions: 0,
-            clicks: 0,
-            title: null,
-            image_url: null,
-            breakeven_acos_stored: null,
-          };
+        const current = groups.get(groupKey) ?? emptyLogicalBook(asin);
         current.asins.add(asin);
         current.royalties += toNumber((row as any).royalties);
         current.orders += toNumber((row as any).orders);
@@ -2172,161 +2645,171 @@ export async function fetchTopBooksRange(
       }
 
       const allAsins = uniqueStrings(Array.from(groups.values()).flatMap((group) => Array.from(group.asins)));
+      const kdpCoverageRows = await kdpCoveragePromise;
+      const kdpCoverage = kdpCoverageRows
+        ? aggregateKdpDailyRows(kdpCoverageRows, kdpAccountIds.length, {
+            start,
+            end,
+            source: "kdp_daily_data",
+          })
+        : null;
+      const rangeKdpState = kdpCoverage?.coverage === "complete" ? "ready" : "partial";
 
-      // Base query — columns that always exist
-      const { data: titles, error: titlesErr } = allAsins.length
-        ? await supabase
-            .from("kdp_titles")
-            .select("asin, title, cover_url, amazon_image_url")
-            .in("account_id", kdpAccountIds)
-            .in("asin", allAsins)
-        : { data: [], error: null };
-      if (titlesErr) throw titlesErr;
+      const finalizeBook = (row: ReturnType<typeof assembleLogicalBookRows>[number], adsState: "ready" | "pending"): TopBookRow => {
+        const hasBookKdp = kdpGroupKeys.has(row.book_key) || row.royalties > 0;
+        const kdpState = hasBookKdp ? rangeKdpState : "missing";
+        const royalties = hasBookKdp ? row.royalties : null;
+        return {
+          ...row,
+          royalties,
+          net:
+            hasBookKdp && adsState === "ready" && royalties != null
+              ? netRoyaltiesKnown(royalties, row.spend)
+              : null,
+          ads_state: adsState,
+          kdp_state: kdpState,
+        };
+      };
 
-      for (const title of titles ?? []) {
-        const groupKey = asinToGroup.get((title as any).asin);
-        if (!groupKey) continue;
-        const group = groups.get(groupKey);
+      const adsPromise = fetchOptionalInPages<any>("product_ads", profileIds, (chunk, from, to) =>
+        supabase
+          .from("product_ads")
+          .select("id, asin, sku, title, image_url, amazon_profile_id, campaign_id, total_sales, total_orders")
+          .in("amazon_profile_id", chunk)
+          .order("id", { ascending: true })
+          .range(from, to),
+      );
+      const titles = await fetchOptionalInPages<any>("kdp_titles", allAsins, (chunk, from, to) =>
+        supabase
+          .from("kdp_titles")
+          .select("asin, title, cover_url, amazon_image_url, kdp_list_price, net_royalty_per_sale, target_break_even_acos")
+          .in("account_id", kdpAccountIds)
+          .in("asin", chunk)
+          .order("asin", { ascending: true })
+          .range(from, to),
+      );
+
+      for (const title of titles) {
+        const asin = String((title as any).asin ?? "").trim();
+        const mappedKey = asinToGroup.get(asin);
+        if (!mappedKey) continue;
+        const group = groups.get(mappedKey);
         if (!group) continue;
-        group.title = group.title ?? (title as any).title ?? null;
-        group.image_url = group.image_url ?? (title as any).cover_url ?? (title as any).amazon_image_url ?? null;
+        const bibliographic = typeof (title as any).title === "string" ? (title as any).title : null;
+        group.title = group.title ?? bibliographic;
+        group.image_url = pickUsableCoverUrl(group.image_url, (title as any).cover_url, (title as any).amazon_image_url);
+        const calculatorBe = calculatorBreakEvenFromKdpTitle(title as any);
+        if (calculatorBe != null) group.breakeven_candidates.push(calculatorBe);
       }
 
-      // Break-even ACoS = royalty per copy ÷ sale price. kdp_titles has no
-      // price/royalty columns, so we derive it from real per-unit data:
-      //   royalty per copy = all-time KDP royalties ÷ all-time KDP orders
-      //   sale price       = all-time ad sales ÷ all-time ad orders (avg unit price)
-      // Both pulled all-time (no date filter) so the value is stable, like the web app.
-      const { data: allTimeKdpRows } = await supabase
-        .from("kdp_book_daily_data")
-        .select("asin, group_key, royalties, orders")
-        .in("account_id", kdpAccountIds);
-      const allTimeRoyaltiesByGroup = new Map<string, number>();
-      const allTimeKdpOrdersByGroup = new Map<string, number>();
-      for (const row of allTimeKdpRows ?? []) {
-        const asin = (row as any).asin as string | null;
-        if (!asin) continue;
-        const groupKey = asinToGroup.get(asin);
-        if (!groupKey) continue;
-        allTimeRoyaltiesByGroup.set(groupKey, (allTimeRoyaltiesByGroup.get(groupKey) ?? 0) + toNumber((row as any).royalties));
-        allTimeKdpOrdersByGroup.set(groupKey, (allTimeKdpOrdersByGroup.get(groupKey) ?? 0) + toNumber((row as any).orders));
+      if (opts.onCoreRows) {
+        const core = assembleLogicalBookRows(groups)
+          .filter((row) => row.royalties !== 0 || row.orders > 0)
+          .sort((a, b) => (b.royalties ?? Number.NEGATIVE_INFINITY) - (a.royalties ?? Number.NEGATIVE_INFINITY))
+          .slice(0, limit)
+          .map((row) => finalizeBook(row, "pending"));
+        if (core.length) opts.onCoreRows(core);
       }
 
-      const { data: productAds, error: adsErr } = await supabase
-        .from("product_ads")
-        .select("id, asin, sku, title, image_url, amazon_profile_id, campaign_id, total_sales, total_orders")
-        .in("amazon_profile_id", profileIds);
-      if (adsErr) throw adsErr;
-
-      // All-time ad sales + orders per group → average unit sale price
-      const allTimeAdSalesByGroup = new Map<string, number>();
-      const allTimeAdOrdersByGroup = new Map<string, number>();
-      for (const ad of (productAds ?? []) as any[]) {
-        const asin = ad.asin || ad.sku;
-        if (!asin) continue;
-        const groupKey = asinToGroup.get(asin);
-        if (!groupKey) continue;
-        allTimeAdSalesByGroup.set(groupKey, (allTimeAdSalesByGroup.get(groupKey) ?? 0) + toNumber(ad.total_sales));
-        allTimeAdOrdersByGroup.set(groupKey, (allTimeAdOrdersByGroup.get(groupKey) ?? 0) + toNumber(ad.total_orders));
-      }
-
-      const adRows = productAds ?? [];
-      const adIds = uniqueStrings(adRows.map((ad: any) => ad.id));
+      const adRows = await adsPromise;
       const adById = new Map(adRows.map((ad: any) => [ad.id, ad]));
+      const adIds = uniqueStrings(adRows.map((ad: any) => ad.id));
       const campaignsWithProductAdMetrics = new Set<string>();
 
       for (const ad of adRows as any[]) {
         const asin = ad.asin || ad.sku;
         if (!asin) continue;
-        const groupKey = asinToGroup.get(asin);
-        if (!groupKey) continue;
-        const group = groups.get(groupKey);
-        if (!group) continue;
-        group.title = group.title ?? ad.title ?? null;
-        group.image_url = group.image_url ?? ad.image_url ?? null;
-      }
-
-      for (const chunk of chunkArray(adIds, 500)) {
-        const { data: metrics, error: metricsErr } = await supabase
-          .from("product_ad_metrics")
-          .select("product_ad_id, impressions, clicks, orders, spend, sales")
-          .in("product_ad_id", chunk)
-          .gte("date", start)
-          .lte("date", end);
-        if (metricsErr) throw metricsErr;
-
-        for (const metric of metrics ?? []) {
-          const ad = adById.get((metric as any).product_ad_id) as any;
-          const asin = ad?.asin || ad?.sku;
-          if (!asin) continue;
-          const groupKey = asinToGroup.get(asin);
-          if (!groupKey) continue;
-          const group = groups.get(groupKey);
-          if (!group) continue;
-          const hasMetricValue =
-            toNumber((metric as any).spend) > 0 ||
-            toNumber((metric as any).sales) > 0 ||
-            toNumber((metric as any).impressions) > 0 ||
-            toNumber((metric as any).clicks) > 0 ||
-            toNumber((metric as any).orders) > 0;
-          if (hasMetricValue && ad.campaign_id) campaignsWithProductAdMetrics.add(ad.campaign_id);
-          group.spend += toNumber((metric as any).spend);
-          group.sales += toNumber((metric as any).sales);
-          group.impressions += toNumber((metric as any).impressions);
-          group.clicks += toNumber((metric as any).clicks);
+        const mappedKey = asinToGroup.get(asin) ?? asin;
+        if (!groups.has(mappedKey)) {
+          const adsOnly = emptyLogicalBook(asin);
+          adsOnly.asins.add(asin);
+          groups.set(mappedKey, adsOnly);
+          asinToGroup.set(asin, mappedKey);
         }
+        const group = groups.get(mappedKey);
+        if (!group) continue;
+        group.title = group.title ?? (typeof ad.title === "string" ? ad.title : null);
+        group.image_url = pickUsableCoverUrl(group.image_url, ad.image_url);
       }
 
-      const { data: campaigns, error: campaignsErr } = await supabase
-        .from("campaigns")
-        .select("id, name")
-        .in("amazon_profile_id", profileIds);
-      if (campaignsErr) throw campaignsErr;
+      const [metrics, campaignRows] = await Promise.all([
+        fetchOptionalInPages<any>("product_ad_metrics", adIds, (chunk, from, to) =>
+          supabase
+            .from("product_ad_metrics")
+            .select("product_ad_id, impressions, clicks, orders, spend, sales")
+            .in("product_ad_id", chunk)
+            .gte("date", start)
+            .lte("date", end)
+            .order("product_ad_id", { ascending: true })
+            .order("date", { ascending: true })
+            .range(from, to),
+        ),
+        fetchOptionalInPages<any>("campaigns", profileIds, (chunk, from, to) =>
+          supabase
+            .from("campaigns")
+            .select("id, name")
+            .in("amazon_profile_id", chunk)
+            .order("id", { ascending: true })
+            .range(from, to),
+        ),
+      ]);
 
-      const campaignRows = campaigns ?? [];
+      for (const metric of metrics) {
+        const ad = adById.get((metric as any).product_ad_id) as any;
+        const asin = ad?.asin || ad?.sku;
+        if (!asin) continue;
+        const mappedKey = asinToGroup.get(asin);
+        if (!mappedKey) continue;
+        const group = groups.get(mappedKey);
+        if (!group) continue;
+        const hasMetricValue =
+          toNumber((metric as any).spend) > 0 ||
+          toNumber((metric as any).sales) > 0 ||
+          toNumber((metric as any).impressions) > 0 ||
+          toNumber((metric as any).clicks) > 0 ||
+          toNumber((metric as any).orders) > 0;
+        if (hasMetricValue && ad.campaign_id) campaignsWithProductAdMetrics.add(ad.campaign_id);
+        group.spend += toNumber((metric as any).spend);
+        group.sales += toNumber((metric as any).sales);
+        group.impressions += toNumber((metric as any).impressions);
+        group.clicks += toNumber((metric as any).clicks);
+      }
+
       const campaignIds = uniqueStrings(campaignRows.map((campaign: any) => campaign.id));
       const campaignById = new Map(campaignRows.map((campaign: any) => [campaign.id, campaign]));
       const campaignTotals = new Map<
         string,
-        {
-          spend: number;
-          sales: number;
-          impressions: number;
-          clicks: number;
-        }
+        { spend: number; sales: number; impressions: number; clicks: number }
       >();
 
-      for (const chunk of chunkArray(campaignIds, 500)) {
-        const { data: campaignMetrics, error: campaignMetricsErr } = await supabase
+      const campaignMetrics = await fetchOptionalInPages<any>("campaign_metrics", campaignIds, (chunk, from, to) =>
+        supabase
           .from("campaign_metrics")
           .select("campaign_id, impressions, clicks, spend, sales")
           .in("campaign_id", chunk)
           .gte("date", start)
-          .lte("date", end);
-        if (campaignMetricsErr) throw campaignMetricsErr;
+          .lte("date", end)
+          .order("campaign_id", { ascending: true })
+          .order("date", { ascending: true })
+          .range(from, to),
+      );
 
-        for (const metric of campaignMetrics ?? []) {
-          const campaignId = (metric as any).campaign_id as string | null;
-          if (!campaignId) continue;
-          const current =
-            campaignTotals.get(campaignId) ??
-            {
-              spend: 0,
-              sales: 0,
-              impressions: 0,
-              clicks: 0,
-            };
-          current.spend += toNumber((metric as any).spend);
-          current.sales += toNumber((metric as any).sales);
-          current.impressions += toNumber((metric as any).impressions);
-          current.clicks += toNumber((metric as any).clicks);
-          campaignTotals.set(campaignId, current);
-        }
+      for (const metric of campaignMetrics) {
+        const campaignId = (metric as any).campaign_id as string | null;
+        if (!campaignId) continue;
+        const current =
+          campaignTotals.get(campaignId) ??
+          { spend: 0, sales: 0, impressions: 0, clicks: 0 };
+        current.spend += toNumber((metric as any).spend);
+        current.sales += toNumber((metric as any).sales);
+        current.impressions += toNumber((metric as any).impressions);
+        current.clicks += toNumber((metric as any).clicks);
+        campaignTotals.set(campaignId, current);
       }
 
       const bookCandidates = Array.from(groups.entries()).map(([key, group]) => ({
         key,
-        asin: group.asin,
+        asin: primaryAsinFromGroupKey(key, group.asins) || group.asin,
         title: group.title,
         royalties: group.royalties,
       }));
@@ -2336,10 +2819,10 @@ export async function fetchTopBooksRange(
         if (totals.spend <= 0 && totals.sales <= 0 && totals.impressions <= 0 && totals.clicks <= 0) continue;
 
         const campaign = campaignById.get(campaignId) as any;
-        const groupKey = inferTopBookGroupFromCampaignName(campaign?.name ?? null, bookCandidates);
-        if (!groupKey) continue;
+        const inferredKey = inferTopBookGroupFromCampaignName(campaign?.name ?? null, bookCandidates);
+        if (!inferredKey) continue;
 
-        const group = groups.get(groupKey);
+        const group = groups.get(inferredKey);
         if (!group) continue;
         group.spend += totals.spend;
         group.sales += totals.sales;
@@ -2347,55 +2830,36 @@ export async function fetchTopBooksRange(
         group.clicks += totals.clicks;
       }
 
-      return Array.from(groups.entries())
-        .map(([groupKey, group]) => {
-          // Break-even ACoS = royalty margin per copy = (royalty per copy) ÷ (sale price).
-          //   royalty per copy = all-time royalties ÷ all-time KDP orders
-          //   sale price       = all-time ad sales ÷ all-time ad orders
-          const allTimeRoy       = allTimeRoyaltiesByGroup.get(groupKey) ?? 0;
-          const allTimeKdpOrders = allTimeKdpOrdersByGroup.get(groupKey) ?? 0;
-          const allTimeAdSales   = allTimeAdSalesByGroup.get(groupKey) ?? 0;
-          const allTimeAdOrders  = allTimeAdOrdersByGroup.get(groupKey) ?? 0;
-
-          const breakevenAcos = breakEvenFromKdpTitle({
-            allTimeRoyalties: allTimeRoy,
-            allTimeKdpOrders,
-            allTimeAdSales,
-            allTimeAdOrders,
-            periodRoyalties: group.royalties,
-            periodSales: group.sales,
-            fallbackRate: effectiveRoyaltyRate,
-          });
-          return {
-            book_key: groupKey,
-            asin: group.asin,
-            sku: null,
-            title: group.title,
-            image_url: group.image_url,
-            impressions: group.impressions,
-            clicks: group.clicks,
-            orders: group.orders,
-            spend: group.spend,
-            sales: group.sales,
-            royalties: group.royalties,
-            acos: group.sales > 0 ? (group.spend / group.sales) * 100 : 0,
-            roas: group.spend > 0 ? group.sales / group.spend : 0,
-            net: group.royalties - group.spend,
-            breakeven_acos: breakevenAcos,
-          };
-        })
-        .filter((row) => row.net !== 0 || row.spend > 0 || row.orders > 0)
-        .sort((a, b) => b.net - a.net)
-        .slice(0, limit);
+      return finalizeTopBooksList(
+        assembleLogicalBookRows(groups)
+          .map((row) => finalizeBook(row, "ready"))
+          .filter((row) => row.royalties !== 0 || row.spend > 0 || row.orders > 0)
+          .sort((a, b) => {
+            if (a.net == null && b.net == null) return b.spend - a.spend;
+            return (b.net ?? Number.NEGATIVE_INFINITY) - (a.net ?? Number.NEGATIVE_INFINITY);
+          }),
+        profileIds,
+        kdpAccountIds,
+        limit,
+        activityDays,
+      );
     }
   }
 
-  const { data: ads, error: aErr } = await supabase
-    .from("product_ads")
-    .select("id,asin,sku,title,image_url,amazon_profile_id")
-    .in("amazon_profile_id", profileIds);
-  if (aErr) throw aErr;
-  const productAds = ads ?? [];
+  let productAds: any[] = [];
+  try {
+    productAds = await fetchAllPages<any>((from, to) =>
+      supabase
+        .from("product_ads")
+        .select("id,asin,sku,title,image_url,amazon_profile_id")
+        .in("amazon_profile_id", profileIds)
+        .order("id", { ascending: true })
+        .range(from, to),
+    );
+  } catch (error) {
+    logBooksStage("product_ads_fallback", error);
+    throw new BooksReadError("product_ads_fallback", booksErrorCode(error));
+  }
   if (!productAds.length) return [];
 
   const productAsins = uniqueStrings(
@@ -2411,47 +2875,46 @@ export async function fetchTopBooksRange(
   >();
 
   if (kdpAccountIds.length && productAsins.length) {
-    const { data: kdpTitles, error: kdpTitlesErr } = await supabase
-      .from("kdp_titles")
-      .select("asin, title, cover_url, amazon_image_url")
-      .in("account_id", kdpAccountIds)
-      .in("asin", productAsins);
-    if (kdpTitlesErr) throw kdpTitlesErr;
+    const kdpTitles = await fetchOptionalInPages<any>("kdp_titles_fallback", productAsins, (chunk, from, to) =>
+      supabase
+        .from("kdp_titles")
+        .select("asin, title, cover_url, amazon_image_url, kdp_list_price, net_royalty_per_sale, target_break_even_acos")
+        .in("account_id", kdpAccountIds)
+        .in("asin", chunk)
+        .order("asin", { ascending: true })
+        .range(from, to),
+    );
 
-    for (const title of kdpTitles ?? []) {
-      kdpTitleByAsin.set(String((title as any).asin ?? "").toUpperCase(), {
-        title: (title as any).title ?? null,
-        image_url: (title as any).cover_url ?? (title as any).amazon_image_url ?? null,
-        breakeven_acos: null,
+    for (const title of kdpTitles) {
+      const asin = String((title as any).asin ?? "").toUpperCase();
+      if (!asin) continue;
+      const existing = kdpTitleByAsin.get(asin);
+      kdpTitleByAsin.set(asin, {
+        title: existing?.title ?? (typeof (title as any).title === "string" ? (title as any).title : null),
+        image_url: pickUsableCoverUrl(existing?.image_url, (title as any).cover_url, (title as any).amazon_image_url),
+        breakeven_acos: existing?.breakeven_acos ?? calculatorBreakEvenFromKdpTitle(title as any),
       });
     }
-
-    // Note: kdp_titles has no price/royalty/break-even columns, so without KDP
-    // daily royalty+order data we can't derive a true per-copy break-even here.
-    // Break-even falls back to effectiveRoyaltyRate for this no-KDP path.
   }
 
-  const adIds = productAds.map((a: any) => a.id);
-  const chunks: string[][] = [];
-  for (let i = 0; i < adIds.length; i += 500) chunks.push(adIds.slice(i, i + 500));
-
-  const metrics: any[] = [];
-  for (const c of chunks) {
-    const { data, error } = await supabase
+  const adIds = uniqueStrings(productAds.map((a: any) => a.id));
+  const metrics = await fetchOptionalInPages<any>("product_ad_metrics_fallback", adIds, (chunk, from, to) =>
+    supabase
       .from("product_ad_metrics")
       .select("product_ad_id,impressions,clicks,orders,spend,sales")
-      .in("product_ad_id", c)
+      .in("product_ad_id", chunk)
       .gte("date", start)
-      .lte("date", end);
-    if (error) throw error;
-    metrics.push(...(data ?? []));
-  }
+      .lte("date", end)
+      .order("product_ad_id", { ascending: true })
+      .order("date", { ascending: true })
+      .range(from, to),
+  );
 
-  // Group by ASIN/SKU
   const byKey = new Map<string, TopBookRow>();
   const adKeyMap = new Map<string, string>();
   for (const a of productAds as any[]) {
     const key = a.asin || a.sku || a.id;
+    if (!key) continue;
     const kdpTitle = kdpTitleByAsin.get(String(a.asin || a.sku || "").toUpperCase());
     adKeyMap.set(a.id, key);
     if (!byKey.has(key)) {
@@ -2459,23 +2922,25 @@ export async function fetchTopBooksRange(
         book_key: key,
         asin: a.asin,
         sku: a.sku,
-        title: kdpTitle?.title ?? a.title,
-        image_url: kdpTitle?.image_url ?? a.image_url,
+        title: kdpTitle?.title ?? (typeof a.title === "string" ? a.title : null),
+        image_url: pickUsableCoverUrl(kdpTitle?.image_url, a.image_url),
         impressions: 0,
         clicks: 0,
         orders: 0,
         spend: 0,
         sales: 0,
-        royalties: 0,
+        royalties: null,
         acos: 0,
         roas: 0,
-        net: 0,
-        breakeven_acos: kdpTitle?.breakeven_acos ?? effectiveRoyaltyRate,
+        net: null,
+        breakeven_acos: kdpTitle?.breakeven_acos ?? 0,
+        ads_state: "ready",
+        kdp_state: "missing",
       });
     } else {
       const existing = byKey.get(key)!;
       if (!existing.title && (kdpTitle?.title || a.title)) existing.title = kdpTitle?.title ?? a.title;
-      if (!existing.image_url && (kdpTitle?.image_url || a.image_url)) existing.image_url = kdpTitle?.image_url ?? a.image_url;
+      existing.image_url = pickUsableCoverUrl(existing.image_url, kdpTitle?.image_url, a.image_url);
       if (!existing.breakeven_acos && kdpTitle?.breakeven_acos) existing.breakeven_acos = kdpTitle.breakeven_acos;
     }
   }
@@ -2490,21 +2955,59 @@ export async function fetchTopBooksRange(
     row.spend += Number(m.spend) || 0;
     row.sales += Number(m.sales) || 0;
   }
-  const rows = Array.from(byKey.values()).map((r) => {
-    const royalties = r.royalties > 0 ? r.royalties : r.breakeven_acos > 0 ? r.sales * (r.breakeven_acos / 100) : 0;
-    return {
-      ...r,
-      royalties,
-      acos: r.sales > 0 ? (r.spend / r.sales) * 100 : 0,
-      roas: r.spend > 0 ? r.sales / r.spend : 0,
-      net: royalties - r.spend,
-    };
-  });
 
-  return rows
-    .filter((r) => r.spend > 0 || r.sales > 0)
-    .sort((a, b) => b.net - a.net)
-    .slice(0, limit);
+  if (kdpAccountIds.length && productAsins.length) {
+    const kdpBookRows = await fetchOptionalInPages<any>("kdp_book_daily_data_fallback", kdpAccountIds, (chunk, from, to) =>
+      supabase
+        .from("kdp_book_daily_data")
+        .select("asin, royalties")
+        .in("account_id", chunk)
+        .in("asin", productAsins)
+        .gte("date", start)
+        .lte("date", end)
+        .order("date", { ascending: true })
+        .order("asin", { ascending: true })
+        .range(from, to),
+    );
+    const royaltiesByAsin = new Map<string, number>();
+    for (const row of kdpBookRows) {
+      const asin = String((row as any).asin ?? "").trim().toUpperCase();
+      if (!asin) continue;
+      royaltiesByAsin.set(asin, (royaltiesByAsin.get(asin) ?? 0) + toNumber((row as any).royalties));
+    }
+    for (const row of byKey.values()) {
+      const asinKey = String(row.asin || row.sku || "").trim().toUpperCase();
+      const royalties = asinKey ? royaltiesByAsin.get(asinKey) : undefined;
+      if (royalties == null) continue;
+      row.royalties = royalties;
+      row.net = netRoyaltiesKnown(royalties, row.spend);
+      row.kdp_state = "partial";
+    }
+  }
+
+  const rows = Array.from(byKey.values()).map((r) => ({
+    ...r,
+    acos: r.sales > 0 ? (r.spend / r.sales) * 100 : 0,
+    roas: r.spend > 0 ? r.sales / r.spend : 0,
+    royalties: r.royalties,
+    net: r.net,
+    kdp_state: r.kdp_state ?? ("missing" as const),
+  }));
+
+  return finalizeTopBooksList(
+    rows
+      .filter(bookHasSignalInRange)
+      .sort((a, b) => {
+        const netA = a.net ?? Number.NEGATIVE_INFINITY;
+        const netB = b.net ?? Number.NEGATIVE_INFINITY;
+        if (netA !== netB) return netB - netA;
+        return b.spend - a.spend;
+      }),
+    profileIds,
+    kdpAccountIds,
+    limit,
+    activityDays,
+  );
 }
 
 // ---------- Optimization Rules ----------
@@ -3160,6 +3663,7 @@ export function aggregateTotals<T extends MetricsTotals>(rows: T[]): MetricsTota
   return acc;
 }
 
+/** Unused leftover. `total_sales * rate` is not KDP royalties and must not feed Home Net. */
 export function toKpiSnapshot(t: MetricsTotals, royaltyRate: number, currency: string): KpiSnapshot {
   const royalties = t.total_sales * (royaltyRate / 100);
   return {

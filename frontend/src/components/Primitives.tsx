@@ -10,9 +10,13 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { useTheme, acosTone, toneColor, spacing, typography } from "../lib/theme";
+import { dashboard, useTheme, acosTone, toneColor, spacing, typography } from "../lib/theme";
 import { formatDelta } from "../lib/format";
+import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import { IOSButton, IOSUnavailable, SFSymbol, sfFromIonicon } from "./ios/Native";
+import { PressableScale, VerifiedValue } from "./Motion";
+import { InteliAdsIcon, type InteliAdsIconName } from "./InteliAdsIcon";
+import { elevatedCardStyle, glassControlStyle } from "./ScreenAmbient";
 
 type Tone = "good" | "warning" | "danger" | "primary" | "product" | "inactive";
 
@@ -65,9 +69,8 @@ export function KpiTile({
       testID={testID}
       style={[
         styles.tile,
+        elevatedCardStyle(t),
         {
-          backgroundColor: t.colors.background_secondary,
-          borderRadius: t.radii.md,
           padding: compact ? t.spacing.md : t.spacing.lg,
         },
       ]}
@@ -172,12 +175,13 @@ export function SectionCard({ title, action, children, noPadding, testID }: Sect
   return (
     <View
       testID={testID}
-      style={{
-        backgroundColor: t.colors.background_secondary,
-        borderRadius: t.radii.md,
-        padding: noPadding ? 0 : t.spacing.lg,
-        marginBottom: t.spacing.lg,
-      }}
+      style={[
+        elevatedCardStyle(t),
+        {
+          padding: noPadding ? 0 : dashboard.cardPadding,
+          marginBottom: dashboard.sectionGap,
+        },
+      ]}
     >
       {title && (
         <View
@@ -210,20 +214,52 @@ export function SectionCard({ title, action, children, noPadding, testID }: Sect
 // Empty state — page-specific icon, one short title, optional one-line hint and action
 export function EmptyState({
   icon = "albums-outline",
+  productIcon,
   title,
   subtitle,
   tone = "primary",
   action,
 }: {
   icon?: keyof typeof Ionicons.glyphMap;
+  productIcon?: InteliAdsIconName;
   title: string;
   subtitle?: string;
   tone?: Tone;
   action?: { label: string; onPress: () => void };
 }) {
+  const t = useTheme();
   return (
-    <View style={{ alignItems: "center", paddingVertical: 32, paddingHorizontal: 16 }}>
-      <IOSUnavailable title={title} description={subtitle} systemImage={sfFromIonicon(icon)} />
+    <View style={{ alignItems: "center", paddingVertical: 40, paddingHorizontal: 20 }}>
+      {productIcon ? (
+        <View style={{ alignItems: "center" }}>
+          <View
+            style={{
+              width: 64,
+              height: 64,
+              borderRadius: dashboard.cardRadius,
+              borderCurve: "continuous",
+              backgroundColor: t.colors.glass_background,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: t.colors.glass_stroke,
+              alignItems: "center",
+              justifyContent: "center",
+              marginBottom: 4,
+            }}
+          >
+            <InteliAdsIcon name={productIcon} size={dashboard.iconEmpty} color={t.colors.text_tertiary} />
+          </View>
+          <Text style={[t.typography.headline, { color: t.colors.text_primary, marginTop: 12, textAlign: "center" }]}>
+            {title}
+          </Text>
+          {subtitle ? (
+            <Text style={[t.typography.subhead, { color: t.colors.text_secondary, marginTop: 6, textAlign: "center", maxWidth: 280 }]}>
+              {subtitle}
+            </Text>
+          ) : null}
+        </View>
+      ) : (
+        <IOSUnavailable title={title} description={subtitle} systemImage={sfFromIonicon(icon)} />
+      )}
       {action ? (
         <View style={{ marginTop: 12 }}>
           <PrimaryButton label={action.label} onPress={action.onPress} />
@@ -288,16 +324,139 @@ export function ToneDot({ value, target = 30 }: { value: number; target?: number
   );
 }
 
-export function FilterChrome({ children }: { children: React.ReactNode }) {
+export function FilterChrome({ children, flush }: { children: React.ReactNode; flush?: boolean }) {
   const t = useTheme();
   return (
     <View
       style={{
-        paddingHorizontal: t.layout.pagePad,
-        paddingTop: t.layout.filterPadTop,
-        gap: t.layout.filterGap,
+        marginHorizontal: flush ? 0 : dashboard.pageInset,
+        marginTop: flush ? 0 : dashboard.chromeGap,
+        marginBottom: flush ? 0 : dashboard.compactGap,
+        padding: dashboard.headerShellInset,
+        gap: dashboard.headerRowGap,
+        borderRadius: dashboard.headerShellRadius,
+        borderCurve: "continuous",
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: t.colors.glass_stroke,
+        backgroundColor: t.colors.glass_background,
+        ...t.shadow.card,
       }}
     >
+      {children}
+    </View>
+  );
+}
+
+export function FilterSearchRow({ children }: { children: React.ReactNode }) {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: dashboard.chromeGap }}>
+      {children}
+    </View>
+  );
+}
+
+export function FilterIconButton({
+  testID,
+  active,
+  onPress,
+  accessibilityLabel,
+  accessibilityHint,
+  symbol = "slider.horizontal.3",
+}: {
+  testID?: string;
+  active?: boolean;
+  onPress: () => void;
+  accessibilityLabel: string;
+  accessibilityHint?: string;
+  symbol?: SFSymbolName;
+}) {
+  const t = useTheme();
+  return (
+    <PressableScale
+      testID={testID}
+      onPress={onPress}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
+      hitSlop={4}
+      style={[
+        glassControlStyle(t, !!active),
+        {
+          width: dashboard.headerControl,
+          height: dashboard.headerControl,
+          alignItems: "center",
+          justifyContent: "center",
+        },
+      ]}
+    >
+      <SFSymbol
+        name={symbol}
+        size={15}
+        color={active ? t.colors.tone_primary : t.colors.text_secondary}
+      />
+      {active ? (
+        <View
+          style={{
+            position: "absolute",
+            top: 6,
+            right: 6,
+            width: 5,
+            height: 5,
+            borderRadius: 2.5,
+            backgroundColor: t.colors.tone_primary,
+          }}
+        />
+      ) : null}
+    </PressableScale>
+  );
+}
+
+export function ActiveFilterChip({
+  testID,
+  label,
+  onPress,
+  accessibilityLabel,
+}: {
+  testID?: string;
+  label: string;
+  onPress: () => void;
+  accessibilityLabel: string;
+}) {
+  const t = useTheme();
+  return (
+    <PressableScale
+      testID={testID}
+      onPress={onPress}
+      accessibilityLabel={accessibilityLabel}
+      style={[
+        glassControlStyle(t, true),
+        {
+          minHeight: dashboard.controlHeight,
+          paddingHorizontal: 10,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 6,
+        },
+      ]}
+    >
+      <Text
+        accessible={false}
+        style={{
+          fontSize: 12,
+          fontWeight: "600",
+          letterSpacing: -0.1,
+          color: t.colors.tone_primary,
+        }}
+      >
+        {label}
+      </Text>
+      <SFSymbol name="xmark" size={9} color={t.colors.tone_primary} />
+    </PressableScale>
+  );
+}
+
+export function ActiveFilterRow({ children }: { children: React.ReactNode }) {
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: dashboard.compactGap }}>
       {children}
     </View>
   );
@@ -314,43 +473,64 @@ export function ScreenSpinner() {
 
 export function ListCard({
   children,
-  accent,
   testID,
   style,
+  compact = false,
 }: {
   children: React.ReactNode;
-  accent?: string;
   testID?: string;
   style?: object;
+  compact?: boolean;
 }) {
   const t = useTheme();
   return (
     <View
       testID={testID}
       style={[
+        elevatedCardStyle(t),
         {
-          backgroundColor: t.colors.background_secondary,
-          borderRadius: t.radii.md,
-          padding: t.spacing.card,
+          padding: compact ? dashboard.denseCardPadding : dashboard.cardPadding,
+          borderRadius: compact ? 14 : dashboard.cardRadius,
           overflow: "hidden",
         },
         style,
       ]}
     >
-      {accent ? (
-        <View
-          pointerEvents="none"
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: t.layout.rowAccent,
-            backgroundColor: accent,
-          }}
-        />
-      ) : null}
       {children}
+    </View>
+  );
+}
+
+/** One-line metrics for dense list rows (replaces full MetricStrip height). */
+export function DenseMetricLine({
+  items,
+}: {
+  items: { label: string; value: string; color?: string }[];
+}) {
+  const t = useTheme();
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 4 }}>
+      {items.map((item, index) => (
+        <View key={`${item.label}-${index}`} style={{ flexDirection: "row", alignItems: "baseline", gap: 3 }}>
+          <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>{item.label}</Text>
+          <Text
+            style={[
+              t.typography.caption1,
+              {
+                color: item.color ?? t.colors.text_primary,
+                fontWeight: "600",
+                fontVariant: ["tabular-nums"],
+              },
+            ]}
+            numberOfLines={1}
+          >
+            {item.value}
+          </Text>
+          {index < items.length - 1 ? (
+            <Text style={[t.typography.caption2, { color: t.colors.separator, marginLeft: 2 }]}>·</Text>
+          ) : null}
+        </View>
+      ))}
     </View>
   );
 }
@@ -529,12 +709,13 @@ export function MetricCard({
       activeOpacity={0.7}
       onPress={onPress}
       testID={testID}
-        style={{
-          flex: 1,
-          backgroundColor: t.colors.background_secondary,
-          borderRadius: t.radii.md,
-          padding: t.spacing.lg,
-        }}
+        style={[
+          elevatedCardStyle(t),
+          {
+            flex: 1,
+            padding: t.spacing.lg,
+          },
+        ]}
     >
       <Text style={[t.typography.footnote, { color: t.colors.text_secondary }]} numberOfLines={1}>
         {label}
@@ -583,11 +764,8 @@ export function WarningCard({
   return (
     <View
       style={{
-        backgroundColor: t.colors.background_secondary,
-        borderRadius: t.radii.md,
+        ...elevatedCardStyle(t),
         padding: t.spacing.lg,
-        borderLeftWidth: 3,
-        borderLeftColor: col,
       }}
     >
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -659,8 +837,7 @@ export function SyncStatusCard({
         flexDirection: "row",
         alignItems: "center",
         gap: 12,
-        backgroundColor: t.colors.background_secondary,
-        borderRadius: t.radii.md,
+        ...elevatedCardStyle(t),
         padding: t.spacing.lg,
       }}
     >
@@ -701,7 +878,7 @@ function metricStripColumns(items: { value: string }[], width: number, fontScale
   const count = items.length;
   if (count <= 1 || width <= 0) return 1;
   const scale = Math.max(1, fontScale);
-  const gap = spacing.sm;
+  const gap = dashboard.metricGap;
   const minCell = Math.max(56 * scale, ...items.map((item) => estimateMetricWidth(item.value, fontScale)));
   const fits = (cols: number) => (width - gap * (cols - 1)) / cols >= minCell;
   if (fits(count)) return count;
@@ -721,10 +898,10 @@ export function MetricStrip({
   useEffect(() => {
     setStripWidth(0);
   }, [fontScale, windowWidth]);
-  const width = stripWidth || Math.max(0, windowWidth - t.spacing.card * 2 - t.layout.pagePad * 2);
+  const width = stripWidth || Math.max(0, windowWidth - dashboard.cardPadding * 2 - dashboard.pageInset * 2);
   const columns = metricStripColumns(items, width, fontScale);
   const wraps = columns < items.length;
-  const gap = t.spacing.sm;
+  const gap = dashboard.metricGap;
   const cellWidth = wraps ? (width - gap * (columns - 1)) / columns : undefined;
 
   return (
@@ -758,7 +935,8 @@ export function MetricStrip({
             <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]} numberOfLines={1}>
               {item.label}
             </Text>
-            <Text
+            <VerifiedValue
+              value={item.value}
               style={[
                 t.typography.headline,
                 {
@@ -768,9 +946,7 @@ export function MetricStrip({
                   lineHeight: typography.headline.lineHeight,
                 },
               ]}
-            >
-              {item.value}
-            </Text>
+            />
           </View>
         );
       })}

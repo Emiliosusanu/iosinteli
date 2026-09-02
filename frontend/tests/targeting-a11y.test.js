@@ -35,9 +35,13 @@ test("Targets rows combine identity without swallowing the pause switch", () => 
   assert.match(targeting, /accessibilityLabel=\{`Clear \$\{perfLabel\} filter`\}/);
   assert.match(targeting, /accessibilityLabel=\{`Clear sort\. Currently \$\{sortLabel\}`\}/);
   assert.match(targeting, /accessibilityHint="Closes filters and sort"/);
-  const switchAfterNav = targeting.indexOf("Opens keyword details");
-  const switchAt = targeting.indexOf('noun="keyword"');
-  assert.ok(switchAfterNav >= 0 && switchAt > switchAfterNav);
+  assert.match(targeting, /styles\.leadRow/);
+  assert.match(targeting, /styles\.switchWell/);
+  assert.match(targeting, /<ResponderBox>/);
+  assert.ok(targeting.indexOf("styles.switchWell") < targeting.indexOf("Opens keyword details"));
+  assert.match(targeting, /coverAsin/);
+  assert.match(targeting, /book_image_url/);
+  assert.match(targeting, /fallbackAsinCoverUrl\(coverAsin\)/);
 });
 
 test("mutation-sensitive details keep identity grouped and switches independent", () => {

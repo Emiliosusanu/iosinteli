@@ -21,8 +21,12 @@ import {
   emptyBidRecsTitle,
   formatBidAmount,
   humanizeBidApplyError,
+  isActionablePendingRecommendation,
+  isBidBotReadQuery,
   isExpiredRecommendation,
   needsRunAutoConfirm,
+  withBidBotReadTimeout,
+  bidBotReadsEnabled,
   placementIdentity,
   recRowAccessibilityLabel,
   runEngineA11yLabel,
@@ -126,6 +130,51 @@ test("placement identity stays percent-based and expired recs are not treated as
   assert.equal(placementIdentity({ top_of_search: 10, product_pages: 5 }), "Top of search · Product pages");
   assert.equal(isExpiredRecommendation("expired"), true);
   assert.equal(isExpiredRecommendation("pending"), false);
+  assert.equal(isActionablePendingRecommendation({ status: "pending" }), true);
+  assert.equal(isActionablePendingRecommendation({ status: "pending", applicationStatus: "expired" }), false);
+  assert.equal(isActionablePendingRecommendation({ status: "expired", applicationStatus: "pending" }), false);
   assert.match(screen, /placementIdentity/);
-  assert.match(screen, /isExpiredRecommendation/);
+  assert.match(screen, /isActionablePendingRecommendation/);
+});
+
+test("BidBot reads wait for a bearer and do not treat loading as engine running", () => {
+  assert.equal(
+    bidBotReadsEnabled({
+      userId: "seller",
+      accessToken: "jwt",
+      authState: "authenticated",
+      guestMode: false,
+    }),
+    true,
+  );
+  assert.equal(
+    bidBotReadsEnabled({
+      userId: "seller",
+      accessToken: "",
+      authState: "authenticated",
+      guestMode: false,
+    }),
+    false,
+  );
+  assert.equal(isBidBotReadQuery(["bid-engine-status", "seller", "self"]), true);
+  assert.equal(isBidBotReadQuery(["bid-engine-status", "self"]), false);
+  assert.match(screen, /bidBotReadsEnabled/);
+  assert.match(screen, /withBidBotReadTimeout/);
+  assert.match(screen, /BIDBOT_LOADING_RECS_LABEL/);
+  assert.doesNotMatch(screen, /accessibilityLabel="Loading bid recommendations"/);
+});
+
+test("BidBot read timeout rejects a hung promise", async () => {
+  await assert.rejects(
+    () => withBidBotReadTimeout(new Promise(() => {}), 10),
+    /took too long/,
+  );
+  await assert.equal(await withBidBotReadTimeout(Promise.resolve(4), 50), 4);
+});
+
+test("empty pending recommendations stay empty instead of becoming a load error", () => {
+  assert.match(screen, /return await fetchPendingBidRecommendations/);
+  assert.doesNotMatch(screen, /if \(pending.length > 0\) return pending/);
+  assert.match(screen, /bid-bot-empty-recs/);
+  assert.equal(emptyBidRecsTitle(true), "No bid recommendations right now");
 });

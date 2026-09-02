@@ -3,10 +3,24 @@ export type NotificationPermissionState = "granted" | "denied" | "undetermined";
 export const APPEARANCE_LABEL = "Appearance";
 export const APPEARANCE_VALUE = "Follows system";
 
-export const KDP_PROFIT_LABEL = "Profit source";
+export const KDP_PROFIT_LABEL = "Royalty source";
 export const KDP_PROFIT_VALUE = "KDP royalties";
 export const KDP_SECTION_FOOTER =
-  "Imported KDP royalties are the profit source. This iPhone does not collect KDP. Use the Chrome helper at inteliads.io.";
+  "Net Royalties = KDP royalties minus Amazon Ads spend. Manage KDP account links here or under Amazon Accounts. Chrome helper and this iPhone write the same schedule; the iPhone helper keeps a Keychain session (After First Unlock) for background replay.";
+
+export const KDP_SOURCE_PICKER_TITLE = "Royalty source";
+export const KDP_SOURCE_PICKER_FOOTER =
+  "Choose where KDP royalties come from. The iPhone helper mirrors Chrome: today + yesterday every ~15 minutes, a 90-day backfill when you first turn it on, and a nightly last-30-day correction after 2am — including background wakes when iOS allows (Keychain session + BG refresh / push). Both write the same data, so running both is safe. Sign in to KDP once inside the app.";
+
+export const KDP_ACCOUNTS_ROW_LABEL = "KDP accounts";
+export const KDP_ACCOUNTS_ROW_SUBTITLE = "Link and unlink Amazon Ads profiles";
+export const KDP_HELPER_ROW_LABEL = "iPhone KDP helper";
+export const KDP_HELPER_ROW_SUBTITLE = "Sign in once, then background import";
+
+export const ACCOUNT_SECTION_TITLE = "Account";
+export const SUBSCRIPTION_ROW_LABEL = "Subscription";
+export const PLAN_ROW_LABEL = "Plan";
+export const MANAGE_BILLING_ROW_LABEL = "Manage billing on the web";
 
 export const ADS_SECTION_FOOTER =
   "BidBot Target ACoS and auto mode live on Bid bot. Account min/max shown there come from the web store, not from this screen. Campaign daily budgets are edited on each campaign. This iPhone does not cap Amazon bids here.";
@@ -17,12 +31,14 @@ export const BID_BOT_ROW_SUBTITLE = "Target ACoS and auto mode";
 export const TEST_NOTIFICATION_LABEL = "Send a test on this iPhone";
 export const TEST_NOTIFICATION_SENDING = "Sending…";
 export const TEST_NOTIFICATION_SENT = "Test sent on this iPhone";
+export const TEST_NOTIFICATION_SERVER_SENT = "Server test push sent";
 export const TEST_NOTIFICATION_BLOCKED = "Allow alerts in iOS Settings";
 export const TEST_NOTIFICATION_GUEST = "Sign in to send a test";
 export const TEST_NOTIFICATION_TITLE = "Test alert";
 export const TEST_NOTIFICATION_BODY =
   "This is a local test on this iPhone. It does not confirm server push.";
-export const TEST_NOTIFICATION_HINT = "Sends a local alert now. Does not test server push.";
+export const TEST_NOTIFICATION_HINT =
+  "Sends a local alert on this iPhone, then tries a server push when available.";
 
 export const VIEWING_CUSTOMER_SETTINGS_NOTE =
   "These preferences apply to your signed-in account, not the customer you're viewing.";
@@ -47,7 +63,7 @@ export function parseSettingsNumber(raw: string): number {
 }
 
 export function spendThresholdLabel(percent: number): string {
-  return `Alert when today's Ads spend is ${percent}% above the sum of campaign daily budgets.`;
+  return `Alert when Ads spend for today or yesterday is ${percent}% above the sum of campaign daily budgets.`;
 }
 
 export function spendThresholdAccessibilityLabel(percent: number): string {
@@ -57,6 +73,11 @@ export function spendThresholdAccessibilityLabel(percent: number): string {
 export function notificationSwitchAccessibilityLabel(label: string, on: boolean): string {
   return `${label}, ${on ? "on" : "off"}`;
 }
+
+export const KDP_NET_ALERTS_LABEL = "Include KDP net in alerts";
+export const DAILY_DIGEST_LABEL = "Daily performance updates";
+export const DAILY_DIGEST_FOOTER =
+  "Performance digests arrive throughout the day at 8am, 10am, noon, 2pm, 4pm, 6pm, and 8pm. Each alert includes today's ad spend, orders, and ACoS.";
 
 export function notificationFooter(input: {
   guestMode: boolean;
@@ -71,18 +92,17 @@ export function notificationFooter(input: {
     return "iPhone alerts are off in system Settings. These switches only choose what to check later. They cannot send alerts until you allow notifications.";
   }
   if (!input.anyEnabled) {
-    return "Alerts stay off until you turn one on. Checks run on this iPhone while the app is open. Background checks are best-effort and are not remote push.";
+    return "Alerts stay off until you turn one on. This iPhone evaluates alerts while open and during background refresh.";
   }
   if (input.permission === "granted") {
-    return input.backgroundRegistered
-      ? "Local alerts on this iPhone. Checks run while the app is open, and iOS may run them in the background. This is not remote push. New-order and overspend taps open Campaigns. Book taps open that book when the ASIN is known."
-      : "Local alerts on this iPhone while the app is open. Background delivery is unavailable. This is not remote push. New-order and overspend taps open Campaigns. Book taps open that book when the ASIN is known.";
+    return `${DAILY_DIGEST_FOOTER} Turn on KDP net to append royalties or net to the same alert. With alerts on, this iPhone refreshes Ads and linked KDP from InteliAds about every 15 minutes in the background and when a push wakes the app.`;
   }
-  return "Alerts are selected. Allow notifications when you turn an alert on or send a test. Alerts are local to this iPhone, not remote push.";
+  return "Alerts are selected. Allow notifications when you turn an alert on or send a test. This iPhone evaluates alerts while open and during background refresh.";
 }
 
-export function testNotificationLabel(status: "idle" | "sending" | "sent" | "blocked" | "guest"): string {
+export function testNotificationLabel(status: "idle" | "sending" | "sent" | "server" | "blocked" | "guest"): string {
   if (status === "sending") return TEST_NOTIFICATION_SENDING;
+  if (status === "server") return TEST_NOTIFICATION_SERVER_SENT;
   if (status === "sent") return TEST_NOTIFICATION_SENT;
   if (status === "blocked") return TEST_NOTIFICATION_BLOCKED;
   if (status === "guest") return TEST_NOTIFICATION_GUEST;

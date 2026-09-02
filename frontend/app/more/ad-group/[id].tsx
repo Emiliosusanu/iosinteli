@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { Image } from "expo-image";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { BookCover } from "@/src/components/BookCover";
+import { IOSSearchBar, IOSSegmentedControl, SFSymbol, sfFromIonicon } from "@/src/components/ios/Native";
 import { useQuery } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { EntityStateSwitch } from "@/src/components/Mutations";
@@ -12,10 +12,10 @@ import { useInvalidateAds } from "@/src/lib/invalidateAds";
 import { updateAdGroupState } from "@/src/lib/mutations";
 import { fetchAdGroupAutomationHistory, fetchAdGroups, fetchKeywords, fetchProductTargets, fetchSearchTerms } from "@/src/lib/queries";
 import { shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
-import { describeProductTarget, fallbackAsinCoverUrl } from "@/src/lib/targeting";
+import { describeProductTarget, fallbackAsinCoverUrl, productTargetHeading } from "@/src/lib/targeting";
 import { formatCurrency, formatInt, formatPercent, safeDivide } from "@/src/lib/format";
-import { EmptyState, SectionCard, ToneDot, MetricStrip, RetryState, ScreenSpinner } from "@/src/components/Primitives";
-import { IOSSearchBar, IOSSegmentedControl, SFSymbol, sfFromIonicon } from "@/src/components/ios/Native";
+import { EmptyState, FilterChrome, SectionCard, ToneDot, MetricStrip, RetryState, ScreenSpinner } from "@/src/components/Primitives";
+import { useLocalSearchParams, useRouter } from "expo-router";
 
 type TabKey = "targets" | "searchTerms" | "history";
 
@@ -180,7 +180,7 @@ export default function AdGroupDetailScreen() {
     return (
       <SubScreen title="Ad Group" showDateRange>
         <RetryState
-          title="Ad group failed to load"
+          title="Couldn't load ad group"
           subtitle="Check your connection and try again."
           onRetry={() => void adGroupsQ.refetch()}
           retrying={adGroupsQ.isRefetching}
@@ -210,6 +210,16 @@ export default function AdGroupDetailScreen() {
       >
         <SectionCard>
           <View style={styles.headerRow}>
+            <EntityStateSwitch
+              testID={`ad-group-state-${id}`}
+              enabled={groupState === "enabled"}
+              noun="ad group"
+              onChange={async (next) => {
+                if (!id) return;
+                await updateAdGroupState(id, next ? "enabled" : "paused");
+                await invalidateAds();
+              }}
+            />
             <View style={{ flex: 1, minWidth: 0 }}>
               <View
                 accessible
@@ -236,16 +246,6 @@ export default function AdGroupDetailScreen() {
                 <ParentLinks campaignId={group.campaign_id} campaignName={null} />
               ) : null}
             </View>
-            <EntityStateSwitch
-              testID={`ad-group-state-${id}`}
-              enabled={groupState === "enabled"}
-              noun="ad group"
-              onChange={async (next) => {
-                if (!id) return;
-                await updateAdGroupState(id, next ? "enabled" : "paused");
-                await invalidateAds();
-              }}
-            />
           </View>
           {defaultBid ? (
             <View
@@ -303,22 +303,24 @@ export default function AdGroupDetailScreen() {
         </SectionCard>
 
         <View style={styles.childChrome}>
-          <IOSSearchBar
-            testID="ad-group-search"
-            placeholder="Find keywords, products, search terms"
-            value={search}
-            onChangeText={setSearch}
-          />
-          <IOSSegmentedControl
-            testID="ad-group-tabs"
-            value={tab}
-            onChange={setTab}
-            options={[
-              { key: "targets", label: "Targets" },
-              { key: "searchTerms", label: "Terms" },
-              { key: "history", label: "History" },
-            ]}
-          />
+          <FilterChrome flush>
+            <IOSSearchBar
+              testID="ad-group-search"
+              placeholder="Find keywords, products, search terms"
+              value={search}
+              onChangeText={setSearch}
+            />
+            <IOSSegmentedControl
+              testID="ad-group-tabs"
+              value={tab}
+              onChange={setTab}
+              options={[
+                { key: "targets", label: "Targets" },
+                { key: "searchTerms", label: "Terms" },
+                { key: "history", label: "History" },
+              ]}
+            />
+          </FilterChrome>
         </View>
 
         {tab === "targets" && (
@@ -340,7 +342,7 @@ export default function AdGroupDetailScreen() {
           <SectionCard title={`Search Terms (${searchTerms.length})`}>
             {searchTermsQ.isError && (searchTermsQ.data ?? []).length === 0 ? (
               <RetryState
-                title="Search terms failed to load"
+                title="Couldn't load search terms"
                 subtitle="Keywords and targets above are still available."
                 onRetry={() => void searchTermsQ.refetch()}
                 retrying={searchTermsQ.isRefetching}
@@ -377,7 +379,7 @@ export default function AdGroupDetailScreen() {
           <SectionCard title={`Automation History (${historyRows.length})`}>
             {historyQ.isError && (historyQ.data ?? []).length === 0 ? (
               <RetryState
-                title="History failed to load"
+                title="Couldn't load history"
                 subtitle="The rest of this ad group is still available."
                 onRetry={() => void historyQ.refetch()}
                 retrying={historyQ.isRefetching}
@@ -435,7 +437,7 @@ function TargetsPane({
         <SectionCard title={`Keywords (${keywords.length})`}>
           {keywordsQ.isError && (keywordsQ.data ?? []).length === 0 ? (
             <RetryState
-              title="Keywords failed to load"
+              title="Couldn't load keywords"
               subtitle="Other targeting on this ad group is still available."
               onRetry={() => void keywordsQ.refetch()}
               retrying={keywordsQ.isRefetching}
@@ -467,7 +469,7 @@ function TargetsPane({
         <SectionCard title={auto ? `Auto Targeting (${targets.length})` : `Product Targets (${targets.length})`}>
           {targetsQ.isError && (targetsQ.data ?? []).length === 0 ? (
             <RetryState
-              title={auto ? "Auto targets failed to load" : "Product targets failed to load"}
+              title={auto ? "Couldn't load auto targets" : "Couldn't load product targets"}
               subtitle="Other targeting on this ad group is still available."
               onRetry={() => void targetsQ.refetch()}
               retrying={targetsQ.isRefetching}
@@ -556,11 +558,9 @@ function TargetRow({
   t: any;
   onPress: () => void;
 }) {
-  const [coverFailed, setCoverFailed] = useState(false);
-  const target = describeProductTarget(pt.expression, pt.expression_type);
+  const target = describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression);
   const fallbackCover = fallbackAsinCoverUrl(target.asin);
-  const coverUrl = !coverFailed ? pt.image_url || fallbackCover : null;
-  const displayTitle = target.isAuto || auto ? target.label : pt.title || target.asin || target.label;
+  const displayTitle = productTargetHeading(pt);
   const status = targetingPerfStatus(pt);
   const acos = safeDivide(Number(pt.total_spend ?? 0), Number(pt.total_sales ?? 0)) * 100;
   const bid = pt.bid != null ? formatCurrency(Number(pt.bid), primaryCurrency) : null;
@@ -574,21 +574,14 @@ function TargetRow({
       accessibilityHint="Opens target details"
       style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: last ? 0 : StyleSheet.hairlineWidth }]}
     >
-      <View style={[styles.targetThumb, { backgroundColor: t.colors.background_tertiary }]}>
-        {coverUrl ? (
-          <Image
-            source={{ uri: coverUrl }}
-            style={styles.targetThumbImage}
-            contentFit="cover"
-            transition={150}
-            cachePolicy="memory-disk"
-            recyclingKey={target.asin || pt.id}
-            onError={() => setCoverFailed(true)}
-          />
-        ) : (
-          <SFSymbol name={target.asin ? "book" : "arrow.triangle.branch"} size={18} color={t.colors.text_tertiary} />
-        )}
-      </View>
+      <BookCover
+        uri={pt.image_url}
+        fallbackUri={fallbackCover}
+        asin={target.asin}
+        size="xs"
+        placeholder={target.isAuto || auto ? "auto" : target.asin ? "book" : "target"}
+        recyclingKey={target.asin || pt.id}
+      />
 
       <View style={{ flex: 1, minWidth: 0, marginLeft: 10 }}>
         <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>

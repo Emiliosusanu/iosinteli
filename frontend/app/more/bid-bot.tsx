@@ -13,7 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import {
   EmptyState,
@@ -27,7 +27,7 @@ import { alertMutationError } from "@/src/components/Mutations";
 import { IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useApp } from "@/src/contexts/AppContext";
-import { useTheme, type Theme } from "@/src/lib/theme";
+import { dashboard, useTheme, type Theme } from "@/src/lib/theme";
 import { formatPercent } from "@/src/lib/format";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
 import { SIGN_IN_TO_MUTATE_MESSAGE } from "@/src/lib/rulesApi";
@@ -53,14 +53,21 @@ import {
   assertRevertSucceeded,
   autoModeDescription,
   autoModeLabel,
+  BIDBOT_LOADING_ACTIVITY_LABEL,
+  BIDBOT_LOADING_PLACEMENTS_LABEL,
+  BIDBOT_LOADING_RECS_LABEL,
+  BIDBOT_LOADING_STATUS_LABEL,
   bidBotApplyLogQueryKey,
   bidBotPlacementsQueryKey,
   bidBotReadFilterUserId,
+  bidBotReadsEnabled,
   bidBotRecsQueryKey,
   bidBotSettingsQueryKey,
   bidBotStatusQueryKey,
   bidDeltaLabel,
   canMutateBidBot,
+  isActionablePendingRecommendation,
+  isBidBotReadQuery,
   confidenceCategoryLabel,
   emptyBidRecsSubtitle,
   emptyBidRecsTitle,
@@ -68,6 +75,7 @@ import {
   humanizeBidApplyError,
   isExpiredRecommendation,
   needsRunAutoConfirm,
+  withBidBotReadTimeout,
   persistableBidBotSettings,
   placementIdentity,
   recRowAccessibilityLabel,
@@ -107,12 +115,18 @@ const TABS: { key: Tab; label: string; testID: string }[] = [
 
 async function loadPendingBidRecommendations(filterUserId?: string | null): Promise<BidRecommendation[]> {
   try {
-    const pending = await fetchPendingBidRecommendations(filterUserId);
-    if (pending.length > 0) return pending;
-  } catch {
-    // Dedicated pending endpoint can be missing or empty; use the status filter.
+    return await fetchPendingBidRecommendations(filterUserId);
+  } catch (pendingError) {
+    try {
+      return await fetchBidRecommendations({ status: "pending", page: 1, per_page: 50, filterUserId });
+    } catch {
+      const status = pendingError && typeof pendingError === "object" && "status" in pendingError
+        ? Number((pendingError as { status?: number }).status)
+        : 0;
+      if (status === 404 || status === 405) return [];
+      throw pendingError;
+    }
   }
-  return fetchBidRecommendations({ status: "pending", filterUserId });
 }
 
 function relativeTime(value?: string | null): string {
@@ -162,14 +176,43 @@ function growType(style: TextStyle): TextStyle {
   };
 }
 
+function BidBotLoading({
+  label,
+  color,
+  textColor,
+}: {
+  label: string;
+  color: string;
+  textColor: string;
+}) {
+  return (
+    <View
+      style={{ marginVertical: 20, alignItems: "center", gap: 8 }}
+      accessibilityRole="progressbar"
+      accessibilityLabel={label}
+    >
+      <ActivityIndicator color={color} />
+      <Text style={{ color: textColor, fontSize: 13 }}>{label}</Text>
+    </View>
+  );
+}
+
 export default function BidBotScreen() {
   const t = useTheme();
-  const { user, guestMode } = useAuth();
+  const queryClient = useQueryClient();
+  const { user, guestMode, session, state: authState } = useAuth();
   const { adminFilterUserId } = useApp();
   const invalidateAds = useInvalidateAds();
   const viewingCustomer = !!adminFilterUserId;
   const canMutate = canMutateBidBot({ userId: user?.id, guestMode, adminFilterUserId });
   const readFilterUserId = bidBotReadFilterUserId(user?.id, adminFilterUserId);
+  const sessionReady = bidBotReadsEnabled({
+    userId: user?.id,
+    accessToken: session?.access_token,
+    authState,
+    guestMode,
+  });
+  const [readsOpen, setReadsOpen] = useState(false);
 
   const [tab, setTab] = useState<Tab>("working");
   const [refreshing, setRefreshing] = useState(false);
@@ -185,38 +228,60 @@ export default function BidBotScreen() {
   const [autoMode, setAutoMode] = useState<BidBotAutoMode>("off");
   const [settingsReady, setSettingsReady] = useState(false);
 
+  useEffect(() => {
+    if (!sessionReady) {
+      setReadsOpen(false);
+      return;
+    }
+    let live = true;
+    void (async () => {
+      await queryClient.cancelQueries({ predicate: (query) => isBidBotReadQuery(query.queryKey) });
+      if (live) setReadsOpen(true);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [queryClient, sessionReady]);
+
+  const readsEnabled = sessionReady && readsOpen;
+
   const statusQ = useQuery({
     queryKey: bidBotStatusQueryKey(user?.id, adminFilterUserId),
-    queryFn: () => fetchBidEngineStatus(readFilterUserId),
-    enabled: !!user?.id,
+    queryFn: () => withBidBotReadTimeout(fetchBidEngineStatus(readFilterUserId)),
+    enabled: readsEnabled,
+    retry: false,
     staleTime: 0,
     placeholderData: undefined,
   });
   const settingsQ = useQuery({
     queryKey: bidBotSettingsQueryKey(user?.id, adminFilterUserId),
-    queryFn: () => fetchBidEngineSettings(readFilterUserId),
-    enabled: !!user?.id,
+    queryFn: () => withBidBotReadTimeout(fetchBidEngineSettings(readFilterUserId)),
+    enabled: readsEnabled,
+    retry: false,
     staleTime: 0,
     placeholderData: undefined,
   });
   const recsQ = useQuery({
     queryKey: bidBotRecsQueryKey(user?.id, adminFilterUserId),
-    queryFn: () => loadPendingBidRecommendations(readFilterUserId),
-    enabled: !!user?.id,
+    queryFn: () => withBidBotReadTimeout(loadPendingBidRecommendations(readFilterUserId)),
+    enabled: readsEnabled,
+    retry: false,
     staleTime: 0,
     placeholderData: undefined,
   });
   const placementsQ = useQuery({
     queryKey: bidBotPlacementsQueryKey(user?.id, adminFilterUserId),
-    queryFn: () => fetchPlacementRecommendations(readFilterUserId),
-    enabled: !!user?.id,
+    queryFn: () => withBidBotReadTimeout(fetchPlacementRecommendations(readFilterUserId)),
+    enabled: readsEnabled,
+    retry: false,
     staleTime: 0,
     placeholderData: undefined,
   });
   const logQ = useQuery({
     queryKey: bidBotApplyLogQueryKey(user?.id, adminFilterUserId),
-    queryFn: () => fetchBidEngineApplyLog({ filterUserId: readFilterUserId }),
-    enabled: !!user?.id,
+    queryFn: () => withBidBotReadTimeout(fetchBidEngineApplyLog({ filterUserId: readFilterUserId })),
+    enabled: readsEnabled,
+    retry: false,
     staleTime: 0,
     placeholderData: undefined,
   });
@@ -229,7 +294,7 @@ export default function BidBotScreen() {
     setSettingsReady(true);
   }, [settingsQ.data, settingsReady]);
 
-  const recs = recsQ.data ?? [];
+  const recs = (recsQ.data ?? []).filter(isActionablePendingRecommendation);
   const placements = placementsQ.data ?? [];
   const activity = logQ.data ?? [];
   const status = statusQ.data;
@@ -239,7 +304,7 @@ export default function BidBotScreen() {
   const selectedRecs = useMemo(
     () =>
       recs.filter(
-        (row) => row.id && selectedRecIds.includes(row.id) && !isExpiredRecommendation(row.status),
+        (row) => row.id && selectedRecIds.includes(row.id) && isActionablePendingRecommendation(row),
       ),
     [recs, selectedRecIds],
   );
@@ -484,9 +549,13 @@ export default function BidBotScreen() {
             style={[styles.statusCard, { backgroundColor: t.colors.background_secondary }]}
           >
             {statusQ.isLoading && !status ? (
-              <ActivityIndicator color={t.colors.tone_primary} accessibilityLabel="Loading BidBot status" />
+              <BidBotLoading
+                label={BIDBOT_LOADING_STATUS_LABEL}
+                color={t.colors.tone_primary}
+                textColor={t.colors.text_secondary}
+              />
             ) : statusQ.isError && !status ? (
-              <Text style={[t.typography.footnote, { color: t.colors.tone_danger }]}>Couldn't load BidBot status.</Text>
+              <Text style={[t.typography.footnote, { color: t.colors.tone_danger }]}>{"Couldn't load BidBot status."}</Text>
             ) : (
               <>
                 <View style={{ gap: 8 }}>
@@ -538,10 +607,14 @@ export default function BidBotScreen() {
               retrying={recsQ.isFetching}
             />
           ) : recsQ.isLoading && recs.length === 0 ? (
-            <ActivityIndicator color={t.colors.tone_primary} style={{ marginVertical: 20 }} accessibilityLabel="Loading bid recommendations" />
+            <BidBotLoading
+              label={BIDBOT_LOADING_RECS_LABEL}
+              color={t.colors.tone_primary}
+              textColor={t.colors.text_secondary}
+            />
           ) : recs.length === 0 ? (
             <SectionCard testID="bid-bot-empty-recs">
-              <EmptyState icon="pricetag-outline" title={emptyBidRecsTitle(hasRun)} subtitle={emptyBidRecsSubtitle(hasRun)} />
+              <EmptyState productIcon="bidBot" title={emptyBidRecsTitle(hasRun)} subtitle={emptyBidRecsSubtitle(hasRun)} />
             </SectionCard>
           ) : (
             <View style={{ gap: 10, marginBottom: 16 }}>
@@ -578,7 +651,11 @@ export default function BidBotScreen() {
               retrying={placementsQ.isFetching}
             />
           ) : placementsQ.isLoading && placements.length === 0 ? (
-            <ActivityIndicator color={t.colors.tone_primary} style={{ marginVertical: 20 }} accessibilityLabel="Loading placement recommendations" />
+            <BidBotLoading
+              label={BIDBOT_LOADING_PLACEMENTS_LABEL}
+              color={t.colors.tone_primary}
+              textColor={t.colors.text_secondary}
+            />
           ) : placements.length === 0 ? (
             <SectionCard testID="bid-bot-empty-placements">
               <EmptyState icon="layers-outline" title="No placement recommendations" subtitle="Run the engine to evaluate placement adjustments." />
@@ -626,7 +703,11 @@ export default function BidBotScreen() {
               retrying={logQ.isFetching}
             />
           ) : logQ.isLoading && activity.length === 0 ? (
-            <ActivityIndicator color={t.colors.tone_primary} style={{ marginVertical: 20 }} accessibilityLabel="Loading BidBot activity" />
+            <BidBotLoading
+              label={BIDBOT_LOADING_ACTIVITY_LABEL}
+              color={t.colors.tone_primary}
+              textColor={t.colors.text_secondary}
+            />
           ) : activity.length === 0 ? (
             <SectionCard testID="bid-bot-empty-activity">
               <EmptyState icon="time-outline" title="No applied changes yet" subtitle="Applied bids and placements show up here." />
@@ -767,7 +848,7 @@ const BidRecRow = React.memo(function BidRecRow({
   const analyzed = formatBidAmount(row.currentBid);
   const proposed = formatBidAmount(row.recommendedBid);
   const delta = bidDeltaLabel(row.currentBid, row.recommendedBid);
-  const expired = isExpiredRecommendation(row.status);
+  const expired = !isActionablePendingRecommendation(row);
   return (
     <TouchableOpacity
       testID={row.id ? `bid-bot-rec-${row.id}` : undefined}
@@ -897,13 +978,14 @@ const styles = StyleSheet.create({
   },
   banner: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
+    borderRadius: dashboard.cardRadius,
+    borderCurve: "continuous",
     paddingHorizontal: 12,
     paddingVertical: 8,
     marginBottom: 10,
   },
   statusCard: {
-    borderRadius: 12,
+    borderRadius: dashboard.cardRadius,
     paddingHorizontal: 14,
     paddingVertical: 12,
     marginBottom: 8,
@@ -912,7 +994,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 12,
-    borderRadius: 10,
+    borderRadius: dashboard.cardRadius,
+    borderCurve: "continuous",
     padding: 14,
     minHeight: 56,
   },

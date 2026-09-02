@@ -100,6 +100,14 @@ test("sign-out names the consequence and clears scoped state", () => {
   assert.match(rulesApi, /if \(!\(await nestSessionAllowed\(\)\)\)/);
 });
 
+test("invalid session restore clears financial caches and cannot race the 8s fallback", () => {
+  assert.match(auth, /const clearStaleAuthCaches = async \(\) => \{/);
+  assert.match(auth, /await clearStaleAuthCaches\(\)/);
+  assert.match(auth, /let restoreSettled = false/);
+  assert.match(auth, /if \(!mounted \|\| restoreSettled\) return/);
+  assert.match(auth, /restoreSettled = true/);
+});
+
 test("More describes My Account without promising a known plan", () => {
   const item = MORE_GROUPS.flatMap((group) => group.items).find((candidate) => candidate.key === "account");
   assert.equal(item?.subtitle, "InteliAds account and session");

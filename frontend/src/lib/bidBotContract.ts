@@ -65,11 +65,82 @@ export function bidBotApplyLogQueryKey(userId?: string | null, adminFilterUserId
   return ["bid-engine-apply-log", userId ?? "guest", adminFilterUserId ?? "self"] as const;
 }
 
+/** Do not enable BidBot Nest reads from user.id alone — that 401s before a bearer exists. */
+export function bidBotReadsEnabled(input: {
+  userId?: string | null;
+  accessToken?: string | null;
+  authState?: string | null;
+  guestMode?: boolean;
+}): boolean {
+  return (
+    !!input.userId &&
+    typeof input.accessToken === "string" &&
+    input.accessToken.trim().length > 0 &&
+    input.authState === "authenticated" &&
+    input.guestMode !== true
+  );
+}
+
+export function isBidBotReadQuery(queryKey: readonly unknown[]): boolean {
+  const root = queryKey[0];
+  if (
+    root === "bid-recommendations" ||
+    root === "bid-engine-settings" ||
+    root === "bid-engine-placements" ||
+    root === "bid-engine-apply-log"
+  ) {
+    return true;
+  }
+  // Home keeps ["bid-engine-status", filter]. BidBot uses the 3-part key.
+  return root === "bid-engine-status" && queryKey.length >= 3;
+}
+
+export const BIDBOT_READ_TIMEOUT_MS = 15_000;
+export const BIDBOT_READ_TIMEOUT_MESSAGE = "Couldn't load BidBot. The request took too long.";
+export const BIDBOT_LOADING_STATUS_LABEL = "Loading BidBot status";
+export const BIDBOT_LOADING_RECS_LABEL = "Loading recommendations";
+export const BIDBOT_LOADING_PLACEMENTS_LABEL = "Loading placement recommendations";
+export const BIDBOT_LOADING_ACTIVITY_LABEL = "Loading BidBot activity";
+
+export function withBidBotReadTimeout<T>(
+  promise: Promise<T>,
+  ms: number = BIDBOT_READ_TIMEOUT_MS,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(BIDBOT_READ_TIMEOUT_MESSAGE));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export function autoModeLabel(mode?: string | null): string {
   if (mode === "high_confidence") return "Careful";
   if (mode === "aggressive") return "Aggressive";
   if (mode === "off") return "Off";
   return mode ? mode.replace(/_/g, " ") : "Off";
+}
+
+/** Home status. Operational, not an AI mascot. */
+export function bidBotOperationalCopy(input: {
+  autoMode?: string | null;
+  pendingCount?: number | null;
+  lastRunAt?: string | null;
+}): { title: string; detail: string } {
+  const mode = asAutoMode(input.autoMode);
+  const last = input.lastRunAt ? `Last run ${String(input.lastRunAt).slice(0, 10)}` : "No run recorded yet";
+  if (mode === "off") return { title: "BidBot Off", detail: last };
+  if ((input.pendingCount ?? 0) > 0) return { title: "BidBot Recommendations ready", detail: last };
+  return { title: "BidBot Monitoring", detail: last };
 }
 
 export function asAutoMode(value?: string | null): BidBotAutoMode {
@@ -171,6 +242,21 @@ export function recommendationContext(row: { campaignName?: string | null }): st
 
 export function isExpiredRecommendation(status?: string | null): boolean {
   return status?.trim().toLowerCase() === "expired";
+}
+
+/**
+ * Same gate as Nest pending + apply: status pending (or legacy null) AND
+ * application_status pending. Expired leftover rows are not actionable.
+ */
+export function isActionablePendingRecommendation(row: {
+  status?: string | null;
+  applicationStatus?: string | null;
+}): boolean {
+  const status = row.status?.trim().toLowerCase();
+  const application = (row.applicationStatus ?? "pending").trim().toLowerCase();
+  if (status === "expired" || application === "expired") return false;
+  if (application !== "pending") return false;
+  return status === "pending" || status == null || status === "";
 }
 
 export function placementIdentity(value?: {

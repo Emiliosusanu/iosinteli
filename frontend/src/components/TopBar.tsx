@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useApp } from "../contexts/AppContext";
-import { useTheme } from "../lib/theme";
+import { dashboard, useTheme } from "../lib/theme";
 import { formatDateRangeLabel, rangePresets } from "../lib/format";
 import { DateRange } from "../lib/types";
 import { IOSDateField, SFSymbol, sfFromIonicon } from "./ios/Native";
@@ -122,7 +122,15 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
         accessibilityLabel={`Date range: ${dateLabel}`}
         testID="date-range-btn"
         onPress={() => setDateOpen(true)}
-        style={[styles.chip, fullWidth && styles.fullWidthChip, { backgroundColor: t.colors.background_tertiary }]}
+        style={[
+          styles.chip,
+          fullWidth && styles.fullWidthChip,
+          {
+            backgroundColor: t.colors.glass_background,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: t.colors.glass_stroke,
+          },
+        ]}
         activeOpacity={0.7}
       >
         <SFSymbol name="calendar" size={14} color={t.colors.tone_primary} />
@@ -236,7 +244,14 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                 accessibilityLabel={rightAction.testID ?? "Screen action"}
                 testID={rightAction.testID}
                 onPress={rightAction.onPress}
-                style={[styles.iconBtn, { backgroundColor: t.colors.background_tertiary }]}
+                style={[
+                  styles.iconBtn,
+                  {
+                    backgroundColor: t.colors.glass_background,
+                    borderWidth: StyleSheet.hairlineWidth,
+                    borderColor: t.colors.glass_stroke,
+                  },
+                ]}
                 activeOpacity={0.7}
               >
                 <SFSymbol name={sfFromIonicon(rightAction.icon)} size={19} color={t.colors.tone_primary} />
@@ -250,7 +265,14 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
               accessibilityLabel={`Profiles: ${selectedLabel}, currency ${primaryCurrency}`}
               testID="profile-selector-btn"
               onPress={() => setProfileOpen(true)}
-              style={[styles.chip, { backgroundColor: t.colors.background_tertiary }]}
+              style={[
+                styles.chip,
+                {
+                  backgroundColor: t.colors.glass_background,
+                  borderWidth: StyleSheet.hairlineWidth,
+                  borderColor: t.colors.glass_stroke,
+                },
+              ]}
               activeOpacity={0.7}
             >
               <SFSymbol name="building.2" size={13} color={t.colors.tone_primary} />
@@ -271,7 +293,14 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
             <TouchableOpacity
               testID={rightAction.testID}
               onPress={rightAction.onPress}
-              style={[styles.iconBtn, { backgroundColor: t.colors.background_tertiary }]}
+              style={[
+                styles.iconBtn,
+                {
+                  backgroundColor: t.colors.glass_background,
+                  borderWidth: StyleSheet.hairlineWidth,
+                  borderColor: t.colors.glass_stroke,
+                },
+              ]}
               activeOpacity={0.7}
             >
               <SFSymbol name={sfFromIonicon(rightAction.icon)} size={16} color={t.colors.tone_primary} />
@@ -448,7 +477,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 10,
+    borderRadius: dashboard.chipRadius,
+    borderCurve: "continuous",
     maxWidth: 210,
     minWidth: 0,
     flexShrink: 1,
@@ -467,7 +497,8 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 38,
     height: 38,
-    borderRadius: 12,
+    borderRadius: dashboard.chipRadius,
+    borderCurve: "continuous",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -479,8 +510,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   sheet: {
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
+    borderTopLeftRadius: dashboard.cardRadius,
+    borderTopRightRadius: dashboard.cardRadius,
     paddingBottom: 32,
     maxHeight: "85%",
   },
@@ -510,14 +541,16 @@ const styles = StyleSheet.create({
   dateInput: {
     flex: 1,
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
+    borderRadius: dashboard.chipRadius,
+    borderCurve: "continuous",
     paddingHorizontal: 10,
     paddingVertical: 8,
     minHeight: 40,
   },
   applyCustom: {
     alignSelf: "flex-start",
-    borderRadius: 10,
+    borderRadius: dashboard.chipRadius,
+    borderCurve: "continuous",
     paddingHorizontal: 12,
     paddingVertical: 8,
   },

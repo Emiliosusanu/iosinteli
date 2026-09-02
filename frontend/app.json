@@ -2,7 +2,7 @@
   "expo": {
     "name": "InteliAds",
     "slug": "inteliads",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "inteliads",
@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "io.inteliads.app",
-      "buildNumber": "1",
+      "buildNumber": "21",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "UIBackgroundModes": [
@@ -103,6 +103,7 @@
         }
       ]
     ],
+    "description": "Net royalties minus Amazon Ads spend for KDP authors. Campaign leaks, daily alerts, book profit.",
     "experiments": {
       "typedRoutes": true
     }
