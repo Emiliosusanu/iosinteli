@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Pressable, type StyleProp, type TextProps, type ViewStyle } from "react-native";
+import { Pressable, StyleSheet, type StyleProp, type TextProps, type ViewStyle } from "react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -226,16 +226,20 @@ export function ChartScrubCursor({
   }, [ax, ay, op, reduceMotion, visible, x, y]);
 
   const lineStyle = useAnimatedStyle(() => ({
-    opacity: op.get() * 0.32,
+    opacity: op.get() * 0.22,
     transform: [{ translateX: ax.get() }],
   }));
   const glowStyle = useAnimatedStyle(() => ({
-    opacity: op.get() * 0.22,
-    transform: [{ translateX: ax.get() - 14 }, { translateY: ay.get() - 14 }, { scale: 0.92 + op.get() * 0.08 }],
+    opacity: op.get() * 0.18,
+    transform: [{ translateX: ax.get() - 16 }, { translateY: ay.get() - 16 }, { scale: 0.9 + op.get() * 0.12 }],
+  }));
+  const ringStyle = useAnimatedStyle(() => ({
+    opacity: op.get() * 0.9,
+    transform: [{ translateX: ax.get() - 8 }, { translateY: ay.get() - 8 }, { scale: 0.94 + op.get() * 0.06 }],
   }));
   const dotStyle = useAnimatedStyle(() => ({
     opacity: op.get(),
-    transform: [{ translateX: ax.get() - 5 }, { translateY: ay.get() - 5 }],
+    transform: [{ translateX: ax.get() - 4.5 }, { translateY: ay.get() - 4.5 }],
   }));
 
   const lineHeight = Math.max(0, plotBottom - plotTop);
@@ -248,7 +252,7 @@ export function ChartScrubCursor({
             position: "absolute",
             left: 0,
             top: plotTop,
-            width: 1,
+            width: StyleSheet.hairlineWidth * 2 || 1,
             height: lineHeight,
             backgroundColor: color,
             marginLeft: -0.5,
@@ -262,9 +266,9 @@ export function ChartScrubCursor({
             position: "absolute",
             left: 0,
             top: 0,
-            width: 28,
-            height: 28,
-            borderRadius: 14,
+            width: 32,
+            height: 32,
+            borderRadius: 16,
             backgroundColor: color,
           },
           glowStyle,
@@ -276,8 +280,24 @@ export function ChartScrubCursor({
             position: "absolute",
             left: 0,
             top: 0,
-            width: 10,
-            height: 10,
+            width: 16,
+            height: 16,
+            borderRadius: 8,
+            borderWidth: 1.5,
+            borderColor: color,
+            backgroundColor: "transparent",
+          },
+          ringStyle,
+        ]}
+      />
+      <Animated.View
+        style={[
+          {
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: 9,
+            height: 9,
             borderRadius: 5,
             backgroundColor: color,
             borderWidth: 2,

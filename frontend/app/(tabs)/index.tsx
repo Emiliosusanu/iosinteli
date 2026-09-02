@@ -1176,7 +1176,7 @@ export default function OverviewScreen() {
     !loading && adsReady && heroSales > 0 && breakEvenAcos > 0
       ? toneColor(acosTone(heroAcos, breakEvenAcos), t.colors)
       : t.colors.text_primary;
-  const chartHeight = viewportWidth < 400 ? 120 : t.layout.chartHero;
+  const chartHeight = viewportWidth < 400 ? 138 : Math.max(t.layout.chartHero, 152);
   const openBook = useCallback((item: TopBookRow) => {
     const asin = item.asin || item.sku;
     if (!asin) return;
@@ -2468,8 +2468,8 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   profitChartShell: {
-    marginTop: 10,
-    overflow: "hidden",
+    marginTop: 14,
+    overflow: "visible",
   },
   heroMetricGrid: {
     flexDirection: "row",

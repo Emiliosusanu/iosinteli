@@ -133,7 +133,7 @@ export const layout = {
   minTap: 44,
   headerTitleSize: 17,
   rowAccent: 4,
-  chartHero: 160,
+  chartHero: 152,
   coverWidth: 52,
   coverHeight: 70,
 };

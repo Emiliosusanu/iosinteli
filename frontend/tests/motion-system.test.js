@@ -70,7 +70,10 @@ test("Home uses the motion system and does not replay entrance or haptic navigat
   assert.match(charts, /ChartScrubCursor/);
   assert.match(charts, /VerifiedValue/);
   assert.match(charts, /makeSmoothPath/);
-  assert.match(charts, /netAreaFill/);
+  assert.match(charts, /netPosFill/);
+  assert.match(charts, /netNegFill/);
+  assert.match(charts, /yAxisTicks/);
+  assert.match(charts, /NetReadoutChip/);
   assert.doesNotMatch(charts, /Haptics\.impactAsync/);
 });
 

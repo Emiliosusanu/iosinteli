@@ -183,8 +183,40 @@ function useChartSelection(
   return { selectedIndex, gesture, clearSelection };
 }
 
-function xAxisLabels(_data: ChartPoint[]) {
-  return [];
+function xAxisLabels(data: ChartPoint[]) {
+  if (!data.length) return [];
+  const last = data.length - 1;
+  const idxs = new Set<number>([0, last]);
+  if (data.length >= 5) idxs.add(Math.round(last / 2));
+  if (data.length >= 10) {
+    idxs.add(Math.round(last / 4));
+    idxs.add(Math.round((3 * last) / 4));
+  }
+  return [...idxs]
+    .sort((a, b) => a - b)
+    .map((index) => ({
+      index,
+      label: data[index]?.label ?? "",
+      key: `${index}-${data[index]?.date ?? data[index]?.label ?? index}`,
+    }))
+    .filter((row) => row.label);
+}
+
+function yAxisTicks(min: number, max: number): number[] {
+  const ticks = [max];
+  if (min < -1e-9 && max > 1e-9) ticks.push(0);
+  if (Math.abs(min - max) > 1e-9) ticks.push(min);
+  // Dedupe near-equals (flat ranges).
+  const out: number[] = [];
+  for (const tick of ticks) {
+    if (out.every((v) => Math.abs(v - tick) > Math.max(1, Math.abs(max - min) * 0.02))) out.push(tick);
+  }
+  return out;
+}
+
+function valueToY(value: number, height: number, min: number, max: number, inset: number) {
+  const plotHeight = Math.max(1, height - inset * 2);
+  return inset + ((max - value) / Math.max(1e-9, max - min)) * plotHeight;
 }
 
 // Budget Pace Ring -- displays % spent vs daily budget
@@ -620,9 +652,9 @@ export function Heatmap({ data, maxValue }: HeatmapProps) {
 }
 
 // Net Profit big metric line chart.
-// Net is the hero line (area + thick stroke). Royalties and Ad Spend are drawn
-// as thin reference lines so the author sees, at a glance, whether ads are
-// eating royalties. All three share one y-scale for honest comparison.
+// Net is the hero line (split area at zero + thick stroke). Royalties and Ad Spend
+// are thin reference lines on the same scale. Y ticks + date labels keep the
+// series readable; scrub updates the labeled readout above the plot.
 export type ChartDaySelection = {
   index: number;
   label?: string;
@@ -650,15 +682,19 @@ export function NetProfitChart({
   royaltiesData,
   spendData,
   width = 320,
-  height = 104,
+  height = 128,
   currency,
   periodLabel,
   selectedIndex: controlledIndex,
   onDaySelect,
 }: NetProfitChartProps) {
   const t = useTheme();
-  const chartWidth = innerChartWidth(width, 0);
-  const inset = 12;
+  const leftGutter = 34;
+  const rightPad = 6;
+  const bottomPad = 22;
+  const chartWidth = Math.max(200, width);
+  const plotWidth = Math.max(160, chartWidth - leftGutter - rightPad);
+  const inset = 8;
   const onDaySelectRef = React.useRef(onDaySelect);
   onDaySelectRef.current = onDaySelect;
   const dataRef = React.useRef(data);
@@ -680,114 +716,314 @@ export function NetProfitChart({
 
   const { selectedIndex, gesture } = useChartSelection(
     data.length,
-    chartWidth,
+    plotWidth,
     inset,
     true,
     notifyDaySelect,
     controlledIndex,
   );
 
-  if (data.length === 0) return <View style={{ height: 100 }} />;
+  const geometry = React.useMemo(() => {
+    if (data.length === 0) return null;
+    const isPositive = data.reduce((sum, d) => sum + (d.value ?? 0), 0) >= 0;
+    const netColor = isPositive ? t.colors.tone_good : t.colors.tone_danger;
+    const royColor = t.colors.tone_primary;
+    const spendColor = t.colors.tone_warning;
+    const series = [data, ...(royaltiesData?.length ? [royaltiesData] : []), ...(spendData?.length ? [spendData] : [])];
+    const { min, max } = rangeFor(series, true);
+    const points = pointsFor(data, plotWidth, height, min, max, inset);
+    const royPoints = royaltiesData?.length ? pointsFor(royaltiesData, plotWidth, height, min, max, inset) : [];
+    const spendPoints = spendData?.length ? pointsFor(spendData, plotWidth, height, min, max, inset) : [];
+    const zeroY = clamp(valueToY(0, height, min, max, inset), inset, height - inset);
+    const netPath = makeSmoothPath(points);
+    const areaPath = makeSmoothAreaPath(points, zeroY);
+    const ticks = yAxisTicks(min, max).map((value) => ({
+      value,
+      y: valueToY(value, height, min, max, inset),
+      label: formatCurrency(value, currency, { compact: true }),
+    }));
+    const xLabels = xAxisLabels(data);
+    return {
+      isPositive,
+      netColor,
+      royColor,
+      spendColor,
+      min,
+      max,
+      points,
+      royPoints,
+      spendPoints,
+      zeroY,
+      netPath,
+      areaPath,
+      ticks,
+      xLabels,
+    };
+  }, [currency, data, height, inset, plotWidth, royaltiesData, spendData, t.colors.tone_danger, t.colors.tone_good, t.colors.tone_primary, t.colors.tone_warning]);
 
-  // Color by the period TOTAL (matches the hero's Profitable/loss state), not the
-  // last day — otherwise a single down day flips the whole line red while profitable.
-  const isPositive = data.reduce((sum, d) => sum + (d.value ?? 0), 0) >= 0;
-  const netColor = isPositive ? t.colors.tone_good : t.colors.tone_danger;
-  const royColor = t.colors.tone_primary;
-  const spendColor = t.colors.tone_warning;
-  const chartHeight = height;
-  const series = [data, ...(royaltiesData?.length ? [royaltiesData] : []), ...(spendData?.length ? [spendData] : [])];
-  const { min, max } = rangeFor(series, true);
-  const points = pointsFor(data, chartWidth, chartHeight, min, max, inset);
-  const royPoints = royaltiesData?.length ? pointsFor(royaltiesData, chartWidth, chartHeight, min, max, inset) : [];
-  const spendPoints = spendData?.length ? pointsFor(spendData, chartWidth, chartHeight, min, max, inset) : [];
-  const zeroY = clamp(pointsFor([{ value: 0 }], chartWidth, chartHeight, min, max, inset)[0]?.y ?? chartHeight - inset, inset, chartHeight - inset);
+  if (data.length === 0 || !geometry) return <View style={{ height: 100 }} />;
+
+  const {
+    netColor,
+    royColor,
+    spendColor,
+    points,
+    royPoints,
+    spendPoints,
+    zeroY,
+    netPath,
+    areaPath,
+    ticks,
+    xLabels,
+  } = geometry;
+
   const selected = selectedIndex != null ? points[selectedIndex] : null;
   const selRoy = selectedIndex != null ? royaltiesData?.[selectedIndex]?.value : null;
   const selSpend = selectedIndex != null ? spendData?.[selectedIndex]?.value : null;
-  const tooltipLabel = selected?.label ?? periodLabel ?? "Period total";
+  const tooltipLabel = selected?.label ?? periodLabel ?? "Period";
   const tooltipNet = selected
     ? formatCurrency(selected.value ?? 0, currency, { compact: true })
     : "";
-  const cursorX = selected?.x ?? points[points.length - 1]?.x ?? inset;
-  const cursorY = selected?.y ?? points[points.length - 1]?.y ?? chartHeight / 2;
+  const end = points[points.length - 1];
+  const cursorX = (selected?.x ?? end?.x ?? inset) + leftGutter;
+  const cursorY = selected?.y ?? end?.y ?? height / 2;
+  const svgHeight = height + bottomPad;
+  const aboveId = "netAboveZero";
+  const belowId = "netBelowZero";
+  const posGrad = "netPosFill";
+  const negGrad = "netNegFill";
 
   return (
-    <GestureDetector gesture={gesture}>
-    <View style={{ width: chartWidth, overflow: "hidden" }}>
-      <View style={chartStyles.tooltipRow}>
-        <VerifiedValue
-          value={tooltipLabel}
-          style={[t.typography.caption1, { color: t.colors.text_secondary }]}
-        />
-        <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
-          {selected && selRoy != null && (
+    <View style={{ width: chartWidth }} accessibilityLabel="Net royalties chart. Drag to inspect a day.">
+      <View style={chartStyles.netHeader}>
+        {selected ? (
+          <>
             <VerifiedValue
-              value={formatCurrency(selRoy, currency, { compact: true })}
-              color={royColor}
-              style={[t.typography.caption2, { fontWeight: "700" }]}
+              value={tooltipLabel}
+              style={[t.typography.caption1, { color: t.colors.text_secondary, fontWeight: "600" }]}
             />
-          )}
-          {selected && selSpend != null && (
-            <VerifiedValue
-              value={formatCurrency(selSpend, currency, { compact: true })}
-              color={spendColor}
-              style={[t.typography.caption2, { fontWeight: "700" }]}
-            />
-          )}
-          {selected ? (
-            <VerifiedValue
-              value={tooltipNet}
-              color={netColor}
-              style={[t.typography.caption1, { fontWeight: "800" }]}
-            />
-          ) : null}
-        </View>
+            <View style={chartStyles.netReadout}>
+              <NetReadoutChip label="Net" value={tooltipNet} color={netColor} t={t} />
+              {selRoy != null ? (
+                <NetReadoutChip
+                  label="Royalties"
+                  value={formatCurrency(selRoy, currency, { compact: true })}
+                  color={royColor}
+                  t={t}
+                />
+              ) : null}
+              {selSpend != null ? (
+                <NetReadoutChip
+                  label="Spend"
+                  value={formatCurrency(selSpend, currency, { compact: true })}
+                  color={spendColor}
+                  t={t}
+                />
+              ) : null}
+            </View>
+          </>
+        ) : (
+          <View style={chartStyles.netLegend}>
+            <LegendSwatch color={netColor} label="Net" solid t={t} />
+            {royPoints.length > 0 ? <LegendSwatch color={royColor} label="Royalties" dashed t={t} /> : null}
+            {spendPoints.length > 0 ? <LegendSwatch color={spendColor} label="Ad spend" dashed t={t} /> : null}
+          </View>
+        )}
       </View>
-      <View style={{ width: chartWidth, height: chartHeight + 30 }}>
-        <Svg width={chartWidth} height={chartHeight + 30}>
+
+      <View style={{ width: chartWidth, height: svgHeight }}>
+        <Svg width={chartWidth} height={svgHeight}>
           <Defs>
-            <ClipPath id="netPlotClip">
-              <Rect x={inset} y={0} width={Math.max(1, chartWidth - inset * 2)} height={chartHeight + 30} />
+            <ClipPath id={aboveId}>
+              <Rect x={0} y={0} width={plotWidth} height={Math.max(0, zeroY)} />
             </ClipPath>
-            <LinearGradient id="netAreaFill" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0%" stopColor={netColor} stopOpacity="0.22" />
-              <Stop offset="100%" stopColor={netColor} stopOpacity="0.02" />
+            <ClipPath id={belowId}>
+              <Rect x={0} y={zeroY} width={plotWidth} height={Math.max(0, height - zeroY)} />
+            </ClipPath>
+            <LinearGradient id={posGrad} x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0%" stopColor={t.colors.tone_good} stopOpacity="0.28" />
+              <Stop offset="100%" stopColor={t.colors.tone_good} stopOpacity="0.03" />
+            </LinearGradient>
+            <LinearGradient id={negGrad} x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0%" stopColor={t.colors.tone_danger} stopOpacity="0.04" />
+              <Stop offset="100%" stopColor={t.colors.tone_danger} stopOpacity="0.26" />
             </LinearGradient>
           </Defs>
-          <G clipPath="url(#netPlotClip)">
-          <Line x1={inset} x2={chartWidth - inset} y1={zeroY} y2={zeroY} stroke={t.colors.chart_grid} strokeWidth={1} opacity={0.8} />
-          {royPoints.length > 0 && (
-            <Path d={makeLinePath(royPoints)} stroke={royColor} strokeWidth={1.5} fill="none" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 4" opacity={0.7} />
-          )}
-          {spendPoints.length > 0 && (
-            <Path d={makeLinePath(spendPoints)} stroke={spendColor} strokeWidth={1.5} fill="none" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 4" opacity={0.7} />
-          )}
-          <Path
-            d={makeSmoothAreaPath(points, zeroY)}
-            fill="url(#netAreaFill)"
-            opacity={1}
-          />
-          <Path d={makeSmoothPath(points)} stroke={netColor} strokeWidth={2.75} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-          </G>
-          {xAxisLabels(data).map(({ index, label, key }) => (
-            <SvgText key={key} x={points[index]?.x ?? inset} y={chartHeight + 20} textAnchor={index === 0 ? "start" : index === data.length - 1 ? "end" : "middle"} fontSize={11} fill={t.colors.text_tertiary}>
-              {label}
-            </SvgText>
+
+          {ticks.map((tick) => (
+            <React.Fragment key={`yt-${tick.value}`}>
+              <Line
+                x1={leftGutter}
+                x2={leftGutter + plotWidth}
+                y1={tick.y}
+                y2={tick.y}
+                stroke={t.colors.chart_grid}
+                strokeWidth={tick.value === 0 ? 1 : 0.5}
+                opacity={tick.value === 0 ? 0.9 : 0.5}
+                strokeDasharray={tick.value === 0 ? undefined : "3 5"}
+              />
+              <SvgText
+                x={leftGutter - 6}
+                y={tick.y + 3.5}
+                textAnchor="end"
+                fontSize={10}
+                fontWeight="500"
+                fill={t.colors.text_tertiary}
+              >
+                {tick.label}
+              </SvgText>
+            </React.Fragment>
           ))}
+
+          <G transform={`translate(${leftGutter}, 0)`}>
+            {royPoints.length > 0 ? (
+              <Path
+                d={makeLinePath(royPoints)}
+                stroke={royColor}
+                strokeWidth={1.35}
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeDasharray="3.5 4"
+                opacity={0.72}
+              />
+            ) : null}
+            {spendPoints.length > 0 ? (
+              <Path
+                d={makeLinePath(spendPoints)}
+                stroke={spendColor}
+                strokeWidth={1.35}
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeDasharray="3.5 4"
+                opacity={0.72}
+              />
+            ) : null}
+
+            <G clipPath={`url(#${aboveId})`}>
+              <Path d={areaPath} fill={`url(#${posGrad})`} />
+            </G>
+            <G clipPath={`url(#${belowId})`}>
+              <Path d={areaPath} fill={`url(#${negGrad})`} />
+            </G>
+
+            <Path
+              d={netPath}
+              stroke={netColor}
+              strokeWidth={2.6}
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            {end ? (
+              <Circle
+                cx={end.x}
+                cy={end.y}
+                r={selected ? 2.5 : 3.25}
+                fill={netColor}
+                opacity={selected ? 0.35 : 1}
+              />
+            ) : null}
+          </G>
+
+          {xLabels.map(({ index, label, key }) => {
+            const x = leftGutter + (points[index]?.x ?? inset);
+            const anchor = index === 0 ? "start" : index === data.length - 1 ? "end" : "middle";
+            const active = selectedIndex === index;
+            return (
+              <SvgText
+                key={key}
+                x={x}
+                y={height + 16}
+                textAnchor={anchor}
+                fontSize={10}
+                fontWeight={active ? "700" : "500"}
+                fill={active ? t.colors.text_secondary : t.colors.text_tertiary}
+              >
+                {label}
+              </SvgText>
+            );
+          })}
         </Svg>
+
+        <GestureDetector gesture={gesture}>
+          <View
+            style={{
+              position: "absolute",
+              left: leftGutter,
+              top: 0,
+              width: plotWidth,
+              height,
+            }}
+            accessibilityRole="adjustable"
+            accessibilityLabel="Scrub net royalties by day"
+          />
+        </GestureDetector>
+
         <ChartScrubCursor
           x={cursorX}
           y={cursorY}
           plotTop={inset}
-          plotBottom={chartHeight - inset}
+          plotBottom={height - inset}
           color={netColor}
           visible={!!selected}
           stroke={t.colors.background_secondary}
         />
       </View>
     </View>
-    </GestureDetector>
+  );
+}
+
+function LegendSwatch({
+  color,
+  label,
+  solid,
+  dashed,
+  t,
+}: {
+  color: string;
+  label: string;
+  solid?: boolean;
+  dashed?: boolean;
+  t: ReturnType<typeof useTheme>;
+}) {
+  return (
+    <View style={chartStyles.legendItem} accessibilityElementsHidden>
+      {dashed ? (
+        <View style={chartStyles.legendDashRow}>
+          <View style={[chartStyles.legendDash, { backgroundColor: color }]} />
+          <View style={[chartStyles.legendDash, { backgroundColor: color }]} />
+          <View style={[chartStyles.legendDash, { backgroundColor: color }]} />
+        </View>
+      ) : (
+        <View style={[chartStyles.legendMark, { backgroundColor: solid ? color : color }]} />
+      )}
+      <Text style={[t.typography.caption2, { color: t.colors.text_secondary }]}>{label}</Text>
+    </View>
+  );
+}
+
+function NetReadoutChip({
+  label,
+  value,
+  color,
+  t,
+}: {
+  label: string;
+  value: string;
+  color: string;
+  t: ReturnType<typeof useTheme>;
+}) {
+  return (
+    <View style={chartStyles.readoutChip}>
+      <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>{label}</Text>
+      <VerifiedValue
+        value={value}
+        color={color}
+        style={[t.typography.caption1, { fontWeight: "700", fontVariant: ["tabular-nums"] }]}
+      />
+    </View>
   );
 }
 
@@ -1260,5 +1496,47 @@ const chartStyles = StyleSheet.create({
     gap: 10,
     marginBottom: 6,
     overflow: "hidden",
+  },
+  netHeader: {
+    minHeight: 28,
+    marginBottom: 8,
+    gap: 6,
+  },
+  netLegend: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 12,
+  },
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  legendMark: {
+    width: 14,
+    height: 3,
+    borderRadius: 2,
+  },
+  legendDashRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    width: 14,
+  },
+  legendDash: {
+    width: 3,
+    height: 2,
+    borderRadius: 1,
+  },
+  netReadout: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "flex-end",
+    gap: 12,
+  },
+  readoutChip: {
+    gap: 1,
+    minWidth: 52,
   },
 });
