@@ -1,0 +1,99 @@
+# InteliAds iOS — Device polish backlog
+
+From the Native Device QA Checkpoint (2026-08-22). P0/P1 found on device were fixed in that pass or remain as blockers in `IOS_DEVICE_QA.md`. This list is P2/P3 only.
+
+Unresolved **P0/P1** (including Dashboard data + inventory safety) live in `IOS_REMAINING_COVERAGE.md` §8. This file stays P2/P3. D38 remains the only P1-class row kept here for Overview spend grains.
+
+| ID | Screen | Issue | Severity | Evidence | Suggested Future Pass |
+| -- | ------ | ----- | -------- | -------- | --------------------- |
+| D1 | All MetricStrip / captions | `text_tertiary` (`#3C3C434D`) on white measures ~2.0:1. Labels are readable but fail WCAG AA 4.5:1. Dark tertiary on gray cards is also thin. | P2 | Pixel sample of `campaign-detail-standard-light.png`; Apple audit follow-up confirmed | Theme token pass — do not rewrite theme in a screen stream |
+| D2 | Campaigns List | ToneDot uses ACoS color; verdict text uses `campaignVerdict`. “Welcome to Retirement” shows a red dot next to green “Profitable”. Color is not the only status, but it disagrees. | P2 | `campaigns-standard-light.png`, `campaigns-standard-dark.png` | Drive ToneDot from verdict tone, not raw ACoS |
+| D3 | Campaign / Keyword / Target Detail | Back title is `(tabs)` instead of Campaigns / Targets. Happens on **in-app** `router.push` as well as deep link. | P2 | `campaigns-scroll-opened-detail.png`, `keyword-detail-from-list.png` | Expo Router `headerBackTitle` / stack group title |
+| D4 | Campaign Detail | Hero strip / verdict `$0` / “No spend yet” while Campaigns list shows spend for the same campaign. Layout is fine; daily-metrics vs list rollup. | P2 | `campaign-detail-standard-light.png` vs list; also Grandma Automat detail under Reduce Motion | Query/data pass only — do not change in UI QA |
+| D5 | Ad Groups List | Default Active rendered empty (“No ad groups”). `fetchAdGroups` has no Nest `filterUserId`; admin viewer may see nothing. 2026-08-23 dark / populated / XXXL used a **runtime React Query fixture only**. | P2 | `ad-groups-standard-dark.png`, `ad-groups-standard-largetype.png` | Data/API — out of UI QA |
+| D6 | Ad Group Detail | Without `name` param, “Ad group not found” for a Nest keyword’s `ad_group_id`. ParentLinks already passes `name`. | P2 | Deep link without query vs `?name=Ad%20group%201` | Same fetch-path as D5 |
+| D7 | Campaigns / Targets | Long names truncate (`cisiny · Sponsored a…`, campaign titles). Acceptable; 2-line names already on campaigns. | P3 | List screenshots | Only if operators complain |
+| D8 | Locale | Simulator locale uses `$12,00` / `$1,04` (comma decimal) and `5.670` grouping. Correct for the device locale, easy to misread as a bug in USD screenshots. | P3 | All financial screens | Document in QA; do not force en-US |
+| D9 | Funnel | Impression values like `48.00` / `55.00` look over-precise next to `47K`. | P3 | Keyword / auto target detail | Charts polish |
+| D10 | Campaigns sort chip | **Closed 2026-08-22.** Non-default Spend chip rendered, 44pt measured, clear verified. | — | `campaigns-sort-chip-active.png`, `campaigns-sort-chip-cleared.png` | — |
+| D11 | Small / Large data | **Closed 2026-08-22.** 16e + Pro Max core lists/details populated after Nest token restore. | — | `campaigns-small-light.png`, `campaigns-large-light.png`, `targets-small-light.png`, `targets-large-light.png` | — |
+| D12 | Search Term Detail | Placeholder id only — no production term in loaded data. Screen itself rendered (identity + Add/Negate + section Retry + Dark). | P2 | `search-term-detail-standard-light.png` | Open a real term from Terms tab when data exists |
+| D13 | VoiceOver speech | **Closed 2026-08-23.** Combined Targets row spoken: `retirement gifts for men. Phrase keyword. High ACoS. Enabled.` Bid spoken independently. Switch stays a separate control. | — | `targets-voiceover-spoken.png` | — |
+| D14 | Campaigns sort sheet | Page sheet is mostly empty white under the 4-option control. | P2 | `campaigns-sort-sheet-standard-light.png` | Compact detent / menu — do not redesign lists |
+| D15 | 16e / Max / 17 | Expo “Open debugger to view warnings.” toast overlaps the tab bar. | P3 | Small/large/standard shots | Dev-only; ignore for store builds |
+| D16 | Testing artifact | `Alert` / `Modal` can persist across `simctl openurl` if left open. Not seen during normal in-app Done/back. | P2 | Budget editor left open across later URL opens | Testing-only; dismiss before deep links |
+| D17 | Books List 16e / Pro Max | Chrome + empty-range state rendered. Populated catalog needs the iPhone 17 admin/Nest SecureStore session; AsyncStorage copy is not enough. | P2 | `books-small-light.png`, `books-large-light.png` | QA-env only — do not change product |
+| D18 | Books List | Break-even bar only when `breakeven_acos` is in (0, 200). Not visible on the cisiny Aug 16–22 snapshot. | P2 | Spend-sorted cards show ACoS without a BE bar | DATA — do not invent BE in UI |
+| D19 | Books List | Title data sometimes includes “Paperback” / edition in the string. No separate format field on `TopBookRow`. | P3 | VoiceOver label on Finnland row | DATA/BACKEND GAP — do not group editions in UI |
+| D20 | Book Detail | Book rollup shows Orders `0` / “Spending without sales” while child campaigns show orders (17, 15) and ad sales. ACoS `92.9%` is still shown from book sales. | P2 | `book-detail-standard-light.png` vs campaign rows | DATA — do not change bookStatus or queries in UI QA |
+| D21 | Book Detail | Campaign rows from Nest can show state as `-` (`statusLabel` empty). | P3 | Campaign a11y “Doing Nothing manual phrase, -” | DATA/API field |
+| D22 | Book Detail | No charts on this screen. Trend is date-range + campaign list only. | P3 | Architecture | Do not invent charts |
+| D23 | Search Terms List | `fetchSearchTerms` has no Nest `filterUserId`. Admin QA session returns `[]` (More → Search Terms empty). | P2 | `search-terms-standard-light.png` | DATA/BACKEND GAP — do not change queries in UI QA |
+| D24 | Search Terms List | Sort page sheet is mostly empty under the 4-option control (same as Campaigns D14). | P3 | `search-terms-standard-sort-sheet.png` | Compact detent / menu later |
+| D25 | Rules List | `fetchOptimizationRules` uses logged-in `user_id`. Admin QA session returns `[]` (More → Rules empty). | P2 | `rules-standard-light.png` | DATA/BACKEND GAP — do not change queries in UI QA |
+| D26 | Rules List | Enable from the list has a confirm; disable does not. Product-correct; keep unless operators ask for disable confirm. | P3 | Code: `handleToggle` | Do not remove Enable friction |
+| D27 | Rules List | Row edit opens existing `/more/rule-create` (builder), not `/more/rule-detail/[id]` (that is an execution). | P3 | `rules-to-create.png` | Rule Detail workstream — do not unify now |
+| D28 | Rule Builder | Back discards unsaved create/edit with no confirm. | P2 | Code: no `beforeRemove` | Do not invent draft persistence unless operators ask |
+| D29 | Rule Builder | Cooldown exists in the engine and is not shown in the builder. Frequency copy says it is not a cooldown. | P2 | `rule-create.tsx` CHECK EVERY hint | Document only — do not invent a cooldown control |
+| D30 | Rule Builder | Unsupported action/entity combos alert “Edit on web”. | P2 | `Edit on web` Alert | Keep; do not expand engine surface here |
+| D31 | Rule Builder | Deep-link back title can be `(tabs)` (same D3). In-app from Rules shows **Rules**. | P2 | `rule-builder-create-standard-light.png` vs in-app edit shots | Expo Router `headerBackTitle` later |
+| D32 | Execution Detail | Admin QA session has no `rule_execution_history` rows. Entity before/after not device-rendered. | P2 | Rules “No runs yet”; fixture summary only | DATA — do not run a Rule for screenshots |
+| D33 | Execution Detail | `entities_checked` is not stored/passed on most runs. UI says “Evaluated count is not stored on this run.” | P2 | `rule-execution-standard-light.png` | RULE ENGINE / EXECUTION DATA GAP |
+| D34 | Execution Detail | Execution does not snapshot the Rule WHEN/THEN at run time. Current rule config is not shown (would be misleading after edits). | P2 | Architecture | AUDIT DATA GAP — do not invent |
+| D35 | Execution Detail | Timestamps render with `Date#toLocaleString` (device TZ). Stored values are treated as ISO instants. | P2 | `22 Aug 2026 at 14:32` from `12:32Z` | DATA/TIMEZONE GAP — do not reinterpret |
+| D36 | Execution Detail | Fetch entities has no page cap. FlatList is used; very large runs are untested. | P3 | `fetchRuleExecutionEntities` | Do not add search this pass |
+| D37 | Rule activity | `/more/rule-history` was not redesigned. **Resolved 2026-08-23** — list is now recent execution history. | P3 resolved | `rule-activity-*.png` | Keep execution vs Rule distinction |
+| D38 | Overview | Hero Ad spend uses `campaign_metrics` (can be `$0`) while “Spending without orders” uses `keyword_metrics` (can show spend). Different grains; do not force-match. | P1 data | `dashboard-standard-light.png` January 2026 | DATA — already in the data audit; do not invent a combined spend |
+| D39 | Overview | Simulator tab-bar taps can hit the Expo debugger toast (D15) instead of Overview/Books/Campaigns. | P3 QA | `dashboard-nav-*.png` | Dev-only; native tabs already PASS |
+| D40 | Overview 16e / Max | Populated Overview needs the iPhone 17 admin/Nest session (same as D17). 16e rendered the no-account gate. | P2 | `dashboard-small-light.png` | QA-env only |
+| D41 | Overview | Dead `enabled: false` queries and unused helpers remain in `index.tsx` for hook order. | P3 | Architecture | Cleanup pass — do not re-enable without IA |
+| D42 | More / Data coverage | More label was `Data map`. **Resolved 2026-08-23** — More now says **Data coverage** / “Amazon Ads and KDP availability”. | P2 resolved | `moreRoot.ts` + Data coverage shots | Keep the diagnostic name |
+| D43 | More | In-app push from More still shows back title `(tabs)` (same D3). Destinations open; Back works. | P2 | `more-nav-bid-bot.png` | Expo Router stack group title — not a More-only rewrite |
+| D44 | Accounts | Long email wraps mid-token at AXL (`test@gmail.co` / `m`). Meaning kept; first profile is below the fold at AXL. | P2 | `accounts-standard-largetype.png` | Theme/DT pass — do not invent a custom email truncate |
+| D45 | Accounts | KDP link/unlink pending is in-button copy only. No live destructive shot (view-as locked). | P3 | Architecture | Do not run Unlink on production profiles for screenshots |
+| D46 | Sync 16e | No Nest session: status request fails + no selected profiles. Chrome is truthful; populated Ads logs need the iPhone 17 session. | P2 | `sync-small-light.png` | QA-env only — same class as D17 / D40 |
+| D47 | Sync | Signed-in self shot had no `profile_sync_logs` (plan-gated). Latest-per-profile rows are implemented; not device-rendered this pass. | P2 | `sync-standard-light.png` | Do not run Sync Now for screenshots |
+| D48 | Sync | Status error repeats in the hero and a full RetryState. Honest; a bit tall on 16e. | P3 | `sync-small-light.png` | Compact inline Retry later |
+| D49 | Sync | Plan-gated Sync now stays visually blue at 50% opacity. Disabled is in the a11y state. | P3 | `sync-standard-light.png` | Shared button disabled treatment — not Sync-only |
+| D50 | Bid bot | This QA session had no pending recommendation rows (pending GET failed / Nest). Snapshot → proposed, Apply CTA, and rec VoiceOver were not device-rendered on a live card. | P2 | `bidbot-standard-light.png`, `bidbot-small-light.png` | Do not Run the engine for screenshots |
+| D51 | Bid bot | AXL (`accessibility-extra-extra-extra-large`) crowds banner + first status card. XXXL wraps and is the gate size. | P2 | AXL trial vs `bidbot-standard-largetype.png` | Theme/DT pass — do not shrink mutation text |
+| D52 | Bid bot | Apply/placement/Aggressive/Run-auto confirmation shots have a Metro LogBox behind the Alert (`SegmentFetcher` from a CDP `__r` probe). Copy is the production confirm. | P2 | `bidbot-*-confirmation.png` | Testing-only; Dismiss LogBox before future shots |
+| D53 | Bid bot | View-as Run stays visually blue while disabled (same class as D49). Banner + Alert explain the lock. | P3 | `bidbot-standard-light.png`, `bidbot-viewas-lock.png` | Shared button disabled treatment |
+| D54 | Settings | Notification and Ads footers are long at XXXL; first viewport still reaches Notifications. | P2 | `settings-standard-largetype.png` | Theme/DT pass — do not shrink honesty copy |
+| D55 | Settings | Guest lock and denied-permission “iPhone alerts Off” row are code-verified, not device-shot. | P3 | `settings.tsx` + settings-ui tests | Do not sign out the QA session for a guest shot |
+| D56 | Settings | `user_settings.mobileSettings` may still exist from older iPhone builds. Settings no longer reads or writes it. | P3 | Architecture | Do not reintroduce unused min/max editors |
+| D57 | Auth / Simulator | Software keyboard screenshot stayed flaky after I/O → Keyboard toggle. Fields use email/password types + `automaticallyAdjustKeyboardInsets`. | P2 | `auth-login-keyboard-standard-light.png` | QA-env only — do not replace secure fields |
+| D58 | Splash | Branded splash canvas stays `#FFFFFF` in Dark Mode. Session label is Checking session. | P2 | `SplashVideo.tsx` | Do not add an elaborate splash |
+| D59 | Login | “Login with Amazon” hides if Nest login URL is missing while logged out. Existing; not a new OAuth flow. | P2 | `login.tsx` `amazonLoginHidden` | Accounts / Amazon connect later |
+| D60 | Reset | `/auth/reset` is WEB-FINISH / WEAKLY REACHABLE. Authenticated users cannot stay on it (RouteGuard). | P2 | `auth-reset-standard-light.png` | Do not rebuild reset in UI QA |
+| D61 | Guest Overview | Preview demo empty state is “No Amazon account” / “Sign in to see your numbers.” More banner says Demo. Honest; not a sample-data claim. | P3 | `auth-guest-overview-small-light.png` | My Account / onboarding later |
+| D62 | Auth | No in-app Terms / Privacy links. Not invented this pass. | P2 | Signup / Welcome | Legal/compliance later if product requires |
+| D63 | Auth storage | Supabase session uses AsyncStorage; Nest JWTs use SecureStore. Passwords are not persisted. Observation only. | P2 / SECURITY note | `supabase.ts` + `rulesApi.ts` | Do not rewrite storage in a UI pass |
+| D64 | My Account | `/pricing-plans/current` / `/limits/status` are in the product map but not wired to iOS. Plan can only be metadata-only or Unavailable. | P2 / BACKEND-SOURCE GAP | `my-account-standard-light.png` | Add an authoritative read only in a separate data contract |
+| D65 | My Account | Real signed-in destructive Sign out was not confirmed on the populated QA session. Native confirm was canceled; guest exit and cleanup paths were exercised/tested. | P2 / QA | `my-account-signout-confirmation.png`, `my-account-guest-to-login-small.png` | Use a disposable independent account/session |
+| D66 | My Account billing | Web CTA reaches `dashboard.inteliads.io`, then asks for web sign-in when the browser has no session. | P3 | `my-account-billing-web.png` | Expected web-only handoff; do not add IAP |
+| D67 | `IOSSettingsRow` static rows | Shared static rows are disabled TouchableOpacity hosts; the live tree can expose `disabled: true` with role text (“dimmed” risk). | P2 / A11Y | My Account live tree | Shared primitive pass; not a My Account truth blocker |
+| D68 | My Account fields | No display name, trial, renewal, or authoritative status source exists on iOS, so those fields are omitted/unavailable. | P3 / DATA | Account truth matrix | Do not infer from account creation date or metadata |
+| D69 | Negatives admin view-as | No customer-scoped Nest endpoint is wired; direct Supabase RLS cannot truthfully read another customer. UI blocks instead of showing empty/stale rows. | P2 / BACKEND-SOURCE GAP | `negatives-viewas-blocked.png` | Add a read-only Nest contract before enabling customer browse |
+| D70 | Negatives pagination | Each type is newest-first and hard-limited to 500 with no pagination. UI says Latest 500 / shows a cap footer. | P2 | Query + presentation tests | Backend/data pass; do not claim all negatives |
+| D71 | Negatives origin | Tables expose no trustworthy manual/Search Terms/Rule origin. | P3 / DATA | Types + query | Do not invent source labels |
+| D72 | Negatives device data | Populated keyword/product rows use a runtime-only fixture because the signed-in QA session expired and customer RLS is blocked. | P2 / QA | `negatives-*.png` | Recheck with a safe self-scoped account containing real negatives |
+| D73 | Negatives context | Campaign/ad-group names are best-effort batched reads; level remains visible when names are unavailable. | P3 | Query + formatter tests | Keep neutral scope fallback; never expose raw IDs |
+| D74 | Negatives first row | Local search moves first row from old-layout estimate ~180pt to ~248pt; all three dense rows still fit on 16e. | P3 | `negatives-small-light.png` | Keep search; do not add another filter/sort row |
+| D75 | Data coverage locale | Currency uses the device locale decimal (QA sim shows `$124,50`). Same class as D8. | P2 | `data-map-standard-light.png` | Do not invent FX or force US punctuation |
+| D76 | Data coverage books | No safe unique KDP book / linked-ASIN count exists. Advertised products are Ads `product_ads`, not KDP books. | P3 / DATA | Current setup rows | Do not invent a book-link total |
+| D77 | Data coverage view-as | No customer-scoped aggregate. UI blocks. Same class as D69. | P2 / BACKEND-SOURCE GAP | `data-map-viewas-blocked.png` | Add a read-only Nest coverage contract before enabling |
+| D78 | Data coverage KDP freshness | Royalty date is the latest imported row date, not an import-job timestamp. | P2 / DATA | KDP source card | Do not say Updated just now |
+| D79 | Data coverage 16e populated | 16e kept a leftover customer view-as, so the small shot is the blocked empty state. Populated source cards were captured on iPhone 17 Auth QA. | P2 / QA | `data-map-small-light.png` | Recheck available layout on a self-scoped 16e |
+| D80 | Rule activity name | History shows the current joined Rule name. No immutable historical name snapshot exists. | P2 / DATA | `ruleActivity.ts` join | Do not invent a historical identity |
+| D81 | Rule activity timezone | `executed_at` ISO instants render device-local (same class as D35). | P2 | `22 Aug 2026 at 22:39` from a `20:39Z`-class instant | Do not claim Amazon-profile-local time |
+| D82 | Rule activity window | `fetchRuleExecutions` is newest-first and capped at 30. UI says Recent activity / latest 30. | P2 | Query + cap footer | Do not add pagination in UI QA |
+| D83 | Rule activity view-as | No customer-scoped execution history read exists. UI blocks. Same class as D69 / D77. | P2 / BACKEND-SOURCE GAP | `rule-activity-viewas-blocked.png` | Add a read-only Nest history contract before enabling |
+| D84 | Notifications timezone | Alert “today” uses `toDateString(new Date())` (device-local), not profile TZ. | P2 | `notifications.ts` | Do not reopen global TZ here |
+| D85 | Overspend currency | Body hardcodes `$` even when selected profiles are not USD. | P2 | overspend copy | Format with primaryCurrency in a later pass |
+| D86 | Book alerts cap | Only the current top 5 books are evaluated. | P2 | `fetchTopBooksRange` limit 5 | Do not scan the full catalog in a background task |
+| D87 | Remote push | Token upsert only. No Nest sender. Live APNs not verified. | P2 / BACKEND | `IOS_NOTIFICATION_INFRASTRUCTURE_AUDIT.md` | Provider + production entitlements |
+
+No unlisted P3 micro-spacing nits; D80–D83 are Rule activity follow-ups. D84–D87 are notification leftovers, not blockers.
+
+2026-08-23 final regression did not escalate any backlog row to P0/P1. `FINAL RELEASE-WIDE REGRESSION: PASS`.

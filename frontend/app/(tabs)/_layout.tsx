@@ -1,81 +1,89 @@
 import React from "react";
 import { Tabs } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
-import { Platform } from "react-native";
-import { BlurView } from "expo-blur";
-import { useTheme } from "@/src/lib/theme";
+import { View } from "react-native";
+import { FloatingTabBar } from "@/src/components/FloatingTabBar";
+import { InteliAdsIcon, type InteliAdsIconName } from "@/src/components/InteliAdsIcon";
+import { SFSymbol as TabSymbol } from "@/src/components/ios/Native";
+import { dashboard, useTheme } from "@/src/lib/theme";
+
+/** Kept for contract tests + a11y fallbacks; visual chrome is FloatingTabBar. */
+function ProductTabIcon({
+  name,
+  color,
+  focused,
+}: {
+  name: InteliAdsIconName;
+  color: string;
+  focused: boolean;
+}) {
+  return (
+    <View style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}>
+      <InteliAdsIcon
+        name={name}
+        size={dashboard.iconLg}
+        color={color}
+        selected={focused}
+        state={focused ? "selected" : "default"}
+      />
+    </View>
+  );
+}
 
 export default function TabsLayout() {
   const t = useTheme();
 
   return (
     <Tabs
+      tabBar={(props) => <FloatingTabBar {...(props as unknown as React.ComponentProps<typeof FloatingTabBar>)} />}
       screenOptions={{
         headerShown: false,
+        animation: "none",
+        lazy: true,
+        freezeOnBlur: true,
         tabBarActiveTintColor: t.colors.tone_primary,
         tabBarInactiveTintColor: t.colors.text_tertiary,
-        tabBarLabelStyle: { fontSize: 10, fontWeight: "600" },
-        tabBarStyle: {
-          position: "absolute",
-          backgroundColor:
-            Platform.OS === "ios" ? "transparent" : t.colors.background_secondary,
-          borderTopColor: t.colors.border,
-          borderTopWidth: 0.5,
-          height: Platform.OS === "ios" ? 84 : 60,
-          paddingTop: 6,
-        },
-        tabBarBackground: () =>
-          Platform.OS === "ios" ? (
-            <BlurView
-              intensity={80}
-              tint={t.scheme}
-              style={{ flex: 1 }}
-            />
-          ) : null,
+        tabBarStyle: { display: "none" },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: "Overview",
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "pie-chart" : "pie-chart-outline"} size={22} color={color} />
-          ),
+          tabBarAccessibilityLabel: "Overview",
+          tabBarIcon: ({ color, focused }) => <ProductTabIcon name="overview" color={color} focused={focused} />,
         }}
       />
       <Tabs.Screen
         name="campaigns"
         options={{
           title: "Campaigns",
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "megaphone" : "megaphone-outline"} size={22} color={color} />
-          ),
+          tabBarAccessibilityLabel: "Campaigns",
+          tabBarIcon: ({ color, focused }) => <ProductTabIcon name="campaigns" color={color} focused={focused} />,
         }}
       />
       <Tabs.Screen
         name="targeting"
         options={{
-          title: "Targeting",
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "locate" : "locate-outline"} size={22} color={color} />
-          ),
+          title: "Targets",
+          tabBarAccessibilityLabel: "Targets",
+          tabBarIcon: ({ color, focused }) => <ProductTabIcon name="targeting" color={color} focused={focused} />,
         }}
       />
       <Tabs.Screen
         name="products"
         options={{
-          title: "Products",
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "cube" : "cube-outline"} size={22} color={color} />
-          ),
+          title: "Books",
+          tabBarAccessibilityLabel: "Books",
+          tabBarIcon: ({ color, focused }) => <ProductTabIcon name="books" color={color} focused={focused} />,
         }}
       />
       <Tabs.Screen
         name="more"
         options={{
           title: "More",
+          tabBarAccessibilityLabel: "More",
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "menu" : "menu-outline"} size={22} color={color} />
+            <TabSymbol name={focused ? "ellipsis.circle.fill" : "ellipsis.circle"} size={dashboard.iconLg} color={color} />
           ),
         }}
       />

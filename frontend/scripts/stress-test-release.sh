@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Pre-TestFlight stress gate: unit tests + static audits for stale cache and fake data.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+OUT="${STRESS_OUT:-/tmp/inteliads-stress-$(date +%Y%m%d-%H%M%S)}"
+mkdir -p "$OUT"
+
+echo "==> Unit tests" | tee "$OUT/summary.txt"
+npm run test:unit 2>&1 | tee "$OUT/unit.log"
+tail -8 "$OUT/unit.log" | tee -a "$OUT/summary.txt"
+
+echo "==> Static release audits" | tee -a "$OUT/summary.txt"
+FAIL=0
+
+audit() {
+  local name="$1"
+  local pattern="$2"
+  local file="$3"
+  local mode="${4:-must}"
+  if [[ "$mode" == "must" ]]; then
+    if rg -q "$pattern" "$file"; then
+      echo "PASS $name" | tee -a "$OUT/summary.txt"
+    else
+      echo "FAIL $name (missing: $pattern in $file)" | tee -a "$OUT/summary.txt"
+      FAIL=1
+    fi
+  elif [[ "$mode" == "forbid" ]]; then
+    if rg -q "$pattern" "$file"; then
+      echo "FAIL $name (forbidden: $pattern in $file)" | tee -a "$OUT/summary.txt"
+      FAIL=1
+    else
+      echo "PASS $name" | tee -a "$OUT/summary.txt"
+    fi
+  fi
+}
+
+audit "usableCachedHomeSnapshot guard" "usableCachedHomeSnapshot" "app/(tabs)/index.tsx"
+audit "snapshot max age" "SNAPSHOT_MAX_AGE_MS" "src/lib/mobileHomeSnapshot.ts"
+audit "background sync wake" "installBackgroundSyncWakeHandlers" "src/lib/notifications.ts"
+audit "server test push" "requestServerTestPush" "src/lib/notifications.ts"
+audit "no fake zero on missing KDP" "publisherNetForPeriod" "app/(tabs)/index.tsx"
+audit "no hardcoded demo totals" "1234\\.56|9999\\.99" "app/(tabs)/index.tsx" "forbid"
+audit "displayMetric null on missing" "displayMetric" "src/lib/mobileHomeSnapshot.ts"
+audit "verified_zero not treated as missing" "verified_zero" "src/lib/mobileHomeSnapshot.ts"
+
+echo "==> Tab / targeting audits" | tee -a "$OUT/summary.txt"
+audit "campaigns list impr clicks" "label: \"Impr\"" "app/(tabs)/campaigns.tsx"
+audit "campaigns list no sales label" "label: \"Sales\"" "app/(tabs)/campaigns.tsx" "forbid"
+audit "targeting list impr" "label: \"Impr\"" "app/(tabs)/targeting.tsx"
+audit "targeting list no sales label" "label: \"Sales\"" "app/(tabs)/targeting.tsx" "forbid"
+audit "ad-groups list impr clicks" "label: \"Impr\"" "app/more/ad-groups.tsx"
+audit "ad-groups list no sales label" "label: \"Sales\"" "app/more/ad-groups.tsx" "forbid"
+audit "search-terms impr clicks" "label: \"Impr\"" "app/more/search-terms.tsx"
+audit "search-terms no sales label" "label: \"Sales\"" "app/more/search-terms.tsx" "forbid"
+audit "campaign detail no sales label" "label: \"Sales\"" "app/campaign/[id].tsx" "forbid"
+audit "entity detail no sales label" "label: \"Sales\"" "src/components/EntityDetail.tsx" "forbid"
+audit "book detail no ads sales label" "ADS_SALES_LABEL" "app/product/[asin].tsx" "forbid"
+audit "local new-order nest-only" "LOCAL_NEW_ORDER_AUTHORITY &&" "src/lib/notifications.ts"
+audit "targets period key sorted profiles" "sortedProfileIds" "app/(tabs)/targeting.tsx"
+audit "targets list cache" "LIST_PERIOD_QUERY_CACHE" "app/(tabs)/targeting.tsx"
+audit "targets period isolation" "noPeriodPlaceholder" "app/(tabs)/targeting.tsx"
+audit "targets bulk enable" "targeting-bulk-enable" "app/(tabs)/targeting.tsx"
+audit "targets bulk pct" "targeting-bulk-increase-pct" "app/(tabs)/targeting.tsx"
+audit "targets advanced bid max" "targeting-adv-bid-max" "app/(tabs)/targeting.tsx"
+audit "targets scroll segments" "targeting-segments" "app/(tabs)/targeting.tsx"
+audit "targets skip kdp enrich" "skipKdpEnrich" "app/(tabs)/targeting.tsx"
+audit "targets book filter" "fetchTargetingBookOptions" "app/(tabs)/targeting.tsx"
+audit "targets perf logs" "\\[inteliads:targeting\\]" "app/(tabs)/targeting.tsx"
+audit "targets timeout 60s" "TARGETING_QUERY_TIMEOUT_MS = 60_000" "src/lib/queryTimeout.ts"
+audit "no global keepPreviousData" "placeholderData:\\s*keepPreviousData" "app/_layout.tsx" "forbid"
+audit "campaigns same-scope warm only" "sameScopeWarmPlaceholder" "app/(tabs)/campaigns.tsx"
+audit "campaigns forbid previous placeholder" "placeholderData:\\s*\\(previous\\)" "app/(tabs)/campaigns.tsx" "forbid"
+audit "query cache v5" "inteliads.queryCache.v5" "src/lib/queryPersist.ts"
+audit "metric totals fast path" "chunkArray\\(ids, 80\\)" "src/lib/queries.ts"
+audit "metric totals no sort" "fetchMetricTotalsByEntity" "src/lib/queries.ts"
+audit "alert check cooldown" "ALERT_CHECK_COOLDOWN_MS" "src/lib/notifications.ts"
+audit "keyword metrics fail-closed" "Never paint lifetime totals or fake zeros" "src/lib/queries.ts"
+audit "keyword metrics enrichment warn" "keyword metrics enrichment failed" "src/lib/queries.ts"
+audit "multi-profile fair keyword quota" "fair per-profile quota" "src/lib/queries.ts"
+audit "targets fair share footer" "fair per-profile fetch" "app/(tabs)/targeting.tsx"
+audit "targets stale book clear" "Drop a remembered book filter" "app/(tabs)/targeting.tsx"
+audit "kdp helper nest user fallback" "resolveHelperUserId" "src/lib/rulesApi.ts"
+audit "kdp helper nest user importer" "resolveHelperUserId" "src/lib/kdp/importer.ts"
+audit "kdp signed-out activity" "15 min sync skipped · sign in required" "src/lib/kdp/importer.ts"
+audit "kdp interval tick AppContext" "runKdpIosHelperTick\\(\"interval\"" "src/contexts/AppContext.tsx"
+audit "kdp bg task 15 min" "minimumInterval: 15" "src/lib/notifications.ts"
+audit "kdp default source chrome-only" "DEFAULT_KDP_ROYALTY_SOURCE: KdpRoyaltySource = \"extension\"" "src/lib/kdp/source.ts"
+audit "bid honesty writing copy" "Writing to Amazon Ads" "app/(tabs)/targeting.tsx"
+audit "bid honesty not confirmed" "Not confirmed on Amazon yet" "app/(tabs)/targeting.tsx"
+audit "bid honesty Amazon reject alert" "Amazon rejected" "src/contexts/AppContext.tsx"
+audit "bid honesty failedItems" "failedItems" "src/lib/bulkOutbox.ts"
+audit "bid honesty previousBid revert" "revertOptimisticEntityBid" "src/lib/invalidateAds.ts"
+audit "bid honesty supersede baseline" "inheritedPreviousBid" "src/lib/bulkOutbox.ts"
+audit "bid honesty bulk queue revert" "Nothing was sent" "app/(tabs)/targeting.tsx"
+audit "campaigns fair share footer" "fair per-profile fetch" "app/(tabs)/campaigns.tsx"
+audit "overview swipe widgets" "OverviewSwipeWidget" "app/(tabs)/index.tsx"
+audit "ads engine overview chart" "home-ads-engine" "app/(tabs)/index.tsx"
+audit "kdp format royalties chart" "home-kdp-royalties-format" "app/(tabs)/index.tsx"
+audit "ads engine chart component" "export function AdsEngineChart" "src/components/Charts.tsx"
+audit "kdp format stack chart" "export function KdpFormatRoyaltiesChart" "src/components/Charts.tsx"
+audit "bid cooldown helper" "getEntityBidCooldown" "src/lib/bidCooldown.ts"
+audit "bulk outbox enable action" "action === \"enable\"" "src/lib/bulkOutbox.ts"
+audit "bulk outbox force cooldown" "forceCooldown: true" "src/lib/bulkOutbox.ts"
+audit "filter memory" "loadCampaignsFilterMemory" "src/lib/filterMemory.ts"
+audit "dual-source background refresh" "runDualSourceBackgroundRefresh" "src/lib/backgroundFinancialSync.ts"
+audit "books top royalties page" "Top royalties" "app/(tabs)/index.tsx"
+audit "overview books period scope" "activityDays: 0" "app/(tabs)/index.tsx"
+audit "books tab period scope" "activityDays: 0" "app/(tabs)/products.tsx"
+audit "overview widget fill cascade" "fillOverviewWidgetRows" "src/lib/overviewWidgets.ts"
+audit "overview swipe height measure" "overview-swipe-page" "src/components/OverviewSwipeWidget.tsx"
+audit "kdp keychain session" "AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY" "src/lib/kdp/session.ts"
+audit "kdp push wake tick" "runKdpIosHelperTick\\(\"push\"" "src/lib/notifications.ts"
+audit "settings kdp accounts row" "settings-kdp-accounts" "app/more/settings.tsx"
+audit "settings subscription row" "settings-subscription-status" "app/more/settings.tsx"
+audit "profile toggle nest-first" "persistUserAmazonProfileEnabled" "src/lib/mutations.ts"
+audit "optimistic entity state" "applyOptimisticEntityState" "src/lib/invalidateAds.ts"
+audit "entity state soft invalidate" "invalidateEntityStateQueries" "src/lib/invalidateAds.ts"
+audit "switch holds optimistic" "setOptimistic\\(next\\)" "src/components/Mutations.tsx"
+audit "server notification event map" "SERVER_NOTIFICATION_TYPES" "src/lib/notificationContract.ts"
+audit "push refresh bus" "subscribeNotificationRefresh" "src/lib/notifications.ts"
+audit "morning yesterday digest" "Yesterday's Amazon Ads" "src/lib/notificationDigest.ts"
+audit "today so far digest" "Today so far" "src/lib/notificationDigest.ts"
+audit "morning digest hour 8" "MORNING_DIGEST_HOUR = 8" "src/lib/notificationDigest.ts"
+
+echo "==> Ads metric label audits" | tee -a "$OUT/summary.txt"
+audit "ads lists use impr clicks not sales" 'label: "Impr"' "app/(tabs)/campaigns.tsx"
+audit "campaigns list clicks not sales" 'label: "Clicks"' "app/(tabs)/campaigns.tsx"
+audit "campaigns list forbid Sales label" 'label: "Sales"' "app/(tabs)/campaigns.tsx" "forbid"
+audit "targeting list impr" 'label: "Impr"' "app/(tabs)/targeting.tsx"
+audit "targeting list forbid Sales label" 'label: "Sales"' "app/(tabs)/targeting.tsx" "forbid"
+audit "ad-groups list impr" 'label: "Impr"' "app/more/ad-groups.tsx"
+audit "ad-groups list forbid Sales label" 'label: "Sales"' "app/more/ad-groups.tsx" "forbid"
+audit "search-terms list impr" 'label: "Impr"' "app/more/search-terms.tsx"
+audit "search-terms list forbid Sales label" 'label: "Sales"' "app/more/search-terms.tsx" "forbid"
+audit "campaign detail Outcome forbid Sales" 'label: "Sales"' "app/campaign/[id].tsx" "forbid"
+audit "entity detail Outcome forbid Sales" 'label: "Sales"' "src/components/EntityDetail.tsx" "forbid"
+
+echo "==> Result: OUT=$OUT" | tee -a "$OUT/summary.txt"
+if [[ "$FAIL" -ne 0 ]]; then
+  echo "STRESS GATE FAILED" | tee -a "$OUT/summary.txt"
+  exit 1
+fi
+echo "STRESS GATE PASSED" | tee -a "$OUT/summary.txt"

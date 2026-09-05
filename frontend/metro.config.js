@@ -19,6 +19,9 @@ config.cacheStores = [
 // // Alternative: use a more aggressive exclusion pattern
 // config.resolver.blacklistRE = /node_modules\/.*\/(android|ios|windows|macos|__tests__|\.git|.*\.android\.js|.*\.ios\.js)$/;
 
+// Bundle uppercase video extensions too (assetExts membership is case-sensitive)
+config.resolver.assetExts = Array.from(new Set([...config.resolver.assetExts, "mp4", "MP4", "mov", "MOV"]));
+
 // Reduce the number of workers to decrease resource usage
 config.maxWorkers = 2;
 

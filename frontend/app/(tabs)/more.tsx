@@ -1,135 +1,112 @@
 import React from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { TopBar } from "@/src/components/TopBar";
 import { useTheme } from "@/src/lib/theme";
+import { AppScreen, elevatedCardStyle } from "@/src/components/ScreenAmbient";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useApp } from "@/src/contexts/AppContext";
-
-const MENU: { key: string; icon: keyof typeof import("@expo/vector-icons/build/Ionicons").default.glyphMap; label: string; href: string; description: string }[] = [
-  { key: "ad-groups", icon: "layers-outline", label: "Ad Groups", href: "/more/ad-groups", description: "Manage ad groups across campaigns" },
-  { key: "negative-targeting", icon: "ban-outline", label: "Negative Targeting", href: "/more/negative-targeting", description: "Keywords & products to exclude" },
-  { key: "search-terms", icon: "search-outline", label: "Search Terms", href: "/more/search-terms", description: "What customers searched for" },
-  { key: "automation", icon: "flash-outline", label: "Automation", href: "/more/automation", description: "Rules and recent runs" },
-  { key: "accounts", icon: "business-outline", label: "Amazon Accounts", href: "/more/accounts", description: "Connected profiles & countries" },
-  { key: "settings", icon: "settings-outline", label: "Settings", href: "/more/settings", description: "Guardrails, budgets & preferences" },
-  { key: "account", icon: "person-outline", label: "Account", href: "/more/account", description: "Profile, plan & sign out" },
-];
+import { BrandIcon } from "@/src/components/Primitives";
+import { IOSGroupedSection, IOSSettingsRow, SFSymbol } from "@/src/components/ios/Native";
+import {
+  MORE_GROUPS,
+  moreAccountBannerAccessibilityLabel,
+  moreAccountBannerCaption,
+  moreRowAccessibilityLabel,
+} from "@/src/lib/moreRoot";
 
 export default function MoreScreen() {
   const t = useTheme();
+  const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user } = useAuth();
-  const { selectedProfiles } = useApp();
+  const { user, guestMode } = useAuth();
+  const { adminFilterUserId } = useApp();
+  const viewingCustomer = !!adminFilterUserId;
+  const email = user?.email ?? "Guest";
+  const bannerCaption = moreAccountBannerCaption({ guestMode, viewingCustomer });
+  const bannerLabel = moreAccountBannerAccessibilityLabel({ email, caption: bannerCaption });
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: t.colors.background_primary }} edges={["top"]}>
-      <TopBar title="More" showProfileSelector={false} showDateRange={false} />
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
-        {/* Account banner */}
-        <View
-          style={[
-            styles.banner,
-            { backgroundColor: t.colors.background_secondary, ...t.shadow.card },
-          ]}
+    <AppScreen>
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingTop: Math.max(insets.top, 8) }]}
+        contentInsetAdjustmentBehavior="never"
+      >        <TouchableOpacity
+          testID="menu-account-banner"
+          onPress={() => router.push("/more/account")}
+          activeOpacity={0.55}
+          accessibilityRole="button"
+          accessibilityLabel={bannerLabel}
+          style={[styles.banner, elevatedCardStyle(t)]}
         >
           <View
-            style={[
-              styles.avatar,
-              { backgroundColor: t.colors.tone_primary + "1F" },
-            ]}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={[styles.avatar, { backgroundColor: t.colors.tone_primary + "1F" }]}
           >
-            <Ionicons name="person" size={22} color={t.colors.tone_primary} />
+            <BrandIcon size={20} radius={6} />
           </View>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>
-              {user?.email ?? "Guest"}
-            </Text>
-            <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-              {selectedProfiles.length} active profile{selectedProfiles.length === 1 ? "" : "s"}
+          <View style={styles.bannerCopy}>
+            <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{email}</Text>
+            <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}>
+              {bannerCaption}
             </Text>
           </View>
-        </View>
+          <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+            <SFSymbol name="chevron.right" size={12} color={t.colors.text_tertiary} />
+          </View>
+        </TouchableOpacity>
 
-        {/* Menu items */}
-        <View style={{ marginTop: 12 }}>
-          {MENU.map((item, idx) => (
-            <TouchableOpacity
-              key={item.key}
-              testID={`menu-${item.key}`}
-              onPress={() => router.push(item.href as any)}
-              activeOpacity={0.7}
-              style={[
-                styles.menuRow,
-                {
-                  backgroundColor: t.colors.background_secondary,
-                  borderTopLeftRadius: idx === 0 ? 14 : 0,
-                  borderTopRightRadius: idx === 0 ? 14 : 0,
-                  borderBottomLeftRadius: idx === MENU.length - 1 ? 14 : 0,
-                  borderBottomRightRadius: idx === MENU.length - 1 ? 14 : 0,
-                  borderBottomColor: t.colors.separator,
-                  borderBottomWidth: idx === MENU.length - 1 ? 0 : StyleSheet.hairlineWidth,
-                },
-              ]}
-            >
-              <View
-                style={[
-                  styles.iconBubble,
-                  { backgroundColor: t.colors.tone_primary + "1F" },
-                ]}
-              >
-                <Ionicons name={item.icon} size={18} color={t.colors.tone_primary} />
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{item.label}</Text>
-                <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 1 }]} numberOfLines={1}>
-                  {item.description}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={t.colors.text_tertiary} />
-            </TouchableOpacity>
-          ))}
-        </View>
+        {MORE_GROUPS.map((group) => (
+          <IOSGroupedSection key={group.title} title={group.title}>
+            {group.items.map((item, index) => (
+              <IOSSettingsRow
+                key={item.key}
+                testID={`menu-${item.key}`}
+                label={item.label}
+                subtitle={item.subtitle}
+                accessibilityLabel={moreRowAccessibilityLabel(item.label, item.subtitle)}
+                symbol={item.symbol}
+                symbolColor={t.colors[item.color]}
+                last={index === group.items.length - 1}
+                onPress={() => router.push(item.href)}
+              />
+            ))}
+          </IOSGroupedSection>
+        ))}
 
         <Text
-          style={[
-            t.typography.caption2,
-            { color: t.colors.text_tertiary, textAlign: "center", marginTop: 18 },
-          ]}
+          style={[t.typography.footnote, { color: t.colors.text_secondary, textAlign: "center", marginTop: 28 }]}
         >
-          inteliads · v1.0 · Smart Clarity for Amazon Ads
+          InteliAds
         </Text>
       </ScrollView>
-    </SafeAreaView>
+    </AppScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    paddingBottom: 120,
+  },
   banner: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     flexDirection: "row",
     alignItems: "center",
-    padding: 14,
-    borderRadius: 14,
+  },
+  bannerCopy: {
+    flex: 1,
+    marginLeft: 10,
+    marginRight: 8,
   },
   avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  menuRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-  },
-  iconBubble: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
   },

@@ -1,0 +1,157 @@
+appId: io.inteliads.app
+---
+- launchApp
+- takeScreenshot: qa-00-launch
+
+- tapOn: Overview
+- takeScreenshot: qa-01-overview
+- tapOn:
+    text: Month
+    optional: true
+- tapOn:
+    text: Week
+    optional: true
+- tapOn:
+    text: Month
+    optional: true
+
+- tapOn: Campaigns
+- extendedWaitUntil:
+    visible: Campaigns
+    timeout: 20000
+- takeScreenshot: qa-02-campaigns
+- tapOn:
+    id: date-range-btn
+    optional: true
+- tapOn:
+    text: Done
+    optional: true
+- tapOn:
+    id: profile-selector-btn
+    optional: true
+- tapOn:
+    text: Done
+    optional: true
+- tapOn:
+    text: All
+    optional: true
+- tapOn:
+    text: Active
+    optional: true
+- tapOn:
+    text: Paused
+    optional: true
+- tapOn:
+    text: All
+    optional: true
+
+- tapOn: Targets
+- extendedWaitUntil:
+    visible: Targets
+    timeout: 30000
+- takeScreenshot: qa-03-targets
+- tapOn:
+    text: Keywords
+    optional: true
+- tapOn:
+    text: ASINs
+    optional: true
+- tapOn:
+    text: Auto
+    optional: true
+- tapOn:
+    text: Cat
+    optional: true
+- tapOn:
+    text: Place
+    optional: true
+- tapOn:
+    text: Keywords
+    optional: true
+- tapOn:
+    id: targeting-filter-btn
+    optional: true
+- tapOn:
+    id: targeting-filter-done
+    optional: true
+- tapOn:
+    id: date-range-btn
+    optional: true
+- tapOn:
+    text: Last 30 days
+    optional: true
+- tapOn:
+    text: This month
+    optional: true
+- tapOn:
+    text: Done
+    optional: true
+- takeScreenshot: qa-03b-targets-date
+- waitForAnimationToEnd:
+    timeout: 20000
+
+- tapOn: Books
+- extendedWaitUntil:
+    visible: Books
+    timeout: 25000
+- takeScreenshot: qa-04-books
+- tapOn:
+    text: Net
+    optional: true
+- tapOn:
+    text: Spend
+    optional: true
+- tapOn:
+    text: ACoS
+    optional: true
+- tapOn:
+    text: Orders
+    optional: true
+- tapOn:
+    text: Net
+    optional: true
+
+- tapOn: More
+- extendedWaitUntil:
+    visible: More
+    timeout: 15000
+- takeScreenshot: qa-05-more
+
+- scrollUntilVisible:
+    element: Settings
+    direction: DOWN
+    optional: true
+- tapOn:
+    text: Settings
+    optional: true
+- takeScreenshot: qa-06-settings
+- back
+- tapOn:
+    text: More
+    optional: true
+
+- scrollUntilVisible:
+    element: Bid Bot
+    direction: DOWN
+    optional: true
+- tapOn:
+    text: Bid Bot
+    optional: true
+- takeScreenshot: qa-07-bidbot
+- back
+- tapOn:
+    text: More
+    optional: true
+
+- scrollUntilVisible:
+    element: Accounts
+    direction: DOWN
+    optional: true
+- tapOn:
+    text: Accounts
+    optional: true
+- takeScreenshot: qa-08-accounts
+- back
+
+- tapOn: Overview
+- takeScreenshot: qa-09-overview-end

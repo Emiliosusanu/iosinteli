@@ -1,248 +1,192 @@
-import React, { useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  Alert,
-} from "react-native";
+import React, { useRef, useState } from "react";
+import { Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  AuthAmazon,
+  AuthDivider,
+  AuthEye,
+  AuthField,
+  AuthFieldGroup,
+  AuthLink,
+  AuthMark,
+  AuthMessage,
+  AuthPrimary,
+  AuthReveal,
+  AuthScreen,
+  AuthSwitch,
+  AuthTitle,
+} from "@/src/components/auth/AuthChrome";
 import { useAuth } from "@/src/contexts/AuthContext";
+import {
+  AMAZON_LOGIN_BUSY,
+  AMAZON_LOGIN_HINT,
+  AMAZON_LOGIN_LABEL,
+  GUEST_CTA,
+  GUEST_HINT,
+  LOGIN_EMAIL_DIVIDER,
+  LOGIN_SUBTITLE,
+  LOGIN_TITLE,
+  humanizeAuthError,
+} from "@/src/lib/authContract";
+import { startAmazonLogin } from "@/src/lib/amazonAuth";
 import { useTheme } from "@/src/lib/theme";
+import { storage } from "@/src/utils/storage";
+import { useQueryClient } from "@tanstack/react-query";
 
 export default function LoginScreen() {
   const t = useTheme();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { signIn, enterGuestMode } = useAuth();
+  const passwordRef = useRef<TextInput>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPwd, setShowPwd] = useState(false);
+  const [amazonBusy, setAmazonBusy] = useState(false);
+
+  React.useEffect(() => {
+    let active = true;
+    storage.getItem<boolean>("inteliads.onboarded", false).then((seen) => {
+      if (active && !seen) router.replace("/auth/welcome");
+    });
+    return () => {
+      active = false;
+    };
+  }, [router]);
 
   async function handleSignIn() {
+    if (loading) return;
     setError(null);
-    if (!email || !password) {
-      setError("Please enter your email and password.");
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !password) {
+      setError("Enter your email and password.");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setError("Enter a valid email address.");
       return;
     }
     setLoading(true);
-    const res = await signIn(email.trim(), password);
+    const res = await signIn(trimmedEmail, password);
     setLoading(false);
-    if (res.error) {
-      setError(res.error);
+    if (res.error) setError(humanizeAuthError(res.error, "login"));
+  }
+
+  async function handleAmazonLogin() {
+    if (amazonBusy || loading) return;
+    setError(null);
+    setAmazonBusy(true);
+    try {
+      const result = await startAmazonLogin();
+      if (result.ok) {
+        await queryClient.invalidateQueries({ queryKey: ["nest-token"] });
+        await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+        await queryClient.invalidateQueries({ queryKey: ["amazon-profiles"] });
+        return;
+      }
+      if (result.cancelled) return;
+      setError(result.error || "Couldn't finish Amazon sign-in.");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Couldn't finish Amazon sign-in.";
+      setError(humanizeAuthError(message, "login"));
+    } finally {
+      setAmazonBusy(false);
     }
   }
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: t.colors.background_primary }]}>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-      >
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <View style={styles.brand}>
-            <View
-              style={[
-                styles.logoBox,
-                { backgroundColor: t.colors.tone_primary, shadowColor: t.colors.tone_primary },
-              ]}
-            >
-              <Ionicons name="trending-up" size={28} color="#fff" />
-            </View>
-            <Text style={[t.typography.largeTitle, { color: t.colors.text_primary, marginTop: 20 }]}>
-              inteliads
-            </Text>
-            <Text
-              style={[
-                t.typography.subhead,
-                { color: t.colors.text_secondary, marginTop: 4, textAlign: "center" },
-              ]}
-            >
-              Smart Clarity for Amazon Ads
-            </Text>
-          </View>
+    <AuthScreen>
+      <AuthMark />
+      <AuthTitle title={LOGIN_TITLE} subtitle={LOGIN_SUBTITLE} align="center" />
 
-          <View style={[styles.card, { backgroundColor: t.colors.background_secondary }]}>
-            <Text style={[t.typography.title2, { color: t.colors.text_primary, marginBottom: 4 }]}>
-              Welcome back
-            </Text>
-            <Text style={[t.typography.subhead, { color: t.colors.text_secondary, marginBottom: 20 }]}>
-              Sign in to your inteliads account
-            </Text>
+      {error ? <AuthMessage kind="error" text={error} /> : null}
 
-            <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginBottom: 6 }]}>
-              EMAIL
-            </Text>
-            <View style={[styles.input, { backgroundColor: t.colors.background_tertiary }]}>
-              <Ionicons name="mail-outline" size={16} color={t.colors.text_secondary} />
-              <TextInput
-                testID="login-email-input"
-                style={[styles.inputText, { color: t.colors.text_primary }]}
-                placeholder="you@example.com"
-                placeholderTextColor={t.colors.text_tertiary}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="email-address"
-                value={email}
-                onChangeText={setEmail}
-                returnKeyType="next"
-              />
-            </View>
+      <AuthAmazon
+        testID="amazon-login-btn"
+        label={amazonBusy ? AMAZON_LOGIN_BUSY : AMAZON_LOGIN_LABEL}
+        onPress={() => void handleAmazonLogin()}
+        disabled={amazonBusy || loading}
+        busy={amazonBusy}
+        accessibilityHint={AMAZON_LOGIN_HINT}
+      />
 
-            <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 14, marginBottom: 6 }]}>
-              PASSWORD
-            </Text>
-            <View style={[styles.input, { backgroundColor: t.colors.background_tertiary }]}>
-              <Ionicons name="lock-closed-outline" size={16} color={t.colors.text_secondary} />
-              <TextInput
-                testID="login-password-input"
-                style={[styles.inputText, { color: t.colors.text_primary }]}
-                placeholder="Your password"
-                placeholderTextColor={t.colors.text_tertiary}
-                secureTextEntry={!showPwd}
-                value={password}
-                onChangeText={setPassword}
-                returnKeyType="go"
-                onSubmitEditing={handleSignIn}
-              />
-              <TouchableOpacity onPress={() => setShowPwd((v) => !v)} hitSlop={10}>
-                <Ionicons
-                  name={showPwd ? "eye-off-outline" : "eye-outline"}
-                  size={16}
-                  color={t.colors.text_secondary}
-                />
-              </TouchableOpacity>
-            </View>
+      <AuthDivider label={LOGIN_EMAIL_DIVIDER} />
 
-            {error && (
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  marginTop: 14,
-                  paddingHorizontal: 10,
-                  paddingVertical: 8,
-                  borderRadius: 8,
-                  backgroundColor: t.colors.tone_danger + "1A",
-                }}
-              >
-                <Ionicons name="alert-circle" size={14} color={t.colors.tone_danger} />
-                <Text style={[t.typography.footnote, { color: t.colors.tone_danger, marginLeft: 6, flex: 1 }]}>
-                  {error}
-                </Text>
-              </View>
-            )}
+      <AuthFieldGroup>
+        <AuthField
+          testID="login-email-input"
+          symbol="envelope"
+          placeholder="Email"
+          keyboardType="email-address"
+          autoComplete="username"
+          textContentType="username"
+          value={email}
+          onChangeText={setEmail}
+          returnKeyType="next"
+          blurOnSubmit={false}
+          onSubmitEditing={() => passwordRef.current?.focus()}
+          editable={!loading && !amazonBusy}
+        />
+        <AuthField
+          testID="login-password-input"
+          symbol="lock"
+          last
+          placeholder="Password"
+          autoComplete="password"
+          textContentType="password"
+          secureTextEntry={!showPwd}
+          value={password}
+          onChangeText={setPassword}
+          returnKeyType="go"
+          onSubmitEditing={() => void handleSignIn()}
+          inputRef={passwordRef}
+          editable={!loading && !amazonBusy}
+          trailing={<AuthEye on={showPwd} onPress={() => setShowPwd((v) => !v)} />}
+        />
+      </AuthFieldGroup>
 
-            <TouchableOpacity
-              testID="login-submit-btn"
-              activeOpacity={0.8}
-              disabled={loading}
-              onPress={handleSignIn}
-              style={[
-                styles.primaryBtn,
-                {
-                  backgroundColor: t.colors.tone_primary,
-                  opacity: loading ? 0.6 : 1,
-                  marginTop: 22,
-                },
-              ]}
-            >
-              <Text style={[t.typography.headline, { color: "#fff" }]}>
-                {loading ? "Signing in..." : "Sign in"}
-              </Text>
-            </TouchableOpacity>
+      <AuthLink
+        testID="forgot-password-link"
+        label="Forgot password?"
+        align="end"
+        onPress={() => router.push("/auth/forgot" as import("expo-router").Href)}
+      />
 
-            <View style={styles.footerRow}>
-              <Text style={[t.typography.footnote, { color: t.colors.text_secondary }]}>
-                Don&apos;t have an account?{" "}
-              </Text>
-              <TouchableOpacity testID="goto-signup-btn" onPress={() => router.push("/auth/signup")}>
-                <Text style={[t.typography.footnote, { color: t.colors.tone_primary, fontWeight: "600" }]}>
-                  Sign up
-                </Text>
-              </TouchableOpacity>
-            </View>
+      <AuthPrimary
+        testID="login-submit-btn"
+        label={loading ? "Signing in…" : "Sign in"}
+        onPress={() => void handleSignIn()}
+        disabled={loading || amazonBusy}
+        busy={loading}
+      />
 
-            <View style={[styles.divider, { backgroundColor: t.colors.separator }]} />
+      <AuthSwitch
+        prompt="No account?"
+        action="Create one"
+        testID="goto-signup-btn"
+        onPress={() => router.push("/auth/signup")}
+      />
 
-            <TouchableOpacity
-              testID="guest-mode-btn"
-              activeOpacity={0.7}
-              onPress={enterGuestMode}
-              style={[
-                styles.guestBtn,
-                { backgroundColor: t.colors.background_tertiary },
-              ]}
-            >
-              <Text style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600" }]}>
-                Continue as guest · Explore demo
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+      <View style={{ flex: 1, minHeight: 24 }} />
+
+      <AuthReveal delay={300}>
+        <TouchableOpacity
+          testID="guest-mode-btn"
+          onPress={enterGuestMode}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={GUEST_CTA}
+          accessibilityHint={GUEST_HINT}
+          style={{ alignSelf: "center", minHeight: 44, justifyContent: "center", paddingHorizontal: 16 }}
+        >
+          <Text style={[t.typography.footnote, { color: t.colors.text_secondary, textAlign: "center" }]}>{GUEST_CTA}</Text>
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary, textAlign: "center", marginTop: 2, lineHeight: undefined }]}>
+            {GUEST_HINT}
+          </Text>
+        </TouchableOpacity>
+      </AuthReveal>
+    </AuthScreen>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  content: { padding: 20, paddingTop: 40, flexGrow: 1 },
-  brand: { alignItems: "center", marginBottom: 28 },
-  logoBox: {
-    width: 64,
-    height: 64,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-  card: {
-    borderRadius: 22,
-    padding: 22,
-  },
-  input: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    height: 48,
-  },
-  inputText: {
-    flex: 1,
-    fontSize: 16,
-    paddingHorizontal: 8,
-  },
-  primaryBtn: {
-    height: 50,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  footerRow: {
-    flexDirection: "row",
-    justifyContent: "center",
-    marginTop: 18,
-  },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    marginTop: 20,
-    marginBottom: 16,
-  },
-  guestBtn: {
-    height: 44,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-});

@@ -33,7 +33,16 @@ yarn-error.*
 # local env files
 .env*.local
 
+# device stress tooling
+.venv-device/
+.tmp-stress-shots/
+
 # typescript
 *.tsbuildinfo
 
 app-example
+
+# Local secrets — never commit
+.env
+.env.*
+!.env.example
