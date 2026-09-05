@@ -654,7 +654,7 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
               <View style={styles.sheetHeader}>
                 <Text style={[t.typography.title3, { color: t.colors.text_primary }]}>Amazon Profiles</Text>
                 <TouchableOpacity onPress={selectAllProfiles} testID="select-all-profiles">
-                  <Text style={[t.typography.callout, { color: t.colors.tone_primary }]}>Select all {primaryCurrency}</Text>
+                  <Text style={[t.typography.callout, { color: t.colors.tone_primary }]}>Select all</Text>
                 </TouchableOpacity>
               </View>
               <View style={styles.filterRow}>

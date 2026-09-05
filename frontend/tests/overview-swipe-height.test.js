@@ -12,9 +12,17 @@ test("OverviewSwipeWidget pages in-place so nested scroll cannot clip rows", () 
   assert.match(swipe, /StaggerReveal/);
   assert.match(swipe, /GestureDetector/);
   assert.match(swipe, /activeOffsetX/);
+  assert.match(swipe, /pageHeader/);
+  assert.match(swipe, /blocksExternalGesture/);
   assert.doesNotMatch(swipe, /<FlatList/);
   assert.doesNotMatch(swipe, /<ScrollView/);
   assert.doesNotMatch(swipe, /pageHeights/);
+});
+
+test("Overview date page swipe lives outside chart plots", () => {
+  assert.match(home, /createOverviewPeriodPan/);
+  assert.match(home, /OverviewPeriodSwipeProvider/);
+  assert.match(home, /Swipe a day on the chart/);
 });
 
 test("Overview campaigns query keeps a wide fill pool and longer timeout", () => {

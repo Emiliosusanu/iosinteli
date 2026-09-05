@@ -16,10 +16,10 @@ import { getKdpRoyaltySource, setKdpRoyaltySource as persistKdpRoyaltySource } f
 import {
   NEST_DISABLED_VIEW_MESSAGE,
   NEST_DISABLED_VIEW_TITLE,
-  VIEW_CURRENCY_CONFLICT_TITLE,
+  displayCurrencyOfSelection,
+  planSelectAllEnabled,
   planSelectAllSameCurrency,
   planViewToggle,
-  viewCurrencyConflictMessage,
 } from "../lib/accountsUi";
 
 const STORAGE_KEYS = {
@@ -591,10 +591,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         (selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id)) &&
         selectableIds.has(profile.id),
     );
-    const selectedCurrency = validSelectedProfiles[0]?.currency_code ?? "USD";
-    const validSelectedIds = validSelectedProfiles
-      .filter((profile) => (profile.currency_code ?? "USD") === selectedCurrency)
-      .map((profile) => profile.id);
+    const validSelectedIds = validSelectedProfiles.map((profile) => profile.id);
     const dataBackedIds = profiles
       .filter((p) => (p.campaign_count ?? 0) > 0 || (p.kdp_account_count ?? 0) > 0)
       .map((p) => p.id);
@@ -603,10 +600,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       : dataBackedIds.length > 0
         ? dataBackedIds
         : profiles.map((profile) => profile.id);
-    const defaultCandidates = profiles.filter((profile) => defaultCandidateIds.includes(profile.id));
-    const defaultCurrency = defaultCandidates[0]?.currency_code ?? "USD";
-    const defaultIds = defaultCandidates
-      .filter((profile) => (profile.currency_code ?? "USD") === defaultCurrency)
+    const defaultIds = profiles
+      .filter((profile) => defaultCandidateIds.includes(profile.id))
       .map((profile) => profile.id);
     const nextIds = validSelectedIds.length > 0 ? validSelectedIds : defaultIds;
     const changed =
@@ -674,20 +669,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       if (plan.kind === "nest_disabled") {
         Alert.alert(NEST_DISABLED_VIEW_TITLE, NEST_DISABLED_VIEW_MESSAGE);
-        return;
       }
-
-      Alert.alert(
-        VIEW_CURRENCY_CONFLICT_TITLE,
-        viewCurrencyConflictMessage(plan.currentCurrency, plan.nextCurrency),
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: `Switch to ${plan.nextCurrency}`,
-            onPress: () => setSelectedProfileIds(plan.nextIdsIfSwitch),
-          },
-        ],
-      );
     },
     [profiles, selectedProfileIds, setSelectedProfileIds],
   );
@@ -695,17 +677,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const selectAllProfiles = useCallback(() => {
     const next =
       typeof planSelectAllSameCurrency === "function"
-        ? planSelectAllSameCurrency({ profiles, selectedProfileIds })
-        : profiles
-            .filter((profile) => profile.is_enabled !== false)
-            .filter((profile, _, list) => {
-              const currency =
-                list.find((row) => selectedProfileIds.includes(row.id) || selectedProfileIds.includes(row.profile_id))
-                  ?.currency_code ??
-                list[0]?.currency_code;
-              return (profile.currency_code ?? "USD") === (currency ?? "USD");
-            })
-            .map((profile) => profile.id);
+        ? planSelectAllEnabled({ profiles, selectedProfileIds })
+        : profiles.filter((profile) => profile.is_enabled !== false).map((profile) => profile.id);
     setSelectedProfileIds(next);
   }, [profiles, selectedProfileIds, setSelectedProfileIds]);
 
@@ -743,23 +716,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [profiles, selectedProfileIds],
   );
 
-  // Determine primary currency (most common amongst selected)
-  const primaryCurrency = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const p of selectedProfiles) {
-      const c = p.currency_code ?? "USD";
-      counts.set(c, (counts.get(c) ?? 0) + 1);
-    }
-    let max = 0;
-    let cur = "USD";
-    for (const [k, v] of counts.entries()) {
-      if (v > max) {
-        max = v;
-        cur = k;
-      }
-    }
-    return cur;
-  }, [selectedProfiles]);
+  const primaryCurrency = useMemo(
+    () => displayCurrencyOfSelection(profiles, selectedProfileIds),
+    [profiles, selectedProfileIds],
+  );
 
   const entityCooldownHours = useMemo(
     () => pickEntityCooldownHours(remoteSettings as Record<string, unknown> | undefined),

@@ -2,8 +2,8 @@
  * Which KDP / Royaltix marketplace totals the UI may show.
  *
  * "Active" means Nest-enabled / InteliAds-enabled profiles (Amazon Profiles
- * toggles) — not the header "in view" currency chips. View is single-currency
- * and must not decide the royalty marketplace.
+ * toggles) — not the header "in view" chips. Mixed Ads views keep USD when
+ * USD is present and must not decide the royalty marketplace.
  *
  * US KDP royalties already include every marketplace. Adding CA (or any other
  * country) on top of US double-counts. Mixed non-US countries have no honest

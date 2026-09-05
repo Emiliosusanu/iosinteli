@@ -96,11 +96,11 @@ test("Nest 403 country-limit message stays honest on enable failure", () => {
   assert.doesNotMatch(mutations, /Nest\/rules were unavailable \(known soft failure\)/);
 });
 
-test("TopBar view switch is not Nest enable; currency conflict is planned", () => {
+test("TopBar view switch is not Nest enable; mixed marketplaces stay selected", () => {
   assert.match(topBar, /viewStatusLabel|In view/);
   assert.match(topBar, /profile-view-toggle-/);
   assert.match(appContext, /planViewToggle/);
-  const conflict = planViewToggle({
+  const plan = planViewToggle({
     profileId: "ca",
     profiles: [
       {
@@ -134,5 +134,6 @@ test("TopBar view switch is not Nest enable; currency conflict is planned", () =
     ],
     selectedProfileIds: ["us"],
   });
-  assert.equal(conflict.kind, "currency_conflict");
+  assert.equal(plan.kind, "add");
+  if (plan.kind === "add") assert.deepEqual(plan.nextIds, ["us", "ca"]);
 });
