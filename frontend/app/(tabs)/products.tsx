@@ -27,7 +27,9 @@ import {
 } from "@/src/lib/kdpTitlePresentation";
 import { useApp } from "@/src/contexts/AppContext";
 import { useTheme, acosTone, toneColor, useReduceMotion } from "@/src/lib/theme";
-import { formatCurrency, formatPercent, formatInt } from "@/src/lib/format";
+import { formatCurrency, formatPercent, formatInt, parseDateOnly, toDateString } from "@/src/lib/format";
+import { useAuth } from "@/src/contexts/AuthContext";
+import { useKdpRoyaltySetupPrompt } from "@/src/hooks/useKdpRoyaltySetupPrompt";
 import { NET_ROYALTIES_LABEL, netRoyaltiesVoiceOver, resolveBookNet, bookNetIsKnown } from "@/src/lib/netRoyalties";
 import { buildBookColorMap, bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { TopBar } from "@/src/components/TopBar";
@@ -127,6 +129,13 @@ export default function ProductsScreen() {
   const router = useRouter();
   const reduceMotion = useReduceMotion();
   const { profiles, selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource } = useApp();
+  const { guestMode } = useAuth();
+  const yesterdayYmd = useMemo(() => {
+    const today = parseDateOnly(toDateString(new Date()));
+    today.setDate(today.getDate() - 1);
+    return toDateString(today);
+  }, []);
+  const royaltyScope = useMemo(() => selectKdpRoyaltyScope(profiles), [profiles]);
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
@@ -153,8 +162,8 @@ export default function ProductsScreen() {
 
   const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
   const royaltyProfiles = useMemo(
-    () => sortedProfileIds(selectKdpRoyaltyScope(profiles).profileIds),
-    [profiles],
+    () => sortedProfileIds(royaltyScope.profileIds),
+    [royaltyScope.profileIds],
   );
   const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", scopeProfiles, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency] as const;
   const overviewBooksKey = [
@@ -209,6 +218,15 @@ export default function ProductsScreen() {
     enabled: scopeProfiles.length > 0 && royaltyProfiles.length > 0 && !showBlockingSpinner && books.length === 0,
     ...LIST_PERIOD_QUERY_CACHE,
     meta: financialQueryMeta(),
+  });
+  const latestImportedYmd = periodRoyalties?.daily?.length
+    ? String(periodRoyalties.daily[periodRoyalties.daily.length - 1]?.date ?? "").slice(0, 10) || null
+    : null;
+  const royaltySetup = useKdpRoyaltySetupPrompt({
+    enabled: selectedProfileIds.length > 0 && !guestMode && !adminFilterUserId,
+    royaltyScopeReason: royaltyScope.reason,
+    latestImportedYmd,
+    yesterdayYmd,
   });
 
   const bookColorMap = useMemo(
@@ -383,7 +401,18 @@ export default function ProductsScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />
           }
           ItemSeparatorComponent={ItemSeparator}
-          ListEmptyComponent={<EmptyState productIcon="books" title={empty.title} subtitle={empty.subtitle} />}
+          ListEmptyComponent={
+            <EmptyState
+              productIcon="books"
+              title={empty.title}
+              subtitle={empty.subtitle}
+              action={
+                empty.actionLabel && !guestMode
+                  ? { label: empty.actionLabel, onPress: royaltySetup.openCollection }
+                  : undefined
+              }
+            />
+          }
           renderItem={({ item, index }) => (
             <ProductCard
               item={item}
@@ -425,7 +454,11 @@ const ProductCard = React.memo(function ProductCard({
   const kdpAvailable = bookKdpAvailable(item);
   const kdpReady = bookKdpReady(item);
   const hasBreakEven = hasAuthoritativeBreakEven(item.breakeven_acos);
-  const tone = adsReady ? acosTone(item.acos, hasBreakEven ? item.breakeven_acos : 30) : acosTone(0);
+  const tone = adsReady
+    ? hasBreakEven
+      ? acosTone(item.acos, item.breakeven_acos)
+      : "inactive"
+    : acosTone(0);
   const netPos = (() => {
     const net = resolveBookNet(item);
     return net != null && net >= 0;

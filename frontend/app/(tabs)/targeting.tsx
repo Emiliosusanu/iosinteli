@@ -161,6 +161,7 @@ function selectedCooldownSummary(
   segment: Segment,
   selectedIds: string[],
   rows: any[],
+  cooldownHours?: number,
 ): { count: number; labels: string[]; remainingHint: string } {
   const byId = new Map(rows.map((row) => [String(row.id), row]));
   const labels: string[] = [];
@@ -168,7 +169,7 @@ function selectedCooldownSummary(
   for (const id of selectedIds) {
     const row = byId.get(String(id)) as EntityBidCooldownFields | undefined;
     if (!row) continue;
-    const info = getEntityBidCooldown(row);
+    const info = getEntityBidCooldown(row, cooldownHours);
     if (!info.isInCooldown) continue;
     labels.push(rowDisplayName(segment, row));
     maxRemaining = Math.max(maxRemaining, info.remainingSeconds);
@@ -435,7 +436,7 @@ export default function TargetingScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const invalidateAds = useInvalidateAds();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours } = useApp();
   const { user, guestMode } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
   const writeGuard = { guestMode, viewAsOtherUser };
@@ -453,6 +454,7 @@ export default function TargetingScreen() {
     id: string;
     title: string;
     value: number;
+    forceCooldown?: boolean;
   } | null>(null);
   const [percentEditor, setPercentEditor] = useState<{
     id: string;
@@ -1105,27 +1107,26 @@ export default function TargetingScreen() {
       }
       const skipNote = skipNoteParts.length ? ` Skipped ${skipNoteParts.join("; ")}.` : "";
 
-      // Keywords + product targets: Nest durable job (survives app kill). Placement stays local.
-      if (kind === "keyword" || kind === "product_target") {
+      // Keywords: Nest /keywords/bulk/manual (async at 100+). Product targets
+      // have no Nest ID-list bulk route — device outbox drains in background.
+      if (kind === "keyword") {
         const built = buildNestBulkItemsFromInputs(inputs);
         if (!built) {
           throw new Error("Couldn't build Nest bulk payload.");
         }
         const submitted = await submitNestBulkManual({
-          entityKind: built.entityKind,
+          entityKind: "keyword",
           items: built.items,
-          requireActiveParents: stateFilter === "enabled",
         });
         const stamp = new Date().toISOString();
         await trackNestBulkJob({
           jobId: submitted.jobId,
-          entityKind: built.entityKind,
+          entityKind: "keyword",
           total: submitted.total,
           processed: submitted.syncResult ? submitted.total : 0,
           status: submitted.syncResult ? "completed" : "pending",
           revertItems: built.revertItems,
           items: built.items,
-          requireActiveParents: stateFilter === "enabled",
           createdAt: stamp,
           updatedAt: stamp,
           resultFailed: submitted.syncResult?.failed,
@@ -1357,7 +1358,7 @@ export default function TargetingScreen() {
       return;
     }
 
-    const cooldown = selectedCooldownSummary(segment, selectedIds, data);
+    const cooldown = selectedCooldownSummary(segment, selectedIds, data, entityCooldownHours);
     const run = () => void enqueueSelected("set_bid", { nextBids });
 
     const confirmLarge = (then: () => void) => {
@@ -1400,7 +1401,7 @@ export default function TargetingScreen() {
   const confirmPauseSelected = () => {
     if (!selectedIds.length) return;
     const run = () => void enqueueSelected("pause");
-    const cooldown = selectedCooldownSummary(segment, selectedIds, data);
+    const cooldown = selectedCooldownSummary(segment, selectedIds, data, entityCooldownHours);
     if (segment !== "placement" && cooldown.count > 0) {
       const preview = cooldown.labels.slice(0, 8).join("\n• ");
       const more =
@@ -1436,7 +1437,7 @@ export default function TargetingScreen() {
   const confirmEnableSelected = () => {
     if (!selectedIds.length) return;
     const run = () => void enqueueSelected("enable");
-    const cooldown = selectedCooldownSummary(segment, selectedIds, data);
+    const cooldown = selectedCooldownSummary(segment, selectedIds, data, entityCooldownHours);
     if (segment !== "placement" && cooldown.count > 0) {
       const preview = cooldown.labels.slice(0, 8).join("\n• ");
       const more =
@@ -1495,8 +1496,8 @@ export default function TargetingScreen() {
       : null;
   const advancedCount = countActiveAdvancedFilters(advanced);
   const cooldownSelected = useMemo(
-    () => selectedCooldownSummary(segment, selectedIds, data),
-    [segment, selectedIds, data],
+    () => selectedCooldownSummary(segment, selectedIds, data, entityCooldownHours),
+    [segment, selectedIds, data, entityCooldownHours],
   );
   const canBulkBid = segment !== "placement";
 
@@ -1721,9 +1722,7 @@ export default function TargetingScreen() {
                   void (async () => {
                     // Drop permanent not-found so Retry cannot loop forever on dead IDs.
                     await dismissNotFoundPermanentBulkFailures();
-                    const nestResult = await resubmitFailedNestBulkJobs({
-                      requireActiveParents: stateFilter === "enabled",
-                    });
+                    const nestResult = await resubmitFailedNestBulkJobs();
                     const nestRetried = nestResult.resubmitted;
                     const skippedStale = nestResult.skippedNotFound;
                     if (nestRetried === 0 && skippedStale > 0 && outboxFailed === 0) {
@@ -1855,13 +1854,14 @@ export default function TargetingScreen() {
                   t={t}
                   viewAsOtherUser={viewAsOtherUser}
                   onPress={onRowPress}
-                  onEditBid={() => {
+                  onEditBid={(opts) => {
                     if (blockIfCannotWriteAmazon(writeGuard)) return;
                     setMoneyEditor({
                       entity: "keyword",
                       id: item.id,
                       title: item.keyword_text ?? "Keyword bid",
                       value: baseBidForRow("keywords", item, defaultBidByAdGroupId) ?? 0.02,
+                      forceCooldown: opts?.forceCooldown === true,
                     });
                   }}
                   {...selectProps}
@@ -1897,13 +1897,14 @@ export default function TargetingScreen() {
                 t={t}
                 viewAsOtherUser={viewAsOtherUser}
                 onPress={onRowPress}
-                onEditBid={() => {
+                onEditBid={(opts) => {
                   if (blockIfCannotWriteAmazon(writeGuard)) return;
                   setMoneyEditor({
                     entity: "target",
                     id: item.id,
                     title: item.title || describeProductTarget(item.expression, item.expression_type).label,
                     value: baseBidForRow(segment, item, defaultBidByAdGroupId) ?? 0.02,
+                    forceCooldown: opts?.forceCooldown === true,
                   });
                 }}
                 {...selectProps}
@@ -2048,6 +2049,7 @@ export default function TargetingScreen() {
               entityId: moneyEditor.id,
               bid: next,
               previousBid,
+              forceCooldown: moneyEditor.forceCooldown === true,
             });
           } catch (error) {
             revertOptimisticEntityBid(queryClient, entityKind, moneyEditor.id, previousBid);
@@ -2233,8 +2235,11 @@ function FilterSheetFields({
         </TouchableOpacity>
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.filterSheetBody} keyboardShouldPersistTaps="handled">
-        <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginBottom: t.spacing.sm }]}>
+        <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginBottom: t.spacing.xs }]}>
           Book
+        </Text>
+        <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: t.spacing.sm }]}>
+          Each row is one ASIN. The same title can be a different edition or format.
         </Text>
         {bookOptions.length ? (
           <View style={{ marginBottom: t.spacing.sm }}>
@@ -2536,12 +2541,13 @@ function KeywordRow({
   t: any;
   viewAsOtherUser?: boolean;
   onPress: () => void;
-  onEditBid: () => void;
+  onEditBid: (opts?: { forceCooldown?: boolean }) => void;
   selectMode?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
 }) {
   const queryClient = useQueryClient();
+  const { entityCooldownHours } = useApp();
   const status = keywordStatus(item);
   const sales = Number(item.total_sales) || 0;
   const rowLabel = targetingSpeech([
@@ -2578,7 +2584,7 @@ function KeywordRow({
                   assertNotViewingAsOtherUser(viewAsOtherUser);
                   const previous = applyOptimisticEntityState(queryClient, "keyword", item.id, next);
                   try {
-                    await updateKeywordManual(item.id, { status: next ? "enabled" : "paused", forceCooldown: true });
+                    await updateKeywordManual(item.id, { status: next ? "enabled" : "paused" });
                     void invalidateEntityStateQueries(queryClient, "keyword");
                   } catch (error) {
                     revertOptimisticEntityState(queryClient, "keyword", item.id, previous);
@@ -2627,7 +2633,7 @@ function KeywordRow({
             {item.match_type ? (
               <Text style={[t.typography.caption2, { color: t.colors.text_secondary }]}>{item.match_type}</Text>
             ) : null}
-            {getEntityBidCooldown(item).isInCooldown ? (
+            {getEntityBidCooldown(item, entityCooldownHours).isInCooldown ? (
               <Text
                 testID={`targeting-cooldown-badge-${item.id}`}
                 style={[t.typography.caption2, { color: t.colors.tone_warning, fontWeight: "700" }]}
@@ -2661,12 +2667,13 @@ function ProductTargetRow({
   t: any;
   viewAsOtherUser?: boolean;
   onPress: () => void;
-  onEditBid: () => void;
+  onEditBid: (opts?: { forceCooldown?: boolean }) => void;
   selectMode?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
 }) {
   const queryClient = useQueryClient();
+  const { entityCooldownHours } = useApp();
   const target = describeProductTarget(item.expression, item.expression_type, item.resolved_expression);
   const displayTitle = productTargetHeading(item);
   const category = isCategoryTarget(item.expression, item.expression_type);
@@ -2707,7 +2714,7 @@ function ProductTargetRow({
                   assertNotViewingAsOtherUser(viewAsOtherUser);
                   const previous = applyOptimisticEntityState(queryClient, "product_target", item.id, next);
                   try {
-                    await updateProductTargetManual(item.id, { state: next ? "enabled" : "paused", forceCooldown: true });
+                    await updateProductTargetManual(item.id, { state: next ? "enabled" : "paused" });
                     void invalidateEntityStateQueries(queryClient, "product_target");
                   } catch (error) {
                     revertOptimisticEntityState(queryClient, "product_target", item.id, previous);
@@ -2772,7 +2779,7 @@ function ProductTargetRow({
                         ? `${target.label} · ${target.asin}`
                         : target.label}
                 </Text>
-                {getEntityBidCooldown(item).isInCooldown ? (
+                {getEntityBidCooldown(item, entityCooldownHours).isInCooldown ? (
                   <Text
                     testID={`targeting-cooldown-badge-${item.id}`}
                     style={[t.typography.caption2, { color: t.colors.tone_warning, fontWeight: "700" }]}
@@ -2822,7 +2829,8 @@ function PlacementRow({
       ? coverAsin
       : "No linked book";
   const placementLabel = String(item.placement_label || field);
-  const cooldown = getCampaignSettingsCooldown(item as EntityBidCooldownFields);
+  const { entityCooldownHours } = useApp();
+  const cooldown = getCampaignSettingsCooldown(item as EntityBidCooldownFields, entityCooldownHours);
   const fieldMeta = PLACEMENT_FIELDS.find((entry) => entry.key === field);
   return (
     <ListCard testID={`placement-row-${item.id}`} compact>

@@ -6,11 +6,15 @@ import {
   NOTIFICATION_EVENTS,
   NOTIFICATION_ROUTES,
   SERVER_NOTIFICATION_TYPES,
+  anyNotificationPrefEnabled,
   bookNeedsAttention,
   buildNotificationPayload,
   canNotifyBookToday,
+  canNotifyKdpStall,
+  clearKdpStallNotified,
   isSafeNotificationHref,
   markBookNotified,
+  markKdpStallNotified,
   newOrderDelta,
   normalizeNotificationEvent,
   notificationIdentifier,
@@ -37,14 +41,18 @@ const layout = readFileSync(new URL("../app/_layout.tsx", import.meta.url), "utf
 const auth = readFileSync(new URL("../src/contexts/AuthContext.tsx", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src/contexts/AppContext.tsx", import.meta.url), "utf8");
 
-const prefsOn = { newOrder: true, bookAttention: true, campaignSpend: true, dailyDigest: true, spendThreshold: 25 };
-const prefsOff = { newOrder: false, bookAttention: false, campaignSpend: false, spendThreshold: 25 };
+const prefsOn = { newOrder: true, bookAttention: true, campaignSpend: true, dailyDigest: true, kdpDataStale: true, spendThreshold: 25 };
+const prefsOff = { newOrder: false, bookAttention: false, campaignSpend: false, kdpDataStale: false, spendThreshold: 25 };
 
 test("disabled preferences do not schedule and threshold is used", () => {
   assert.equal(preferenceAllowsEvent(prefsOff, NOTIFICATION_EVENTS.newOrders), false);
   assert.equal(preferenceAllowsEvent(prefsOff, NOTIFICATION_EVENTS.bookAttention), false);
   assert.equal(preferenceAllowsEvent(prefsOff, NOTIFICATION_EVENTS.campaignOverspend), false);
   assert.equal(preferenceAllowsEvent(prefsOn, NOTIFICATION_EVENTS.newOrders), true);
+  assert.equal(preferenceAllowsEvent(prefsOn, NOTIFICATION_EVENTS.kdpDataStale), true);
+  assert.equal(preferenceAllowsEvent(prefsOff, NOTIFICATION_EVENTS.kdpDataStale), false);
+  assert.equal(anyNotificationPrefEnabled({ kdpDataStale: true }), true);
+  assert.equal(anyNotificationPrefEnabled(prefsOff), false);
   assert.equal(preferenceAllowsEvent(prefsOn, NOTIFICATION_EVENTS.periodCompare), true);
   assert.equal(preferenceAllowsEvent(prefsOff, NOTIFICATION_EVENTS.periodCompare), false);
   assert.equal(preferenceAllowsEvent({ campaignSpend: true }, NOTIFICATION_EVENTS.periodCompare), false);
@@ -71,6 +79,10 @@ test("routes book and campaign events, and rejects unsafe payloads", () => {
   assert.deepEqual(
     routeForNotification(buildNotificationPayload(NOTIFICATION_EVENTS.periodCompare, user), user),
     { href: NOTIFICATION_ROUTES.tabs, reason: NOTIFICATION_EVENTS.periodCompare },
+  );
+  assert.deepEqual(
+    routeForNotification(buildNotificationPayload(NOTIFICATION_EVENTS.kdpDataStale, user), user),
+    { href: NOTIFICATION_ROUTES.kdpSource, reason: NOTIFICATION_EVENTS.kdpDataStale },
   );
   assert.equal(routeForNotification(null, user).href, NOTIFICATION_ROUTES.tabs);
   assert.equal(
@@ -197,6 +209,12 @@ test("alert evaluation requires session and selected profiles, and skips view-as
   assert.equal(bookNeedsAttention({ sales: 10, acos: 40, breakeven_acos: 30 }), true);
   assert.equal(bookNeedsAttention({ sales: 10, acos: 31, breakeven_acos: 30 }), false);
   assert.equal(bookNeedsAttention({ sales: 0, acos: 90, breakeven_acos: 20 }), false);
+  assert.equal(bookNeedsAttention({ sales: 10, acos: 90, breakeven_acos: 208 }), false);
+  const stallState = rollAlertState({ kdpStallNotifiedAt: { acc1: 1 } }, "2026-09-05");
+  assert.equal(stallState.kdpStallNotifiedAt?.acc1, 1);
+  assert.equal(canNotifyKdpStall({ kdpStallNotifiedAt: { acc1: 1_000 } }, "acc1", 1_000 + 6 * 60 * 60 * 1000), true);
+  assert.equal(canNotifyKdpStall({ kdpStallNotifiedAt: { acc1: 1_000 } }, "acc1", 1_000 + 60 * 60 * 1000), false);
+  assert.equal(canNotifyKdpStall(clearKdpStallNotified(markKdpStallNotified({}, "acc1", 1_000), "acc1"), "acc1", 2_000), true);
 });
 
 test("token association and sign-out detach live in product code", () => {
@@ -232,6 +250,12 @@ test("token association and sign-out detach live in product code", () => {
   assert.match(app, /dailyDigest: true/);
   assert.match(app, /bookAttention: true/);
   assert.match(app, /campaignSpend: true/);
+  assert.match(app, /kdpDataStale: true/);
+  assert.match(notifications, /refreshOpenNestBulkJobs/);
+  assert.match(notifications, /loadScopedKdpFreshness/);
+  assert.match(notifications, /NOTIFICATION_EVENTS.kdpDataStale/);
+  assert.match(layout, /more\/notifications/);
+  assert.doesNotMatch(notifications, /kdpDataStale: !!prefs/);
   assert.match(app, /notificationsEnabledBundle/);
   assert.match(app, /coalesceNotificationPrefs/);
   assert.match(app, /dailyReport/);

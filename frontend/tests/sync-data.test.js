@@ -25,6 +25,15 @@ test("admin view-as cannot mutate sync and does not mix admin sessions", () => {
   assert.equal(canMutateSync({ userId: "seller", guestMode: true, adminFilterUserId: null }), false);
   assert.match(syncScreen, /viewingCustomer = !!adminFilterUserId/);
   assert.match(syncScreen, /canMutateSync/);
+  assert.match(
+    syncScreen,
+    /const syncNowDisabled =\s*\n\s*!canMutate \|\| inProgress \|\| syncBusy \|\| \(statusLoading && !statusQ\.isError\);/,
+  );
+  assert.doesNotMatch(
+    syncScreen.slice(syncScreen.indexOf("const syncNowDisabled ="), syncScreen.indexOf("return (")),
+    /hasSyncAccess/,
+  );
+  assert.match(syncScreen, /Sync now still tries/);
   assert.match(syncScreen, /SYNC_VIEWING_CUSTOMER_MESSAGE/);
   assert.match(syncScreen, /includeSessions: !viewingCustomer/);
   assert.equal(

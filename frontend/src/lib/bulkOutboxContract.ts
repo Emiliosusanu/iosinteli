@@ -29,6 +29,8 @@ export type BulkOutboxItem = {
   nextAttemptAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Nest cooldown override — only after Edit anyway. */
+  forceCooldown?: boolean;
 };
 
 export type BulkSelectionMemory = {
@@ -46,7 +48,95 @@ export type EnqueueBulkInput = {
   baseBid?: number | null;
   previousBid?: number | null;
   previousEnabled?: boolean | null;
+  forceCooldown?: boolean;
 };
+
+/** Nest cooldown is authoritative — only attach the flag after Edit anyway. */
+export function amazonManualWrite<T extends Record<string, unknown>>(
+  fields: T,
+  forceCooldown?: boolean,
+): Omit<T, "forceCooldown"> & { forceCooldown?: true } {
+  const { forceCooldown: _ignored, ...rest } = fields as T & { forceCooldown?: boolean };
+  if (forceCooldown === true) return { ...rest, forceCooldown: true };
+  return rest;
+}
+
+export function buildNestKeywordBulkBody(
+  items: Array<{
+    id: string;
+    status?: "enabled" | "paused";
+    bid?: number;
+    forceCooldown?: boolean;
+  }>,
+) {
+  return {
+    items: items.map((item) => {
+      const next: { id: string; status?: "enabled" | "paused"; bid?: number; forceCooldown?: true } = {
+        id: item.id,
+      };
+      if (item.status) next.status = item.status;
+      if (item.bid != null) next.bid = item.bid;
+      if (item.forceCooldown === true) next.forceCooldown = true;
+      return next;
+    }),
+  };
+}
+
+export function isLocalSyncNestJobId(jobId: string | null | undefined): boolean {
+  return String(jobId || "").startsWith("sync_");
+}
+
+/** 404/missing Nest bulk job — stop polling as if it were still running. */
+export function classifyNestBulkPollFailure(error: unknown): "gone" | "transient" {
+  const status =
+    error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+      ? (error as { status: number }).status
+      : null;
+  if (status === 404 || status === 400) return "gone";
+  if (status === 401 || status === 403 || status === 429) return "transient";
+  if (status != null && status >= 500) return "transient";
+  const msg = error instanceof Error ? error.message : String(error || "");
+  if (/not found|Cannot GET|no ID-list bulk route/i.test(msg)) return "gone";
+  return "transient";
+}
+
+export function nestManualItemsToOutboxInputs(
+  items: Array<{
+    id: string;
+    status?: "enabled" | "paused";
+    state?: "enabled" | "paused";
+    bid?: number;
+    forceCooldown?: boolean;
+  }>,
+  revertItems: Array<{
+    entityId: string;
+    action: BulkActionKind;
+    previousBid?: number | null;
+    previousEnabled?: boolean | null;
+  }> = [],
+): EnqueueBulkInput[] {
+  return items.map((item) => {
+    const revert = revertItems.find((row) => row.entityId === item.id);
+    const state = item.state || item.status;
+    if (state) {
+      return {
+        entityKind: "product_target" as const,
+        entityId: item.id,
+        action: state === "enabled" ? ("enable" as const) : ("pause" as const),
+        previousEnabled: revert?.previousEnabled,
+        forceCooldown: item.forceCooldown === true,
+      };
+    }
+    return {
+      entityKind: "product_target" as const,
+      entityId: item.id,
+      action: "set_bid" as const,
+      bid: item.bid,
+      previousBid: revert?.previousBid,
+      forceCooldown: item.forceCooldown === true,
+    };
+  });
+}
 
 export function clampAmazonBid(value: number): number {
   if (!Number.isFinite(value)) return AMAZON_MIN_BID;

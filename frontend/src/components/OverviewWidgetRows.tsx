@@ -4,6 +4,7 @@ import { BookCover } from "@/src/components/BookCover";
 import { SFSymbol } from "@/src/components/ios/Native";
 import type { AdGroupEnriched, PlacementMixRow, TopBookRow, TopCampaignRow } from "@/src/lib/queries";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
+import { hasAuthoritativeBreakEven } from "@/src/lib/kdpTitlePresentation";
 import { acosTone, dashboard, toneColor, type Theme } from "@/src/lib/theme";
 import { formatCurrency, formatInt, formatPercent } from "@/src/lib/format";
 import { resolveBookNet, bookNetIsKnown } from "@/src/lib/netRoyalties";
@@ -39,7 +40,7 @@ export function KeywordWidgetRow({
   onPress,
   isLast,
 }: {
-  row: { id: string; keyword_text?: string | null; total_spend?: number; total_acos?: number; total_orders?: number; total_sales?: number };
+  row: { id: string; keyword_text?: string | null; match_type?: string | null; total_spend?: number; total_acos?: number; total_orders?: number; total_sales?: number };
   currency: string;
   t: Theme;
   onPress: () => void;
@@ -48,10 +49,12 @@ export function KeywordWidgetRow({
   const spend = Number(row.total_spend) || 0;
   const acos = Number(row.total_acos) || 0;
   const hasSales = Number(row.total_sales) > 0;
+  const match = String(row.match_type || "").trim();
   return (
     <TouchableOpacity
       onPress={onPress}
       accessibilityRole="button"
+      accessibilityLabel={`${row.keyword_text || "Keyword"}${match ? `, ${match}` : ""}`}
       style={[ROW.row, rowBorder(t, !!isLast)]}
     >
       <View style={{ flex: 1, marginRight: t.spacing.md }}>
@@ -59,7 +62,7 @@ export function KeywordWidgetRow({
           {row.keyword_text || "Keyword"}
         </Text>
         <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}>
-          {formatCurrency(spend, currency, { compact: true })} spend
+          {formatCurrency(spend, currency, { compact: true })} spend{match ? ` · ${match}` : ""}
         </Text>
       </View>
       <Text
@@ -266,7 +269,7 @@ export function BookWidgetRow({
         <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 2 }]}>
           {bookKdpAvailable ? `${formatCurrency(book.royalties!, currency, { compact: true })} royalties · ` : ""}
           {formatCurrency(book.spend, currency, { compact: true })} spend ·{" "}
-          <Text style={{ color: book.sales > 0 ? toneColor(acosTone(book.acos, book.breakeven_acos), t.colors) : t.colors.text_secondary }}>
+          <Text style={{ color: book.sales > 0 ? toneColor(hasAuthoritativeBreakEven(book.breakeven_acos) ? acosTone(book.acos, book.breakeven_acos) : "inactive", t.colors) : t.colors.text_secondary }}>
             {book.sales > 0 ? formatPercent(book.acos) : "—"} ACoS
           </Text>
         </Text>

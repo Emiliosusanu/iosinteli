@@ -13,6 +13,9 @@ import {
   KDP_PROFIT_VALUE,
   KDP_SECTION_FOOTER,
   KDP_SOURCE_PICKER_FOOTER,
+  KDP_STALE_FOOTER,
+  KDP_STALE_LABEL,
+  NOTIFICATIONS_ROW_LABEL,
   SPEND_THRESHOLD_CAPTION,
   TEST_NOTIFICATION_BODY,
   TEST_NOTIFICATION_HINT,
@@ -26,6 +29,7 @@ import {
 } from "../src/lib/settingsContract.ts";
 
 const screen = readFileSync(new URL("../app/more/settings.tsx", import.meta.url), "utf8");
+const notificationsPage = readFileSync(new URL("../app/more/notifications.tsx", import.meta.url), "utf8");
 const notifications = readFileSync(new URL("../src/lib/notifications.ts", import.meta.url), "utf8");
 const bidBot = readFileSync(new URL("../app/more/bid-bot.tsx", import.meta.url), "utf8");
 
@@ -103,10 +107,17 @@ test("notification copy stays short without inventing schedule walls", () => {
   assert.equal(notificationSwitchAccessibilityLabel("New orders", true), "New orders, on");
   assert.equal(spendThresholdLabel(25), "Overspend vs daily budgets");
   assert.doesNotMatch(spendThresholdLabel(25), /optional daily budget|typed on this screen/);
-  assert.match(screen, /SPEND_THRESHOLD_CAPTION/);
+  assert.match(notificationsPage, /SPEND_THRESHOLD_CAPTION/);
   assert.equal(SPEND_THRESHOLD_CAPTION, "");
-  assert.match(screen, /notif-daily-digest/);
-  assert.match(screen, /notif-include-kdp-net/);
+  assert.match(screen, /settings-notifications/);
+  assert.match(screen, /more\/notifications/);
+  assert.equal(NOTIFICATIONS_ROW_LABEL, "Notifications");
+  assert.match(notificationsPage, /notif-daily-digest/);
+  assert.match(notificationsPage, /notif-include-kdp-net/);
+  assert.match(notificationsPage, /notif-kdp-data-stale/);
+  assert.equal(KDP_STALE_LABEL, "KDP data stalled");
+  assert.match(KDP_STALE_FOOTER, /Chrome extension or iPhone helper/);
+  assert.doesNotMatch(notificationsPage, /44%/);
 });
 
 test("KDP royalty source is switchable between Chrome and iPhone", () => {
@@ -129,8 +140,9 @@ test("KDP royalty source is switchable between Chrome and iPhone", () => {
 
 test("guest cannot look like a remote settings save, and view-as stays self-scoped", () => {
   assert.match(screen, /settings-guest/);
-  assert.match(screen, /alertsLocked/);
+  assert.match(notificationsPage, /alertsLocked/);
   assert.match(screen, /VIEWING_CUSTOMER_SETTINGS_NOTE/);
+  assert.match(notificationsPage, /VIEWING_CUSTOMER_SETTINGS_NOTE/);
   assert.match(VIEWING_CUSTOMER_SETTINGS_NOTE, /signed-in account/);
   assert.match(VIEWING_CUSTOMER_SETTINGS_NOTE, /not the customer/);
   assert.doesNotMatch(screen, /saveUserSetting|Settings saved|Syncing settings/);

@@ -67,7 +67,7 @@ test("requeue skips not-found permanent fails", () => {
 
 test("Nest durable bulk submit path is wired for keywords and product targets", () => {
   assert.match(targeting, /submitNestBulkManual/);
-  assert.match(targeting, /requireActiveParents: stateFilter === "enabled"/);
+  assert.match(targeting, /if \(kind === "keyword"\)/);
   assert.match(targeting, /queued on InteliAds servers/);
   assert.match(targeting, /finished on InteliAds servers/);
   assert.match(targeting, /if \(submitted\.syncResult\)/);
@@ -78,11 +78,10 @@ test("Nest durable bulk submit path is wired for keywords and product targets", 
   assert.match(targeting, /bulkFailureAlertTitle/);
   assert.match(targeting, /selected visible \/ filtered rows/);
   assert.match(targeting, /Pause anyway|Enable anyway/);
-  assert.match(nestJobs, /\/product-targets\/bulk\/manual/);
   assert.match(nestJobs, /\/keywords\/bulk\/manual/);
-  assert.match(nestJobs, /durable: true/);
+  assert.match(nestJobs, /buildNestKeywordBulkBody/);
+  assert.doesNotMatch(nestJobs, /durable: true/);
   assert.match(nestJobs, /buildNestBulkItemsFromInputs/);
-  assert.match(nestJobs, /requireActiveParents/);
   assert.match(nestJobs, /cancelNestBulkJob/);
   assert.match(nestJobs, /resubmitFailedNestBulkJobs/);
   assert.match(targeting, /resubmitFailedNestBulkJobs/);
@@ -228,4 +227,45 @@ test("Nest skipped rows revert optimistic paint and never claim a full send", ()
   assert.match(targeting, /succeeded: nestBulkConfirmedSucceeded\(submitted\.syncResult\)/);
   assert.doesNotMatch(targeting, /succeeded: submitted\.syncResult\.succeeded \?\? 0/);
   assert.doesNotMatch(targeting, /doneSucceeded \|\| submitted\.total/);
+});
+
+test("gone Nest bulk jobs stop counting as Writing", async () => {
+  const {
+    classifyNestBulkPollFailure,
+    isLocalSyncNestJobId,
+    nestManualItemsToOutboxInputs,
+  } = await import("../src/lib/bulkOutboxContract.ts");
+  assert.equal(classifyNestBulkPollFailure({ status: 404, message: "not found" }), "gone");
+  assert.equal(classifyNestBulkPollFailure({ status: 503, message: "timeout" }), "transient");
+  assert.equal(isLocalSyncNestJobId("sync_abc"), true);
+  assert.equal(isLocalSyncNestJobId("job_123"), false);
+  assert.deepEqual(
+    nestManualItemsToOutboxInputs([{ id: "t1", state: "paused" }], [{ entityId: "t1", action: "pause", previousEnabled: true }]),
+    [
+      {
+        entityKind: "product_target",
+        entityId: "t1",
+        action: "pause",
+        previousEnabled: true,
+        forceCooldown: false,
+      },
+    ],
+  );
+  assert.match(nestJobs, /settleOrphanProductTargetJob/);
+  assert.match(nestJobs, /classifyNestBulkPollFailure/);
+});
+
+test("keyword bulk body matches Nest DTO and cooldown is opt-in", async () => {
+  const { amazonManualWrite, buildNestKeywordBulkBody } = await import("../src/lib/bulkOutboxContract.ts");
+  assert.deepEqual(buildNestKeywordBulkBody([{ id: "k1", bid: 0.5 }]), {
+    items: [{ id: "k1", bid: 0.5 }],
+  });
+  assert.deepEqual(buildNestKeywordBulkBody([{ id: "k1", status: "paused", forceCooldown: true }]), {
+    items: [{ id: "k1", status: "paused", forceCooldown: true }],
+  });
+  assert.deepEqual(amazonManualWrite({ bid: 0.4 }, false), { bid: 0.4 });
+  assert.deepEqual(amazonManualWrite({ bid: 0.4, forceCooldown: false }, false), { bid: 0.4 });
+  assert.deepEqual(amazonManualWrite({ bid: 0.4 }, true), { bid: 0.4, forceCooldown: true });
+  assert.match(nestJobs, /buildNestKeywordBulkBody/);
+  assert.doesNotMatch(nestJobs, /forceCooldown: true,/);
 });

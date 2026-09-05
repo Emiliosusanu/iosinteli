@@ -18,6 +18,7 @@ import { formatCurrency } from "@/src/lib/format";
 import {
   cooldownAlertMessage,
   getEntityBidCooldown,
+  type CooldownOverridePress,
   type EntityBidCooldownFields,
   type EntityBidCooldownInfo,
 } from "@/src/lib/bidCooldown";
@@ -274,6 +275,12 @@ export function BidBudgetEditor({
   const [draft, setDraft] = useState(String(value || ""));
   const [saving, setSaving] = useState(false);
   const usedNativePrompt = React.useRef(false);
+  const saveWhileOpen = React.useRef(onSave);
+  const closeWhileOpen = React.useRef(onClose);
+  if (visible) {
+    saveWhileOpen.current = onSave;
+    closeWhileOpen.current = onClose;
+  }
 
   const [forceSheet, setForceSheet] = useState(false);
 
@@ -293,7 +300,7 @@ export function BidBudgetEditor({
       } else if (viewAsOtherUser) {
         alertViewAsWriteBlocked();
       }
-      onClose();
+      closeWhileOpen.current();
       return;
     }
     if (usedNativePrompt.current) return;
@@ -309,13 +316,14 @@ export function BidBudgetEditor({
       max,
       onCancel: () => {
         usedNativePrompt.current = false;
-        onClose();
+        closeWhileOpen.current();
       },
       onSave: (next) => {
         // Close first so the seller can edit the next bid immediately.
-        // Amazon writes continue via the caller's outbox / network path.
+        // Keep saveWhileOpen from the last visible render — onClose nulls parent
+        // editor state and must not drop this write.
         usedNativePrompt.current = false;
-        onClose();
+        closeWhileOpen.current();
         void (async () => {
           assertCanWriteAmazon({ guestMode, viewAsOtherUser });
           let resolved = next;
@@ -328,7 +336,7 @@ export function BidBudgetEditor({
             resolved = sanitized;
             if (confirmLargeChange && !(await confirmLargeBidChange(value, resolved))) return;
           }
-          await onSave(resolved);
+          await saveWhileOpen.current(resolved);
         })().catch((error) => alertMutationError(error));
       },
     });
@@ -371,11 +379,11 @@ export function BidBudgetEditor({
     }
     if (kind === "money" && confirmLargeChange && !(await confirmLargeBidChange(value, next))) return;
     setSaving(false);
-    onClose();
+    closeWhileOpen.current();
     void Promise.resolve()
       .then(() => {
         assertCanWriteAmazon({ guestMode, viewAsOtherUser });
-        return onSave(next);
+        return saveWhileOpen.current(next);
       })
       .catch((error) => alertMutationError(error));
   };
@@ -435,7 +443,7 @@ export function MutationTap({
 }: {
   label: string;
   value: string;
-  onPress: () => void;
+  onPress: CooldownOverridePress;
   testID?: string;
   compact?: boolean;
   /** Precomputed cooldown (preferred). */
@@ -444,7 +452,8 @@ export function MutationTap({
   cooldownRow?: EntityBidCooldownFields | null;
 }) {
   const t = useTheme();
-  const info = cooldown ?? (cooldownRow ? getEntityBidCooldown(cooldownRow) : null);
+  const { entityCooldownHours } = useApp();
+  const info = cooldown ?? (cooldownRow ? getEntityBidCooldown(cooldownRow, entityCooldownHours) : null);
   const locked = Boolean(info?.isInCooldown);
   const valueColor = locked ? t.colors.tone_warning : compact ? t.colors.text_primary : t.colors.text_secondary;
 
@@ -452,7 +461,7 @@ export function MutationTap({
     if (locked && info) {
       Alert.alert("Cooldown", cooldownAlertMessage(info), [
         { text: "Cancel", style: "cancel" },
-        { text: "Edit anyway", style: "destructive", onPress },
+        { text: "Edit anyway", style: "destructive", onPress: () => onPress({ forceCooldown: true }) },
       ]);
       return;
     }

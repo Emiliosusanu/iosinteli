@@ -178,6 +178,7 @@ export async function enqueueBulkAmazonWrites(inputs: EnqueueBulkInput[]): Promi
       baseBid: input.baseBid ?? null,
       previousBid: inherited ?? input.previousBid ?? null,
       previousEnabled: input.previousEnabled ?? null,
+      forceCooldown: input.forceCooldown === true,
       status: "pending",
       attempts: 0,
       lastError: null,
@@ -197,6 +198,7 @@ export async function enqueueEntityBidWrite(opts: {
   entityId: string;
   bid: number;
   previousBid?: number | null;
+  forceCooldown?: boolean;
 }): Promise<{ jobId: string; count: number }> {
   return enqueueBulkAmazonWrites([
     {
@@ -205,6 +207,7 @@ export async function enqueueEntityBidWrite(opts: {
       action: "set_bid",
       bid: clampAmazonBid(opts.bid),
       previousBid: opts.previousBid ?? null,
+      forceCooldown: opts.forceCooldown === true,
     },
   ]);
 }
@@ -232,14 +235,15 @@ export type DrainResult = {
 };
 
 async function applyItem(item: BulkOutboxItem): Promise<void> {
+  const forceCooldown = item.forceCooldown === true;
   if (item.action === "pause" || item.action === "enable") {
     const state = item.action === "enable" ? "enabled" : "paused";
     if (item.entityKind === "keyword") {
-      await updateKeywordManual(item.entityId, { status: state, forceCooldown: true });
+      await updateKeywordManual(item.entityId, { status: state, forceCooldown });
       return;
     }
     if (item.entityKind === "product_target") {
-      await updateProductTargetManual(item.entityId, { state, forceCooldown: true });
+      await updateProductTargetManual(item.entityId, { state, forceCooldown });
       return;
     }
     await updateCampaignState(item.entityId, state);
@@ -252,11 +256,11 @@ async function applyItem(item: BulkOutboxItem): Promise<void> {
     }
     const next = clampAmazonBid(Number(item.bid));
     if (item.entityKind === "keyword") {
-      await updateKeywordManual(item.entityId, { bid: next, forceCooldown: true });
+      await updateKeywordManual(item.entityId, { bid: next, forceCooldown });
       return;
     }
     if (item.entityKind === "product_target") {
-      await updateProductTargetManual(item.entityId, { bid: next, forceCooldown: true });
+      await updateProductTargetManual(item.entityId, { bid: next, forceCooldown });
       return;
     }
     throw new NestApiError("Campaigns do not support dollar bid edits here.", 400);
@@ -268,11 +272,11 @@ async function applyItem(item: BulkOutboxItem): Promise<void> {
   }
   const next = clampAmazonBid(Number(item.baseBid) + delta);
   if (item.entityKind === "keyword") {
-    await updateKeywordManual(item.entityId, { bid: next, forceCooldown: true });
+    await updateKeywordManual(item.entityId, { bid: next, forceCooldown });
     return;
   }
   if (item.entityKind === "product_target") {
-    await updateProductTargetManual(item.entityId, { bid: next, forceCooldown: true });
+    await updateProductTargetManual(item.entityId, { bid: next, forceCooldown });
     return;
   }
   throw new NestApiError("Campaigns do not support dollar bid bulk edits.", 400);

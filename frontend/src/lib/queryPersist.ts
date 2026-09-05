@@ -65,6 +65,8 @@ const PERSISTED_QUERY_KEYS = new Set([
   "targeting-placements-v2",
   "targeting-keywords",
   "targeting-products",
+  "ads-engine-keywords-daily",
+  "ads-engine-search-terms-daily",
   "targeting-adgroup-default-bids",
   "targeting-book-options-v2",
   FINANCIAL_QUERY_ROOTS.topBooks,

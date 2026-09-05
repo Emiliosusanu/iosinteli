@@ -6,6 +6,7 @@ import {
   ADS_SALES_LABEL,
   KDP_ROYALTIES_LABEL,
   NET_ROYALTIES_CAPTION,
+  GROSS_ROYALTIES_LABEL,
   NET_ROYALTIES_LABEL,
   netRoyalties,
   netRoyaltiesKnown,
@@ -49,6 +50,7 @@ test("ads sales cannot become the net royalties input", () => {
   assert.equal(netRoyalties({ kdpRoyalties: 100, adsSpend: 30, adsSales: 500 }), 70);
   assert.notEqual(netRoyalties({ kdpRoyalties: 100, adsSpend: 30, adsSales: 500 }), 500 - 30);
   assert.equal(NET_ROYALTIES_LABEL, "Net Royalties");
+  assert.equal(GROSS_ROYALTIES_LABEL, "Gross");
   assert.match(NET_ROYALTIES_CAPTION, /KDP royalties minus Amazon Ads spend/);
   assert.equal(KDP_ROYALTIES_LABEL, "KDP royalties");
   assert.equal(ADS_SALES_LABEL, "Amazon Ads sales");
@@ -67,6 +69,7 @@ test("VoiceOver names the three money domains", () => {
 });
 
 test("live publisher-net surfaces use the contract helper and label", () => {
+  assert.match(home, /GROSS_ROYALTIES_LABEL/);
   assert.match(home, /NET_ROYALTIES_LABEL/);
   assert.match(home, /netRoyaltiesVoiceOver/);
   assert.match(books, /NET_ROYALTIES_LABEL/);

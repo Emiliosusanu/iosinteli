@@ -1,18 +1,17 @@
 import React, { useState } from "react";
 import { View, Text, ScrollView, Linking, Alert, type TextStyle } from "react-native";
-import Slider from "@react-native-community/slider";
 import { type Href, useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { SubScreen } from "@/src/components/SubScreen";
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useTheme } from "@/src/lib/theme";
-import { sendTestNotification } from "@/src/lib/notifications";
 import {
   ACCOUNT_BILLING_URL,
   accountSubscriptionPresentation,
 } from "@/src/lib/accountContract";
 import { useCurrentUserPlan } from "@/src/hooks/useCurrentUserPlan";
+import { anyNotificationPrefEnabled } from "@/src/lib/notificationContract";
 import {
   ACCOUNT_SECTION_TITLE,
   ADS_SECTION_FOOTER,
@@ -20,8 +19,6 @@ import {
   APPEARANCE_VALUE,
   BID_BOT_ROW_LABEL,
   BID_BOT_ROW_SUBTITLE,
-  DAILY_DIGEST_FOOTER,
-  DAILY_DIGEST_LABEL,
   GUEST_SETTINGS_NOTE,
   IPHONE_ALERTS_LABEL,
   IPHONE_ALERTS_OFF,
@@ -33,18 +30,13 @@ import {
   KDP_PROFIT_LABEL,
   KDP_SECTION_FOOTER,
   MANAGE_BILLING_ROW_LABEL,
+  NOTIFICATIONS_ROW_LABEL,
   PLAN_ROW_LABEL,
-  SPEND_THRESHOLD_CAPTION,
   SUBSCRIPTION_ROW_LABEL,
-  TEST_NOTIFICATION_HINT,
   VIEWING_CUSTOMER_SETTINGS_NOTE,
   notificationFooter,
-  notificationSwitchAccessibilityLabel,
-  spendThresholdAccessibilityLabel,
-  spendThresholdLabel,
-  testNotificationLabel,
 } from "@/src/lib/settingsContract";
-import { IOSGroupedSection, IOSSettingsRow, IOSSwitchRow } from "@/src/components/ios/Native";
+import { IOSGroupedSection, IOSSettingsRow } from "@/src/components/ios/Native";
 import { isIosHelperEnabled, kdpRoyaltySourceValueLabel } from "@/src/lib/kdp/source";
 
 function growType(style: TextStyle): TextStyle {
@@ -59,7 +51,7 @@ export default function SettingsScreen() {
   const t = useTheme();
   const router = useRouter();
   const { guestMode, user } = useAuth();
-  const { notifications, setNotifications, notificationRuntime, adminFilterUserId, kdpRoyaltySource } = useApp();
+  const { notifications, notificationRuntime, adminFilterUserId, kdpRoyaltySource } = useApp();
   const kdpSourceValue = kdpRoyaltySourceValueLabel(kdpRoyaltySource);
   const helperOn = isIosHelperEnabled(kdpRoyaltySource);
   const currentPlanQ = useCurrentUserPlan();
@@ -69,31 +61,12 @@ export default function SettingsScreen() {
     userMetadata: user?.user_metadata,
     appMetadata: user?.app_metadata,
   });
-  const [testStatus, setTestStatus] = useState<"idle" | "sending" | "sent" | "server" | "blocked">("idle");
   const [billingBusy, setBillingBusy] = useState(false);
 
   const viewingCustomer = !!adminFilterUserId;
-  const alertsLocked = guestMode;
-  const anyAlertOn =
-    notifications.newOrder ||
-    notifications.bookAttention ||
-    notifications.campaignSpend ||
-    notifications.dailyDigest;
+  const anyAlertOn = anyNotificationPrefEnabled(notifications);
   const permissionDenied = notificationRuntime.permission === "denied";
-  const testRowStatus = guestMode ? "guest" : testStatus;
   const subscriptionFooter = subscription.footer;
-
-  const handleTestNotification = async () => {
-    if (guestMode) return;
-    if (testStatus === "blocked" || permissionDenied) {
-      void Linking.openSettings();
-      return;
-    }
-    setTestStatus("sending");
-    const result = await sendTestNotification(user?.id);
-    setTestStatus(result === "server" ? "server" : result === "local" ? "sent" : "blocked");
-    setTimeout(() => setTestStatus("idle"), 4000);
-  };
 
   const openBilling = async () => {
     if (guestMode || billingBusy) return;
@@ -155,108 +128,16 @@ export default function SettingsScreen() {
                 accessibilityLabel={`${IPHONE_ALERTS_LABEL}. ${IPHONE_ALERTS_OFF}. ${IPHONE_ALERTS_SUBTITLE}`}
               />
             ) : null}
-            <IOSSwitchRow
-              label="Daily performance updates"
-              symbol="chart.bar"
-              symbolColor={t.colors.tone_primary}
-              value={notifications.dailyDigest}
-              disabled={alertsLocked}
-              onChange={(v) => setNotifications({ ...notifications, dailyDigest: v })}
-              testID="notif-daily-digest"
-              accessibilityLabel={notificationSwitchAccessibilityLabel(
-                DAILY_DIGEST_LABEL,
-                notifications.dailyDigest,
-              )}
-              accessibilityHint={DAILY_DIGEST_FOOTER}
-            />
-            <IOSSwitchRow
-              label="Include KDP net in alerts"
-              symbol="dollarsign.circle"
-              symbolColor={t.colors.tone_good}
-              value={notifications.includeKdpNet}
-              disabled={alertsLocked || !notifications.dailyDigest && !notifications.newOrder && !notifications.bookAttention && !notifications.campaignSpend}
-              onChange={(v) => setNotifications({ ...notifications, includeKdpNet: v })}
-              testID="notif-include-kdp-net"
-              accessibilityLabel={notificationSwitchAccessibilityLabel("Include KDP net in alerts", notifications.includeKdpNet)}
-            />
-            <IOSSwitchRow
-              label="New orders"
-              symbol="cart"
-              symbolColor={t.colors.tone_good}
-              value={notifications.newOrder}
-              disabled={alertsLocked}
-              onChange={(v) => setNotifications({ ...notifications, newOrder: v })}
-              testID="notif-new-order"
-              accessibilityLabel={notificationSwitchAccessibilityLabel("New orders", notifications.newOrder)}
-            />
-            <IOSSwitchRow
-              label="Book needs attention"
-              symbol="book"
-              symbolColor={t.colors.tone_warning}
-              value={notifications.bookAttention}
-              disabled={alertsLocked}
-              onChange={(v) => setNotifications({ ...notifications, bookAttention: v })}
-              testID="notif-book-attention"
-              accessibilityLabel={notificationSwitchAccessibilityLabel("Book needs attention", notifications.bookAttention)}
-            />
-            <IOSSwitchRow
-              label="Campaign overspending"
-              symbol="chart.line.uptrend.xyaxis"
-              symbolColor={t.colors.tone_danger}
-              value={notifications.campaignSpend}
-              disabled={alertsLocked}
-              onChange={(v) => setNotifications({ ...notifications, campaignSpend: v })}
-              testID="notif-campaign-spend"
-              accessibilityLabel={notificationSwitchAccessibilityLabel("Campaign overspending", notifications.campaignSpend)}
-            />
-            {notifications.campaignSpend ? (
-              <View
-                accessible
-                accessibilityRole="adjustable"
-                accessibilityLabel={spendThresholdAccessibilityLabel(notifications.spendThreshold)}
-                accessibilityValue={{ text: `${notifications.spendThreshold} percent` }}
-                style={{ paddingHorizontal: 16, paddingBottom: 12 }}
-              >
-                <Text style={[growType(t.typography.footnote), { color: t.colors.text_secondary, marginTop: 8 }]}>
-                  {spendThresholdLabel(notifications.spendThreshold)}
-                </Text>
-                <Slider
-                  testID="notif-spend-threshold-slider"
-                  minimumValue={5}
-                  maximumValue={100}
-                  step={5}
-                  value={notifications.spendThreshold}
-                  disabled={alertsLocked}
-                  onValueChange={(v) => setNotifications({ ...notifications, spendThreshold: v })}
-                  minimumTrackTintColor={t.colors.tone_danger}
-                  maximumTrackTintColor={t.colors.background_tertiary}
-                />
-                {SPEND_THRESHOLD_CAPTION ? (
-                  <Text style={[growType(t.typography.caption1), { color: t.colors.text_tertiary }]}>
-                    {SPEND_THRESHOLD_CAPTION}
-                  </Text>
-                ) : null}
-              </View>
-            ) : null}
             <IOSSettingsRow
-              testID="notif-send-test"
-              label={testNotificationLabel(testRowStatus)}
-              symbol={testStatus === "sent" || testStatus === "server" ? "checkmark.circle.fill" : testStatus === "blocked" || permissionDenied ? "exclamationmark.triangle.fill" : "bell"}
-              symbolColor={
-                testStatus === "sent" || testStatus === "server"
-                  ? t.colors.tone_good
-                  : testStatus === "blocked" || permissionDenied
-                    ? t.colors.tone_danger
-                    : t.colors.tone_primary
-              }
+              testID="settings-notifications"
+              label={NOTIFICATIONS_ROW_LABEL}
+              subtitle={guestMode ? GUEST_SETTINGS_NOTE : anyAlertOn ? "Alerts on" : "Turn an alert on"}
+              symbol="bell"
+              symbolColor={t.colors.tone_primary}
               last
-              accessibilityLabel={testNotificationLabel(testRowStatus)}
-              accessibilityHint={guestMode ? undefined : TEST_NOTIFICATION_HINT}
-              onPress={
-                guestMode || testStatus === "sending"
-                  ? undefined
-                  : handleTestNotification
-              }
+              onPress={() => router.push("/more/notifications" as Href)}
+              accessibilityLabel={NOTIFICATIONS_ROW_LABEL}
+              accessibilityHint="Opens notification alerts, including KDP ingest stalls."
             />
           </IOSGroupedSection>
         </View>

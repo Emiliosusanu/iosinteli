@@ -126,7 +126,7 @@ export default function CampaignsScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const reduceMotion = useReduceMotion();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours } = useApp();
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const { user, guestMode } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
@@ -443,7 +443,7 @@ export default function CampaignsScreen() {
             const campaignColor = colorKey ? fallbackBookColor(colorKey) : t.colors.tone_primary;
             const verdict = campaignVerdict(item);
             const strategy = biddingStrategyLabel(item.bidding_strategy);
-            const settingsCooldown = getCampaignSettingsCooldown(item);
+            const settingsCooldown = getCampaignSettingsCooldown(item, entityCooldownHours);
             const marketplaceCountries = countriesForSponsoredCampaign(marketplaceIndex, item);
             return (
               <AnimatedCard

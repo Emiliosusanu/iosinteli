@@ -21,11 +21,6 @@ export async function resolveLockedPhoneKdpWakeMode(
     pendingNativeKind = null;
   }
 
-  // Silent push is always a short recent wake (Royaltix ~25s budget).
-  if (fallbackReason === "push" && !pendingNativeKind) {
-    return "recent";
-  }
-
   try {
     const [state, deferred] = await Promise.all([loadHelperSyncState(), loadHelperDeferredDays()]);
     return resolveBackgroundKdpWakeMode({

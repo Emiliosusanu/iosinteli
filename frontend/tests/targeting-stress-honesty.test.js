@@ -233,7 +233,7 @@ test("bulk bid stress: visible Bid ±, outbox drain, cooldown names, Placement g
   assert.match(targeting, /Not confirmed on Amazon yet/);
   assert.match(targeting, /drainBulkOutbox/);
   assert.match(outbox, /inteliads\.bulkOutbox\.v1/);
-  assert.match(outbox, /forceCooldown: true/);
+  assert.match(outbox, /item.forceCooldown === true/);
   assert.match(outbox, /failed_permanent/);
 
   // Behavioral clamp + delta math used by bulk apply

@@ -594,6 +594,60 @@ type AdsEngineDailyPoint = {
   impressions: number;
 };
 
+export type AdsEngineFunnelRange = {
+  daily: AdsEngineDailyPoint[];
+  entityCount: number;
+};
+
+/** search_terms inherit profile via campaigns — no amazon_profile_id column. */
+async function fetchAdsEngineEntityIds(
+  profileIds: string[],
+  entityTable: "keywords" | "search_terms",
+): Promise<string[]> {
+  if (entityTable === "keywords") {
+    const { data, error } = await supabase
+      .from("keywords")
+      .select("id")
+      .in("amazon_profile_id", profileIds)
+      .order("total_spend", { ascending: false })
+      .limit(ADS_ENGINE_ENTITY_CAP);
+    if (error) throw error;
+    return (data ?? []).map((row) => String(row.id));
+  }
+
+  const { data: campaigns, error: campErr } = await supabase
+    .from("campaigns")
+    .select("id")
+    .in("amazon_profile_id", profileIds);
+  if (campErr) throw campErr;
+  const campaignIds = uniqueStrings((campaigns ?? []).map((row: { id?: string }) => row.id));
+  if (!campaignIds.length) return [];
+
+  const ranked: Array<{ id: string; spend: number }> = [];
+  for (const chunk of chunkArray(campaignIds, 300)) {
+    const { data, error } = await supabase
+      .from("search_terms")
+      .select("id, total_spend")
+      .in("campaign_id", chunk)
+      .order("total_spend", { ascending: false })
+      .limit(ADS_ENGINE_ENTITY_CAP);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      ranked.push({ id: String(row.id), spend: Number(row.total_spend) || 0 });
+    }
+  }
+  ranked.sort((a, b) => b.spend - a.spend);
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const row of ranked) {
+    if (!row.id || seen.has(row.id)) continue;
+    seen.add(row.id);
+    ids.push(row.id);
+    if (ids.length >= ADS_ENGINE_ENTITY_CAP) break;
+  }
+  return ids;
+}
+
 async function fetchEntityDailyAggregateForProfiles(
   profileIds: string[],
   start: string,
@@ -603,18 +657,10 @@ async function fetchEntityDailyAggregateForProfiles(
     metricsTable: "keyword_metrics" | "search_term_metrics";
     entityColumn: "keyword_id" | "search_term_id";
   },
-): Promise<AdsEngineDailyPoint[]> {
-  if (!profileIds.length || !start || !end) return [];
-  const entities = await fetchAllPages<{ id: string }>((from, to) =>
-    supabase
-      .from(opts.entityTable)
-      .select("id")
-      .in("amazon_profile_id", profileIds)
-      .order("total_spend", { ascending: false })
-      .range(from, to),
-  );
-  const ids = entities.map((row) => row.id).slice(0, ADS_ENGINE_ENTITY_CAP);
-  if (!ids.length) return [];
+): Promise<AdsEngineFunnelRange> {
+  if (!profileIds.length || !start || !end) return { daily: [], entityCount: 0 };
+  const ids = await fetchAdsEngineEntityIds(profileIds, opts.entityTable);
+  if (!ids.length) return { daily: [], entityCount: 0 };
 
   const rows: CampaignMetric[] = [];
   for (const chunk of chunkArray(ids, 80)) {
@@ -646,7 +692,7 @@ async function fetchEntityDailyAggregateForProfiles(
       });
     }
   }
-  return aggregateDailyMetrics(rows);
+  return { daily: aggregateDailyMetrics(rows), entityCount: ids.length };
 }
 
 /** Top keywords by spend — daily funnel for Ads Engine Keywords page. */
@@ -654,16 +700,12 @@ export async function fetchKeywordDailyAggregate(
   profileIds: string[],
   start: string,
   end: string,
-): Promise<AdsEngineDailyPoint[]> {
-  try {
-    return await fetchEntityDailyAggregateForProfiles(profileIds, start, end, {
-      entityTable: "keywords",
-      metricsTable: "keyword_metrics",
-      entityColumn: "keyword_id",
-    });
-  } catch {
-    return [];
-  }
+): Promise<AdsEngineFunnelRange> {
+  return fetchEntityDailyAggregateForProfiles(profileIds, start, end, {
+    entityTable: "keywords",
+    metricsTable: "keyword_metrics",
+    entityColumn: "keyword_id",
+  });
 }
 
 /** Top search terms by spend — daily funnel for Ads Engine Search terms page. */
@@ -671,16 +713,12 @@ export async function fetchSearchTermDailyAggregate(
   profileIds: string[],
   start: string,
   end: string,
-): Promise<AdsEngineDailyPoint[]> {
-  try {
-    return await fetchEntityDailyAggregateForProfiles(profileIds, start, end, {
-      entityTable: "search_terms",
-      metricsTable: "search_term_metrics",
-      entityColumn: "search_term_id",
-    });
-  } catch {
-    return [];
-  }
+): Promise<AdsEngineFunnelRange> {
+  return fetchEntityDailyAggregateForProfiles(profileIds, start, end, {
+    entityTable: "search_terms",
+    metricsTable: "search_term_metrics",
+    entityColumn: "search_term_id",
+  });
 }
 
 function ruleAppliesToProfiles(rule: Pick<OptimizationRule, "amazon_profile_ids">, profileIds?: string[]): boolean {

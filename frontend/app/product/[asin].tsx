@@ -307,7 +307,9 @@ function BookHeader({
   const resolvedNet = book ? resolveBookNet(book) : null;
   const netPos = resolvedNet != null && resolvedNet >= 0;
   const bookTone = book
-    ? acosTone(book.acos, hasBreakEven ? book.breakeven_acos : 30)
+    ? hasBreakEven
+      ? acosTone(book.acos, book.breakeven_acos)
+      : "inactive"
     : acosTone(adsAcos);
   const acosOver = !!book && isOverBreakEven(book.acos, book.breakeven_acos);
   const showTraffic = adsTotals.impressions > 0 || adsTotals.clicks > 0;

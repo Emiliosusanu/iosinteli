@@ -213,6 +213,7 @@ export default function RootLayout() {
                     <Stack.Screen name="target/[id]" options={{ headerShown: false, presentation: "card" }} />
                     <Stack.Screen name="search-term/[id]" options={{ headerShown: false, presentation: "card" }} />
                     <Stack.Screen name="more/settings" />
+                    <Stack.Screen name="more/notifications" />
                     <Stack.Screen name="more/automation" />
                     <Stack.Screen name="more/rule-create" />
                     <Stack.Screen name="more/accounts" />

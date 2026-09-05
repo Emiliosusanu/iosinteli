@@ -13,6 +13,7 @@ import {
   stampMobileHomeSource,
   type MobileHomeCacheScope,
 } from "./mobileHomeSnapshot";
+import { adsProfileIdsForSelection, mergeBackgroundScope, parseSelectedProfileIds } from "./notificationScope";
 
 export const BACKGROUND_REFRESH_COOLDOWN_MS = 15 * 60_000;
 export const ADS_SYNC_TRIGGER_COOLDOWN_MS = 30 * 60_000;
@@ -42,23 +43,24 @@ async function writeLastRun(key: string): Promise<void> {
   await storage.setItem(key, String(Date.now()));
 }
 
-/** Scope for background work — prefers last Home scope, falls back to saved profile IDs. */
+/** Scope for background work — live header selection, then last Home snapshot. */
 export async function resolveBackgroundScope(): Promise<MobileHomeCacheScope | null> {
-  const fromHome = await loadLastMobileHomeScope();
-  if (fromHome?.userId && fromHome.profileIds.length > 0) return fromHome;
-
+  const fromHome = await loadLastMobileHomeScope().catch(() => null);
+  let sessionUserId: string | null = null;
   try {
     const {
       data: { session },
     } = await supabase.auth.getSession();
-    const userId = session?.user?.id;
-    if (!userId) return null;
-    const profileIds = await storage.getItem<string[]>(PROFILES_KEY, []);
-    if (!Array.isArray(profileIds) || profileIds.length === 0) return null;
-    return { userId, viewAs: null, profileIds, currency: null };
+    sessionUserId = session?.user?.id ?? null;
   } catch {
-    return null;
+    sessionUserId = null;
   }
+  const selectedIds = parseSelectedProfileIds(await storage.getItem(PROFILES_KEY, ""));
+  return mergeBackgroundScope({
+    selectedIds,
+    lastHome: fromHome,
+    sessionUserId,
+  });
 }
 
 async function maybeTriggerAdsSync(snapshotGeneratedAt: string | null | undefined): Promise<void> {
@@ -88,20 +90,24 @@ export async function refreshDualSourceFinancialCache(
 
   try {
     const { fetchMobileOverview } = await import("./dashboardApi");
+    const { fetchAmazonProfiles, fetchKdpRoyaltiesRange } = await import("./queries");
+    const { selectKdpRoyaltyScopeForSelection } = await import("./kdpRoyaltyScope");
+    const profiles = await fetchAmazonProfiles(scope.userId, scope.viewAs).catch(() => []);
+    const adsIds = adsProfileIdsForSelection(scope.profileIds, profiles);
+    const queryIds = adsIds.length ? adsIds : scope.profileIds;
     const snapshot = await fetchMobileOverview({
-      profileIds: scope.profileIds,
+      profileIds: queryIds,
       filterUserId: scope.viewAs,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
-    await persistMobileHomeSnapshot(scope, stampMobileHomeSource(snapshot, "nest"));
+    await persistMobileHomeSnapshot(
+      { ...scope, profileIds: queryIds },
+      stampMobileHomeSource(snapshot, "nest"),
+    );
 
     const today = toDateString(new Date());
     try {
-      const { fetchAmazonProfiles, fetchKdpRoyaltiesRange } = await import("./queries");
-      const { selectKdpRoyaltyScope } = await import("./kdpRoyaltyScope");
-      const royaltyIds = selectKdpRoyaltyScope(
-        await fetchAmazonProfiles(scope.userId, scope.viewAs),
-      ).profileIds;
+      const royaltyIds = selectKdpRoyaltyScopeForSelection(profiles, scope.profileIds).profileIds;
       if (royaltyIds.length) {
         await fetchKdpRoyaltiesRange(royaltyIds, today, today);
       }

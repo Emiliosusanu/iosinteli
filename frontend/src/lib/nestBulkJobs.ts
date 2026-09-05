@@ -4,20 +4,26 @@
  */
 
 import { storage } from "../utils/storage";
-import { nestApiJson } from "./rulesApi";
+import { nestApiJson, NestApiError } from "./rulesApi";
 import type { BulkActionKind, BulkEntityKind } from "./bulkOutboxContract";
 import {
+  buildNestKeywordBulkBody,
   clampAmazonBid,
+  classifyNestBulkPollFailure,
   collectFailedEntityIds,
   collectNotFoundFailIds,
   collectPermanentFailIds,
   collectPermanentFailMessages,
   collectRetryableFailIds,
   collectSkippedEntityIds,
+  isLocalSyncNestJobId,
   isPermanentNotFoundBulkError,
+  nestManualItemsToOutboxInputs,
 } from "./bulkOutboxContract";
 
 export {
+  buildNestKeywordBulkBody,
+  classifyNestBulkPollFailure,
   collectFailedEntityIds,
   collectNotFoundFailIds,
   collectPermanentFailIds,
@@ -163,33 +169,16 @@ export async function submitNestBulkManual(opts: {
   items: NestBulkManualItem[];
   requireActiveParents?: boolean;
 }): Promise<{ jobId: string; total: number; syncResult?: NestBulkManualResult }> {
-  const path =
-    opts.entityKind === "keyword" ? "/keywords/bulk/manual" : "/product-targets/bulk/manual";
-  const body =
-    opts.entityKind === "keyword"
-      ? {
-          durable: true,
-          requireActiveParents: opts.requireActiveParents === true,
-          items: opts.items.map((item) => ({
-            id: item.id,
-            ...(item.status ? { status: item.status } : {}),
-            ...(item.bid != null ? { bid: item.bid } : {}),
-            forceCooldown: true,
-          })),
-        }
-      : {
-          durable: true,
-          requireActiveParents: opts.requireActiveParents === true,
-          items: opts.items.map((item) => ({
-            id: item.id,
-            ...(item.state ? { state: item.state } : {}),
-            ...(item.bid != null ? { bid: item.bid } : {}),
-            forceCooldown: true,
-          })),
-        };
+  if (opts.entityKind !== "keyword") {
+    throw new NestApiError(
+      "Product-target bulk uses the iPhone outbox — Nest has no ID-list bulk route.",
+      404,
+    );
+  }
+  const body = buildNestKeywordBulkBody(opts.items);
 
   const response = await nestApiJson<NestBulkAccepted | NestBulkManualResult>(
-    path,
+    "/keywords/bulk/manual",
     { method: "PATCH", body: JSON.stringify(body) },
     "Couldn't queue Amazon bulk changes.",
   );
@@ -348,11 +337,38 @@ export async function resubmitFailedNestBulkJobs(opts?: {
     }
 
     try {
+      if (job.entityKind === "product_target") {
+        const { enqueueBulkAmazonWrites } = await import("./bulkOutbox");
+        await enqueueBulkAmazonWrites(
+          nestManualItemsToOutboxInputs(retryItems, job.revertItems || []),
+        );
+        const stamp = nowIso();
+        resubmitted += retryItems.length;
+        jobsStarted += 1;
+        if (residualNotFound.length) {
+          const residualIds = new Set(residualNotFound.map((i) => i.id));
+          nextJobs.push({
+            ...job,
+            jobId: `${job.jobId}:notfound`,
+            total: residualNotFound.length,
+            processed: residualNotFound.length,
+            status: "completed",
+            items: residualNotFound,
+            revertItems: (job.revertItems || []).filter((r) => residualIds.has(r.entityId)),
+            resultFailed: residualNotFound.length,
+            resultSucceeded: 0,
+            permanentFailIds: residualNotFound.map((i) => i.id),
+            failedIds: residualNotFound.map((i) => i.id),
+            notFoundFailIds: residualNotFound.map((i) => i.id),
+            updatedAt: stamp,
+          });
+        }
+        continue;
+      }
+
       const submitted = await submitNestBulkManual({
-        entityKind: job.entityKind,
+        entityKind: "keyword",
         items: retryItems,
-        requireActiveParents:
-          opts?.requireActiveParents ?? job.requireActiveParents === true,
       });
       const stamp = nowIso();
       const revertItems = (job.revertItems || []).filter((r) =>
@@ -360,14 +376,12 @@ export async function resubmitFailedNestBulkJobs(opts?: {
       );
       const record: NestBulkJobRecord = {
         jobId: submitted.jobId,
-        entityKind: job.entityKind,
+        entityKind: "keyword",
         total: submitted.total,
         processed: submitted.syncResult ? submitted.total : 0,
         status: submitted.syncResult ? "completed" : "pending",
         revertItems,
         items: retryItems,
-        requireActiveParents:
-          opts?.requireActiveParents ?? job.requireActiveParents === true,
         createdAt: stamp,
         updatedAt: stamp,
         resultFailed: submitted.syncResult?.failed,
@@ -447,6 +461,43 @@ export async function dismissCompletedNestBulkFailures(): Promise<number> {
   return removed;
 }
 
+async function settleOrphanProductTargetJob(
+  job: NestBulkJobRecord,
+): Promise<{ record: NestBulkJobRecord; notifyCompleted: boolean }> {
+  const items = job.items || [];
+  if (!items.length) {
+    const record: NestBulkJobRecord = {
+      ...job,
+      status: "failed",
+      lastError: "Product-target bulk uses the iPhone outbox — Nest has no ID-list bulk route.",
+      updatedAt: nowIso(),
+    };
+    return { record, notifyCompleted: true };
+  }
+  try {
+    const { enqueueBulkAmazonWrites } = await import("./bulkOutbox");
+    await enqueueBulkAmazonWrites(nestManualItemsToOutboxInputs(items, job.revertItems || []));
+    return {
+      record: {
+        ...job,
+        status: "completed",
+        processed: job.total,
+        lastError: null,
+        updatedAt: nowIso(),
+      },
+      notifyCompleted: false,
+    };
+  } catch (error) {
+    const record: NestBulkJobRecord = {
+      ...job,
+      status: "failed",
+      lastError: error instanceof Error ? error.message : "Couldn't move product-target bulk to the outbox.",
+      updatedAt: nowIso(),
+    };
+    return { record, notifyCompleted: true };
+  }
+}
+
 export async function refreshOpenNestBulkJobs(): Promise<{
   pending: number;
   failed: number;
@@ -459,6 +510,17 @@ export async function refreshOpenNestBulkJobs(): Promise<{
   for (const job of state.jobs) {
     if (job.status !== "pending" && job.status !== "running") {
       jobs.push(job);
+      continue;
+    }
+    if (job.entityKind === "product_target") {
+      const settled = await settleOrphanProductTargetJob(job);
+      if (settled.notifyCompleted) newlyCompleted.push(settled.record);
+      jobs.push(settled.record);
+      continue;
+    }
+    if (isLocalSyncNestJobId(job.jobId)) {
+      const next = { ...job, status: "completed" as const, processed: job.total, updatedAt: nowIso() };
+      jobs.push(next);
       continue;
     }
     try {
@@ -488,11 +550,15 @@ export async function refreshOpenNestBulkJobs(): Promise<{
       }
       jobs.push(next);
     } catch (error) {
-      jobs.push({
+      const kind = classifyNestBulkPollFailure(error);
+      const next: NestBulkJobRecord = {
         ...job,
+        status: kind === "gone" ? "failed" : job.status,
         lastError: error instanceof Error ? error.message : "Couldn't poll bulk job",
         updatedAt: nowIso(),
-      });
+      };
+      if (kind === "gone") newlyCompleted.push(next);
+      jobs.push(next);
     }
   }
 

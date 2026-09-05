@@ -33,10 +33,14 @@ import {
   fetchSearchTerms,
   fetchKeywords,
   fetchAdGroups,
+  fetchKeywordDailyAggregate,
+  fetchSearchTermDailyAggregate,
   TARGETING_LIST_LIMIT,
   type TopBookRow,
 } from "@/src/lib/queries";
 import { fetchBidEngineStatus } from "@/src/lib/mutations";
+import { KdpRoyaltySetupCard } from "@/src/components/KdpRoyaltySetupCard";
+import { useKdpRoyaltySetupPrompt } from "@/src/hooks/useKdpRoyaltySetupPrompt";
 import {
   bootstrapToBleeders,
   bootstrapToCampaignMetrics,
@@ -128,6 +132,7 @@ import {
   publisherNetForPeriod,
 } from "@/src/lib/homePeriod";
 import {
+  ADS_ENGINE_FUNNEL_TIMEOUT_MS,
   HOME_QUERY_TIMEOUT_MS,
   TARGETING_QUERY_TIMEOUT_MS,
   homeWidgetStatus,
@@ -144,6 +149,7 @@ import {
   sortedProfileIds,
 } from "@/src/lib/periodQuery";
 import { filterTopBooksByRecentActivity } from "@/src/lib/booksListActivity";
+import { computeOverallBreakEvenAcos } from "@/src/lib/kdpTitlePresentation";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { markPerf } from "@/src/lib/perf";
 import { debugIngest } from "@/src/lib/debugIngest";
@@ -152,6 +158,7 @@ import { NetProfitChart, type ChartDaySelection } from "@/src/components/Charts"
 import { emptyKdpFormatRoyaltyRange } from "@/src/lib/kdpFormatRoyalties";
 import { InteliAdsIcon } from "@/src/components/InteliAdsIcon";
 import {
+  GROSS_ROYALTIES_LABEL,
   NET_ROYALTIES_LABEL,
   kdpRoyaltiesAreKnown,
   netRoyalties,
@@ -480,11 +487,40 @@ export default function OverviewScreen() {
     ...OVERVIEW_QUERY_CACHE,
     meta: financialQueryMeta(),
   });
+  const latestImportedYmd = royaltiesQ.data?.daily?.length
+    ? String(royaltiesQ.data.daily[royaltiesQ.data.daily.length - 1]?.date ?? "").slice(0, 10) || null
+    : null;
+  const royaltySetup = useKdpRoyaltySetupPrompt({
+    enabled: sellerReady && !guestMode,
+    royaltyScopeReason: royaltyScope.reason,
+    latestImportedYmd,
+    yesterdayYmd: yesterdayStr,
+  });
 
   const formatRoyaltiesQ = useQuery({
     queryKey: ["kdp-format-royalties", royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () => withQueryTimeout(fetchKdpFormatRoyaltiesRange(royaltyProfiles, dateRange.start, dateRange.end)),
     enabled: (sellerReady || (viewingAsAdmin && scopeProfiles.length > 0)) && royaltyProfiles.length > 0,
+    ...OVERVIEW_QUERY_CACHE,
+  });
+  useQuery({
+    queryKey: ["ads-engine-keywords-daily", scopeProfiles, dateRange.start, dateRange.end],
+    queryFn: () =>
+      withQueryTimeout(
+        fetchKeywordDailyAggregate(scopeProfiles, dateRange.start, dateRange.end),
+        ADS_ENGINE_FUNNEL_TIMEOUT_MS,
+      ),
+    enabled: sellerReady && scopeProfiles.length > 0,
+    ...OVERVIEW_QUERY_CACHE,
+  });
+  useQuery({
+    queryKey: ["ads-engine-search-terms-daily", scopeProfiles, dateRange.start, dateRange.end],
+    queryFn: () =>
+      withQueryTimeout(
+        fetchSearchTermDailyAggregate(scopeProfiles, dateRange.start, dateRange.end),
+        ADS_ENGINE_FUNNEL_TIMEOUT_MS,
+      ),
+    enabled: sellerReady && scopeProfiles.length > 0,
     ...OVERVIEW_QUERY_CACHE,
   });
 
@@ -565,38 +601,26 @@ export default function OverviewScreen() {
     meta: financialQueryMeta(),
   });
 
-  // Warm the Books tab list so Overview → Books is cache-first (same pattern as Campaigns).
-  useEffect(() => {
-    if (!sellerSecondary || scopeProfiles.length === 0) return;
-    if (!topBooksQ.isSuccess) return;
-    void queryClient.prefetchQuery({
-      queryKey: [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", scopeProfiles, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency],
-      queryFn: () =>
-        withQueryTimeout(
-          fetchTopBooksRange({
-            profileIds: scopeProfiles,
-            kdpProfileIds: royaltyProfiles,
-            start: dateRange.start,
-            end: dateRange.end,
-            royaltyRate: 0,
-            limit: 300,
-            filterUserId: adminFilterUserId,
-          }),
-        ),
-      ...LIST_PERIOD_QUERY_CACHE,
-      meta: financialQueryMeta(),
-    });
-  }, [
-    sellerSecondary,
-    topBooksQ.isSuccess,
-    scopeProfiles,
-    royaltyProfiles,
-    dateRange.start,
-    dateRange.end,
-    adminFilterUserId,
-    primaryCurrency,
-    queryClient,
-  ]);
+  // Same Books / Product Ads catalog the web Ads Engine uses for overall BE.
+  const catalogBooksQ = useQuery({
+    queryKey: [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", scopeProfiles, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () =>
+      withQueryTimeout(
+        fetchTopBooksRange({
+          profileIds: scopeProfiles,
+          kdpProfileIds: royaltyProfiles,
+          start: dateRange.start,
+          end: dateRange.end,
+          royaltyRate: 0,
+          limit: 300,
+          activityDays: 0,
+          filterUserId: adminFilterUserId,
+        }),
+      ),
+    enabled: sellerSecondary && scopeProfiles.length > 0,
+    ...LIST_PERIOD_QUERY_CACHE,
+    meta: financialQueryMeta(),
+  });
 
   // Warm Targets keywords for the active period (client filters stay local).
   useEffect(() => {
@@ -835,27 +859,11 @@ export default function OverviewScreen() {
     return { ...acc, royalties, bookOrders, organicOrders, net, acos, ctr, cvr };
   }, [daily, royaltyRange, kdpReady]);
 
-  const breakEvenAcos = useMemo(() => {
-    const royaltyPerBookOrder =
-      kdpReady && totals.bookOrders > 0
-        ? safeDivide(Number(totals.royalties) || 0, totals.bookOrders)
-        : 0;
-    const adSalePerOrder = totals.orders > 0 ? safeDivide(totals.sales, totals.orders) : 0;
-    const realBreakEven =
-      royaltyPerBookOrder > 0 && adSalePerOrder > 0
-        ? (royaltyPerBookOrder / adSalePerOrder) * 100
-        : 0;
-
-    // Break-even ACoS comes only from real KDP royalty data (per book, like the
-    // Top Books widget) — no manual/settings override.
-    return Number.isFinite(realBreakEven) && realBreakEven > 0 ? realBreakEven : 0;
-  }, [
-    kdpReady,
-    totals.bookOrders,
-    totals.orders,
-    totals.royalties,
-    totals.sales,
-  ]);
+  const catalogBooks = viewingAsAdmin ? adminTopBooks ?? [] : catalogBooksQ.data ?? [];
+  const breakEvenAcos = useMemo(
+    () => computeOverallBreakEvenAcos(catalogBooks),
+    [catalogBooks],
+  );
 
   const prevTotals = useMemo(() => {
     const acc = prevDaily.reduce(
@@ -1245,11 +1253,6 @@ export default function OverviewScreen() {
       : t.colors.tone_danger;
   const profitColor = !netKnown ? t.colors.text_tertiary : profitAccentColor;
   const heroAcos = chartDay ? safeDivide(chartDay.spend, chartDay.sales) * 100 : totals.acos;
-  const profitVerdict = loading
-    ? null
-    : chartDay
-      ? chartDay.label
-      : null;
   const profitMargin = heroNet == null
     ? null
     : safeDivide(heroNet, heroRoyalties) * 100;
@@ -1309,7 +1312,7 @@ export default function OverviewScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    const primary: Promise<unknown>[] = [snapshotQ.refetch(), metricsQ.refetch(), royaltiesQ.refetch(), syncLogsQ.refetch()];
+    const primary: Promise<unknown>[] = [snapshotQ.refetch(), metricsQ.refetch(), royaltiesQ.refetch(), syncLogsQ.refetch(), royaltySetup.refetchAccounts()];
     if (viewingAsAdmin) primary.push(bootstrapQ.refetch());
     await Promise.all(primary);
     setRefreshing(false);
@@ -1461,29 +1464,32 @@ export default function OverviewScreen() {
         </View>
 
         <View style={{ paddingHorizontal: dashboard.pageInset, paddingTop: dashboard.compactGap }}>
+          {royaltySetup.ask ? (
+            <KdpRoyaltySetupCard plan={royaltySetup.ask} onAction={royaltySetup.onAction} />
+          ) : null}
           <FirstReveal>
           <HorizonPane watchKey={activePeriodKey}>
           <DashboardSurface tone="hero" style={{ marginBottom: dashboard.sectionGap, overflow: "hidden" }} testID="home-net-royalties">
             <PressableScale
               onPress={chartDay ? clearChartSelection : undefined}
               accessibilityRole={chartDay ? "button" : "text"}
-              accessibilityLabel={chartDay ? `${chartDay.label}. Tap to show period total.` : `${NET_ROYALTIES_LABEL} for ${periodLabel}`}
+              accessibilityLabel={chartDay ? `${chartDay.label}. Release to show the period total.` : `${GROSS_ROYALTIES_LABEL} royalties for ${periodLabel}. Hold a day on the chart to inspect it.`}
             >
               <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
                 <VerifiedValue
-                  value={chartDay ? chartDay.label : "Net"}
+                  value={chartDay ? chartDay.label : GROSS_ROYALTIES_LABEL}
                   style={[t.typography.caption1, { color: t.colors.text_tertiary, fontWeight: "600", letterSpacing: 0.2 }]}
                   accessibilityRole="header"
                 />
                 <VerifiedValue
-                  value={profitVerdict ?? (!chartDay ? periodLabel : "")}
+                  value={!chartDay ? periodLabel : ""}
                   style={[t.typography.caption2, { color: t.colors.text_tertiary, flexShrink: 1 }]}
                 />
               </View>
             </PressableScale>
             <VerifiedValue
-              value={netDisplay}
-              color={profitColor}
+              value={royaltiesDisplay}
+              color={royaltiesKnown ? t.colors.text_primary : t.colors.text_tertiary}
               style={[
                 t.typography.metric_massive,
                 {
@@ -1492,17 +1498,17 @@ export default function OverviewScreen() {
                 },
               ]}
               accessible
-              accessibilityLabel={`${NET_ROYALTIES_LABEL}, ${netDisplay}`}
-              testID="home-hero-net"
+              accessibilityLabel={`${GROSS_ROYALTIES_LABEL} royalties, ${royaltiesDisplay}`}
+              testID="home-hero-gross"
             />
             {kdpPartial && !loading ? (
               <Text style={[t.typography.caption2, { color: t.colors.tone_warning, marginTop: t.spacing.xs }]}>
                 Partial royalties — net may be low.
               </Text>
             ) : null}
-            {!loading && netKnown && prevKdpReady && !chartDay && (
+            {!loading && royaltiesKnown && prevKdpReady && !chartDay && (
               <View style={{ marginTop: t.spacing.sm }}>
-                <StatBadge delta={deltas.net} suffix="vs prior" />
+                <StatBadge delta={deltas.royalties} suffix="vs prior" />
               </View>
             )}
             {financeCaption ? (
@@ -1524,9 +1530,9 @@ export default function OverviewScreen() {
             <View
               style={[styles.heroMetricGrid, { marginTop: dashboard.metricGap }]}
               accessible
-              accessibilityLabel={`Royalties, ${royaltiesDisplay}. Ad spend, ${spendDisplay}. ACoS, ${acosDisplay}. Margin, ${marginDisplay}.`}
+              accessibilityLabel={`${NET_ROYALTIES_LABEL}, ${netDisplay}. Ad spend, ${spendDisplay}. ACoS, ${acosDisplay}. Margin, ${marginDisplay}.`}
             >
-              <HeroMetric label="Royalties" value={royaltiesDisplay} t={t} />
+              <HeroMetric label="Net" value={netDisplay} t={t} color={profitColor} />
               <HeroMetric label="Ad spend" value={spendDisplay} t={t} />
               <HeroMetric label="ACoS" value={acosDisplay} t={t} color={acosValueColor} />
               <HeroMetric label="Margin" value={marginDisplay} t={t} />
@@ -1581,7 +1587,7 @@ export default function OverviewScreen() {
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineKeywordsPage
-                      profileIds={selectedProfileIds}
+                      profileIds={scopeProfiles}
                       start={dateRange.start}
                       end={dateRange.end}
                       breakEvenAcos={breakEvenAcos}
@@ -1596,7 +1602,7 @@ export default function OverviewScreen() {
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineSearchTermsPage
-                      profileIds={selectedProfileIds}
+                      profileIds={scopeProfiles}
                       start={dateRange.start}
                       end={dateRange.end}
                       breakEvenAcos={breakEvenAcos}
@@ -1614,8 +1620,8 @@ export default function OverviewScreen() {
               testID="home-kdp-royalties-format"
               title="KDP Royalties"
               icon="royalties"
-              actionLabel="Helper"
-              onAction={() => router.push("/more/kdp-helper")}
+              actionLabel={royaltySetup.collectionLabel}
+              onAction={royaltySetup.openCollection}
               pages={[
                 {
                   key: "format-mix",
@@ -1629,7 +1635,7 @@ export default function OverviewScreen() {
                       loading={formatRoyaltiesQ.isPending && !formatRoyaltiesQ.data}
                       error={formatRoyaltiesQ.isError}
                       onRetry={() => void formatRoyaltiesQ.refetch()}
-                      onOpenHelper={() => router.push("/more/kdp-helper")}
+                      onImportRoyalties={royaltySetup.openCollection}
                     />
                   ),
                 },
@@ -1826,7 +1832,7 @@ export default function OverviewScreen() {
                           currency={primaryCurrency}
                           t={t}
                           isLast={idx === keywordBleeders.length - 1}
-                          onPress={() => router.push(`/target/${row.id}` as never)}
+                          onPress={() => router.push(`/keyword/${row.id}` as never)}
                         />
                       ))}
                     </WidgetRowList>
@@ -1846,7 +1852,7 @@ export default function OverviewScreen() {
                           currency={primaryCurrency}
                           t={t}
                           isLast={idx === keywordHighAcos.length - 1}
-                          onPress={() => router.push(`/target/${row.id}` as never)}
+                          onPress={() => router.push(`/keyword/${row.id}` as never)}
                         />
                       ))}
                     </WidgetRowList>
@@ -1866,6 +1872,7 @@ export default function OverviewScreen() {
                           currency={primaryCurrency}
                           t={t}
                           isLast={idx === termSpendNoOrders.length - 1}
+                          onPress={row.id ? () => router.push(`/search-term/${row.id}` as never) : undefined}
                         />
                       ))}
                     </WidgetRowList>
@@ -1885,6 +1892,7 @@ export default function OverviewScreen() {
                           currency={primaryCurrency}
                           t={t}
                           isLast={idx === termLowAcos.length - 1}
+                          onPress={row.id ? () => router.push(`/search-term/${row.id}` as never) : undefined}
                         />
                       ))}
                     </WidgetRowList>
@@ -1971,14 +1979,16 @@ export default function OverviewScreen() {
                       <SwipeEmpty message="Couldn't load books. Tap to retry." t={t} />
                     </TouchableOpacity>
                   ) : booksRoyalties.length === 0 ? (
-                    <SwipeEmpty
-                      message={
-                        kdpReady && totals.royalties > 0
-                          ? "No per-book data"
-                          : "No KDP royalties"
-                      }
-                      t={t}
-                    />
+                    kdpReady && totals.royalties > 0 ? (
+                      <SwipeEmpty message="No per-book data" t={t} />
+                    ) : (
+                      <TouchableOpacity onPress={royaltySetup.openCollection} accessibilityRole="button">
+                        <SwipeEmpty
+                          message="No KDP royalties. Import with Chrome or the iPhone helper."
+                          t={t}
+                        />
+                      </TouchableOpacity>
+                    )
                   ) : (
                     <WidgetRowList>
                       {booksRoyalties.map((book, idx) => (

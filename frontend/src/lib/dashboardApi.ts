@@ -6,6 +6,7 @@ import type { Campaign, CampaignMetric, Keyword, MetricsTotals, ProductTarget } 
 import type { BookCampaignRow, KdpRoyaltyRange, TopBookRow, TopCampaignRow } from "./queries";
 import type { MobileHomeSnapshot } from "./mobileHomeSnapshot";
 import { netRoyaltiesKnown } from "./netRoyalties";
+import { resolveAuthoritativeBreakEvenAcos } from "./kdpTitlePresentation";
 
 function qs(params: Record<string, string | number | undefined | null>) {
   const search = new URLSearchParams();
@@ -72,6 +73,9 @@ export type KdpBreakEvenBookRow = {
   royalties: number;
   currentAcos: number | null;
   breakEvenAcos: number | null;
+  calculatorBreakEvenAcos?: number | null;
+  pricingSynced?: boolean;
+  listPrice?: number | null;
 };
 
 export type BleedingEntityRow = {
@@ -325,7 +329,7 @@ export function bootstrapToTopBooks(boot: DashboardBootstrapResponse | undefined
       acos: sales > 0 ? (spend / sales) * 100 : n(book.currentAcos),
       roas: spend > 0 ? sales / spend : null,
       net: netRoyaltiesKnown(royalties, spend),
-      breakeven_acos: n(book.breakEvenAcos),
+      breakeven_acos: resolveAuthoritativeBreakEvenAcos(book) ?? 0,
       ads_state: "ready" as const,
       kdp_state: "ready" as const,
     };

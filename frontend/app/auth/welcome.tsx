@@ -26,6 +26,7 @@ type Slide = { icon: InteliAdsIconName; title: string; body: string };
 
 const SLIDES: Slide[] = [
   { icon: "netRoyalties", title: "Profit by book", body: "KDP royalties minus Amazon Ads spend, per title." },
+  { icon: "royalties", title: "Import royalties", body: "Chrome on a computer, or the iPhone helper. This app cannot read KDP until one of them is on." },
   { icon: "attention", title: "Catch waste early", body: "High ACoS and $0 targets in one list." },
   { icon: "bidBot", title: "Change bids here", body: "Rules stay reviewable." },
 ];

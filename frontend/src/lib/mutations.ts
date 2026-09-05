@@ -5,7 +5,10 @@ import { nestApiFetch, nestApiJson, nestLogout, parseNestError, NestApiError } f
 import { supabase } from "./supabase";
 import { normalizeNestUserPlanPayload, type NestUserPlan } from "./accountContract";
 import { isTransientEnableProfileError } from "./accountsUi";
+import { amazonManualWrite } from "./bulkOutboxContract";
 import type { AmazonProfile } from "./types";
+
+export { amazonManualWrite } from "./bulkOutboxContract";
 
 export type EntityState = "enabled" | "paused";
 
@@ -229,9 +232,10 @@ export async function updateKeywordManual(
   keywordId: string,
   payload: { status?: EntityState; bid?: number; forceCooldown?: boolean },
 ) {
+  const { forceCooldown, ...fields } = payload;
   return nestApiJson(
     `/keywords/${keywordId}/manual`,
-    { method: "PATCH", body: JSON.stringify(payload) },
+    { method: "PATCH", body: JSON.stringify(amazonManualWrite(fields, forceCooldown)) },
     "Couldn't update keyword.",
   );
 }
@@ -240,9 +244,10 @@ export async function updateProductTargetManual(
   productTargetId: string,
   payload: { state?: EntityState; bid?: number; forceCooldown?: boolean },
 ) {
+  const { forceCooldown, ...fields } = payload;
   return nestApiJson(
     `/product-targets/${productTargetId}/manual`,
-    { method: "PATCH", body: JSON.stringify(payload) },
+    { method: "PATCH", body: JSON.stringify(amazonManualWrite(fields, forceCooldown)) },
     "Couldn't update target.",
   );
 }
@@ -266,7 +271,7 @@ export async function updateAdGroupManual(
   try {
     return await nestApiJson(
       `/ad-groups/${adGroupId}`,
-      { method: "PATCH", body: JSON.stringify(payload) },
+      { method: "PATCH", body: JSON.stringify({ defaultBid: payload.defaultBid }) },
       "Couldn't update ad group bid.",
     );
   } catch (error) {
@@ -275,7 +280,10 @@ export async function updateAdGroupManual(
     const missingRoute = status === 404 || /Cannot PATCH/i.test(message);
     if (!missingRoute || payload.defaultBid == null || fallbackTargetIds.length === 0) throw error;
     for (const targetId of fallbackTargetIds) {
-      await updateProductTargetManual(targetId, { bid: payload.defaultBid, forceCooldown: payload.forceCooldown });
+      await updateProductTargetManual(targetId, {
+        bid: payload.defaultBid,
+        forceCooldown: payload.forceCooldown,
+      });
     }
     return { id: adGroupId, defaultBid: payload.defaultBid };
   }

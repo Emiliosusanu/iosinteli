@@ -89,7 +89,7 @@ test("targeting exposes bulk select, durable queue, and expanded filters", () =>
   assert.match(targeting, /has_impressions/);
   assert.match(targeting, /saveBulkSelectionMemory/);
   assert.match(outbox, /inteliads\.bulkOutbox\.v1/);
-  assert.match(outbox, /forceCooldown: true/);
+  assert.match(outbox, /item.forceCooldown === true/);
   assert.match(outbox, /status === "in_flight"/);
   assert.match(outbox, /retryPermanentBulkFailures/);
   assert.match(outbox, /requeuePermanentBulkFailures/);
@@ -121,8 +121,11 @@ test("targeting exposes bulk select, durable queue, and expanded filters", () =>
   assert.match(targeting, /applyOptimisticEntityBid/);
   assert.match(targeting, /applyOptimisticEntityState/);
   assert.match(targeting, /revertOptimisticEntityState/);
-  assert.match(targeting, /forceCooldown: true/);
+  assert.match(targeting, /forceCooldown: moneyEditor.forceCooldown === true/);
+  assert.doesNotMatch(targeting, /forceCooldown: true/);
   assert.match(mutationsUi, /Close first so the seller can edit the next bid immediately/);
+  assert.match(mutationsUi, /saveWhileOpen/);
+  assert.match(mutationsUi, /Keep saveWhileOpen from the last visible render/);
   assert.match(mutationsUi, /min = 0\.01/);
   assert.match(mutationsUi, /Hold the user's choice until the parent/);
   assert.match(mutationsUi, /setOptimistic\(next\)/);

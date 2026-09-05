@@ -1,4 +1,6 @@
 export const ACCOUNT_BILLING_URL = "https://dashboard.inteliads.io/billing";
+/** Web dashboard — Chrome extension install / KDP import lives here, not on iPhone. */
+export const KDP_CHROME_HELPER_URL = "https://dashboard.inteliads.io";
 export const ACCOUNT_PLAN_UNAVAILABLE = "Unavailable";
 export const ACCOUNT_STATUS_UNAVAILABLE = "Unavailable";
 export const ACCOUNT_PLAN_NONE = "No plan";

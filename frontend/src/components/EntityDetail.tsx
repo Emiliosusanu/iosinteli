@@ -10,9 +10,11 @@ import type { EntityDailyPoint } from "../lib/queries";
 import {
   cooldownAlertMessage,
   getEntityBidCooldown,
+  type CooldownOverridePress,
   type EntityBidCooldownFields,
   type EntityBidCooldownInfo,
 } from "../lib/bidCooldown";
+import { useApp } from "@/src/contexts/AppContext";
 import { acosTone, layout, spacing, toneColor, useTheme } from "../lib/theme";
 
 export function targetingPerfStatus(item: {
@@ -97,18 +99,19 @@ export function EntityBidControl({
 }: {
   value: string;
   testID?: string;
-  onPress: () => void;
+  onPress: CooldownOverridePress;
   cooldown?: EntityBidCooldownInfo | null;
   cooldownRow?: EntityBidCooldownFields | null;
 }) {
   const t = useTheme();
-  const info = cooldown ?? (cooldownRow ? getEntityBidCooldown(cooldownRow) : null);
+  const { entityCooldownHours } = useApp();
+  const info = cooldown ?? (cooldownRow ? getEntityBidCooldown(cooldownRow, entityCooldownHours) : null);
   const locked = Boolean(info?.isInCooldown);
   const openEditor = () => {
     if (locked && info) {
       Alert.alert("Cooldown", cooldownAlertMessage(info), [
         { text: "Cancel", style: "cancel" },
-        { text: "Edit anyway", style: "destructive", onPress },
+        { text: "Edit anyway", style: "destructive", onPress: () => onPress({ forceCooldown: true }) },
       ]);
       return;
     }

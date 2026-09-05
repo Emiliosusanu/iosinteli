@@ -13,6 +13,15 @@ import {
 const queries = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
 const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
 
+test("book filter keeps distinct ASINs even when titles match", () => {
+  const rows = dedupeTargetingBookOptions([
+    { asin: "B0F1G3QVF5", title: "Alaska Travel Guide 2026", campaignIds: ["c1"] },
+    { asin: "B0FSKDQ27V", title: "Alaska Travel Guide 2026", campaignIds: ["c2"] },
+  ]);
+  assert.equal(rows.length, 2);
+  assert.match(targeting, /Each row is one ASIN/);
+});
+
 test("dedupeTargetingBookOptions collapses identical ASINs and merges campaigns", () => {
   const rows = dedupeTargetingBookOptions([
     {

@@ -58,7 +58,7 @@ test("Home uses the motion system and does not replay entrance or haptic navigat
   assert.match(home, /VerifiedValue/);
   assert.match(home, /HorizonPane/);
   assert.match(home, /color=\{profitColor\}/);
-  assert.match(home, /testID="home-hero-net"/);
+  assert.match(home, /testID="home-hero-gross"/);
   assert.match(home, /tone="hero"/);
   assert.match(home, /playHaptic\("select"/);
   assert.match(home, /from "@\/src\/lib\/hapticPolicy"/);

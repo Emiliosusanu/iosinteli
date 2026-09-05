@@ -79,6 +79,14 @@ export const KDP_NET_ALERTS_LABEL = "Include KDP net in alerts";
 export const DAILY_DIGEST_LABEL = "Daily performance updates";
 export const DAILY_DIGEST_FOOTER = "Daytime digests";
 
+export const NOTIFICATIONS_ROW_LABEL = "Notifications";
+export const KDP_STALE_LABEL = "KDP data stalled";
+export const KDP_STALE_FOOTER =
+  "Alert when a linked KDP account has not received royalty data for more than an hour — Chrome extension or iPhone helper.";
+export const KDP_INGEST_SECTION_TITLE = "KDP ingest";
+export const KDP_INGEST_EMPTY = "No KDP account is linked to the selected Amazon profiles.";
+export const KDP_INGEST_UNAVAILABLE = "Couldn't load KDP ingest status.";
+
 export function notificationFooter(input: {
   guestMode: boolean;
   permission: NotificationPermissionState;

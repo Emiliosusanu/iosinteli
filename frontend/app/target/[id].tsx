@@ -36,6 +36,7 @@ export default function TargetDetailScreen() {
   const writeGuard = { guestMode, viewAsOtherUser };
   const id = paramId(useLocalSearchParams<{ id: string }>().id);
   const [bidOpen, setBidOpen] = useState(false);
+  const bidForceCooldownRef = React.useRef(false);
   const chartWidth = Math.max(240, width - 64);
 
   const targetQ = useQuery({
@@ -114,7 +115,7 @@ export default function TargetDetailScreen() {
                 assertNotViewingAsOtherUser(viewAsOtherUser);
                 const previous = applyOptimisticEntityState(queryClient, "product_target", item.id, next);
                 try {
-                  await updateProductTargetManual(item.id, { state: next ? "enabled" : "paused", forceCooldown: true });
+                  await updateProductTargetManual(item.id, { state: next ? "enabled" : "paused" });
                   void invalidateEntityStateQueries(queryClient, "product_target");
                 } catch (error) {
                   revertOptimisticEntityState(queryClient, "product_target", item.id, previous);
@@ -173,8 +174,9 @@ export default function TargetDetailScreen() {
             testID={`targeting-bid-${item.id}`}
             value={bidLabel}
             cooldownRow={item}
-            onPress={() => {
+            onPress={(opts) => {
               if (blockIfCannotWriteAmazon(writeGuard)) return;
+              bidForceCooldownRef.current = opts?.forceCooldown === true;
               setBidOpen(true);
             }}
           />
@@ -230,7 +232,9 @@ export default function TargetDetailScreen() {
               entityId: item.id,
               bid: next,
               previousBid,
+              forceCooldown: bidForceCooldownRef.current,
             });
+            bidForceCooldownRef.current = false;
           } catch (error) {
             revertOptimisticEntityBid(queryClient, "product_target", item.id, previousBid);
             throw error;

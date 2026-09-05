@@ -1,10 +1,32 @@
 import { KDP_PAGE_HOOK_JS } from "./vendor/kdpVendor.generated.js";
 
+/** Page hook patches fetch/XHR — never install that on Amazon sign-in. */
+export function kdpHelperShouldInstallPageHook(hrefOrHost: string): boolean {
+  const s = String(hrefOrHost || "").toLowerCase();
+  return (
+    s.includes("kdpreports.amazon.") ||
+    s.includes("kdp.amazon.") ||
+    s.includes("advertising.amazon.")
+  );
+}
+
 /** Injected into the KDP WebView: page hook + RN message bridge. */
 export function kdpInjectedJavaScript(): string {
   return `
 (function () {
-  try { ${KDP_PAGE_HOOK_JS} } catch (e) {}
+  function hostAllowsPageHook() {
+    try {
+      var href = String(location.href || "").toLowerCase();
+      var host = String(location.hostname || "").toLowerCase();
+      var s = href + " " + host;
+      return s.indexOf("kdpreports.amazon.") >= 0 || s.indexOf("kdp.amazon.") >= 0 || s.indexOf("advertising.amazon.") >= 0;
+    } catch (e) {
+      return false;
+    }
+  }
+  if (hostAllowsPageHook()) {
+    try { ${KDP_PAGE_HOOK_JS} } catch (e) {}
+  }
 
   function send(payload) {
     try {

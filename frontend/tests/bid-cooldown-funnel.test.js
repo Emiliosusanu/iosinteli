@@ -7,7 +7,9 @@ import {
   DEFAULT_ENTITY_COOLDOWN_HOURS,
   formatCooldownRemaining,
   getEntityBidCooldown,
+  pickEntityCooldownHours,
   resolveBidChangeAt,
+  resolveEntityCooldownHours,
 } from "../src/lib/bidCooldown.ts";
 
 const charts = readFileSync(new URL("../src/components/Charts.tsx", import.meta.url), "utf8");
@@ -34,6 +36,24 @@ test("cooldown uses latest of bid/rule timestamps within default 48h", () => {
   assert.match(info.sourceLabel, /rule/i);
   assert.match(cooldownAlertMessage(info), /Cooldown ends/);
   assert.equal(formatCooldownRemaining(90), "1m");
+});
+
+test("cooldown hours come from server settings, not an invented window", () => {
+  assert.equal(resolveEntityCooldownHours(24), 24);
+  assert.equal(resolveEntityCooldownHours({ value: 12 }), 12);
+  assert.equal(resolveEntityCooldownHours(0), 48);
+  assert.equal(resolveEntityCooldownHours(999), 48);
+  assert.equal(pickEntityCooldownHours({ entity_cooldown_hours: 36 }), 36);
+  assert.equal(pickEntityCooldownHours({}), 48);
+  const now = Date.parse("2026-09-02T12:00:00.000Z");
+  const tenHoursAgo = new Date(now - 10 * 60 * 60 * 1000).toISOString();
+  assert.equal(getEntityBidCooldown({ bid_last_modified_at: tenHoursAgo }, 8, now).isInCooldown, false);
+  assert.equal(getEntityBidCooldown({ bid_last_modified_at: tenHoursAgo }, 48, now).isInCooldown, true);
+  const app = readFileSync(new URL("../src/contexts/AppContext.tsx", import.meta.url), "utf8");
+  const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
+  assert.match(app, /entityCooldownHours/);
+  assert.match(app, /pickEntityCooldownHours/);
+  assert.match(targeting, /entityCooldownHours/);
 });
 
 test("expired cooldown clears", () => {
@@ -81,8 +101,10 @@ test("MutationTap and EntityBidControl mark cooldown yellow + popup", () => {
   assert.match(mutations, /cooldownRow/);
   assert.match(mutations, /tone_warning/);
   assert.match(mutations, /Cooldown/);
+  assert.match(mutations, /onPress\(\{ forceCooldown: true \}\)/);
   assert.match(entityDetail, /cooldownRow/);
   assert.match(entityDetail, /Edit anyway/);
+  assert.match(entityDetail, /onPress\(\{ forceCooldown: true \}\)/);
 });
 
 test("placement and up/down bidding surfaces reuse campaign settings cooldown", () => {

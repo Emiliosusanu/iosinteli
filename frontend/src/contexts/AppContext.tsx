@@ -9,6 +9,8 @@ import { AmazonProfile, DateRange } from "../lib/types";
 import { normalizeDateRange, rangePresets } from "../lib/format";
 import { useAuth } from "./AuthContext";
 import { configureNotifications, registerForPushAsync, clearNotificationIdentity, installBackgroundSyncWakeHandlers, runAlertCheck, subscribeNotificationRefresh } from "../lib/notifications";
+import { anyNotificationPrefEnabled } from "../lib/notificationContract";
+import { pickEntityCooldownHours } from "../lib/bidCooldown";
 import { DEFAULT_KDP_ROYALTY_SOURCE, normalizeKdpRoyaltySource, type KdpRoyaltySource } from "../lib/kdp/source";
 import { getKdpRoyaltySource, setKdpRoyaltySource as persistKdpRoyaltySource } from "../lib/kdp/sourceStore";
 import {
@@ -36,6 +38,7 @@ export interface NotificationPrefs {
   spendThreshold: number;
   dailyDigest: boolean;
   includeKdpNet: boolean;
+  kdpDataStale: boolean;
 }
 
 /** Mass-use defaults: alerts ON; Nest owns morning digest + new orders when synced. */
@@ -46,6 +49,7 @@ const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
   spendThreshold: 25,
   dailyDigest: true,
   includeKdpNet: true,
+  kdpDataStale: true,
 };
 
 /** Map Nest `dailyReport` onto the iOS `dailyDigest` switch so remote prefs stay honest. */
@@ -69,6 +73,7 @@ function coalesceNotificationPrefs(
         : base.spendThreshold,
     dailyDigest,
     includeKdpNet: typeof raw.includeKdpNet === "boolean" ? raw.includeKdpNet : base.includeKdpNet,
+    kdpDataStale: typeof raw.kdpDataStale === "boolean" ? raw.kdpDataStale : base.kdpDataStale,
   };
 }
 
@@ -103,6 +108,8 @@ interface AppContextType {
     backgroundRegistered: boolean;
     pushRegistered: boolean;
   };
+  /** Server `entity_cooldown_hours` (default 48). Bid chips must not invent a window. */
+  entityCooldownHours: number;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -422,6 +429,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const sub = AppState.addEventListener("change", (next) => {
       if (next === "background") {
         void import("../lib/bulkOutbox").then(({ drainBulkOutbox }) => drainBulkOutbox());
+        void import("../lib/nestBulkJobs").then(({ refreshOpenNestBulkJobs }) => refreshOpenNestBulkJobs());
         void import("../lib/kdp/importer").then(({ runKdpIosHelperTick }) =>
           runKdpIosHelperTick("background", { profileIds: selectedProfileIds }),
         );
@@ -429,6 +437,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       if (next === "inactive") {
         void import("../lib/bulkOutbox").then(({ drainBulkOutbox }) => drainBulkOutbox());
+        void import("../lib/nestBulkJobs").then(({ refreshOpenNestBulkJobs }) => refreshOpenNestBulkJobs());
         return;
       }
       if (next === "active") {
@@ -559,9 +568,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (kdpRoyaltySource !== "extension_ios") return;
     const id = setInterval(() => {
-      void import("../lib/kdp/importer").then((m) =>
-        m.runKdpIosHelperTick("interval", { profileIds: selectedProfileIds }),
-      );
+      void import("../lib/kdp/importer").then(async (m) => {
+        const { resolveLockedPhoneKdpWakeMode } = await import("../lib/kdp/backgroundWake");
+        const wakeMode = await resolveLockedPhoneKdpWakeMode("background");
+        await m.runKdpIosHelperTick("interval", { profileIds: selectedProfileIds, wakeMode });
+      });
     }, 15 * 60_000);
     return () => clearInterval(id);
   }, [hydrated, user?.id, kdpRoyaltySource, selectedProfileIds]);
@@ -723,7 +734,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setNotificationsState(n);
     void storage.setItem(STORAGE_KEYS.notifications, JSON.stringify(n));
     if (user?.id) void saveUserSetting(user.id, "notifications", n);
-    const wants = n.newOrder || n.bookAttention || n.campaignSpend || n.dailyDigest;
+    const wants = anyNotificationPrefEnabled(n);
     void configureNotifications(n, { requestPermission: wants });
   }, [user?.id]);
 
@@ -749,6 +760,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     return cur;
   }, [selectedProfiles]);
+
+  const entityCooldownHours = useMemo(
+    () => pickEntityCooldownHours(remoteSettings as Record<string, unknown> | undefined),
+    [remoteSettings],
+  );
 
   const scopeLoading = profilesLoading || waitingForCustomer || (!!user && !guestMode && !nestTokenFetched);
 
@@ -783,6 +799,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       notifications,
       setNotifications,
       notificationRuntime,
+      entityCooldownHours,
     }),
     [
       profiles,
@@ -813,6 +830,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       notifications,
       setNotifications,
       notificationRuntime,
+      entityCooldownHours,
     ],
   );
 

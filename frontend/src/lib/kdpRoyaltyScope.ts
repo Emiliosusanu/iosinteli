@@ -113,6 +113,29 @@ export function selectKdpRoyaltyScope(profiles: readonly RoyaltyCountryProfile[]
   return { kind: "unavailable", reason: "mixed_non_us", country: null, profileIds: [] };
 }
 
+export function profilesMatchingSelection(
+  profiles: readonly RoyaltyCountryProfile[],
+  selectedIds: readonly string[],
+): RoyaltyCountryProfile[] {
+  const wanted = new Set(
+    selectedIds.map((id) => String(id || "").trim()).filter(Boolean),
+  );
+  if (!wanted.size) return [...profiles];
+  return profiles.filter((profile) => {
+    const id = String(profile.id || "").trim();
+    const adsId = String(profile.profile_id || "").trim();
+    return (id && wanted.has(id)) || (adsId && wanted.has(adsId));
+  });
+}
+
+/** Country rules on the selected (in-view) profiles only. */
+export function selectKdpRoyaltyScopeForSelection(
+  profiles: readonly RoyaltyCountryProfile[],
+  selectedIds: readonly string[],
+): KdpRoyaltyScope {
+  return selectKdpRoyaltyScope(profilesMatchingSelection(profiles, selectedIds));
+}
+
 export function kdpRoyaltyProfileIdsForQuery(profiles: readonly RoyaltyCountryProfile[]): string[] {
   return selectKdpRoyaltyScope(profiles).profileIds;
 }

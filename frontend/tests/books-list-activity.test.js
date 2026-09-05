@@ -48,6 +48,8 @@ test("Overview admin books respect 60-day activity keys", () => {
   assert.match(home, /filterTopBooksByRecentActivity/);
   assert.match(home, /books-activity-60d/);
   assert.match(home, /activeBookKeysQ\.isError/);
+  assert.match(home, /limit: 300/);
+  assert.match(home, /activityDays: 0/);
 });
 
 test("Books tab uses period-scoped list without 60-day gate", () => {
@@ -60,7 +62,8 @@ test("Books tab uses period-scoped list without 60-day gate", () => {
 test("empty books copy is not misleading when KDP was never imported", () => {
   const missing = booksEmptyCopy("", { iosHelperOn: false, hasLinkedKdp: false });
   assert.equal(missing.title, "Connect KDP");
-  assert.equal(missing.subtitle, "");
+  assert.match(missing.subtitle, /Chrome on a computer or the iPhone helper/);
+  assert.equal(missing.actionLabel, "Set up royalties");
   const accountOnly = booksEmptyCopy("", { hasAccountRoyalties: true });
   assert.equal(accountOnly.title, "No per-book breakdown");
   assert.equal(accountOnly.subtitle, "");

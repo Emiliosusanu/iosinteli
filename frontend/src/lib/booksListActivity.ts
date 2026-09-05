@@ -43,7 +43,7 @@ export function filterTopBooksByRecentActivity<T extends BookListRow>(
 export function booksEmptyCopy(
   search: string,
   opts: { iosHelperOn?: boolean; hasLinkedKdp?: boolean; hasAccountRoyalties?: boolean } = {},
-): { title: string; subtitle: string } {
+): { title: string; subtitle: string; actionLabel?: string } {
   if (search.trim()) {
     return { title: "No matching books", subtitle: "Try another search" };
   }
@@ -56,7 +56,8 @@ export function booksEmptyCopy(
   if (!opts.hasLinkedKdp && !opts.iosHelperOn) {
     return {
       title: "Connect KDP",
-      subtitle: "",
+      subtitle: "Import royalties with Chrome on a computer or the iPhone helper.",
+      actionLabel: "Set up royalties",
     };
   }
   return {

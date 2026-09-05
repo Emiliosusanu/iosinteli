@@ -134,7 +134,7 @@ export default function CampaignDetail() {
   const router = useRouter();
   const { width: viewportWidth } = useWindowDimensions();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { primaryCurrency, dateRange, selectedProfileIds, profilesLoading, adminFilterUserId } = useApp();
+  const { primaryCurrency, dateRange, selectedProfileIds, profilesLoading, adminFilterUserId, entityCooldownHours } = useApp();
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const { user, guestMode } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
@@ -151,6 +151,7 @@ export default function CampaignDetail() {
     title: string;
     value: number;
     fallbackTargetIds?: string[];
+    forceCooldown?: boolean;
   } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -340,7 +341,7 @@ export default function CampaignDetail() {
   const heroRoas   = heroSpend > 0 ? heroSales / heroSpend : 0;
   const heroCtr    = dailyAgg.impressions > 0 ? (dailyAgg.clicks / dailyAgg.impressions) * 100 : 0;
   const biddingLabel = biddingStrategyLabel(c.bidding_strategy);
-  const settingsCooldown = getCampaignSettingsCooldown(c as any);
+  const settingsCooldown = getCampaignSettingsCooldown(c as any, entityCooldownHours);
   const displayBudget = readBudget(campaignApiQ.data, c);
   const placementAdjustments = readPlacementAdjustments(campaignApiQ.data, c as unknown as Record<string, unknown>);
   const budgetPeriod = (c.budget_type ?? "daily").toLowerCase() === "lifetime" ? "total" : "day";
@@ -377,15 +378,18 @@ export default function CampaignDetail() {
     );
   };
 
-  const openEntityBidEdit = (edit: {
-    kind: "keyword" | "target" | "adGroup";
-    id: string;
-    title: string;
-    value: number;
-    fallbackTargetIds?: string[];
-  }) => {
+  const openEntityBidEdit = (
+    edit: {
+      kind: "keyword" | "target" | "adGroup";
+      id: string;
+      title: string;
+      value: number;
+      fallbackTargetIds?: string[];
+    },
+    opts?: { forceCooldown?: boolean },
+  ) => {
     if (blockIfCannotWriteAmazon(writeGuard)) return;
-    setEntityBidEdit(edit);
+    setEntityBidEdit({ ...edit, forceCooldown: opts?.forceCooldown === true });
   };
 
   const persistCampaign = async () => {
@@ -820,19 +824,22 @@ export default function CampaignDetail() {
                       compact
                       value={bidChipValue != null ? formatCurrency(bidChipValue, primaryCurrency) : "Set"}
                       cooldownRow={ag as any}
-                      onPress={() =>
-                        openEntityBidEdit({
-                          kind: "adGroup",
-                          id: ag.id,
-                          title: `${ag.name || "Ad Group"} default bid`,
-                          value: bidChipValue ?? 0.02,
-                          fallbackTargetIds: (productTargetsQ.data ?? [])
-                            .filter((pt) => {
-                              if (pt.ad_group_id !== ag.id) return false;
-                              return describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression).isAuto;
-                            })
-                            .map((pt) => pt.id),
-                        })
+                      onPress={(opts) =>
+                        openEntityBidEdit(
+                          {
+                            kind: "adGroup",
+                            id: ag.id,
+                            title: `${ag.name || "Ad Group"} default bid`,
+                            value: bidChipValue ?? 0.02,
+                            fallbackTargetIds: (productTargetsQ.data ?? [])
+                              .filter((pt) => {
+                                if (pt.ad_group_id !== ag.id) return false;
+                                return describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression).isAuto;
+                              })
+                              .map((pt) => pt.id),
+                          },
+                          opts,
+                        )
                       }
                     />
                   </View>
@@ -883,13 +890,16 @@ export default function CampaignDetail() {
                       return bid != null ? formatCurrency(bid, primaryCurrency) : "Set";
                     })()}
                     cooldownRow={kw as any}
-                    onPress={() =>
-                      openEntityBidEdit({
-                        kind: "keyword",
-                        id: kw.id,
-                        title: kw.keyword_text || "Keyword bid",
-                        value: readTargetBid(kw as any, resolveInheritedBid(kw.ad_group_id)) ?? 0.02,
-                      })
+                    onPress={(opts) =>
+                      openEntityBidEdit(
+                        {
+                          kind: "keyword",
+                          id: kw.id,
+                          title: kw.keyword_text || "Keyword bid",
+                          value: readTargetBid(kw as any, resolveInheritedBid(kw.ad_group_id)) ?? 0.02,
+                        },
+                        opts,
+                      )
                     }
                   />
                 </View>
@@ -909,14 +919,17 @@ export default function CampaignDetail() {
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
                 onOpenTarget={(targetId) => router.push(`/target/${targetId}` as any)}
-                onEditBid={() => {
+                onEditBid={(opts) => {
                   const bid = readTargetBid(pt, resolveInheritedBid(pt.ad_group_id));
-                  setEntityBidEdit({
-                    kind: "target",
-                    id: pt.id,
-                    title: productTargetHeading(pt),
-                    value: bid ?? 0.02,
-                  });
+                  openEntityBidEdit(
+                    {
+                      kind: "target",
+                      id: pt.id,
+                      title: productTargetHeading(pt),
+                      value: bid ?? 0.02,
+                    },
+                    opts,
+                  );
                 }}
               />
             ))}
@@ -960,14 +973,17 @@ export default function CampaignDetail() {
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
                 onOpenTarget={(targetId) => router.push(`/target/${targetId}` as any)}
-                onEditBid={() => {
+                onEditBid={(opts) => {
                   const bid = readTargetBid(pt, resolveInheritedBid(pt.ad_group_id));
-                  setEntityBidEdit({
-                    kind: "target",
-                    id: pt.id,
-                    title: productTargetHeading(pt),
-                    value: bid ?? 0.02,
-                  });
+                  openEntityBidEdit(
+                    {
+                      kind: "target",
+                      id: pt.id,
+                      title: productTargetHeading(pt),
+                      value: bid ?? 0.02,
+                    },
+                    opts,
+                  );
                 }}
               />
             ))}
@@ -1127,12 +1143,17 @@ export default function CampaignDetail() {
           }
           const write =
             edit.kind === "adGroup"
-              ? updateAdGroupManual(edit.id, { defaultBid: next, forceCooldown: true }, edit.fallbackTargetIds ?? [])
+              ? updateAdGroupManual(
+                  edit.id,
+                  { defaultBid: next, forceCooldown: edit.forceCooldown === true },
+                  edit.fallbackTargetIds ?? [],
+                )
               : enqueueEntityBidWrite({
                   entityKind: edit.kind === "keyword" ? "keyword" : "product_target",
                   entityId: edit.id,
                   bid: next,
                   previousBid,
+                  forceCooldown: edit.forceCooldown === true,
                 });
           void write
             .then(() => {
@@ -1284,7 +1305,7 @@ function ProductTargetRow({
   inheritedDefaultBid?: number;
   t: any;
   onOpenTarget: (targetId: string) => void;
-  onEditBid: () => void;
+  onEditBid: (opts?: { forceCooldown?: boolean }) => void;
 }) {
   const target = describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression);
   const fallbackCover = fallbackAsinCoverUrl(target.asin);

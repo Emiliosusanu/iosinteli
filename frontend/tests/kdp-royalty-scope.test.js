@@ -8,6 +8,7 @@ import {
   kdpRoyaltyProfileIdsForQuery,
   normalizeRoyaltyCountry,
   selectKdpRoyaltyScope,
+  selectKdpRoyaltyScopeForSelection,
 } from "../src/lib/kdpRoyaltyScope.ts";
 
 const home = readFileSync(new URL("../app/(tabs)/index.tsx", import.meta.url), "utf8");
@@ -114,10 +115,20 @@ test("Home, Books, notifications, and background refresh use enabled-country roy
   assert.match(products, /selectKdpRoyaltyScope/);
   assert.match(products, /kdpProfileIds: royaltyProfiles/);
   assert.match(products, /fetchKdpRoyaltiesRange\(royaltyProfiles/);
-  assert.match(notifications, /selectKdpRoyaltyScope/);
+  assert.match(notifications, /selectKdpRoyaltyScopeForSelection/);
   assert.match(notifications, /knownKdpRoyaltyTotal/);
-  assert.match(background, /selectKdpRoyaltyScope/);
+  assert.match(background, /selectKdpRoyaltyScopeForSelection/);
   assert.match(productDetail, /selectKdpRoyaltyScope/);
   assert.match(queries, /kdpLinkProfileIds/);
   assert.match(queries, /kdpProfileIds !== undefined \? opts\.kdpProfileIds : profileIds/);
+  assert.equal(
+    selectKdpRoyaltyScopeForSelection(
+      [
+        profile({ id: "us", profile_id: "us-ads", country_code: "US", is_enabled: true }),
+        profile({ id: "ca", profile_id: "ca-ads", country_code: "CA", is_enabled: true }),
+      ],
+      ["ca"],
+    ).country,
+    "CA",
+  );
 });

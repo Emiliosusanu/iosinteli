@@ -25,6 +25,10 @@ test("required notification destinations stay inside the allowlist", () => {
   assert.equal(resolveDeepLinkHref("inteliads://rules"), DEEP_LINK_HREFS.ruleHistory);
   assert.equal(resolveDeepLinkHref("inteliads://bid-bot"), DEEP_LINK_HREFS.bidBot);
   assert.equal(resolveDeepLinkHref("inteliads://product/B0FSSV2PRT"), "/product/B0FSSV2PRT");
+  assert.equal(resolveDeepLinkHref("inteliads://kdp-helper"), DEEP_LINK_HREFS.kdpHelper);
+  assert.equal(resolveDeepLinkHref("inteliads://more/kdp-source"), DEEP_LINK_HREFS.kdpSource);
+  assert.equal(resolveDeepLinkHref("inteliads://more/notifications"), DEEP_LINK_HREFS.notifications);
+  assert.equal(resolveDeepLinkHref("inteliads://kdp-data-stale"), DEEP_LINK_HREFS.kdpSource);
 });
 
 test("unknown and external paths fall back to Overview", () => {

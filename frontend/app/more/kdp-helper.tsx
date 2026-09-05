@@ -1,24 +1,22 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { SubScreen } from "@/src/components/SubScreen";
 import { PrimaryButton, SecondaryButton } from "@/src/components/Primitives";
 import { IOSGroupedSection } from "@/src/components/ios/Native";
+import { KdpReportsWebView, KDP_HELPER_HOME } from "@/src/components/KdpReportsWebView";
 import { useApp } from "@/src/contexts/AppContext";
 import { useTheme } from "@/src/lib/theme";
-import { kdpInjectedJavaScript } from "@/src/lib/kdp/bridge";
+import { setKdpHelperScreenFocused } from "@/src/lib/kdp/helperUi";
 import { runKdpIosHelperTick } from "@/src/lib/kdp/importer";
 import {
   attachKdpWebView,
   getKdpHelperStatus,
-  handleKdpWebViewMessage,
   kdpTemplatesReady,
   subscribeKdpHelperStatus,
 } from "@/src/lib/kdp/runtime";
 import { KDP_CAPTURE_PAGES } from "@/src/lib/kdp/templates";
 import { isIosHelperEnabled } from "@/src/lib/kdp/source";
-
-const KDP_HOME = "https://kdpreports.amazon.com/reports/royalties";
 
 export default function KdpHelperScreen() {
   const t = useTheme();
@@ -29,17 +27,29 @@ export default function KdpHelperScreen() {
 
   useEffect(() => subscribeKdpHelperStatus(setStatus), []);
 
-  useEffect(() => {
-    attachKdpWebView((js) => {
+  useLayoutEffect(() => {
+    setKdpHelperScreenFocused(true);
+    attachKdpWebView("ui", (js) => {
       ref.current?.injectJavaScript(js);
     });
-    return () => attachKdpWebView(null);
+    return () => {
+      attachKdpWebView("ui", null);
+      setKdpHelperScreenFocused(false);
+    };
   }, []);
 
   const captured = useMemo(
     () => KDP_CAPTURE_PAGES.filter((p) => status.templates[p.type]).map((p) => p.type),
     [status.templates],
   );
+  const startedAfterLogin = useRef(false);
+
+  useEffect(() => {
+    if (!enabled || !status.loggedIn || status.running || startedAfterLogin.current) return;
+    if (!kdpTemplatesReady()) return;
+    startedAfterLogin.current = true;
+    void runKdpIosHelperTick("manual", { force: true, profileIds: selectedProfileIds });
+  }, [enabled, status.loggedIn, status.running, status.templates, selectedProfileIds]);
 
   const onSync = () => {
     void runKdpIosHelperTick("manual", { force: true, profileIds: selectedProfileIds });
@@ -50,7 +60,7 @@ export default function KdpHelperScreen() {
       <IOSGroupedSection
         footer={
           enabled
-            ? "Sign in to KDP below once. Every ~15 minutes this iPhone imports today and yesterday, then continues any leftover last-30 days — even if the phone was off overnight. After 2am it starts a full 30-day correction and keeps going until every day is in. Web history skips the first 30→90 backfill."
+            ? "Sign in to KDP below once. Every ~15 minutes this iPhone imports today and yesterday. If Chrome has not already imported the last 90 days, this iPhone finishes that backfill in the background — even if you close the app — and resumes on the next wake. After 2am it starts a full 30-day correction and keeps going until every leftover day is in."
             : "Turn on Royalty source → Chrome + iPhone in Settings first."
         }
       >
@@ -77,35 +87,21 @@ export default function KdpHelperScreen() {
       </IOSGroupedSection>
 
       <View style={styles.webWrap}>
-        <WebView
-          ref={ref}
-          source={{ uri: KDP_HOME }}
-          style={styles.web}
-          sharedCookiesEnabled
-          thirdPartyCookiesEnabled
-          javaScriptEnabled
-          domStorageEnabled
-          injectedJavaScript={kdpInjectedJavaScript()}
-          onMessage={(event) => handleKdpWebViewMessage(event.nativeEvent.data)}
-          onNavigationStateChange={(nav) => {
-            handleKdpWebViewMessage(JSON.stringify({ channel: "kdp", kind: "NAV", url: nav.url }));
-          }}
-          onLoadEnd={() => {
-            ref.current?.injectJavaScript(kdpInjectedJavaScript());
-          }}
-        />
+        <KdpReportsWebView webRef={ref} style={styles.web} />
       </View>
 
       <View style={styles.actions}>
         <PrimaryButton
           label={status.running ? "Importing…" : kdpTemplatesReady() ? "Import now" : "Capture and import"}
           onPress={onSync}
-          disabled={!enabled || status.running}
+          disabled={!enabled || status.running || !status.loggedIn}
         />
         <View style={{ height: 10 }} />
         <SecondaryButton
           label="Open royalties"
-          onPress={() => ref.current?.injectJavaScript(`window.location.href=${JSON.stringify(KDP_HOME)};true;`)}
+          onPress={() =>
+            ref.current?.injectJavaScript(`window.location.href=${JSON.stringify(KDP_HELPER_HOME)};true;`)
+          }
         />
       </View>
     </SubScreen>

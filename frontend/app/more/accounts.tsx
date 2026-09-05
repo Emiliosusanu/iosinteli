@@ -15,6 +15,7 @@ import {
   KeyboardAvoidingView,
 } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type Href, useRouter } from "expo-router";
 import { SubScreen } from "@/src/components/SubScreen";
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
@@ -120,6 +121,7 @@ function profileLabel(profiles: AmazonProfile[], id: string): string {
 
 export default function AmazonAccountsScreen() {
   const t = useTheme();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const {
     profiles,
@@ -755,9 +757,19 @@ export default function AmazonAccountsScreen() {
               />
             </View>
           ) : kdpAccounts.length === 0 ? (
-            <Text style={[t.typography.footnote, styles.kdpNote, { color: t.colors.text_secondary }]}>
-              No KDP accounts
-            </Text>
+            <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+              <Text style={[t.typography.footnote, { color: t.colors.text_secondary, lineHeight: 18 }]}>
+                No KDP accounts. Import with Chrome on a computer or the iPhone helper.
+              </Text>
+              <View style={{ marginTop: 12 }}>
+                <SecondaryButton
+                  testID="kdp-setup-royalties"
+                  label="Set up royalties"
+                  onPress={() => router.push("/more/kdp-source" as Href)}
+                  full
+                />
+              </View>
+            </View>
           ) : (
             kdpAccounts.map((account, index) => {
               const linked = account.linked_amazon_profile_ids ?? [];

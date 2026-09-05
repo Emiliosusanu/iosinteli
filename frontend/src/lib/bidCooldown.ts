@@ -9,6 +9,23 @@
 
 export const DEFAULT_ENTITY_COOLDOWN_HOURS = 48;
 
+/** Nest/user_settings `entity_cooldown_hours` — never invent a window. */
+export function resolveEntityCooldownHours(raw: unknown): number {
+  if (raw && typeof raw === "object" && raw !== null && "value" in raw) {
+    return resolveEntityCooldownHours((raw as { value: unknown }).value);
+  }
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 1 && n <= 168) return Math.round(n);
+  return DEFAULT_ENTITY_COOLDOWN_HOURS;
+}
+
+export function pickEntityCooldownHours(settings: Record<string, unknown> | null | undefined): number {
+  if (!settings) return DEFAULT_ENTITY_COOLDOWN_HOURS;
+  return resolveEntityCooldownHours(
+    settings.entity_cooldown_hours ?? settings.entityCooldownHours,
+  );
+}
+
 export type BidChangeSource =
   | "rule"
   | "bid_bot"
@@ -28,6 +45,9 @@ export type EntityBidCooldownFields = {
   placement_adj_change_source?: string | null;
   metrics_updated_at?: string | null;
 };
+
+/** Passed from cooldown chips — Nest forceCooldown only after Edit anyway. */
+export type CooldownOverridePress = (opts?: { forceCooldown?: boolean }) => void;
 
 export type EntityBidCooldownInfo = {
   isInCooldown: boolean;

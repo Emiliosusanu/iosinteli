@@ -179,7 +179,7 @@ test("freshness and KDP collection boundaries stay truthful", () => {
   assert.match(queries, /row\.status === "completed" && row\.completed_at/);
   assert.match(screen, /Last successful Ads sync/);
   assert.match(screen, /Royalty data present through/);
-  assert.match(KDP_IPHONE_BOUNDARY, /Chrome helper/);
+  assert.match(KDP_IPHONE_BOUNDARY, /Chrome extension or the iPhone helper/);
   assert.match(KDP_IPHONE_BOUNDARY, /refreshes linked KDP/);
   assert.doesNotMatch(screen, /KDP updated|iPhone collects|keeps KDP fresh/);
 });

@@ -32,6 +32,7 @@ export default function KeywordDetailScreen() {
   const writeGuard = { guestMode, viewAsOtherUser };
   const id = paramId(useLocalSearchParams<{ id: string }>().id);
   const [bidOpen, setBidOpen] = useState(false);
+  const bidForceCooldownRef = React.useRef(false);
   const chartWidth = Math.max(240, width - 64);
 
   const keywordQ = useQuery({
@@ -101,7 +102,7 @@ export default function KeywordDetailScreen() {
                 assertNotViewingAsOtherUser(viewAsOtherUser);
                 const previous = applyOptimisticEntityState(queryClient, "keyword", item.id, next);
                 try {
-                  await updateKeywordManual(item.id, { status: next ? "enabled" : "paused", forceCooldown: true });
+                  await updateKeywordManual(item.id, { status: next ? "enabled" : "paused" });
                   void invalidateEntityStateQueries(queryClient, "keyword");
                 } catch (error) {
                   revertOptimisticEntityState(queryClient, "keyword", item.id, previous);
@@ -148,8 +149,9 @@ export default function KeywordDetailScreen() {
             testID={`targeting-bid-${item.id}`}
             value={bidLabel}
             cooldownRow={item}
-            onPress={() => {
+            onPress={(opts) => {
               if (blockIfCannotWriteAmazon(writeGuard)) return;
+              bidForceCooldownRef.current = opts?.forceCooldown === true;
               setBidOpen(true);
             }}
           />
@@ -186,7 +188,9 @@ export default function KeywordDetailScreen() {
               entityId: item.id,
               bid: next,
               previousBid,
+              forceCooldown: bidForceCooldownRef.current,
             });
+            bidForceCooldownRef.current = false;
           } catch (error) {
             revertOptimisticEntityBid(queryClient, "keyword", item.id, previousBid);
             throw error;

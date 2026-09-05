@@ -102,7 +102,7 @@ audit "ads engine chart component" "export function AdsEngineChart" "src/compone
 audit "kdp format stack chart" "export function KdpFormatRoyaltiesChart" "src/components/Charts.tsx"
 audit "bid cooldown helper" "getEntityBidCooldown" "src/lib/bidCooldown.ts"
 audit "bulk outbox enable action" "action === \"enable\"" "src/lib/bulkOutbox.ts"
-audit "bulk outbox force cooldown" "forceCooldown: true" "src/lib/bulkOutbox.ts"
+audit "bulk outbox server cooldown" "item.forceCooldown === true" "src/lib/bulkOutbox.ts"
 audit "filter memory" "loadCampaignsFilterMemory" "src/lib/filterMemory.ts"
 audit "dual-source background refresh" "runDualSourceBackgroundRefresh" "src/lib/backgroundFinancialSync.ts"
 audit "books top royalties page" "Top royalties" "app/(tabs)/index.tsx"
