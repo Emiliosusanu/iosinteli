@@ -21,8 +21,13 @@ import {
   bookNeedsAttention,
   canNotifyBookToday,
   markBookNotified,
+  canNotifyKdpStall,
+  markKdpStallNotified,
+  clearKdpStallNotified,
+  anyNotificationPrefEnabled,
   type AlertState,
 } from "./notificationContract";
+import { kdpStallAlertCopy } from "./kdpIngestFreshness";
 import {
   digestMetricsLine,
   digestTitleForHour,
@@ -32,6 +37,7 @@ import {
   type DigestTotals,
 } from "./notificationDigest";
 import { netRoyaltiesKnown } from "./netRoyalties";
+import { adsProfileIdsForSelection, uniqueProfileIds } from "./notificationScope";
 import { nestApiJson } from "./rulesApi";
 
 export const INTELIADS_BACKGROUND_TASK = "io.inteliads.app.background-refresh";
@@ -146,13 +152,9 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       dailyDigest?: boolean;
       includeKdpNet?: boolean;
       spendThreshold?: number;
+      kdpDataStale?: boolean;
     }>(PREFS_KEY, {});
-    const anyOn =
-      prefs.newOrder ||
-      prefs.bookAttention ||
-      prefs.campaignSpend ||
-      prefs.dailyDigest;
-    if (!anyOn) return 0;
+    if (!anyNotificationPrefEnabled(prefs)) return 0;
 
     const today = toDateString(new Date());
     let alertState = rollAlertState(await readJson<AlertState>(ALERT_STATE_KEY, {}), today);
@@ -174,8 +176,17 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     // Commit cooldown only once we know we will evaluate (not on view-as / empty scope).
     await storage.setItem(ALERT_CHECK_LAST_RUN_KEY, String(now));
 
+    const { fetchAmazonProfiles } = await import("./queries");
+    const { knownKdpRoyaltyTotal, selectKdpRoyaltyScopeForSelection } = await import(
+      "./kdpRoyaltyScope"
+    );
+    const profiles = await fetchAmazonProfiles(userId, scope.viewAs).catch(() => []);
+    const adsIds = adsProfileIdsForSelection(scope.profileIds, profiles);
+    const queryIds = adsIds.length ? adsIds : scope.profileIds;
+    const royaltyIds = selectKdpRoyaltyScopeForSelection(profiles, scope.profileIds).profileIds;
+
     const snapshot = await fetchMobileOverview({
-      profileIds: scope.profileIds,
+      profileIds: queryIds,
       filterUserId: scope.viewAs,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
@@ -191,9 +202,11 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     if (prefs.includeKdpNet) {
       try {
         const { fetchKdpRoyaltiesRange } = await import("./queries");
-        const kdp = await fetchKdpRoyaltiesRange(scope.profileIds, today, today);
-        royalties = kdp.totalRoyalties ?? null;
-        if (royalties != null) net = netRoyaltiesKnown(royalties, spend);
+        if (royaltyIds.length) {
+          const kdp = await fetchKdpRoyaltiesRange(royaltyIds, today, today);
+          royalties = knownKdpRoyaltyTotal(kdp);
+          if (royalties != null) net = netRoyaltiesKnown(royalties, spend);
+        }
       } catch {
         royalties = null;
         net = null;
@@ -222,9 +235,9 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
           try {
             const { fetchKdpRoyaltiesRange } = await import("./queries");
             const yDate = String(snapshot.yesterday?.date || "").slice(0, 10);
-            if (yDate) {
-              const kdp = await fetchKdpRoyaltiesRange(scope.profileIds, yDate, yDate);
-              yesterdayRoyalties = kdp.totalRoyalties ?? null;
+            if (yDate && royaltyIds.length) {
+              const kdp = await fetchKdpRoyaltiesRange(royaltyIds, yDate, yDate);
+              yesterdayRoyalties = knownKdpRoyaltyTotal(kdp);
               if (yesterdayRoyalties != null) {
                 yesterdayNet = netRoyaltiesKnown(yesterdayRoyalties, ySpend);
               }
@@ -281,7 +294,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       const already = alertState.spendAlertDays?.[today];
       if (!already) {
         const { fetchAllCampaignBudgets } = await import("./queries");
-        const budget = await fetchAllCampaignBudgets(scope.profileIds);
+        const budget = await fetchAllCampaignBudgets(uniqueProfileIds([...queryIds, ...scope.profileIds]));
         if (spendExceedsBudget(spend, budget, prefs.spendThreshold)) {
           await scheduleLocalAlert({
             identifier: notificationIdentifier(NOTIFICATION_EVENTS.campaignOverspend, today),
@@ -308,7 +321,8 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     if (prefs.bookAttention && preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.bookAttention)) {
       const { fetchTopBooksRange } = await import("./queries");
       const books = await fetchTopBooksRange({
-        profileIds: scope.profileIds,
+        profileIds: uniqueProfileIds([...queryIds, ...scope.profileIds]),
+        kdpProfileIds: royaltyIds,
         start: today,
         end: today,
         limit: 5,
@@ -332,6 +346,28 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
           ),
         });
         alertState = markBookNotified(alertState, key);
+        sent += 1;
+      }
+    }
+
+    if (prefs.kdpDataStale && preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.kdpDataStale)) {
+      const { loadScopedKdpFreshness } = await import("./kdpIngestMonitor");
+      const rows = await loadScopedKdpFreshness(scope.profileIds, now);
+      for (const row of rows) {
+        if (!row.stale) {
+          alertState = clearKdpStallNotified(alertState, row.accountId);
+          continue;
+        }
+        if (!canNotifyKdpStall(alertState, row.accountId, now)) continue;
+        const copy = kdpStallAlertCopy(row.name);
+        await scheduleLocalAlert({
+          identifier: notificationIdentifier(NOTIFICATION_EVENTS.kdpDataStale, today, row.accountId),
+          event: NOTIFICATION_EVENTS.kdpDataStale,
+          userId,
+          title: copy.title,
+          body: notificationBodyWithTotals(copy.body, todayTotals, currency, includeKdpNet),
+        });
+        alertState = markKdpStallNotified(alertState, row.accountId, now);
         sent += 1;
       }
     }
@@ -405,7 +441,9 @@ export function installBackgroundSyncWakeHandlers(): void {
       if (silent) {
         try {
           const { runKdpIosHelperTick } = await import("./kdp/importer");
-          await runKdpIosHelperTick("push", { wakeMode: "recent" });
+          const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
+          const wakeMode = await resolveLockedPhoneKdpWakeMode("push");
+          await runKdpIosHelperTick("push", { wakeMode });
         } catch (error) {
           devWarn("KDP helper push wake skipped", error);
         }
@@ -457,79 +495,101 @@ try {
   devWarn("Notification handler unavailable.", error);
 }
 
-if (!TaskManager.isTaskDefined(INTELIADS_BACKGROUND_TASK)) {
-  TaskManager.defineTask(INTELIADS_BACKGROUND_TASK, async () => {
-    try {
-      try {
-        const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
-        await runDualSourceBackgroundRefresh("background");
-      } catch (error) {
-        devWarn("background financial refresh skipped", error);
-      }
-      try {
-        const { runKdpIosHelperTick } = await import("./kdp/importer");
-        const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
-        const wakeMode = await resolveLockedPhoneKdpWakeMode("background");
-        await runKdpIosHelperTick(wakeMode === "processing" ? "processing" : "background", {
-          wakeMode,
-        });
-      } catch (error) {
-        devWarn("KDP helper background wake skipped", error);
-      }
-      try {
-        await runAlertCheck("background");
-      } catch (error) {
-        devWarn("background alert check skipped", error);
-      }
-      try {
-        const { drainBulkOutbox } = await import("./bulkOutbox");
-        await drainBulkOutbox();
-      } catch (error) {
-        devWarn("background outbox drain skipped", error);
-      }
-      // Leftover nightly/deferred is expected work, not a failed wake (iOS throttles false).
-      return BackgroundTask.BackgroundTaskResult.Success;
-    } catch {
-      return BackgroundTask.BackgroundTaskResult.Success;
-    }
-  });
+function defineLaunchSafeTask(
+  name: string,
+  runner: () => Promise<(typeof BackgroundTask)["BackgroundTaskResult"]["Success"]>,
+) {
+  try {
+    if (TaskManager.isTaskDefined(name)) return;
+    TaskManager.defineTask(name, runner);
+  } catch (error) {
+    // AppContext/AuthContext import this module on launch. A missing or
+    // half-linked TaskManager must not abort JS before the first paint.
+    devWarn(`Task ${name} unavailable.`, error);
+  }
 }
 
-if (!TaskManager.isTaskDefined(INTELIADS_NOTIFICATION_TASK)) {
-  TaskManager.defineTask(INTELIADS_NOTIFICATION_TASK, async () => {
+defineLaunchSafeTask(INTELIADS_BACKGROUND_TASK, async () => {
+  try {
     try {
-      try {
-        const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
-        await runDualSourceBackgroundRefresh("background");
-      } catch (error) {
-        devWarn("notification financial refresh skipped", error);
-      }
-      try {
-        const { runKdpIosHelperTick } = await import("./kdp/importer");
-        const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
-        // Push defaults to recent; native pending kind still wins if set.
-        const wakeMode = await resolveLockedPhoneKdpWakeMode("push");
-        await runKdpIosHelperTick("push", { wakeMode });
-      } catch (error) {
-        devWarn("KDP helper notification wake skipped", error);
-      }
-      try {
-        await runAlertCheck("background");
-      } catch (error) {
-        devWarn("notification alert check skipped", error);
-      }
-      try {
-        const { drainBulkOutbox } = await import("./bulkOutbox");
-        await drainBulkOutbox();
-      } catch (error) {
-        devWarn("notification outbox drain skipped", error);
-      }
-      return BackgroundTask.BackgroundTaskResult.Success;
-    } catch {
-      return BackgroundTask.BackgroundTaskResult.Success;
+      const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
+      await runDualSourceBackgroundRefresh("background");
+    } catch (error) {
+      devWarn("background financial refresh skipped", error);
     }
-  });
-}
+    try {
+      const { runKdpIosHelperTick } = await import("./kdp/importer");
+      const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
+      const wakeMode = await resolveLockedPhoneKdpWakeMode("background");
+      await runKdpIosHelperTick(wakeMode === "processing" ? "processing" : "background", {
+        wakeMode,
+      });
+    } catch (error) {
+      devWarn("KDP helper background wake skipped", error);
+    }
+    try {
+      await runAlertCheck("background");
+    } catch (error) {
+      devWarn("background alert check skipped", error);
+    }
+    try {
+      const { drainBulkOutbox } = await import("./bulkOutbox");
+      await drainBulkOutbox();
+    } catch (error) {
+      devWarn("background outbox drain skipped", error);
+    }
+    try {
+      const { refreshOpenNestBulkJobs } = await import("./nestBulkJobs");
+      await refreshOpenNestBulkJobs();
+    } catch (error) {
+      devWarn("background nest bulk poll skipped", error);
+    }
+    // Leftover nightly/deferred is expected work, not a failed wake (iOS throttles false).
+    return BackgroundTask.BackgroundTaskResult.Success;
+  } catch {
+    return BackgroundTask.BackgroundTaskResult.Success;
+  }
+});
+
+defineLaunchSafeTask(INTELIADS_NOTIFICATION_TASK, async () => {
+  try {
+    try {
+      const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
+      await runDualSourceBackgroundRefresh("background");
+    } catch (error) {
+      devWarn("notification financial refresh skipped", error);
+    }
+    try {
+      const { runKdpIosHelperTick } = await import("./kdp/importer");
+      const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
+      // Push defaults to recent; native pending kind still wins if set.
+      const wakeMode = await resolveLockedPhoneKdpWakeMode("push");
+      await runKdpIosHelperTick("push", { wakeMode });
+    } catch (error) {
+      devWarn("KDP helper notification wake skipped", error);
+    }
+    try {
+      await runAlertCheck("background");
+    } catch (error) {
+      devWarn("notification alert check skipped", error);
+    }
+    try {
+      const { drainBulkOutbox } = await import("./bulkOutbox");
+      await drainBulkOutbox();
+    } catch (error) {
+      devWarn("notification outbox drain skipped", error);
+    }
+    try {
+      const { refreshOpenNestBulkJobs } = await import("./nestBulkJobs");
+      await refreshOpenNestBulkJobs();
+    } catch (error) {
+      devWarn("notification nest bulk poll skipped", error);
+    }
+    return BackgroundTask.BackgroundTaskResult.Success;
+  } catch {
+    return BackgroundTask.BackgroundTaskResult.Success;
+  }
+});
 
 export async function registerForPushAsync(opts?: {
   requestPermission?: boolean;
@@ -715,8 +775,7 @@ export async function configureNotifications(
 }> {
   const backgroundRegistered = await ensureBackgroundRefreshRegistered();
 
-  const wantsNotifications =
-    prefs.newOrder || prefs.bookAttention || prefs.campaignSpend || prefs.dailyDigest;
+  const wantsNotifications = anyNotificationPrefEnabled(prefs);
 
   // Always read OS permission — even when alert prefs are off — so KDP silent
   // push registration can still proceed when the user already granted access.
@@ -728,10 +787,7 @@ export async function configureNotifications(
       // Still push explicit OFF to Nest so mass-use defaults cannot leave stale ON prefs.
       void persistNotificationPreferences({
         newOrder: false,
-        dailyDigest: false,
-        includeKdpNet: prefs.includeKdpNet,
-        bookAttention: false,
-        campaignSpend: false,
+        dailyReport: false,
       });
       // Keep APNs registration when already granted — KDP silent wakes need the token.
       if (permission === "granted") {
@@ -776,10 +832,7 @@ export async function configureNotifications(
     void syncNotificationTimeZone();
     void persistNotificationPreferences({
       newOrder: prefs.newOrder,
-      dailyDigest: prefs.dailyDigest,
-      includeKdpNet: prefs.includeKdpNet,
-      bookAttention: prefs.bookAttention,
-      campaignSpend: prefs.campaignSpend,
+      dailyReport: prefs.dailyDigest,
     });
     void registerForPushAsync();
   }
@@ -833,17 +886,18 @@ export async function persistNotificationPreferences(prefs: {
   includeKdpNet?: boolean;
   bookAttention?: boolean;
   campaignSpend?: boolean;
+  spendThreshold?: number;
 }): Promise<boolean> {
   try {
+    // Nest ValidationPipe uses forbidNonWhitelisted. Only send fields the
+    // live preferences DTO accepts (newOrder + dailyReport). Extra iOS-only
+    // keys (dailyDigest, includeKdpNet, kdpDataStale, …) would 400 and leave
+    // Nest prefs OFF.
     await notificationNestJson("/notifications/preferences", {
       method: "PUT",
       body: JSON.stringify({
         newOrder: !!prefs.newOrder,
         dailyReport: !!(prefs.dailyReport ?? prefs.dailyDigest),
-        dailyDigest: !!prefs.dailyDigest,
-        includeKdpNet: !!prefs.includeKdpNet,
-        bookAttention: !!prefs.bookAttention,
-        campaignSpend: !!prefs.campaignSpend,
       }),
     });
     return true;

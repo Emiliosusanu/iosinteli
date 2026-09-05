@@ -22,7 +22,8 @@ export type MoreHref =
 export type MoreItem = {
   key: string;
   label: string;
-  subtitle: string;
+  /** Optional — hub labels are enough without tutorial subtitles. */
+  subtitle?: string;
   href: MoreHref;
   symbol: SFSymbol;
   color: MoreTone;
@@ -41,7 +42,6 @@ export const MORE_GROUPS: MoreGroup[] = [
       {
         key: "bid-bot",
         label: "Bid bot",
-        subtitle: "Recommendations and automation",
         href: "/more/bid-bot",
         symbol: "slider.horizontal.3",
         color: "tone_primary",
@@ -49,7 +49,6 @@ export const MORE_GROUPS: MoreGroup[] = [
       {
         key: "automation",
         label: "Rules",
-        subtitle: "Automated bid and state changes",
         href: "/more/automation",
         symbol: "arrow.triangle.branch",
         color: "tone_primary",
@@ -57,7 +56,6 @@ export const MORE_GROUPS: MoreGroup[] = [
       {
         key: "rule-history",
         label: "Rule activity",
-        subtitle: "History of rule runs",
         href: "/more/rule-history",
         symbol: "clock",
         color: "tone_inactive",
@@ -65,7 +63,6 @@ export const MORE_GROUPS: MoreGroup[] = [
       {
         key: "search-terms",
         label: "Search terms",
-        subtitle: "Review terms from ads",
         href: "/more/search-terms",
         symbol: "magnifyingglass",
         color: "tone_primary",
@@ -73,7 +70,6 @@ export const MORE_GROUPS: MoreGroup[] = [
       {
         key: "ad-groups",
         label: "Ad groups",
-        subtitle: "Browse campaign ad groups",
         href: "/more/ad-groups",
         symbol: "square.stack.3d.up",
         color: "tone_primary",
@@ -81,7 +77,6 @@ export const MORE_GROUPS: MoreGroup[] = [
       {
         key: "negative-targeting",
         label: "Negative targeting",
-        subtitle: "Keywords and product targets",
         href: "/more/negative-targeting",
         symbol: "minus.circle.fill",
         color: "tone_warning",
@@ -94,7 +89,6 @@ export const MORE_GROUPS: MoreGroup[] = [
       {
         key: "sync",
         label: "Sync",
-        subtitle: "Amazon Ads sync",
         href: "/more/sync",
         symbol: "arrow.triangle.2.circlepath",
         color: "tone_good",
@@ -102,7 +96,6 @@ export const MORE_GROUPS: MoreGroup[] = [
       {
         key: "accounts",
         label: "Amazon accounts",
-        subtitle: "Profiles, connection, and KDP links",
         href: "/more/accounts",
         symbol: "building.2",
         color: "tone_primary",
@@ -110,7 +103,6 @@ export const MORE_GROUPS: MoreGroup[] = [
       {
         key: "data-map",
         label: "Data coverage",
-        subtitle: "Amazon Ads and KDP availability",
         href: "/more/data-map",
         symbol: "chart.bar",
         color: "tone_primary",
@@ -123,7 +115,6 @@ export const MORE_GROUPS: MoreGroup[] = [
       {
         key: "settings",
         label: "Settings",
-        subtitle: "Alerts and app preferences",
         href: "/more/settings",
         symbol: "gearshape.fill",
         color: "tone_inactive",
@@ -131,7 +122,6 @@ export const MORE_GROUPS: MoreGroup[] = [
       {
         key: "account",
         label: "My account",
-        subtitle: "InteliAds account and session",
         href: "/more/account",
         symbol: "person.crop.circle.fill",
         color: "tone_primary",

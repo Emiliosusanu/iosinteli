@@ -139,7 +139,7 @@ test("entity metric totals paginate and chunk .in() filters", () => {
   assert.match(fn, /POSTGREST_PAGE_SIZE/);
   assert.match(fn, /\.range\(from, from \+ POSTGREST_PAGE_SIZE - 1\)/);
   assert.doesNotMatch(fn, /fetchAllPages/);
-  assert.doesNotMatch(fn, /\.order\(/);
+  assert.match(fn, /\.order\(/);
 });
 
 test("Books required reads paginate inside the selected-profile scope", () => {
@@ -151,7 +151,7 @@ test("Books required reads paginate inside the selected-profile scope", () => {
   assert.match(fn, /fetchAllPages/);
   assert.match(fn, /fetchOptionalInPages/);
   assert.match(queriesSrc, /const BOOKS_IN_CHUNK = 200/);
-  assert.match(fn, /fetchLinkedKdpAccountIds\(profileIds\)/);
+  assert.match(fn, /fetchLinkedKdpAccountIds\(kdpLinkProfileIds\)/);
   assert.match(fn, /\.order\("date"/);
   assert.match(fn, /\.order\("asin"/);
   assert.match(booksReadSrc, /assembleLogicalBookRows/);

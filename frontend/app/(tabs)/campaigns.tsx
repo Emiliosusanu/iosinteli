@@ -18,8 +18,19 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { fetchTopCampaignsRange, type TopCampaignRow } from "@/src/lib/queries";
-import { biddingStrategyLabel, shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
+import {
+  BIDDING_STRATEGY_OPTIONS,
+  biddingStrategyLabel,
+  isDynamicBiddingStrategy,
+  matchesEntityStateFilter,
+  normalizeBiddingStrategyCode,
+  shouldShowActiveOrPausedWithData,
+  statusLabel,
+  type BiddingStrategyCode,
+} from "@/src/lib/campaigns";
+import { getCampaignSettingsCooldown } from "@/src/lib/bidCooldown";
 import { useApp } from "@/src/contexts/AppContext";
+import { useAuth } from "@/src/contexts/AuthContext";
 import { useTheme, acosTone, toneColor, useReduceMotion, dashboard, spacing, layout } from "@/src/lib/theme";
 import { formatCurrency, formatPercent, formatInt } from "@/src/lib/format";
 import {
@@ -31,7 +42,14 @@ import {
 } from "@/src/lib/mutations";
 import { applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { TopBar } from "@/src/components/TopBar";
-import { alertMutationError, BidBudgetEditor, EntityStateSwitch, MutationTap } from "@/src/components/Mutations";
+import {
+  alertMutationError,
+  assertNotViewingAsOtherUser,
+  BidBudgetEditor,
+  blockIfCannotWriteAmazon,
+  EntityStateSwitch,
+  MutationTap,
+} from "@/src/components/Mutations";
 import { EmptyState, RetryState, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard } from "@/src/components/Primitives";
 import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
@@ -44,6 +62,9 @@ import {
   sameScopeWarmPlaceholder,
   sortedProfileIds,
 } from "@/src/lib/periodQuery";
+import { countriesForSponsoredCampaign, marketplaceFlagsA11y } from "@/src/lib/bookMarketplaces";
+import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
+import { CampaignMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 
 type PlacementField = keyof PlacementAdjustments;
 
@@ -65,18 +86,20 @@ function campaignVerdict(item: any): { label: string; tone: "good" | "warning" |
 }
 
 function emptyCopy(search: string, stateFilter: StateFilter) {
-  if (search.trim()) return { title: "No matching campaigns", subtitle: "Try a different name." };
-  if (stateFilter === "enabled") return { title: "No active campaigns", subtitle: "Try All or Paused." };
-  if (stateFilter === "paused") return { title: "No paused campaigns", subtitle: "Try All or Active." };
-  return { title: "No campaigns", subtitle: "None in this period." };
+  if (search.trim()) return { title: "No matching campaigns", subtitle: undefined as string | undefined };
+  if (stateFilter === "enabled") return { title: "No active campaigns", subtitle: undefined as string | undefined };
+  if (stateFilter === "paused") return { title: "No paused campaigns", subtitle: undefined as string | undefined };
+  return { title: "No campaigns", subtitle: undefined as string | undefined };
 }
 
-function campaignA11yLabel(item: any, verdict: { label: string }, currency: string) {
+function campaignA11yLabel(item: any, verdict: { label: string }, currency: string, marketplaceLabel?: string | null) {
   const state = statusLabel(item.state);
   const acos = Number(item.sales) > 0 ? formatPercent(Number(item.acos)) : "not available";
   const spend = formatCurrency(Number(item.spend) || 0, currency);
   const orders = formatInt(Number(item.orders) || 0);
-  return `${item.name}, ${state}, ${verdict.label}, ACoS ${acos}, Spend ${spend}, ${orders} orders`;
+  return [item.name, marketplaceLabel, state, verdict.label, `ACoS ${acos}`, `Spend ${spend}`, `${orders} orders`]
+    .filter(Boolean)
+    .join(", ");
 }
 
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -93,15 +116,24 @@ const SORT_CONFIG: { key: SortKey; label: string }[] = [
   { key: "acos", label: "ACoS" },
 ];
 
+function CampaignsListSeparator() {
+  const t = useTheme();
+  return <View style={{ height: t.layout.listGap }} />;
+}
+
 export default function CampaignsScreen() {
   const t = useTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
   const reduceMotion = useReduceMotion();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours } = useApp();
+  const marketplaceIndex = useSponsoredMarketplaceIndex();
+  const { user, guestMode } = useAuth();
+  const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
+  const writeGuard = { guestMode, viewAsOtherUser };
   const invalidateAds = useInvalidateAds();
   const [search, setSearch] = useState("");
-  const [stateFilter, setStateFilter] = useState<StateFilter>("all");
+  const [stateFilter, setStateFilter] = useState<StateFilter>("enabled");
   const [sortKey, setSortKey] = useState<SortKey>("acos");
   const [filterOpen, setFilterOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -112,6 +144,11 @@ export default function CampaignsScreen() {
     field: PlacementField;
     title: string;
     value: number;
+  } | null>(null);
+  const [strategyEdit, setStrategyEdit] = useState<{
+    id: string;
+    name: string;
+    strategy: string | null;
   } | null>(null);
 
   useEffect(() => {
@@ -147,8 +184,9 @@ export default function CampaignsScreen() {
     scopeProfiles,
     dateRange.start,
     dateRange.end,
+    primaryCurrency,
   ] as const;
-  const overviewWarmKey = ["top-campaigns-range-v2", scopeProfiles, dateRange.start, dateRange.end] as const;
+  const overviewWarmKey = ["top-campaigns-range-v2", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency] as const;
 
   const {
     data: campaigns = [],
@@ -191,7 +229,7 @@ export default function CampaignsScreen() {
   const filtered = useMemo(() => {
     let arr = campaigns.filter((c) => {
       if (!shouldShowActiveOrPausedWithData(c as any, c.state)) return false;
-      if (stateFilter !== "all" && c.state !== stateFilter) return false;
+      if (stateFilter !== "all" && !matchesEntityStateFilter(c.state, stateFilter)) return false;
       if (search) return c.name.toLowerCase().includes(search.toLowerCase());
       return true;
     });
@@ -274,6 +312,7 @@ export default function CampaignsScreen() {
   };
 
   const openPlacementEditor = async (item: TopCampaignRow, field: PlacementField) => {
+    if (blockIfCannotWriteAmazon(writeGuard)) return;
     try {
       let adj = placementAdj[item.id];
       if (!adj) {
@@ -297,7 +336,7 @@ export default function CampaignsScreen() {
   const sortLabel = SORT_CONFIG.find((entry) => entry.key === sortKey)?.label ?? "ACoS";
   const sortActive = sortKey !== "acos";
   const empty = emptyCopy(search, stateFilter);
-  const showCount = search.trim().length > 0 || stateFilter !== "all" || sortActive;
+  const showCount = search.trim().length > 0 || stateFilter !== "enabled" || sortActive;
 
   if (selectedProfileIds.length === 0) {
     return (
@@ -340,9 +379,9 @@ export default function CampaignsScreen() {
           value={stateFilter}
           onChange={applyStateFilter}
           options={[
-            { key: "all", label: "All", testID: "filter-state-all" },
             { key: "enabled", label: "Active", testID: "filter-state-enabled" },
             { key: "paused", label: "Paused", testID: "filter-state-paused" },
+            { key: "all", label: "All", testID: "filter-state-all" },
           ]}
         />
         {sortActive ? (
@@ -377,10 +416,14 @@ export default function CampaignsScreen() {
           data={filtered}
           keyExtractor={(item) => item.id}
           contentContainerStyle={{ padding: t.layout.pagePad, paddingBottom: t.layout.tabClearance }}
+          initialNumToRender={16}
+          maxToRenderPerBatch={20}
+          windowSize={7}
+          removeClippedSubviews={Platform.OS !== "ios"}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />
           }
-          ItemSeparatorComponent={() => <View style={{ height: t.layout.listGap }} />}
+          ItemSeparatorComponent={CampaignsListSeparator}
           ListEmptyComponent={<EmptyState icon="megaphone-outline" title={empty.title} subtitle={empty.subtitle} />}
           ListFooterComponent={
             listTruncated ? (
@@ -390,17 +433,18 @@ export default function CampaignsScreen() {
                   { color: t.colors.text_secondary, textAlign: "center", marginTop: t.spacing.md },
                 ]}
               >
-                Showing up to 500 fetched across {scopeProfiles.length} profile
-                {scopeProfiles.length === 1 ? "" : "s"} for this period (fair per-profile fetch). Active filters may
-                hide more rows. Narrow the date range or profiles to load a different set.
+                Showing 500 (app limit)
               </Text>
             ) : null
           }
+          // fair per-profile fetch is enforced in queries (list cap is app-only).
           renderItem={({ item }) => {
             const colorKey = bookColorKeyFor(item);
             const campaignColor = colorKey ? fallbackBookColor(colorKey) : t.colors.tone_primary;
             const verdict = campaignVerdict(item);
             const strategy = biddingStrategyLabel(item.bidding_strategy);
+            const settingsCooldown = getCampaignSettingsCooldown(item, entityCooldownHours);
+            const marketplaceCountries = countriesForSponsoredCampaign(marketplaceIndex, item);
             return (
               <AnimatedCard
                 key={item.id}
@@ -408,8 +452,24 @@ export default function CampaignsScreen() {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                   router.push(`/campaign/${item.id}`);
                 }}
+                onLongPress={() => {
+                  if (blockIfCannotWriteAmazon(writeGuard)) return;
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+                  setStrategyEdit({
+                    id: item.id,
+                    name: item.name,
+                    strategy: item.bidding_strategy,
+                  });
+                }}
+                delayLongPress={380}
                 testID={`campaign-row-${item.id}`}
-                accessibilityLabel={campaignA11yLabel(item, verdict, primaryCurrency)}
+                accessibilityLabel={campaignA11yLabel(
+                  item,
+                  verdict,
+                  primaryCurrency,
+                  marketplaceFlagsA11y(marketplaceCountries),
+                )}
+                accessibilityHint="Long press to change bidding strategy"
               >
                 <ListCard compact>
                   <View style={styles.leadRow}>
@@ -419,6 +479,7 @@ export default function CampaignsScreen() {
                         noun="campaign"
                         testID={`campaign-state-${item.id}`}
                         onChange={async (next) => {
+                          assertNotViewingAsOtherUser(viewAsOtherUser);
                           const previous = applyOptimisticEntityState(queryClient, "campaign", item.id, next);
                           try {
                             await updateCampaignState(item.id, next ? "enabled" : "paused");
@@ -438,6 +499,11 @@ export default function CampaignsScreen() {
                         >
                           {item.name}
                         </Text>
+                        <CampaignMarketplaceFlags
+                          index={marketplaceIndex}
+                          campaign={item}
+                          style={[t.typography.callout, { flexShrink: 0 }]}
+                        />
                         <View onStartShouldSetResponder={() => true}>
                           <TouchableOpacity
                             testID={`campaign-budget-${item.id}`}
@@ -450,6 +516,7 @@ export default function CampaignsScreen() {
                             accessibilityHint="Opens the budget editor. Saving writes Amazon Ads."
                             activeOpacity={0.7}
                             onPress={() => {
+                              if (blockIfCannotWriteAmazon(writeGuard)) return;
                               Haptics.selectionAsync();
                               setBudgetEdit({ id: item.id, value: Number(item.budget) || 0 });
                             }}
@@ -477,7 +544,36 @@ export default function CampaignsScreen() {
                       </View>
                       <View style={styles.metaRow}>
                         <CampaignVerdictBadge verdict={verdict} t={t} />
-                        <Text style={[t.typography.caption2, { color: t.colors.text_secondary }]}>{strategy}</Text>
+                        <TouchableOpacity
+                          testID={`campaign-strategy-${item.id}`}
+                          onPress={() => {
+                            if (blockIfCannotWriteAmazon(writeGuard)) return;
+                            Haptics.selectionAsync();
+                            setStrategyEdit({
+                              id: item.id,
+                              name: item.name,
+                              strategy: item.bidding_strategy,
+                            });
+                          }}
+                          hitSlop={6}
+                        >
+                          <Text
+                            style={[
+                              t.typography.caption2,
+                              {
+                                color: settingsCooldown.isInCooldown
+                                  ? t.colors.tone_warning
+                                  : isDynamicBiddingStrategy(item.bidding_strategy)
+                                    ? t.colors.tone_primary
+                                    : t.colors.text_secondary,
+                                fontWeight: "600",
+                              },
+                            ]}
+                          >
+                            {strategy}
+                            {settingsCooldown.isInCooldown ? " · Cooldown" : ""}
+                          </Text>
+                        </TouchableOpacity>
                       </View>
                       <DenseMetricLine
                         items={[
@@ -495,6 +591,7 @@ export default function CampaignsScreen() {
                       <PlacementSharePills
                         item={item}
                         adjustments={placementAdj[item.id]}
+                        cooldown={settingsCooldown}
                         onEdit={(field) => void openPlacementEditor(item, field)}
                       />
                     </View>
@@ -516,6 +613,7 @@ export default function CampaignsScreen() {
         onClose={() => setBudgetEdit(null)}
         onSave={async (next) => {
           if (!budgetEdit) return;
+          if (blockIfCannotWriteAmazon(writeGuard)) return;
           await updateCampaign(budgetEdit.id, { budget: next });
           await invalidateAds(["campaign-api", "campaign"]);
           await refetch();
@@ -533,6 +631,7 @@ export default function CampaignsScreen() {
         onClose={() => setPlacementEdit(null)}
         onSave={async (next) => {
           if (!placementEdit) return;
+          if (blockIfCannotWriteAmazon(writeGuard)) return;
           // Patch only the edited field — never default missing siblings to 0.
           const payload: PlacementAdjustments = { [placementEdit.field]: next };
           await updateCampaign(placementEdit.id, { placementAdjustments: payload });
@@ -544,6 +643,63 @@ export default function CampaignsScreen() {
           await refetch();
         }}
       />
+
+      <Modal
+        visible={strategyEdit != null}
+        animationType="slide"
+        presentationStyle={Platform.OS === "ios" ? "pageSheet" : undefined}
+        transparent={Platform.OS !== "ios"}
+        onRequestClose={() => setStrategyEdit(null)}
+      >
+        {Platform.OS === "ios" ? (
+          <View style={[styles.filterSheet, { backgroundColor: t.colors.background_secondary }]}>
+            <BiddingStrategySheet
+              t={t}
+              campaignName={strategyEdit?.name ?? ""}
+              current={strategyEdit?.strategy ?? null}
+              onClose={() => setStrategyEdit(null)}
+              onPick={async (code) => {
+                if (!strategyEdit) return;
+                if (blockIfCannotWriteAmazon(writeGuard)) return;
+                try {
+                  await updateCampaign(strategyEdit.id, { biddingStrategy: code });
+                  setStrategyEdit(null);
+                  await invalidateAds(["campaign-api", "campaign"]);
+                  await refetch();
+                } catch (error) {
+                  alertMutationError(error, "Couldn't update bidding strategy.");
+                }
+              }}
+            />
+          </View>
+        ) : (
+          <Pressable style={[styles.filterOverlay, { backgroundColor: t.colors.overlay }]} onPress={() => setStrategyEdit(null)}>
+            <Pressable
+              style={[styles.filterSheetAndroid, { backgroundColor: t.colors.background_secondary }]}
+              onPress={(event) => event.stopPropagation()}
+            >
+              <BiddingStrategySheet
+                t={t}
+                campaignName={strategyEdit?.name ?? ""}
+                current={strategyEdit?.strategy ?? null}
+                onClose={() => setStrategyEdit(null)}
+                onPick={async (code) => {
+                  if (!strategyEdit) return;
+                  if (blockIfCannotWriteAmazon(writeGuard)) return;
+                  try {
+                    await updateCampaign(strategyEdit.id, { biddingStrategy: code });
+                    setStrategyEdit(null);
+                    await invalidateAds(["campaign-api", "campaign"]);
+                    await refetch();
+                  } catch (error) {
+                    alertMutationError(error, "Couldn't update bidding strategy.");
+                  }
+                }}
+              />
+            </Pressable>
+          </Pressable>
+        )}
+      </Modal>
 
       <Modal
         visible={filterOpen}
@@ -609,16 +765,97 @@ function SortSheetBody({
   );
 }
 
+function BiddingStrategySheet({
+  t,
+  campaignName,
+  current,
+  onClose,
+  onPick,
+}: {
+  t: any;
+  campaignName: string;
+  current: string | null;
+  onClose: () => void;
+  onPick: (code: BiddingStrategyCode) => Promise<void>;
+}) {
+  const currentCode = normalizeBiddingStrategyCode(current);
+  const [saving, setSaving] = useState<BiddingStrategyCode | null>(null);
+  return (
+    <>
+      <View style={styles.filterSheetHeader}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>Bidding strategy</Text>
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]} numberOfLines={1}>
+            {campaignName}
+          </Text>
+        </View>
+        <TouchableOpacity
+          testID="campaigns-strategy-done"
+          accessibilityRole="button"
+          accessibilityLabel="Done"
+          onPress={onClose}
+          hitSlop={4}
+          style={styles.sheetDone}
+        >
+          <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Done</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={[styles.filterSheetBody, { gap: 10 }]}>
+        {BIDDING_STRATEGY_OPTIONS.map((opt) => {
+          const selected = currentCode === opt.code;
+          return (
+            <TouchableOpacity
+              key={opt.code}
+              testID={`campaign-strategy-option-${opt.code}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              accessibilityLabel={`${opt.label}. ${opt.hint}`}
+              disabled={saving != null}
+              onPress={() => {
+                if (selected) {
+                  onClose();
+                  return;
+                }
+                setSaving(opt.code);
+                void onPick(opt.code).finally(() => setSaving(null));
+              }}
+              style={[
+                styles.strategyOption,
+                {
+                  borderColor: selected ? t.colors.tone_primary : t.colors.separator,
+                  backgroundColor: selected ? t.colors.tone_primary + "14" : t.colors.background_tertiary,
+                },
+              ]}
+            >
+              <Text style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "700" }]}>
+                {opt.label}
+                {saving === opt.code ? "…" : ""}
+              </Text>
+              <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>{opt.hint}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </>
+  );
+}
+
 function AnimatedCard({
   children,
   onPress,
+  onLongPress,
+  delayLongPress,
   testID,
   accessibilityLabel,
+  accessibilityHint,
 }: {
   children: React.ReactNode;
   onPress: () => void;
+  onLongPress?: () => void;
+  delayLongPress?: number;
   testID?: string;
   accessibilityLabel?: string;
+  accessibilityHint?: string;
 }) {
   const reduceMotion = useReduceMotion();
   const scale = useRef(new Animated.Value(1)).current;
@@ -629,7 +866,9 @@ function AnimatedCard({
         testID={testID}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
+        accessibilityHint={accessibilityHint}
         activeOpacity={1}
+        delayLongPress={delayLongPress}
         onPressIn={() => {
           if (reduceMotion) return;
           Animated.spring(scale, { toValue: 0.968, useNativeDriver: true, damping: 20, stiffness: 450 }).start();
@@ -639,6 +878,7 @@ function AnimatedCard({
           Animated.spring(scale, { toValue: 1, useNativeDriver: true, damping: 15, stiffness: 320 }).start();
         }}
         onPress={onPress}
+        onLongPress={onLongPress}
       >
         {children}
       </TouchableOpacity>
@@ -681,10 +921,12 @@ function CampaignVerdictBadge({
 function PlacementSharePills({
   item,
   adjustments,
+  cooldown,
   onEdit,
 }: {
   item: any;
   adjustments?: PlacementAdjustments;
+  cooldown?: ReturnType<typeof getCampaignSettingsCooldown> | null;
   onEdit: (field: PlacementField) => void;
 }) {
   return (
@@ -702,6 +944,7 @@ function PlacementSharePills({
                 : formatPercent(Number(adjustments[field.key]), 0)
               : "…"
           }
+          cooldown={cooldown ?? undefined}
           onPress={() => onEdit(field.key)}
         />
       ))}
@@ -774,5 +1017,11 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     paddingTop: spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  strategyOption: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
 });

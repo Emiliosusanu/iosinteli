@@ -1,6 +1,7 @@
 /** Pure notification routing, preference, and dedup helpers. No Expo / network. */
 
 import { DEEP_LINK_HREFS, isAllowedAppHref } from "./deepLinkContract.ts";
+import { hasAuthoritativeBreakEven } from "./kdpTitlePresentation.ts";
 
 export const NOTIFICATION_EVENTS = {
   test: "test",
@@ -8,7 +9,11 @@ export const NOTIFICATION_EVENTS = {
   bookAttention: "book-attention",
   campaignOverspend: "campaign-overspend",
   periodCompare: "period-compare",
+  kdpDataStale: "kdp-data-stale",
 } as const;
+
+/** Re-notify a still-stalled KDP account at most this often. */
+export const KDP_STALL_RENOTIFY_MS = 6 * 60 * 60 * 1000;
 
 /** Backend is the sole new-order authority. Local evaluators must not generate this type. */
 export const LOCAL_NEW_ORDER_AUTHORITY = false;
@@ -26,6 +31,8 @@ export const NOTIFICATION_ROUTES = {
   campaigns: DEEP_LINK_HREFS.campaigns,
   books: DEEP_LINK_HREFS.books,
   settings: DEEP_LINK_HREFS.settings,
+  notifications: DEEP_LINK_HREFS.notifications,
+  kdpSource: DEEP_LINK_HREFS.kdpSource,
   sync: DEEP_LINK_HREFS.sync,
   bidBot: DEEP_LINK_HREFS.bidBot,
   rules: DEEP_LINK_HREFS.ruleHistory,
@@ -39,6 +46,7 @@ export type NotificationPrefsInput = {
   bookAttention?: boolean;
   campaignSpend?: boolean;
   spendThreshold?: number;
+  kdpDataStale?: boolean;
 };
 
 export type AlertState = {
@@ -52,6 +60,7 @@ export type AlertState = {
   bookPeriodAlerts?: Record<string, true>;
   digestDay?: string;
   lastDigestHour?: number;
+  kdpStallNotifiedAt?: Record<string, number>;
 };
 
 export type NotificationPayload = {
@@ -94,11 +103,23 @@ export function normalizeNotificationEvent(raw: unknown): NotificationEvent | nu
   return SERVER_EVENT_ALIASES[value] ?? null;
 }
 
+export function anyNotificationPrefEnabled(prefs: NotificationPrefsInput): boolean {
+  return !!(
+    prefs.newOrder ||
+    prefs.bookAttention ||
+    prefs.campaignSpend ||
+    prefs.dailyDigest ||
+    prefs.dailyReport ||
+    prefs.kdpDataStale
+  );
+}
+
 export function preferenceAllowsEvent(prefs: NotificationPrefsInput, event: NotificationEvent): boolean {
   if (event === NOTIFICATION_EVENTS.test) return true;
   if (event === NOTIFICATION_EVENTS.newOrders) return !!prefs.newOrder;
   if (event === NOTIFICATION_EVENTS.bookAttention) return !!prefs.bookAttention;
   if (event === NOTIFICATION_EVENTS.campaignOverspend) return !!prefs.campaignSpend;
+  if (event === NOTIFICATION_EVENTS.kdpDataStale) return !!prefs.kdpDataStale;
   if (event === NOTIFICATION_EVENTS.periodCompare) {
     return !!(prefs.dailyReport || prefs.dailyDigest);
   }
@@ -125,11 +146,13 @@ export function bookNeedsAttention(book: {
   sales?: number | null;
   acos?: number | null;
   breakeven_acos?: number | null;
+  breakEvenAcos?: number | null;
 }): boolean {
   const sales = Number(book.sales) || 0;
   const acos = Number(book.acos) || 0;
-  const breakeven = Number(book.breakeven_acos) || 0;
-  return sales > 0 && breakeven > 0 && acos > breakeven * 1.1;
+  const breakeven = book.breakeven_acos ?? book.breakEvenAcos;
+  if (!hasAuthoritativeBreakEven(breakeven)) return false;
+  return sales > 0 && acos > Number(breakeven) * 1.1;
 }
 
 function addCalendarDaysLocal(isoDate: string, days: number): string {
@@ -159,6 +182,7 @@ export function rollAlertState(state: AlertState, today: string): AlertState {
       campaignLeakDays: { ...(state.campaignLeakDays ?? {}) },
       bookPeriodAlerts: { ...(state.bookPeriodAlerts ?? {}) },
       periodAlertMonth: state.periodAlertMonth,
+      kdpStallNotifiedAt: { ...(state.kdpStallNotifiedAt ?? {}) },
     };
   }
   const spendAlertDays = pruneDatedKeysLocal(state.spendAlertDays, keepDays);
@@ -174,7 +198,33 @@ export function rollAlertState(state: AlertState, today: string): AlertState {
     campaignLeakDays: pruneDatedKeysLocal(state.campaignLeakDays, keepDays),
     periodAlertMonth: state.periodAlertMonth,
     bookPeriodAlerts: { ...(state.bookPeriodAlerts ?? {}) },
+    kdpStallNotifiedAt: { ...(state.kdpStallNotifiedAt ?? {}) },
   };
+}
+
+export function canNotifyKdpStall(state: AlertState, accountId: string, nowMs: number): boolean {
+  const key = String(accountId || "").trim();
+  if (!key) return false;
+  const last = state.kdpStallNotifiedAt?.[key];
+  if (last == null) return true;
+  return nowMs - last >= KDP_STALL_RENOTIFY_MS;
+}
+
+export function markKdpStallNotified(state: AlertState, accountId: string, nowMs: number): AlertState {
+  const key = String(accountId || "").trim();
+  if (!key) return state;
+  return {
+    ...state,
+    kdpStallNotifiedAt: { ...(state.kdpStallNotifiedAt ?? {}), [key]: nowMs },
+  };
+}
+
+export function clearKdpStallNotified(state: AlertState, accountId: string): AlertState {
+  const key = String(accountId || "").trim();
+  if (!key || !state.kdpStallNotifiedAt?.[key]) return state;
+  const next = { ...(state.kdpStallNotifiedAt ?? {}) };
+  delete next[key];
+  return { ...state, kdpStallNotifiedAt: next };
 }
 
 export function canNotifyBookToday(state: AlertState, key: string): boolean {
@@ -229,6 +279,9 @@ export function routeForNotification(
   if (payload.event === NOTIFICATION_EVENTS.bookAttention) {
     if (payload.asin) return { href: `/product/${payload.asin}`, reason: "book" };
     return { href: NOTIFICATION_ROUTES.books, reason: "book-list" };
+  }
+  if (payload.event === NOTIFICATION_EVENTS.kdpDataStale) {
+    return { href: NOTIFICATION_ROUTES.kdpSource, reason: payload.event };
   }
   return { href: NOTIFICATION_ROUTES.tabs, reason: "unknown-event" };
 }

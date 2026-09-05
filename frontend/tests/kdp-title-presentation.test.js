@@ -10,6 +10,8 @@ import {
   isPlaceholderCoverUrl,
   pickCalculatorBreakEvenAcos,
   pickUsableCoverUrl,
+  computeOverallBreakEvenAcos,
+  resolveAuthoritativeBreakEvenAcos,
 } from "../src/lib/kdpTitlePresentation.ts";
 import { logicalBookAsinsFromDailyRows } from "../src/lib/kdpBookIdentity.ts";
 
@@ -27,6 +29,7 @@ const persistSource = readFileSync(new URL("../src/lib/queryPersist.ts", import.
 const productSource = readFileSync(new URL("../app/product/[asin].tsx", import.meta.url), "utf8");
 const queriesSource = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
 const booksReadSource = readFileSync(new URL("../src/lib/kdpBooksRead.ts", import.meta.url), "utf8");
+const dashboardSource = readFileSync(new URL("../src/lib/dashboardApi.ts", import.meta.url), "utf8");
 
 test("valid same-ASIN cover wins over sash", () => {
   assert.equal(isPlaceholderCoverUrl(SASH), true);
@@ -85,6 +88,15 @@ test("fallback BE is net per sale / list price × 100, same as web", () => {
     (7.274 / 16.91) * 100,
   );
   assert.equal(pickCalculatorBreakEvenAcos([null, 43.01596688350088]), 43.02);
+  assert.equal(
+    calculatorBreakEvenFromKdpTitle({
+      target_break_even_acos: 208,
+      net_royalty_per_sale: 7.274,
+      kdp_list_price: 16.91,
+    }),
+    (7.274 / 16.91) * 100,
+  );
+  assert.equal(pickCalculatorBreakEvenAcos([208, 44]), 44);
 });
 
 test("missing pricing is unavailable, not 69/0/100", () => {
@@ -100,6 +112,56 @@ test("missing pricing is unavailable, not 69/0/100", () => {
   assert.equal(hasAuthoritativeBreakEven(0), false);
   assert.equal(formatBreakEvenAcos(0), "—");
   assert.equal(formatBreakEvenAcos(69), "69.00%");
+});
+
+test("overall Ads Engine BE is spend-weighted calculator BE, not royalties÷ads AOV", () => {
+  const weighted = computeOverallBreakEvenAcos([
+    { breakeven_acos: 30, spend: 80, sales: 20, royalties: 5, orders: 1 },
+    { breakeven_acos: 50, spend: 20, sales: 20, royalties: 5, orders: 1 },
+  ]);
+  assert.equal(Number(weighted.toFixed(2)), 34);
+
+  const inventedPeriod = computeOverallBreakEvenAcos([
+    { breakeven_acos: 208, spend: 425, sales: 995, royalties: 712, orders: 40 },
+  ]);
+  assert.equal(inventedPeriod, 0);
+
+  assert.equal(computeOverallBreakEvenAcos([]), 0);
+  assert.equal(
+    Number(
+      computeOverallBreakEvenAcos([
+        { breakeven_acos: 43.81, spend: 10 },
+        { breakeven_acos: 44.14, spend: 10 },
+      ]).toFixed(2),
+    ),
+    43.98,
+  );
+
+  assert.equal(
+    resolveAuthoritativeBreakEvenAcos({
+      breakEvenAcos: 35,
+      calculatorBreakEvenAcos: 42,
+      pricingSynced: true,
+    }),
+    42,
+  );
+  assert.equal(
+    computeOverallBreakEvenAcos([
+      {
+        breakEvenAcos: 208,
+        calculatorBreakEvenAcos: 44,
+        pricingSynced: true,
+        adSpend: 50,
+      },
+    ]),
+    44,
+  );
+});
+
+test("view-as Nest books prefer calculator BE over period royalty÷price", () => {
+  assert.match(dashboardSource, /resolveAuthoritativeBreakEvenAcos\(book\)/);
+  assert.match(dashboardSource, /calculatorBreakEvenAcos\?:/);
+  assert.doesNotMatch(dashboardSource, /breakeven_acos: n\(book\.breakEvenAcos\)/);
 });
 
 test("ACoS and break-even stay separate; labels use calculator BE", () => {

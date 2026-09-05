@@ -4,9 +4,10 @@ import { useLocalSearchParams } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { EmptyState, RetryState, ScreenSpinner, SectionCard, ToneDot } from "@/src/components/Primitives";
-import { BidBudgetEditor, EntityStateSwitch } from "@/src/components/Mutations";
+import { BidBudgetEditor, EntityStateSwitch, assertNotViewingAsOtherUser, blockIfCannotWriteAmazon } from "@/src/components/Mutations";
 import { EntityBidControl, EntityPerformance, ParentLinks, targetingPerfStatus } from "@/src/components/EntityDetail";
 import { useApp } from "@/src/contexts/AppContext";
+import { useAuth } from "@/src/contexts/AuthContext";
 import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { updateKeywordManual } from "@/src/lib/mutations";
 import { enqueueEntityBidWrite } from "@/src/lib/bulkOutbox";
@@ -26,8 +27,12 @@ export default function KeywordDetailScreen() {
   const invalidateAds = useInvalidateAds();
   const { width } = useWindowDimensions();
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
+  const { user, guestMode } = useAuth();
+  const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
+  const writeGuard = { guestMode, viewAsOtherUser };
   const id = paramId(useLocalSearchParams<{ id: string }>().id);
   const [bidOpen, setBidOpen] = useState(false);
+  const bidForceCooldownRef = React.useRef(false);
   const chartWidth = Math.max(240, width - 64);
 
   const keywordQ = useQuery({
@@ -94,9 +99,10 @@ export default function KeywordDetailScreen() {
               enabled={item.status === "enabled"}
               noun="keyword"
               onChange={async (next) => {
+                assertNotViewingAsOtherUser(viewAsOtherUser);
                 const previous = applyOptimisticEntityState(queryClient, "keyword", item.id, next);
                 try {
-                  await updateKeywordManual(item.id, { status: next ? "enabled" : "paused", forceCooldown: true });
+                  await updateKeywordManual(item.id, { status: next ? "enabled" : "paused" });
                   void invalidateEntityStateQueries(queryClient, "keyword");
                 } catch (error) {
                   revertOptimisticEntityState(queryClient, "keyword", item.id, previous);
@@ -143,7 +149,11 @@ export default function KeywordDetailScreen() {
             testID={`targeting-bid-${item.id}`}
             value={bidLabel}
             cooldownRow={item}
-            onPress={() => setBidOpen(true)}
+            onPress={(opts) => {
+              if (blockIfCannotWriteAmazon(writeGuard)) return;
+              bidForceCooldownRef.current = opts?.forceCooldown === true;
+              setBidOpen(true);
+            }}
           />
         </SectionCard>
 
@@ -170,6 +180,7 @@ export default function KeywordDetailScreen() {
         testID={`targeting-bid-editor-${item.id}`}
         onClose={() => setBidOpen(false)}
         onSave={async (next) => {
+          if (blockIfCannotWriteAmazon(writeGuard)) return;
           const previousBid = applyOptimisticEntityBid(queryClient, "keyword", item.id, next);
           try {
             await enqueueEntityBidWrite({
@@ -177,7 +188,9 @@ export default function KeywordDetailScreen() {
               entityId: item.id,
               bid: next,
               previousBid,
+              forceCooldown: bidForceCooldownRef.current,
             });
+            bidForceCooldownRef.current = false;
           } catch (error) {
             revertOptimisticEntityBid(queryClient, "keyword", item.id, previousBid);
             throw error;

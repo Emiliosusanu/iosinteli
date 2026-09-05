@@ -4,9 +4,10 @@ import { BookCover } from "@/src/components/BookCover";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol, sfFromIonicon } from "@/src/components/ios/Native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
-import { EntityStateSwitch } from "@/src/components/Mutations";
+import { EntityStateSwitch, assertNotViewingAsOtherUser } from "@/src/components/Mutations";
 import { ParentLinks, targetingPerfStatus } from "@/src/components/EntityDetail";
 import { useApp } from "@/src/contexts/AppContext";
+import { useAuth } from "@/src/contexts/AuthContext";
 import { acosTone, layout, radii, spacing, toneColor, useTheme } from "@/src/lib/theme";
 import { applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityState } from "@/src/lib/invalidateAds";
 import { updateAdGroupState } from "@/src/lib/mutations";
@@ -29,6 +30,8 @@ export default function AdGroupDetailScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
+  const { user } = useAuth();
+  const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
   const params = useLocalSearchParams<{
     id: string; name?: string; isAuto?: string; state?: string;
     spend?: string; orders?: string; acos?: string; ctr?: string; clicks?: string; impressions?: string;
@@ -216,6 +219,7 @@ export default function AdGroupDetailScreen() {
               noun="ad group"
               onChange={async (next) => {
                 if (!id) return;
+                assertNotViewingAsOtherUser(viewAsOtherUser);
                 const previous = applyOptimisticEntityState(queryClient, "ad_group", id, next);
                 try {
                   await updateAdGroupState(id, next ? "enabled" : "paused");

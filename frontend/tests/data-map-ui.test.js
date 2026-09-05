@@ -179,7 +179,7 @@ test("freshness and KDP collection boundaries stay truthful", () => {
   assert.match(queries, /row\.status === "completed" && row\.completed_at/);
   assert.match(screen, /Last successful Ads sync/);
   assert.match(screen, /Royalty data present through/);
-  assert.match(KDP_IPHONE_BOUNDARY, /Chrome helper/);
+  assert.match(KDP_IPHONE_BOUNDARY, /Chrome extension or the iPhone helper/);
   assert.match(KDP_IPHONE_BOUNDARY, /refreshes linked KDP/);
   assert.doesNotMatch(screen, /KDP updated|iPhone collects|keeps KDP fresh/);
 });
@@ -193,5 +193,5 @@ test("mixed currencies hide combined money and More names the real job", () => {
   assert.equal(formatCoverageCount(null), "—");
   assert.match(screen, /This diagnostic does not combine them/);
   assert.match(moreRoot, /label: "Data coverage"/);
-  assert.match(moreRoot, /subtitle: "Amazon Ads and KDP availability"/);
+  assert.doesNotMatch(moreRoot, /subtitle: "Amazon Ads and KDP availability"/);
 });

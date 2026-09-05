@@ -138,7 +138,8 @@ test("selected Amazon profiles stay the Ads scope; KDP uses linked accounts", ()
     queriesSource.indexOf("export async function fetchTopBooksRange"),
     queriesSource.indexOf("// ---------- Optimization Rules ----------"),
   );
-  assert.equal(fetchFn.includes("fetchLinkedKdpAccountIds(profileIds)"), true);
+  assert.equal(fetchFn.includes("fetchLinkedKdpAccountIds(kdpLinkProfileIds)"), true);
+  assert.equal(fetchFn.includes("kdpProfileIds !== undefined ? opts.kdpProfileIds : profileIds"), true);
   assert.equal(fetchFn.includes('.in("amazon_profile_id", chunk)'), true);
   assert.equal(fetchFn.includes("from(\"amazon_profiles\")"), false);
 });

@@ -51,15 +51,17 @@ test("grouping is Automation, Data, App with the live routes", () => {
 
 test("More copy does not contradict BidBot / Sync / Accounts contracts", () => {
   const copy = allCopy();
-  assert.match(copy, /recommendations and automation/);
-  assert.match(copy, /amazon ads sync/);
-  assert.match(copy, /profiles, connection, and kdp links/);
-  assert.match(copy, /keywords and product targets/);
-  assert.match(copy, /alerts and app preferences/);
+  // Hub labels only — no tutorial subtitles.
+  assert.doesNotMatch(copy, /recommendations and automation/);
+  assert.doesNotMatch(copy, /profiles, connection, and kdp links/);
+  assert.doesNotMatch(copy, /alerts and app preferences/);
+  assert.match(copy, /bid bot/);
+  assert.match(copy, /amazon accounts/);
+  assert.match(copy, /my account/);
   assert.doesNotMatch(copy, /24\/7|always up to date|selected profile|auto scheduling|confidence|probability/);
   assert.doesNotMatch(copy, /sync all|kdp \+|kdp sync|all your data/);
   assert.doesNotMatch(copy, /disconnect|bidbot limit|bid bot limit|engine guardrail/);
-  assert.equal(moreRowAccessibilityLabel("Bid bot", "Recommendations and automation"), "Bid bot. Recommendations and automation");
+  assert.equal(moreRowAccessibilityLabel("Bid bot"), "Bid bot");
 });
 
 test("banner distinguishes InteliAds account from Amazon profiles", () => {

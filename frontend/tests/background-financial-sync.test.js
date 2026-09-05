@@ -16,6 +16,12 @@ test("load errors never say failed to load", () => {
   assert.doesNotMatch(couldntLoad("books"), /failed to load/i);
 });
 
+test("background scope prefers selected profiles over last Home", () => {
+  assert.match(background, /parseSelectedProfileIds/);
+  assert.match(background, /mergeBackgroundScope/);
+  assert.match(background, /adsProfileIdsForSelection/);
+});
+
 test("dual-source background refresh is wired to notifications and resume", () => {
   assert.match(background, /BACKGROUND_REFRESH_COOLDOWN_MS = 15 \* 60_000/);
   assert.match(background, /ADS_SYNC_TRIGGER_COOLDOWN_MS = 30 \* 60_000/);

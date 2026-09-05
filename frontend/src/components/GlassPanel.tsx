@@ -1,26 +1,25 @@
 import React from "react";
 import { Platform, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import { BlurView } from "expo-blur";
-import { useTheme } from "@/src/lib/theme";
+import { dashboard, useTheme } from "@/src/lib/theme";
 
 type GlassStrength = "chrome" | "card" | "chip";
 
-const INTENSITY: Record<GlassStrength, number> = {
-  chrome: 64,
-  card: 48,
-  chip: 36,
+const INTENSITY: Record<"chrome", number> = {
+  chrome: 48,
 };
 
 /**
  * Frosted glass panel for Overview chrome / hero / chips.
- * iOS uses BlurView; Android falls back to translucent fill (no fake blur).
+ * BlurView only for chrome (header / floating chrome) — card/chip use translucent
+ * fill to avoid stacking live blurs behind scroll content.
  */
 export function GlassPanel({
   children,
   strength = "card",
   style,
-  contentStyle,
   testID,
+  contentStyle,
 }: {
   children?: React.ReactNode;
   strength?: GlassStrength;
@@ -30,16 +29,22 @@ export function GlassPanel({
 }) {
   const t = useTheme();
   const dark = t.scheme === "dark";
-  const border = dark ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.55)";
-  const fill = dark ? t.colors.glass_background : "rgba(255,255,255,0.55)";
+  const border = dark ? t.colors.glass_stroke : t.colors.glass_highlight;
+  const fill = t.colors.glass_background;
+  const wash = dark ? "rgba(18,18,20,0.28)" : "rgba(255,255,255,0.22)";
+  const useLiveBlur = Platform.OS === "ios" && strength === "chrome";
 
-  if (Platform.OS !== "ios") {
+  if (!useLiveBlur) {
     return (
       <View
         testID={testID}
         style={[
           styles.base,
-          { backgroundColor: fill, borderColor: t.colors.border },
+          {
+            backgroundColor: fill,
+            borderColor: Platform.OS === "ios" ? border : t.colors.border,
+            borderRadius: dashboard.chipRadius,
+          },
           style,
         ]}
       >
@@ -54,16 +59,13 @@ export function GlassPanel({
       style={[styles.base, { borderColor: border, overflow: "hidden" }, style]}
     >
       <BlurView
-        intensity={INTENSITY[strength]}
-        tint={dark ? "systemChromeMaterialDark" : "systemChromeMaterialLight"}
+        intensity={INTENSITY.chrome}
+        tint={dark ? "dark" : "light"}
         style={StyleSheet.absoluteFill}
       />
       <View
         pointerEvents="none"
-        style={[
-          StyleSheet.absoluteFill,
-          { backgroundColor: dark ? "rgba(18,18,20,0.28)" : "rgba(255,255,255,0.22)" },
-        ]}
+        style={[StyleSheet.absoluteFill, { backgroundColor: wash }]}
       />
       <View style={[{ position: "relative" }, contentStyle]}>{children}</View>
     </View>

@@ -8,6 +8,7 @@ import { PieChart, LineChart, BarChart } from "react-native-gifted-charts";
 import Svg, { Path, Circle, Rect, Line, Text as SvgText, Defs, LinearGradient, Stop, ClipPath, G } from "react-native-svg";
 import { useTheme, toneColor } from "../lib/theme";
 import { formatCompact, formatInt, formatPercent, safeDivide, formatCurrency } from "../lib/format";
+import { hasAuthoritativeBreakEven } from "../lib/kdpTitlePresentation";
 import { dayBarStep, dayXLayout } from "../lib/chartLayout";
 
 function innerChartWidth(width: number, padding = 40) {
@@ -116,6 +117,7 @@ function useChartSelection(
   persistSelection = false,
   onIndexChange?: (index: number | null) => void,
   controlledIndex?: number | null,
+  holdToInspect = false,
 ) {
   const [uncontrolledIndex, setUncontrolledIndex] = React.useState<number | null>(null);
   const isControlled = controlledIndex !== undefined;
@@ -165,16 +167,18 @@ function useChartSelection(
   }, [setIndex]);
 
   const gesture = React.useMemo(() => {
-    const pan = Gesture.Pan()
-      .activeOffsetX([-6, 6])
-      .failOffsetY([-10, 10])
-      .onStart((e) => runOnJS(selectByX)(e.x))
-      .onUpdate((e) => runOnJS(selectByX)(e.x));
+    const pan = Gesture.Pan().failOffsetY([-10, 10]);
+    if (holdToInspect) {
+      pan.activateAfterLongPress(160);
+    } else {
+      pan.activeOffsetX([-6, 6]);
+    }
+    pan.onStart((e) => runOnJS(selectByX)(e.x)).onUpdate((e) => runOnJS(selectByX)(e.x));
     if (!persistSelection) {
-      pan.onEnd(() => runOnJS(clearSelection)());
+      pan.onFinalize(() => runOnJS(clearSelection)());
     }
     return pan;
-  }, [selectByX, clearSelection, persistSelection]);
+  }, [selectByX, clearSelection, persistSelection, holdToInspect]);
 
   return { selectedIndex, gesture, clearSelection };
 }
@@ -712,9 +716,10 @@ export function NetProfitChart({
     data.length,
     plotWidth,
     inset,
-    true,
+    false,
     notifyDaySelect,
     controlledIndex,
+    true,
   );
 
   const geometry = React.useMemo(() => {
@@ -788,7 +793,7 @@ export function NetProfitChart({
   const negGrad = "netNegFill";
 
   return (
-    <View style={{ width: chartWidth }} accessibilityLabel="Net royalties chart. Drag to inspect a day.">
+    <View style={{ width: chartWidth }} accessibilityLabel="Profit chart. Hold a day to inspect it. Release to show the period total.">
       <View style={chartStyles.netHeader}>
         {selected ? (
           <>
@@ -800,7 +805,7 @@ export function NetProfitChart({
               <NetReadoutChip label="Net" value={tooltipNet} color={netColor} t={t} />
               {selRoy != null ? (
                 <NetReadoutChip
-                  label="Royalties"
+                  label="Gross"
                   value={formatCurrency(selRoy, currency, { compact: true })}
                   color={royColor}
                   t={t}
@@ -819,7 +824,7 @@ export function NetProfitChart({
         ) : (
           <View style={chartStyles.netLegend}>
             <LegendSwatch color={netColor} label="Net" solid t={t} />
-            {royPoints.length > 0 ? <LegendSwatch color={royColor} label="Royalties" dashed t={t} /> : null}
+            {royPoints.length > 0 ? <LegendSwatch color={royColor} label="Gross" dashed t={t} /> : null}
             {spendPoints.length > 0 ? <LegendSwatch color={spendColor} label="Ad spend" dashed t={t} /> : null}
           </View>
         )}
@@ -1081,6 +1086,8 @@ interface AdsEngineChartProps {
   clicksData: ChartPoint[];
   ordersData: ChartPoint[];
   acosData: ChartPoint[];
+  totals?: { impressions: number; clicks: number; orders: number; acos: number };
+  periodLabel?: string;
   breakEvenAcos?: number;
   width?: number;
 }
@@ -1090,6 +1097,8 @@ export function AdsEngineChart({
   clicksData,
   ordersData,
   acosData,
+  totals,
+  periodLabel,
   breakEvenAcos = 0,
   width = 320,
 }: AdsEngineChartProps) {
@@ -1097,7 +1106,15 @@ export function AdsEngineChart({
   const chartWidth = innerChartWidth(width, 0);
   const chartHeight = 168;
   const inset = 14;
-  const { selectedIndex, gesture } = useChartSelection(impressionsData.length, chartWidth, inset);
+  const { selectedIndex, gesture } = useChartSelection(
+    impressionsData.length,
+    chartWidth,
+    inset,
+    false,
+    undefined,
+    undefined,
+    true,
+  );
   if (!impressionsData.length) return <View style={{ height: 200 }} />;
 
   const imprColor = t.colors.tone_product;
@@ -1106,9 +1123,10 @@ export function AdsEngineChart({
   const acosColor = t.colors.tone_warning;
   const breakEvenColor = t.colors.tone_danger;
 
+  const showBreakEven = hasAuthoritativeBreakEven(breakEvenAcos);
   const maxClicks = Math.max(...clicksData.map((d) => d.value), 1);
   const maxOrders = Math.max(...ordersData.map((d) => d.value), 1);
-  const maxAcos = Math.max(...acosData.map((d) => d.value), breakEvenAcos || 0, 1);
+  const maxAcos = Math.max(...acosData.map((d) => d.value), showBreakEven ? breakEvenAcos : 0, 1);
   const maxImpr = Math.max(...impressionsData.map((d) => d.value), 1);
 
   function scalePoints(data: ChartPoint[], seriesMax: number) {
@@ -1126,21 +1144,30 @@ export function AdsEngineChart({
   const orderPoints = scalePoints(ordersData, maxOrders);
   const acosPoints = scalePoints(acosData, maxAcos);
   const imprPoints = scalePoints(impressionsData, maxImpr);
-  const selectedLabel = impressionsData[selectedIndex]?.label ?? "—";
-  const selectedImpr = impressionsData[selectedIndex]?.value ?? 0;
-  const selectedClicks = clicksData[selectedIndex]?.value ?? 0;
-  const selectedOrders = ordersData[selectedIndex]?.value ?? 0;
-  const selectedAcos = acosData[selectedIndex]?.value ?? 0;
+  const inspecting = selectedIndex != null;
+  const periodTotals = totals ?? {
+    impressions: impressionsData.reduce((sum, point) => sum + (Number(point.value) || 0), 0),
+    clicks: clicksData.reduce((sum, point) => sum + (Number(point.value) || 0), 0),
+    orders: ordersData.reduce((sum, point) => sum + (Number(point.value) || 0), 0),
+    acos: 0,
+  };
+  const selectedLabel = inspecting
+    ? impressionsData[selectedIndex]?.label ?? "—"
+    : periodLabel || "Period";
+  const selectedImpr = inspecting ? impressionsData[selectedIndex]?.value ?? 0 : periodTotals.impressions;
+  const selectedClicks = inspecting ? clicksData[selectedIndex]?.value ?? 0 : periodTotals.clicks;
+  const selectedOrders = inspecting ? ordersData[selectedIndex]?.value ?? 0 : periodTotals.orders;
+  const selectedAcos = inspecting ? acosData[selectedIndex]?.value ?? 0 : periodTotals.acos;
   const baseY = chartHeight - inset;
   const plotW = Math.max(1, chartWidth - inset * 2);
   const barStep = dayBarStep(impressionsData.length, plotW);
   const barW = clamp(barStep * 0.55, 2, 14);
   const breakEvenY =
-    breakEvenAcos > 0 ? inset + (1 - breakEvenAcos / maxAcos) * (chartHeight - inset * 2) : null;
+    showBreakEven ? inset + (1 - breakEvenAcos / maxAcos) * (chartHeight - inset * 2) : null;
 
   return (
     <GestureDetector gesture={gesture}>
-      <View style={{ width: chartWidth, overflow: "hidden" }} accessibilityLabel="Ads Engine chart. Drag to inspect a day.">
+      <View style={{ width: chartWidth, overflow: "hidden" }} accessibilityLabel="Ads Engine chart. Hold a day to inspect it. Release to show the period total.">
         <View style={chartStyles.tooltipRow}>
           <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{selectedLabel}</Text>
           <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={1}>
@@ -1168,7 +1195,7 @@ export function AdsEngineChart({
               height={Math.max(1, baseY - p.y)}
               rx={2}
               fill={imprColor}
-              opacity={i === selectedIndex ? 0.55 : 0.28}
+              opacity={inspecting && i === selectedIndex ? 0.55 : 0.28}
             />
           ))}
 
@@ -1189,7 +1216,7 @@ export function AdsEngineChart({
           <Path d={makeSmoothPath(orderPoints)} stroke={orderColor} strokeWidth={2.25} fill="none" strokeLinecap="round" strokeLinejoin="round" />
           <Path d={makeSmoothPath(acosPoints)} stroke={acosColor} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
 
-          {clickPoints[selectedIndex] && orderPoints[selectedIndex] && (
+          {inspecting && clickPoints[selectedIndex] && orderPoints[selectedIndex] && (
             <>
               <Line
                 x1={clickPoints[selectedIndex].x}
@@ -1227,7 +1254,7 @@ export function AdsEngineChart({
           <LegendSwatch color={clickColor} label="Clicks" solid t={t} />
           <LegendSwatch color={orderColor} label="Orders" solid t={t} />
           <LegendSwatch color={acosColor} label="ACoS" solid t={t} />
-          {breakEvenAcos > 0 ? (
+          {showBreakEven ? (
             <LegendSwatch color={breakEvenColor} label={`BE ${formatPercent(breakEvenAcos, 0)}`} dashed t={t} />
           ) : null}
         </View>

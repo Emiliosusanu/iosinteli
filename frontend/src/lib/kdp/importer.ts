@@ -10,7 +10,7 @@
  */
 import { supabase } from "../supabase.ts";
 import { accountLinkedToProfiles, resolveHelperAccountId } from "./accounts.ts";
-import { orderDaysForWake } from "./coverage.ts";
+import { orderDaysForWake, reopenOnboardingIfIncomplete } from "./coverage.ts";
 import { addDaysYmd, eachYmd, ymdInTz } from "./dates.ts";
 import {
   acknowledgeDeferredDays,
@@ -36,7 +36,7 @@ import { parseKdpJsonOrThrow, rebuildTemplateForDay } from "./replay.ts";
 import { fetchAmazonProfiles } from "../queries.ts";
 import {
   hasIncompleteNightly,
-  nightlyWindow,
+  ONBOARDING_DAYS,
   planSync,
   resolveWakeMode,
   sealNightlyIfClear,
@@ -52,6 +52,7 @@ import {
   setKdpHelperError,
   setKdpHelperRunning,
 } from "./runtime.ts";
+import { isKdpHelperScreenFocused } from "./helperUi.ts";
 import { getKdpRoyaltySource } from "./sourceStore.ts";
 import { isIosHelperEnabled, type KdpRoyaltySource } from "./source.ts";
 import { loadKdpWebSession } from "./session.ts";
@@ -254,6 +255,12 @@ export async function runKdpIosHelperTick(
   reason: string,
   opts: { force?: boolean; profileIds?: string[]; wakeMode?: KdpWakeMode } = {},
 ): Promise<{ ok: boolean; skipped?: boolean; reason: string; days?: number; wakeMode?: KdpWakeMode }> {
+  // Background / resume ticks must not navigate the sign-in WebView.
+  // Once signed in, Keychain replay can continue 90-day leftover in-place.
+  if (isKdpHelperScreenFocused() && reason !== "manual" && !getKdpHelperStatus().loggedIn) {
+    return { ok: true, skipped: true, reason: "helper_ui_focused" };
+  }
+
   if (!isIosHelperEnabled(await getKdpRoyaltySource())) {
     void appendKdpActivity("15 min sync skipped · iPhone helper off (Chrome-only source)", "info");
     return { ok: true, skipped: true, reason: "source_off" };
@@ -350,23 +357,24 @@ export async function runKdpIosHelperTick(
     const today = ymdInTz(new Date(), tz);
     const yesterday = addDaysYmd(today, -1);
 
-    // Web/Chrome already imported history → seal both milestones.
-    if (!state.onboardingDone) {
-      const history = await cloudHistorySealsOnboarding(accountId, today);
-      if (history.sealed) {
-        state = {
-          ...state,
-          onboardingDone: true,
-          milestone30Done: true,
-          onboardingCursor: null,
-          onboardingFloor: null,
-        };
-        await saveHelperSyncState(state);
-        const histMsg = `Web history found (${history.dayCount} days) — skipping 30→90 backfill`;
-        setKdpHelperRunning(true, histMsg);
-        void appendKdpActivity(histMsg, "onboarding");
-      }
+    // Always reconcile last-90 coverage. A phone that sealed onboarding after
+    // 45 Chrome days must reopen and finish the leftover.
+    const history = await cloudHistorySealsOnboarding(accountId, today);
+    const wasOnboarded = state.onboardingDone;
+    state = reopenOnboardingIfIncomplete(state, history);
+    if (history.sealed && !wasOnboarded) {
+      const histMsg = `Web history complete (${history.dayCount} days) — skipping 30→90 backfill`;
+      setKdpHelperRunning(true, histMsg);
+      void appendKdpActivity(histMsg, "onboarding");
+    } else if (history.missingHistorical.length) {
+      deferred = journalDeferredDays(deferred, history.missingHistorical);
+      await saveHelperDeferredDays(deferred);
+      const holeMsg = `Last-90 leftover · ${history.missingHistorical.length} day(s) to import`;
+      setKdpHelperRunning(true, holeMsg);
+      void appendKdpActivity(holeMsg, "onboarding");
     }
+    await saveHelperSyncState(state);
+    if (!state.onboardingDone) wakeMode = "processing";
 
     let totalDays = 0;
     let guard = 0;
@@ -412,18 +420,16 @@ export async function runKdpIosHelperTick(
       await saveHelperDeferredDays(deferred);
     }
 
-    // Recover holes: incomplete nightly, leftover journal, or cloud gaps.
-    if (state.onboardingDone) {
-      const window = nightlyWindow(today);
-      try {
-        const holes = await cloudMissingDays(accountId, window.from, window.to);
-        if (holes.length) {
-          deferred = journalDeferredDays(deferred, holes);
-          await saveHelperDeferredDays(deferred);
-        }
-      } catch {
-        /* next wake retries */
+    // Recover last-90 holes on every wake — never abandon leftover days.
+    try {
+      const floor90 = addDaysYmd(today, -(ONBOARDING_DAYS - 1));
+      const holes90 = await cloudMissingDays(accountId, floor90, yesterday);
+      if (holes90.length) {
+        deferred = journalDeferredDays(deferred, holes90);
+        await saveHelperDeferredDays(deferred);
       }
+    } catch {
+      /* next wake retries */
     }
 
     const queued = orderDaysForWake(deferred, today, yesterday).slice(0, Math.max(0, remaining));
@@ -462,9 +468,14 @@ export async function runKdpIosHelperTick(
       void appendKdpActivity(`15 min sync · imported ${totalDays} day(s)`, "steady");
     }
 
-    const leftover = hasIncompleteNightly(state) || deferred.length > 0;
+    const leftover = !state.onboardingDone || hasIncompleteNightly(state) || deferred.length > 0;
     const backlog = deferred.length ? ` · ${deferred.length} deferred` : "";
-    const leftoverNote = leftover && !deferred.length ? " · nightly leftover" : "";
+    const leftoverNote =
+      leftover && !deferred.length
+        ? state.onboardingDone
+          ? " · nightly leftover"
+          : " · last-90 leftover"
+        : "";
     const doneMessage = totalDays
       ? `Imported ${totalDays} day${totalDays === 1 ? "" : "s"}${backlog}${leftoverNote}`
       : leftover

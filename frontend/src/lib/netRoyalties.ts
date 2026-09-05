@@ -8,6 +8,7 @@
 
 export const NET_ROYALTIES_LABEL = "Net Royalties";
 export const NET_ROYALTIES_CAPTION = "KDP royalties minus Amazon Ads spend.";
+export const GROSS_ROYALTIES_LABEL = "Gross";
 export const KDP_ROYALTIES_LABEL = "KDP royalties";
 export const ADS_SPEND_LABEL = "Amazon Ads spend";
 export const ADS_SALES_LABEL = "Amazon Ads sales";

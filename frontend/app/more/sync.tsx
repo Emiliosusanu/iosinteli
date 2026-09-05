@@ -298,7 +298,7 @@ export default function SyncScreen() {
 
   const statusLoading = !statusKnown && statusQ.isLoading;
   const syncNowDisabled =
-    !canMutate || inProgress || syncBusy || !hasSyncAccess || (statusLoading && !statusQ.isError);
+    !canMutate || inProgress || syncBusy || (statusLoading && !statusQ.isError);
 
   return (
     <SubScreen
@@ -412,7 +412,7 @@ export default function SyncScreen() {
         ) : null}
         {canMutate && !hasSyncAccess ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, textAlign: "center", marginTop: 8 }]}>
-            {statusQ.data?.noSyncAccessMessage || PLAN_MANAGE_MESSAGE}
+            {statusQ.data?.noSyncAccessMessage || PLAN_MANAGE_MESSAGE} Sync now still tries.
           </Text>
         ) : null}
 

@@ -38,8 +38,10 @@ type StatusListener = (status: KdpHelperStatus) => void;
 
 const FETCH_TIMEOUT_MS = 45_000;
 
+export type KdpWebViewSlot = "host" | "ui";
+
 let injectFn: ((js: string) => void) | null = null;
-const injectStack: Array<(js: string) => void> = [];
+const injectSlots: Partial<Record<KdpWebViewSlot, (js: string) => void>> = {};
 let waiters = new Map<string, FetchWaiter>();
 let reqSeq = 0;
 const listeners = new Set<StatusListener>();
@@ -90,10 +92,11 @@ export function setKdpHelperError(error: string | null) {
   emit();
 }
 
-export function attachKdpWebView(inject: ((js: string) => void) | null) {
-  if (inject) injectStack.push(inject);
-  else injectStack.pop();
-  injectFn = injectStack[injectStack.length - 1] ?? null;
+export function attachKdpWebView(slot: KdpWebViewSlot, inject: ((js: string) => void) | null) {
+  if (inject) injectSlots[slot] = inject;
+  else delete injectSlots[slot];
+  // Visible helper screen always wins so a hidden host cannot drive sign-in.
+  injectFn = injectSlots.ui ?? injectSlots.host ?? null;
   if (!injectFn) {
     status = { ...status, ready: false };
     emit();

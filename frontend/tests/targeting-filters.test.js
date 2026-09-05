@@ -98,7 +98,7 @@ test("placement short campaign metrics normalize for targeting filters", () => {
   );
 });
 
-test("active filter family drives sort key; else ACoS desc", () => {
+test("explicit sort always wins; ranges never hijack sort order", () => {
   assert.equal(
     resolveTargetingSortKey("acos", {
       acosMin: null,
@@ -110,10 +110,10 @@ test("active filter family drives sort key; else ACoS desc", () => {
       impressionsMin: null,
       impressionsMax: null,
     }),
-    "bid",
+    "acos",
   );
   assert.equal(
-    resolveTargetingSortKey("acos", {
+    resolveTargetingSortKey("spend", {
       acosMin: 10,
       acosMax: 20,
       bidMin: null,
@@ -123,10 +123,10 @@ test("active filter family drives sort key; else ACoS desc", () => {
       impressionsMin: null,
       impressionsMax: null,
     }),
-    "acos",
+    "spend",
   );
   assert.equal(
-    resolveTargetingSortKey("acos", {
+    resolveTargetingSortKey("clicks", {
       acosMin: null,
       acosMax: null,
       bidMin: null,
@@ -136,7 +136,7 @@ test("active filter family drives sort key; else ACoS desc", () => {
       impressionsMin: 50,
       impressionsMax: null,
     }),
-    "impressions",
+    "clicks",
   );
   assert.equal(
     resolveTargetingSortKey(null, {
@@ -153,7 +153,7 @@ test("active filter family drives sort key; else ACoS desc", () => {
   );
 });
 
-test("advanced sort override is honest when ranges disagree with explicit sort", () => {
+test("ranges never report a sort override; placement still strips bid ranges", () => {
   const bidMax = {
     acosMin: null,
     acosMax: null,
@@ -164,7 +164,7 @@ test("advanced sort override is honest when ranges disagree with explicit sort",
     impressionsMin: null,
     impressionsMax: null,
   };
-  assert.equal(advancedSortOverridesExplicit("spend", bidMax), true);
+  assert.equal(advancedSortOverridesExplicit("spend", bidMax), false);
   assert.equal(advancedSortOverridesExplicit("bid", bidMax), false);
   assert.equal(
     advancedSortOverridesExplicit("acos", {
@@ -203,6 +203,21 @@ test("filter range inputs keep decimals while typing (0.85)", () => {
   assert.deepEqual(parseFilterRangeInput("0,85"), { kind: "value", value: 0.85 });
   assert.deepEqual(parseFilterRangeInput(""), { kind: "empty" });
   assert.deepEqual(parseFilterRangeInput("12", true), { kind: "value", value: 12 });
+});
+
+test("Targets Active default + parent-chain contract is wired for all segments", () => {
+  const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
+  const campaigns = readFileSync(new URL("../src/lib/campaigns.ts", import.meta.url), "utf8");
+  assert.match(campaigns, /DEFAULT_TARGETING_STATE_FILTER:\s*EntityStateFilter\s*=\s*"enabled"/);
+  assert.match(targeting, /useState<EntityStateFilter>\(DEFAULT_TARGETING_STATE_FILTER\)/);
+  assert.match(targeting, /matchesLiveTargetingRow/);
+  assert.match(campaigns, /Fail closed when Active/);
+  assert.match(campaigns, /"adGroupState" in opts/);
+  // Keywords, product targets (asins/auto/category), placement all filtered.
+  assert.match(targeting, /adGroupState: \(k as any\)\.ad_group_state/);
+  assert.match(targeting, /adGroupState: p\.ad_group_state/);
+  assert.match(targeting, /campaignState: c\.state/);
+  assert.doesNotMatch(targeting, /shouldShowActiveOrPausedWithData/);
 });
 
 test("placement cover enrichment maps Nest campaigns without inventing books", () => {

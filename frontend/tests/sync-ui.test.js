@@ -37,14 +37,14 @@ import {
 const screen = readFileSync(new URL("../app/more/sync.tsx", import.meta.url), "utf8");
 
 test("empty selected profiles is not Amazon disconnect", () => {
-  assert.equal(NO_SELECTED_TITLE, "No profiles in the current view");
-  assert.match(NO_SELECTED_SUBTITLE, /enabled profiles/);
+  assert.equal(NO_SELECTED_TITLE, "No profiles in view");
+  assert.match(NO_SELECTED_SUBTITLE, /enabled/);
   assert.match(screen, /NO_SELECTED_TITLE/);
   assert.doesNotMatch(screen, /No account connected/);
 });
 
 test("selected view is not Sync Now scope", () => {
-  assert.equal(SCOPE_HELPER, "Showing selected profiles. Sync runs for all enabled profiles.");
+  assert.equal(SCOPE_HELPER, "Selected profiles · Sync runs for all enabled");
   assert.match(screen, /SCOPE_HELPER/);
   assert.match(screen, /Selected profiles/);
 });
@@ -200,15 +200,15 @@ test("expired-token CTA only matches strong LWA evidence", () => {
 });
 
 test("cancel confirm is stop-not-delete, records are demoted, AMS stays separate", () => {
-  assert.equal(CANCEL_CONFIRM_TITLE, "Cancel current Amazon Ads sync?");
-  assert.match(CANCEL_CONFIRM_MESSAGE, /already imported stays/);
+  assert.equal(CANCEL_CONFIRM_TITLE, "Cancel sync?");
+  assert.match(CANCEL_CONFIRM_MESSAGE, /Imported data stays/);
   assert.doesNotMatch(CANCEL_CONFIRM_TITLE + CANCEL_CONFIRM_MESSAGE, /Delete sync|rolled back/i);
   assert.match(screen, /CANCEL_CONFIRM_TITLE/);
-  assert.match(RECORDS_FOOTNOTE, /Not catalog size/);
+  assert.match(RECORDS_FOOTNOTE, /not catalog size/i);
   assert.match(screen, /logWindowCaption/);
   assert.doesNotMatch(screen, /label="Records"/);
   assert.equal(AMS_SECTION_TITLE, "Marketing Stream");
-  assert.match(AMS_SECTION_SUBTITLE, /does not refresh/);
+  assert.match(AMS_SECTION_SUBTITLE, /Not refreshed by Sync now/);
   assert.equal(amsEventLabel("CAMPAIGN_CLICK"), "CAMPAIGN CLICK");
 });
 
@@ -224,7 +224,7 @@ test("VoiceOver copy uses Amazon Ads state, not color-only status", () => {
     sessionRowAccessibilityLabel({ type: "hourly", status: "completed", when: "Updated 1 hour ago" }),
     /Scheduled/,
   );
-  assert.match(REFRESH_A11Y_HINT, /Does not start a new sync/);
+  assert.match(REFRESH_A11Y_HINT, /Does not start sync/);
   assert.match(screen, /REFRESH_A11Y_HINT/);
   assert.match(screen, /accessibilityLabel=\{statusSpeech\}/);
 });
@@ -234,7 +234,7 @@ test("screen keeps Ads-only copy and view-as lock", () => {
   assert.match(screen, /KDP iPhone helper/);
   assert.doesNotMatch(screen, /Keep the app open/);
   assert.match(screen, /VIEWING_CUSTOMER_BANNER/);
-  assert.equal(VIEWING_CUSTOMER_BANNER, "Viewing a customer. Sync now and Cancel stay off.");
+  assert.equal(VIEWING_CUSTOMER_BANNER, "Viewing customer — Sync off");
   assert.match(screen, /includeSessions: !viewingCustomer/);
   assert.match(screen, /4000/);
 });

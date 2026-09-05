@@ -21,7 +21,8 @@ test("OverviewHeaderV3 keeps period and profile accessibility", () => {
   assert.match(header, /testID="home-period"/);
   assert.match(header, /home-period-month/);
   assert.match(header, /home-period-week/);
-  assert.match(header, /dashboard\.headerRow/);
+  assert.match(header, /home-period-day/);
+  assert.match(header, /layout\.minTap/);
   assert.match(header, /Profiles,/);
   assert.match(header, /Currency,/);
   assert.match(header, /Previous period/);
@@ -49,4 +50,6 @@ test("theme exposes header V3 tokens", () => {
   assert.match(theme, /headerShellRadius/);
   assert.match(theme, /headerRowGap/);
   assert.match(theme, /headerControl/);
+  assert.match(theme, /density/);
+  assert.match(theme, /statusChip/);
 });

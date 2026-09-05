@@ -7,6 +7,7 @@ import {
   useWindowDimensions,
   TouchableOpacity,
   RefreshControl,
+  Alert,
 } from "react-native";
 import { BookCover } from "@/src/components/BookCover";
 import { SFSymbol } from "@/src/components/ios/Native";
@@ -25,6 +26,7 @@ import {
   type CampaignPlacementRow,
 } from "@/src/lib/queries";
 import { useApp } from "@/src/contexts/AppContext";
+import { useAuth } from "@/src/contexts/AuthContext";
 import { useTheme, acosTone, toneColor, layout, radii, spacing } from "@/src/lib/theme";
 import {
   formatCurrency,
@@ -34,10 +36,17 @@ import {
   safeDivide,
 } from "@/src/lib/format";
 import { EmptyState, ToneDot, SectionCard, MetricStrip, RetryState, ScreenSpinner } from "@/src/components/Primitives";
-import { alertMutationError, BidBudgetEditor, EntityStateSwitch, MutationTap } from "@/src/components/Mutations";
+import { alertMutationError, assertCanWriteAmazon, assertNotViewingAsOtherUser, BidBudgetEditor, blockIfCannotWriteAmazon, EntityStateSwitch, MutationTap } from "@/src/components/Mutations";
 import { CampaignDailyChart, Funnel } from "@/src/components/Charts";
 import { SubScreen } from "@/src/components/SubScreen";
-import { biddingStrategyLabel, shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
+import {
+  BIDDING_STRATEGY_OPTIONS,
+  biddingStrategyLabel,
+  normalizeBiddingStrategyCode,
+  shouldShowActiveOrPausedWithData,
+  statusLabel,
+} from "@/src/lib/campaigns";
+import { getCampaignSettingsCooldown } from "@/src/lib/bidCooldown";
 import {
   fetchCampaignApi,
   updateAdGroupManual,
@@ -49,6 +58,9 @@ import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityS
 import { enqueueEntityBidWrite } from "@/src/lib/bulkOutbox";
 import { describeProductTarget, fallbackAsinCoverUrl, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
+import { countriesForSponsoredCampaign, marketplaceFlagsA11y } from "@/src/lib/bookMarketplaces";
+import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
+import { CampaignMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 
 const PLACEMENT_EDITORS: {
   key: keyof PlacementAdjustments;
@@ -122,7 +134,11 @@ export default function CampaignDetail() {
   const router = useRouter();
   const { width: viewportWidth } = useWindowDimensions();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { primaryCurrency, dateRange, selectedProfileIds, profilesLoading, adminFilterUserId } = useApp();
+  const { primaryCurrency, dateRange, selectedProfileIds, profilesLoading, adminFilterUserId, entityCooldownHours } = useApp();
+  const marketplaceIndex = useSponsoredMarketplaceIndex();
+  const { user, guestMode } = useAuth();
+  const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
+  const writeGuard = { guestMode, viewAsOtherUser };
   const queryClient = useQueryClient();
   const invalidateAds = useInvalidateAds();
   const chartWidth = Math.max(240, viewportWidth - 64);
@@ -135,6 +151,7 @@ export default function CampaignDetail() {
     title: string;
     value: number;
     fallbackTargetIds?: string[];
+    forceCooldown?: boolean;
   } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -324,11 +341,56 @@ export default function CampaignDetail() {
   const heroRoas   = heroSpend > 0 ? heroSales / heroSpend : 0;
   const heroCtr    = dailyAgg.impressions > 0 ? (dailyAgg.clicks / dailyAgg.impressions) * 100 : 0;
   const biddingLabel = biddingStrategyLabel(c.bidding_strategy);
+  const settingsCooldown = getCampaignSettingsCooldown(c as any, entityCooldownHours);
   const displayBudget = readBudget(campaignApiQ.data, c);
   const placementAdjustments = readPlacementAdjustments(campaignApiQ.data, c as unknown as Record<string, unknown>);
   const budgetPeriod = (c.budget_type ?? "daily").toLowerCase() === "lifetime" ? "total" : "day";
   const budgetNoun = budgetPeriod === "total" ? "Lifetime budget" : "Daily budget";
   const placementRows = placementsQ.data ?? [];
+
+  const changeBiddingStrategy = () => {
+    if (blockIfCannotWriteAmazon(writeGuard)) return;
+    const current = normalizeBiddingStrategyCode(c.bidding_strategy);
+    Alert.alert(
+      "Bidding strategy",
+      settingsCooldown.isInCooldown
+        ? `On cooldown. Changing now resets the window.\nCurrent: ${biddingLabel}`
+        : `Current: ${biddingLabel}`,
+      [
+        ...BIDDING_STRATEGY_OPTIONS.map((opt) => ({
+          text: current === opt.code ? `${opt.label} ✓` : opt.label,
+          onPress: () => {
+            if (current === opt.code) return;
+            void (async () => {
+              try {
+                assertCanWriteAmazon({ viewAsOtherUser });
+                await updateCampaign(c.id, { biddingStrategy: opt.code });
+                await persistCampaign();
+                await campaignQ.refetch();
+              } catch (error) {
+                alertMutationError(error, "Couldn't update bidding strategy.");
+              }
+            })();
+          },
+        })),
+        { text: "Cancel", style: "cancel" as const },
+      ],
+    );
+  };
+
+  const openEntityBidEdit = (
+    edit: {
+      kind: "keyword" | "target" | "adGroup";
+      id: string;
+      title: string;
+      value: number;
+      fallbackTargetIds?: string[];
+    },
+    opts?: { forceCooldown?: boolean },
+  ) => {
+    if (blockIfCannotWriteAmazon(writeGuard)) return;
+    setEntityBidEdit({ ...edit, forceCooldown: opts?.forceCooldown === true });
+  };
 
   const persistCampaign = async () => {
     await invalidateAds(["campaign-api", "campaign"]);
@@ -392,6 +454,7 @@ export default function CampaignDetail() {
               noun="campaign"
               testID={`campaign-state-${c.id}`}
               onChange={async (next) => {
+                assertNotViewingAsOtherUser(viewAsOtherUser);
                 const previous = applyOptimisticEntityState(queryClient, "campaign", c.id, next);
                 try {
                   await updateCampaignState(c.id, next ? "enabled" : "paused");
@@ -407,21 +470,40 @@ export default function CampaignDetail() {
               style={{ flex: 1, minWidth: 0 }}
               accessible
               accessibilityRole="header"
-              accessibilityLabel={[c.name, heroLoading ? null : verdict.label, contextLine, c.state === "enabled" ? "Enabled" : "Paused"].filter(Boolean).join(". ")}
+              accessibilityLabel={[c.name, marketplaceFlagsA11y(countriesForSponsoredCampaign(marketplaceIndex, c)), heroLoading ? null : verdict.label, contextLine, c.state === "enabled" ? "Enabled" : "Paused"].filter(Boolean).join(". ")}
             >
-              <Text
-                style={[t.typography.headline, { color: t.colors.text_primary }]}
-                numberOfLines={2}
-              >
-                {c.name}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
+                <Text
+                  style={[t.typography.headline, { color: t.colors.text_primary, flex: 1, minWidth: 0 }]}
+                  numberOfLines={2}
+                >
+                  {c.name}
+                </Text>
+                <CampaignMarketplaceFlags
+                  index={marketplaceIndex}
+                  campaign={c}
+                  style={t.typography.headline}
+                />
+              </View>
               <View style={styles.metaRow}>
                 <View style={[styles.statusDot, { backgroundColor: toneColor(heroLoading ? "inactive" : verdict.tone, t.colors) }]} />
                 <Text style={[t.typography.caption1, { color: toneColor(verdict.tone, t.colors), fontWeight: "600" }]}>
                   {heroLoading ? "…" : verdict.label}
                 </Text>
                 {contextLine ? (
-                  <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{contextLine}</Text>
+                  <TouchableOpacity onPress={changeBiddingStrategy} hitSlop={6}>
+                    <Text
+                      style={[
+                        t.typography.caption1,
+                        {
+                          color: settingsCooldown.isInCooldown ? t.colors.tone_warning : t.colors.text_secondary,
+                        },
+                      ]}
+                    >
+                      {contextLine}
+                      {settingsCooldown.isInCooldown ? " · Cooldown" : ""}
+                    </Text>
+                  </TouchableOpacity>
                 ) : null}
               </View>
             </View>
@@ -431,7 +513,10 @@ export default function CampaignDetail() {
             accessibilityRole="button"
             accessibilityLabel={`${budgetNoun} ${budgetLabel}. Edit budget.`}
             accessibilityHint="Opens the budget editor. Saving writes Amazon Ads."
-            onPress={() => setBudgetOpen(true)}
+            onPress={() => {
+              if (blockIfCannotWriteAmazon(writeGuard)) return;
+              setBudgetOpen(true);
+            }}
             style={[styles.budgetRow, { borderTopColor: t.colors.separator }]}
           >
             <View style={{ flex: 1, minWidth: 0 }}>
@@ -452,7 +537,11 @@ export default function CampaignDetail() {
                   label={editor.label}
                   compact
                   value={formatPercent(placementAdjustments[editor.key], 0)}
-                  onPress={() => setPlacementEdit(editor)}
+                  cooldown={settingsCooldown}
+                  onPress={() => {
+                    if (blockIfCannotWriteAmazon(writeGuard)) return;
+                    setPlacementEdit(editor);
+                  }}
                 />
               ))}
             </View>
@@ -531,7 +620,10 @@ export default function CampaignDetail() {
                   performanceState="error"
                   primaryCurrency={primaryCurrency}
                   isLast={idx === PLACEMENT_EDITORS.length - 1}
-                  onEdit={() => setPlacementEdit(editor)}
+                  onEdit={() => {
+                    if (blockIfCannotWriteAmazon(writeGuard)) return;
+                    setPlacementEdit(editor);
+                  }}
                 />
               ))}
               <RetryState
@@ -553,7 +645,10 @@ export default function CampaignDetail() {
                   performanceState="loading"
                   primaryCurrency={primaryCurrency}
                   isLast={idx === PLACEMENT_EDITORS.length - 1}
-                  onEdit={() => setPlacementEdit(editor)}
+                  onEdit={() => {
+                    if (blockIfCannotWriteAmazon(writeGuard)) return;
+                    setPlacementEdit(editor);
+                  }}
                 />
               ))}
               <ScreenSpinner />
@@ -572,7 +667,10 @@ export default function CampaignDetail() {
                     performanceState={row ? "ready" : "empty"}
                     primaryCurrency={primaryCurrency}
                     isLast={idx === PLACEMENT_EDITORS.length - 1 && extraPlacements.length === 0}
-                    onEdit={() => setPlacementEdit(editor)}
+                    onEdit={() => {
+                    if (blockIfCannotWriteAmazon(writeGuard)) return;
+                    setPlacementEdit(editor);
+                  }}
                   />
                 );
               })}
@@ -726,19 +824,22 @@ export default function CampaignDetail() {
                       compact
                       value={bidChipValue != null ? formatCurrency(bidChipValue, primaryCurrency) : "Set"}
                       cooldownRow={ag as any}
-                      onPress={() =>
-                        setEntityBidEdit({
-                          kind: "adGroup",
-                          id: ag.id,
-                          title: `${ag.name || "Ad Group"} default bid`,
-                          value: bidChipValue ?? 0.02,
-                          fallbackTargetIds: (productTargetsQ.data ?? [])
-                            .filter((pt) => {
-                              if (pt.ad_group_id !== ag.id) return false;
-                              return describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression).isAuto;
-                            })
-                            .map((pt) => pt.id),
-                        })
+                      onPress={(opts) =>
+                        openEntityBidEdit(
+                          {
+                            kind: "adGroup",
+                            id: ag.id,
+                            title: `${ag.name || "Ad Group"} default bid`,
+                            value: bidChipValue ?? 0.02,
+                            fallbackTargetIds: (productTargetsQ.data ?? [])
+                              .filter((pt) => {
+                                if (pt.ad_group_id !== ag.id) return false;
+                                return describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression).isAuto;
+                              })
+                              .map((pt) => pt.id),
+                          },
+                          opts,
+                        )
                       }
                     />
                   </View>
@@ -789,13 +890,16 @@ export default function CampaignDetail() {
                       return bid != null ? formatCurrency(bid, primaryCurrency) : "Set";
                     })()}
                     cooldownRow={kw as any}
-                    onPress={() =>
-                      setEntityBidEdit({
-                        kind: "keyword",
-                        id: kw.id,
-                        title: kw.keyword_text || "Keyword bid",
-                        value: readTargetBid(kw as any, resolveInheritedBid(kw.ad_group_id)) ?? 0.02,
-                      })
+                    onPress={(opts) =>
+                      openEntityBidEdit(
+                        {
+                          kind: "keyword",
+                          id: kw.id,
+                          title: kw.keyword_text || "Keyword bid",
+                          value: readTargetBid(kw as any, resolveInheritedBid(kw.ad_group_id)) ?? 0.02,
+                        },
+                        opts,
+                      )
                     }
                   />
                 </View>
@@ -815,14 +919,17 @@ export default function CampaignDetail() {
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
                 onOpenTarget={(targetId) => router.push(`/target/${targetId}` as any)}
-                onEditBid={() => {
+                onEditBid={(opts) => {
                   const bid = readTargetBid(pt, resolveInheritedBid(pt.ad_group_id));
-                  setEntityBidEdit({
-                    kind: "target",
-                    id: pt.id,
-                    title: productTargetHeading(pt),
-                    value: bid ?? 0.02,
-                  });
+                  openEntityBidEdit(
+                    {
+                      kind: "target",
+                      id: pt.id,
+                      title: productTargetHeading(pt),
+                      value: bid ?? 0.02,
+                    },
+                    opts,
+                  );
                 }}
               />
             ))}
@@ -866,14 +973,17 @@ export default function CampaignDetail() {
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
                 onOpenTarget={(targetId) => router.push(`/target/${targetId}` as any)}
-                onEditBid={() => {
+                onEditBid={(opts) => {
                   const bid = readTargetBid(pt, resolveInheritedBid(pt.ad_group_id));
-                  setEntityBidEdit({
-                    kind: "target",
-                    id: pt.id,
-                    title: productTargetHeading(pt),
-                    value: bid ?? 0.02,
-                  });
+                  openEntityBidEdit(
+                    {
+                      kind: "target",
+                      id: pt.id,
+                      title: productTargetHeading(pt),
+                      value: bid ?? 0.02,
+                    },
+                    opts,
+                  );
                 }}
               />
             ))}
@@ -975,6 +1085,7 @@ export default function CampaignDetail() {
         kind="money"
         onClose={() => setBudgetOpen(false)}
         onSave={async (next) => {
+          if (blockIfCannotWriteAmazon(writeGuard)) return;
           await updateCampaign(c.id, { budget: next });
           await persistCampaign();
         }}
@@ -989,6 +1100,7 @@ export default function CampaignDetail() {
         onClose={() => setPlacementEdit(null)}
         onSave={async (next) => {
           if (!placementEdit) return;
+          if (blockIfCannotWriteAmazon(writeGuard)) return;
           await updateCampaign(c.id, { placementAdjustments: { [placementEdit.key]: next } });
           await persistCampaign();
         }}
@@ -1002,6 +1114,7 @@ export default function CampaignDetail() {
         onClose={() => setEntityBidEdit(null)}
         onSave={async (next) => {
           if (!entityBidEdit) return;
+          if (blockIfCannotWriteAmazon(writeGuard)) return;
           const edit = entityBidEdit;
           let previousBid: number | null = null;
           if (edit.kind === "keyword" || edit.kind === "target") {
@@ -1030,12 +1143,17 @@ export default function CampaignDetail() {
           }
           const write =
             edit.kind === "adGroup"
-              ? updateAdGroupManual(edit.id, { defaultBid: next, forceCooldown: true }, edit.fallbackTargetIds ?? [])
+              ? updateAdGroupManual(
+                  edit.id,
+                  { defaultBid: next, forceCooldown: edit.forceCooldown === true },
+                  edit.fallbackTargetIds ?? [],
+                )
               : enqueueEntityBidWrite({
                   entityKind: edit.kind === "keyword" ? "keyword" : "product_target",
                   entityId: edit.id,
                   bid: next,
                   previousBid,
+                  forceCooldown: edit.forceCooldown === true,
                 });
           void write
             .then(() => {
@@ -1187,7 +1305,7 @@ function ProductTargetRow({
   inheritedDefaultBid?: number;
   t: any;
   onOpenTarget: (targetId: string) => void;
-  onEditBid: () => void;
+  onEditBid: (opts?: { forceCooldown?: boolean }) => void;
 }) {
   const target = describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression);
   const fallbackCover = fallbackAsinCoverUrl(target.asin);

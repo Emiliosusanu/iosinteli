@@ -5,8 +5,10 @@
  *
  *   - STEADY:     today + yesterday, at least every ~15 minutes.
  *   - ONBOARDING: 30-day milestone first, then extend to 90 days, in 14-day
- *                 chunks (chained via `continueSoon`). Skipped when sealed
- *                 from existing web history.
+ *                 chunks (chained via `continueSoon` on processing wakes).
+ *                 Recent wakes still take one chunk so a closed app cannot
+ *                 abandon leftover days. Skipped only when Chrome already
+ *                 covered the last 90 historical days.
  *   - NIGHTLY:    last-30-day correction after 02:00. Not sealed until every
  *                 day in the window is imported (leftover resumes on any wake).
  *   - GAP:        missed days after onboarding (bounded to 90).
@@ -181,10 +183,12 @@ export function resolveBackgroundKdpWakeMode(args: {
   incompleteNightly: boolean;
   deferredCount: number;
 }): KdpWakeMode {
+  // 90-day leftover always wins — a native BGAppRefresh "recent" stamp must
+  // not abandon onboarding after the user closes the app.
+  if (!args.onboardingDone) return "processing";
   if (args.pendingNativeKind === "processing" || args.pendingNativeKind === "recent") {
     return args.pendingNativeKind;
   }
-  if (!args.onboardingDone) return "processing";
   if (args.hour >= NIGHTLY_HOUR && args.incompleteNightly) return "processing";
   if (args.deferredCount > DEFERRED_DAY_LIMIT_RECENT) return "processing";
   return "recent";
@@ -232,7 +236,7 @@ export function planSync(
   const ranges: KdpSyncRange[] = [];
   const reasons: string[] = [];
   let continueSoon = false;
-  const allowOnboarding = wakeMode === "processing";
+  // Every wake may advance onboarding. Processing chains chunks; recent does one.
 
   // ---- STEADY: today + yesterday every ~15 min (or forced) — always allowed ----
   const steadyDue = opts.force || nowMs - state.lastSteadyAtMs >= SYNC_EVERY_MS;
@@ -243,15 +247,22 @@ export function planSync(
   }
 
   // ---- Initialize onboarding: 30-day milestone first, then 90 ----
-  if (allowOnboarding && !state.onboardingDone && !state.onboardingCursor && !state.onboardingFloor) {
+  // A premature Chrome seal leaves milestone30Done with a null cursor. Reopen
+  // those phones via the leftover journal — do not walk the last 90 again.
+  if (
+    !state.onboardingDone &&
+    !state.onboardingCursor &&
+    !state.onboardingFloor &&
+    !state.milestone30Done
+  ) {
     state.onboardingAnchorYmd = today;
-    const span = state.milestone30Done ? ONBOARDING_DAYS : ONBOARDING_MILESTONE_30_DAYS;
+    const span = ONBOARDING_MILESTONE_30_DAYS;
     state.onboardingFloor = addDaysYmd(today, -(span - 1));
     state.onboardingCursor = today;
   }
 
   // ---- ONBOARDING: one 14-day chunk per tick (processing wakes only) ----
-  if (allowOnboarding && !state.onboardingDone && isYmd(state.onboardingCursor) && isYmd(state.onboardingFloor)) {
+  if (!state.onboardingDone && isYmd(state.onboardingCursor) && isYmd(state.onboardingFloor)) {
     const cursor = state.onboardingCursor;
     const floor = state.onboardingFloor;
     const chunkFrom = (() => {

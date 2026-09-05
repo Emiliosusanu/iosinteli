@@ -81,17 +81,14 @@ export function OverviewSwipeWidget({
   return (
     <StaggerReveal index={staggerIndex}>
     <GlassPanel
-      strength="chrome"
+      strength="card"
       testID={testID}
-      style={[
-        {
-          marginTop: dashboard.sectionGap,
-          borderRadius: dashboard.cardRadius,
-          borderCurve: "continuous",
-          borderColor: t.colors.glass_stroke,
-        },
-        t.shadow.card,
-      ]}
+      style={{
+        marginTop: dashboard.sectionGap,
+        borderRadius: dashboard.cardRadius,
+        borderCurve: "continuous",
+        borderColor: t.colors.glass_stroke,
+      }}
       contentStyle={{ padding: dashboard.cardPadding }}
     >
       <OverviewCardHeader title={title} icon={icon} actionLabel={actionLabel} onAction={onAction} action={action} />

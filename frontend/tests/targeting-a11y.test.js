@@ -34,7 +34,7 @@ test("Targets rows combine identity without swallowing the pause switch", () => 
   assert.match(targeting, /accessibilityHint=\{selectMode \? "Toggles bulk selection" : "Opens campaign details"\}/);
   assert.match(targeting, /accessibilityLabel=\{rowLabel\}/);
   assert.match(targeting, /accessibilityLabel=\{`Clear \$\{perfLabel\} filter`\}/);
-  assert.match(targeting, /accessibilityLabel=\{`Clear sort\. Currently \$\{sortLabel\}`\}/);
+  assert.match(targeting, /accessibilityLabel=\{`Clear sort\. Currently \$\{sortLabel\} high to low`\}/);
   assert.match(targeting, /accessibilityHint="Closes filters and sort"/);
   assert.match(targeting, /styles\.leadRow/);
   assert.match(targeting, /styles\.switchWell/);

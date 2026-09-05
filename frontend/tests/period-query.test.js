@@ -6,6 +6,7 @@ import {
   HOME_PERIOD_QUERY_CACHE,
   LIST_PERIOD_QUERY_CACHE,
   STABLE_SCOPED_CACHE,
+  financialPeriodQueryKey,
   noPeriodPlaceholder,
   periodFinancePending,
   periodQueryKey,
@@ -20,6 +21,11 @@ const home = readFileSync(new URL("../app/(tabs)/index.tsx", import.meta.url), "
 const layout = readFileSync(new URL("../app/_layout.tsx", import.meta.url), "utf8");
 const campaigns = readFileSync(new URL("../app/(tabs)/campaigns.tsx", import.meta.url), "utf8");
 const products = readFileSync(new URL("../app/(tabs)/products.tsx", import.meta.url), "utf8");
+const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
+const glass = readFileSync(new URL("../src/components/GlassPanel.tsx", import.meta.url), "utf8");
+const tabBar = readFileSync(new URL("../src/components/FloatingTabBar.tsx", import.meta.url), "utf8");
+const header = readFileSync(new URL("../src/components/OverviewHeaderV3.tsx", import.meta.url), "utf8");
+const snapshotLib = readFileSync(new URL("../src/lib/mobileHomeSnapshot.ts", import.meta.url), "utf8");
 
 test("period query cache blocks cross-key placeholders", () => {
   assert.equal(typeof HOME_PERIOD_QUERY_CACHE.placeholderData, "function");
@@ -107,11 +113,47 @@ test("Campaigns and Books never reuse a previous period's list", () => {
 test("Home wires period isolation, motion, and live refetch", () => {
   assert.match(home, /from "@\/src\/lib\/periodQuery"/);
   assert.match(home, /periodFinancePending/);
-  assert.match(home, /periodQueryKey/);
+  assert.match(home, /financialPeriodQueryKey/);
   assert.match(home, /HorizonPane watchKey=\{activePeriodKey\}/);
   assert.match(home, /Updating…/);
   assert.match(home, /syncing: syncActive/);
   assert.match(home, /sortedProfileIds/);
   assert.match(home, /LIST_PERIOD_QUERY_CACHE/);
   assert.doesNotMatch(home, /placeholderData: undefined/);
+  assert.match(home, /usableCachedHomeSnapshot\(cachedSnapshot, homeScope, todayStr\)/);
+});
+
+test("financialPeriodQueryKey includes sorted profiles period and currency", () => {
+  assert.equal(
+    financialPeriodQueryKey({ start: "2026-08-01", end: "2026-08-27" }, ["b", "a"], "eur"),
+    "2026-08-01|2026-08-27|a,b|EUR",
+  );
+  assert.notEqual(
+    financialPeriodQueryKey({ start: "2026-08-01", end: "2026-08-27" }, ["a"], "USD"),
+    financialPeriodQueryKey({ start: "2026-08-01", end: "2026-08-27" }, ["a"], "GBP"),
+  );
+  assert.equal(periodQueryKey({ start: "2026-08-01", end: "2026-08-27" }, ["b", "a"]), "2026-08-01|2026-08-27|a,b");
+});
+
+test("Overview financial query keys bind sorted profiles and currency", () => {
+  assert.match(home, /campaignMetrics, scopeProfiles, dateRange\.start, dateRange\.end, primaryCurrency/);
+  assert.match(home, /kdpRoyalties, royaltyProfiles, dateRange\.start, dateRange\.end, primaryCurrency/);
+  assert.match(campaigns, /dateRange\.end,\s*primaryCurrency/);
+  assert.match(products, /dateRange\.end,\s*primaryCurrency/);
+  assert.match(targeting, /financialPeriodQueryKey\(dateRange, scopeProfiles, primaryCurrency\)/);
+});
+
+test("list screens tune FlatList virtualization windows", () => {
+  assert.match(campaigns, /initialNumToRender=\{16\}/);
+  assert.match(campaigns, /windowSize=\{7\}/);
+  assert.match(products, /maxToRenderPerBatch=\{20\}/);
+  assert.match(targeting, /TargetingListSeparator/);
+});
+
+test("chrome keeps one live blur; scroll cards and tab bar do not stack BlurViews", () => {
+  assert.match(glass, /strength === "chrome"/);
+  assert.doesNotMatch(tabBar, /BlurView/);
+  assert.match(header, /withRepeat/);
+  assert.match(header, /cancelAnimation/);
+  assert.match(snapshotLib, /snapCurrency !== scopeCurrency/);
 });

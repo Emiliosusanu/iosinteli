@@ -46,11 +46,13 @@ must "category segment" 'key: "category"' "$ROOT/app/(tabs)/targeting.tsx"
 must "segment wrap always visible" 'targeting-segments' "$ROOT/app/(tabs)/targeting.tsx"
 
 must "profile sorted ids" 'sortedProfileIds' "$ROOT/app/(tabs)/targeting.tsx"
-must "period query key" 'periodQueryKey' "$ROOT/app/(tabs)/targeting.tsx"
+must "period query key" 'financialPeriodQueryKey' "$ROOT/app/(tabs)/targeting.tsx"
 must "no period placeholder bleed" 'noPeriodPlaceholder' "$ROOT/app/(tabs)/targeting.tsx"
 
-must_f "book filter web parity" 'Sponsored ASINs on enabled campaigns' "$ROOT/app/(tabs)/targeting.tsx"
-must "book cover grid" 'bookGrid' "$ROOT/app/(tabs)/targeting.tsx"
+must_f "book filter campaign or KDP" 'campaign or KDP books' "$ROOT/app/(tabs)/targeting.tsx"
+must "book cover list rows" 'bookList' "$ROOT/app/(tabs)/targeting.tsx"
+must "book filter search" 'targeting-book-search' "$ROOT/app/(tabs)/targeting.tsx"
+must "book filter dedupe" 'dedupeTargetingBookOptions' "$ROOT/src/lib/queries.ts"
 must 'enabled product ads only' 'eq\("status", "enabled"\)' "$ROOT/src/lib/queries.ts"
 must 'enabled campaigns only' 'campaigns\.state", "enabled"' "$ROOT/src/lib/queries.ts"
 
@@ -60,7 +62,9 @@ must "adv clicks max" 'targeting-adv-clicks-max' "$ROOT/app/(tabs)/targeting.tsx
 must "adv impr max" 'targeting-adv-impr-max' "$ROOT/app/(tabs)/targeting.tsx"
 must "decimal draft parser" 'parseFilterRangeInput' "$ROOT/app/(tabs)/targeting.tsx"
 must "placement ignores bid ranges" 'advancedFiltersForSegment' "$ROOT/app/(tabs)/targeting.tsx"
-must_f "bid ranges ignored copy" 'Bid min/max ignored on Placement' "$ROOT/app/(tabs)/targeting.tsx"
+must_f "bid ranges ignored copy" "Bid ranges don't apply on Placement" "$ROOT/app/(tabs)/targeting.tsx"
+must_f "ranges section title" 'Ranges' "$ROOT/app/(tabs)/targeting.tsx"
+must_f "no sales perf chip" 'label: "No sales"' "$ROOT/app/(tabs)/targeting.tsx"
 
 must_f "bulk Bid +$ label" 'Bid +$' "$ROOT/app/(tabs)/targeting.tsx"
 must_f "bulk Bid −$ label" 'Bid −$' "$ROOT/app/(tabs)/targeting.tsx"
@@ -71,8 +75,11 @@ must_f "not Amazon-confirmed copy" 'Not confirmed on Amazon yet' "$ROOT/app/(tab
 must_f "placement gates bulk bid" 'Increase / decrease bid applies to keywords and targets' "$ROOT/app/(tabs)/targeting.tsx"
 
 must_f "fail-closed keyword metrics" 'Never paint lifetime totals or fake zeros' "$ROOT/src/lib/queries.ts"
-must_f "filter miss vs missing data" 'No rows match these period filters — not missing data' "$ROOT/app/(tabs)/targeting.tsx"
+must_f "filter miss vs missing data" 'No matches' "$ROOT/app/(tabs)/targeting.tsx"
 must_f "list cap not write limit" 'Not an Amazon write limit' "$ROOT/src/lib/queries.ts"
+must_f "list cap UI honesty" 'Showing {TARGETING_LIST_LIMIT} (app limit)' "$ROOT/app/(tabs)/targeting.tsx"
+must_f "fair per-profile honesty" 'fair per-profile' "$ROOT/src/lib/queries.ts"
+must_f "bulk selected visible only" 'selected visible / filtered rows' "$ROOT/app/(tabs)/targeting.tsx"
 must_f "Nest placement first" 'Nest campaign aggregation failed; falling back' "$ROOT/src/lib/queries.ts"
 must_f "Nest null placement shares" 'placement_top_share: null' "$ROOT/src/lib/dashboardApi.ts"
 
@@ -82,8 +89,12 @@ forbid "no invent placement zeros prefetch" 'top_of_search: 0,\s*product_pages: 
 
 echo "=== unit stress suite ===" | tee -a "$OUT/report.txt"
 cd "$ROOT"
+HELPER="${HELPER:-/Applications/Cursor.app/Contents/Resources/app/resources/helpers/node}"
+if [[ ! -x "$HELPER" ]]; then
+  HELPER="$(command -v node || true)"
+fi
 set +e
-node --test --experimental-strip-types \
+"$HELPER" --experimental-strip-types --test --test-force-exit \
   tests/targeting-stress-honesty.test.js \
   tests/targeting-filters.test.js \
   tests/filter-honesty.test.js \

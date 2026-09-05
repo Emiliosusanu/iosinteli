@@ -58,7 +58,7 @@ test("Home uses the motion system and does not replay entrance or haptic navigat
   assert.match(home, /VerifiedValue/);
   assert.match(home, /HorizonPane/);
   assert.match(home, /color=\{profitColor\}/);
-  assert.match(home, /testID="home-hero-net"/);
+  assert.match(home, /testID="home-hero-gross"/);
   assert.match(home, /tone="hero"/);
   assert.match(home, /playHaptic\("select"/);
   assert.match(home, /from "@\/src\/lib\/hapticPolicy"/);
@@ -90,7 +90,9 @@ test("VerifiedValue and scrub cursor stay on opacity/transform tokens", () => {
   assert.match(motionSrc, /motion\.contentChange/);
   assert.doesNotMatch(motionSrc, /confetti|sparkles|BounceIn/);
   assert.match(glass, /BlurView/);
-  assert.match(glass, /systemChromeMaterial/);
+  assert.match(glass, /tint=\{dark \? "dark" : "light"\}/);
+  assert.doesNotMatch(glass, /systemChromeMaterial/);
+  assert.match(glass, /strength === "chrome"/);
   assert.match(home, /AppScreen/);
   assert.match(home, /GlassPanel/);
 });

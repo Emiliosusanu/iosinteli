@@ -1,56 +1,47 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { WebView } from "react-native-webview";
+import { KdpReportsWebView } from "@/src/components/KdpReportsWebView";
 import { useApp } from "@/src/contexts/AppContext";
-import { kdpInjectedJavaScript } from "@/src/lib/kdp/bridge";
-import { isIosHelperEnabled } from "@/src/lib/kdp/source";
 import {
-  attachKdpWebView,
-  handleKdpWebViewMessage,
-} from "@/src/lib/kdp/runtime";
-
-const KDP_HOME = "https://kdpreports.amazon.com/reports/royalties";
+  isKdpHelperScreenFocused,
+  subscribeKdpHelperScreenFocused,
+} from "@/src/lib/kdp/helperUi";
+import { isIosHelperEnabled } from "@/src/lib/kdp/source";
+import { attachKdpWebView } from "@/src/lib/kdp/runtime";
 
 /**
  * Hidden authenticated KDP WebView. Mounted whenever Royalty source includes
  * this iPhone so background / resume ticks can replay captured templates.
+ * Unmounted while the helper screen is focused so Amazon sign-in is not
+ * shared with a second cookie-using WebView.
  */
 export function KdpHelperHost() {
   const { kdpRoyaltySource } = useApp();
   const ref = useRef<WebView>(null);
   const enabled = isIosHelperEnabled(kdpRoyaltySource);
+  const [helperScreenFocused, setHelperScreenFocused] = useState(isKdpHelperScreenFocused);
+
+  useEffect(() => subscribeKdpHelperScreenFocused(setHelperScreenFocused), []);
+
+  const active = enabled && !helperScreenFocused;
 
   useEffect(() => {
-    if (!enabled) {
-      attachKdpWebView(null);
+    if (!active) {
+      attachKdpWebView("host", null);
       return;
     }
-    attachKdpWebView((js) => {
+    attachKdpWebView("host", (js) => {
       ref.current?.injectJavaScript(js);
     });
-    return () => attachKdpWebView(null);
-  }, [enabled]);
+    return () => attachKdpWebView("host", null);
+  }, [active]);
 
-  if (!enabled) return null;
+  if (!active) return null;
 
   return (
     <View style={styles.host} pointerEvents="none" collapsable={false}>
-      <WebView
-        ref={ref}
-        source={{ uri: KDP_HOME }}
-        sharedCookiesEnabled
-        thirdPartyCookiesEnabled
-        javaScriptEnabled
-        domStorageEnabled
-        injectedJavaScript={kdpInjectedJavaScript()}
-        onMessage={(event) => handleKdpWebViewMessage(event.nativeEvent.data)}
-        onNavigationStateChange={(nav) => {
-          handleKdpWebViewMessage(JSON.stringify({ channel: "kdp", kind: "NAV", url: nav.url }));
-        }}
-        onLoadEnd={() => {
-          ref.current?.injectJavaScript(kdpInjectedJavaScript());
-        }}
-      />
+      <KdpReportsWebView webRef={ref} />
     </View>
   );
 }

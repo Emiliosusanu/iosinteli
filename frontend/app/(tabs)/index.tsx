@@ -33,10 +33,14 @@ import {
   fetchSearchTerms,
   fetchKeywords,
   fetchAdGroups,
+  fetchKeywordDailyAggregate,
+  fetchSearchTermDailyAggregate,
   TARGETING_LIST_LIMIT,
   type TopBookRow,
 } from "@/src/lib/queries";
 import { fetchBidEngineStatus } from "@/src/lib/mutations";
+import { KdpRoyaltySetupCard } from "@/src/components/KdpRoyaltySetupCard";
+import { useKdpRoyaltySetupPrompt } from "@/src/hooks/useKdpRoyaltySetupPrompt";
 import {
   bootstrapToBleeders,
   bootstrapToCampaignMetrics,
@@ -65,7 +69,7 @@ import {
 import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialReadVersion";
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
-import { dashboard, useTheme, acosTone, toneColor, useReduceMotion } from "@/src/lib/theme";
+import { dashboard, density, useTheme, acosTone, toneColor, useReduceMotion } from "@/src/lib/theme";
 import { OverviewSwipeWidget, SwipeEmpty } from "@/src/components/OverviewSwipeWidget";
 import {
   AdsEngineCampaignsPage,
@@ -106,7 +110,7 @@ import {
   OverviewBudgetTodayCard,
 } from "@/src/components/OverviewOpsCards";
 import { DashboardSurface } from "@/src/components/DashboardSurface";
-import { OverviewHeaderV3 } from "@/src/components/OverviewHeaderV3";
+import { OverviewHeaderV3, type OverviewPeriodMode } from "@/src/components/OverviewHeaderV3";
 import { FirstReveal, HorizonPane, PressableScale, VerifiedValue } from "@/src/components/Motion";
 import { GlassPanel } from "@/src/components/GlassPanel";
 import { syncChrome } from "@/src/lib/motion";
@@ -128,6 +132,7 @@ import {
   publisherNetForPeriod,
 } from "@/src/lib/homePeriod";
 import {
+  ADS_ENGINE_FUNNEL_TIMEOUT_MS,
   HOME_QUERY_TIMEOUT_MS,
   TARGETING_QUERY_TIMEOUT_MS,
   homeWidgetStatus,
@@ -138,12 +143,14 @@ import {
   HOME_PERIOD_LIVE_CACHE,
   HOME_PERIOD_QUERY_CACHE,
   LIST_PERIOD_QUERY_CACHE,
+  financialPeriodQueryKey,
   periodFinancePending,
-  periodQueryKey,
   periodQueryRefreshing,
   sortedProfileIds,
 } from "@/src/lib/periodQuery";
 import { filterTopBooksByRecentActivity } from "@/src/lib/booksListActivity";
+import { computeOverallBreakEvenAcos } from "@/src/lib/kdpTitlePresentation";
+import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { markPerf } from "@/src/lib/perf";
 import { debugIngest } from "@/src/lib/debugIngest";
 import { EmptyState, PrimaryButton, RetryState, StatBadge } from "@/src/components/Primitives";
@@ -151,12 +158,14 @@ import { NetProfitChart, type ChartDaySelection } from "@/src/components/Charts"
 import { emptyKdpFormatRoyaltyRange } from "@/src/lib/kdpFormatRoyalties";
 import { InteliAdsIcon } from "@/src/components/InteliAdsIcon";
 import {
+  GROSS_ROYALTIES_LABEL,
   NET_ROYALTIES_LABEL,
   kdpRoyaltiesAreKnown,
   netRoyalties,
   netRoyaltiesKnown,
   netRoyaltiesVoiceOver,
 } from "@/src/lib/netRoyalties";
+import { knownKdpRoyaltyTotal, selectKdpRoyaltyScope } from "@/src/lib/kdpRoyaltyScope";
 
 const PAGE_PAD = dashboard.pageInset;
 const OVERVIEW_QUERY_CACHE = {
@@ -199,6 +208,14 @@ function sameMonth(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
 }
 
+function makeDashboardDayRange(anchor: Date, now = new Date()) {
+  const today = parseDateOnly(toDateString(now));
+  const day = parseDateOnly(toDateString(anchor)) > today ? today : parseDateOnly(toDateString(anchor));
+  const iso = toDateString(day);
+  const range = { start: iso, end: iso, label: "Custom" };
+  return { ...range, label: sameDate(day, today) ? "Today" : formatDateRangeLabel(range) };
+}
+
 function makeDashboardMonthRange(anchor: Date, now = new Date()) {
   const today = parseDateOnly(toDateString(now));
   const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -229,11 +246,18 @@ function isDashboardMonthRange(start: Date, end: Date, now = new Date()) {
   return start.getDate() === 1 && sameMonth(start, end) && (endsAtMonthEnd || endsTodayInCurrentMonth);
 }
 
-function inferDashboardPeriodMode(range: { start: string; end: string }) {
+function isDashboardWeekRange(start: Date, end: Date, now = new Date()) {
+  const week = makeDashboardWeekRange(end, now);
+  return week.start === toDateString(start) && week.end === toDateString(end);
+}
+
+function inferDashboardPeriodMode(range: { start: string; end: string }): OverviewPeriodMode {
   const start = parseDateOnly(range.start);
   const end = parseDateOnly(range.end);
+  if (sameDate(start, end)) return "day";
   if (isDashboardMonthRange(start, end)) return "month";
-  return "week";
+  if (isDashboardWeekRange(start, end)) return "week";
+  return "custom";
 }
 
 // ─── main screen ──────────────────────────────────────────────────────────────
@@ -253,12 +277,14 @@ export default function OverviewScreen() {
     adminUsersError,
     isAdminViewer,
     adminFilterUserId,
+    profiles,
     selectedProfileIds,
     selectedProfiles,
     primaryCurrency,
     dateRange,
     setDateRange,
   } = useApp();
+  const marketplaceIndex = useSponsoredMarketplaceIndex();
   const viewingUser = adminUsers.find((candidate) => candidate.id === adminFilterUserId);
   const viewingAsAdmin = !!adminFilterUserId;
   const nestProfileIds = useMemo(
@@ -300,7 +326,7 @@ export default function OverviewScreen() {
   }, [selectedProfileIds.length, profilesLoading, profilesFetching]);
 
   // period selector: Month / Week
-  const [periodMode, setPeriodMode] = useState<"month" | "week">(() => inferDashboardPeriodMode(dateRange));
+  const [periodMode, setPeriodMode] = useState<OverviewPeriodMode>(() => inferDashboardPeriodMode(dateRange));
 
   useEffect(() => {
     setPeriodMode(inferDashboardPeriodMode(dateRange));
@@ -309,6 +335,8 @@ export default function OverviewScreen() {
   // ── queries ──
   const sellerReady = !viewingAsAdmin && selectedProfileIds.length > 0;
   const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
+  const royaltyScope = useMemo(() => selectKdpRoyaltyScope(profiles), [profiles]);
+  const royaltyProfiles = useMemo(() => sortedProfileIds(royaltyScope.profileIds), [royaltyScope]);
   const homeScope = useMemo(
     () => ({
       userId: user?.id ?? "",
@@ -377,7 +405,10 @@ export default function OverviewScreen() {
       return built;
     },
     enabled: sellerReady && !!user?.id,
-    placeholderData: cachedSnapshot ?? undefined,
+    placeholderData: () =>
+      cachedSnapshot && usableCachedHomeSnapshot(cachedSnapshot, homeScope, todayStr)
+        ? cachedSnapshot
+        : undefined,
     staleTime: 60_000,
     gcTime: 12 * 60 * 60_000,
     meta: financialQueryMeta(),
@@ -427,8 +458,8 @@ export default function OverviewScreen() {
   });
 
   const metricsQ = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetrics, selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(selectedProfileIds, dateRange.start, dateRange.end)),
+    queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetrics, scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(scopeProfiles, dateRange.start, dateRange.end)),
     enabled: sellerReady,
     ...FINANCIAL_QUERY_CACHE,
   });
@@ -440,43 +471,72 @@ export default function OverviewScreen() {
   const adminSecondary = viewingAsAdmin && nestProfileIds.length > 0 && bootstrapQ.isFetched;
 
   const prevMetricsQ = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetricsPrev, selectedProfileIds, dateRange.start, dateRange.end],
+    queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetricsPrev, scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () => {
       const prev = previousRange(dateRange.start, dateRange.end);
-      return withQueryTimeout(fetchCampaignMetricsRange(selectedProfileIds, prev.start, prev.end));
+      return withQueryTimeout(fetchCampaignMetricsRange(scopeProfiles, prev.start, prev.end));
     },
     enabled: sellerSecondary,
     ...FINANCIAL_QUERY_CACHE,
   });
 
   const royaltiesQ = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => withQueryTimeout(fetchKdpRoyaltiesRange(selectedProfileIds, dateRange.start, dateRange.end)),
-    enabled: sellerReady,
+    queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () => withQueryTimeout(fetchKdpRoyaltiesRange(royaltyProfiles, dateRange.start, dateRange.end)),
+    enabled: sellerReady && royaltyProfiles.length > 0,
     ...OVERVIEW_QUERY_CACHE,
     meta: financialQueryMeta(),
   });
+  const latestImportedYmd = royaltiesQ.data?.daily?.length
+    ? String(royaltiesQ.data.daily[royaltiesQ.data.daily.length - 1]?.date ?? "").slice(0, 10) || null
+    : null;
+  const royaltySetup = useKdpRoyaltySetupPrompt({
+    enabled: sellerReady && !guestMode,
+    royaltyScopeReason: royaltyScope.reason,
+    latestImportedYmd,
+    yesterdayYmd: yesterdayStr,
+  });
 
   const formatRoyaltiesQ = useQuery({
-    queryKey: ["kdp-format-royalties", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => withQueryTimeout(fetchKdpFormatRoyaltiesRange(selectedProfileIds, dateRange.start, dateRange.end)),
-    enabled: sellerReady || (viewingAsAdmin && selectedProfileIds.length > 0),
+    queryKey: ["kdp-format-royalties", royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () => withQueryTimeout(fetchKdpFormatRoyaltiesRange(royaltyProfiles, dateRange.start, dateRange.end)),
+    enabled: (sellerReady || (viewingAsAdmin && scopeProfiles.length > 0)) && royaltyProfiles.length > 0,
+    ...OVERVIEW_QUERY_CACHE,
+  });
+  useQuery({
+    queryKey: ["ads-engine-keywords-daily", scopeProfiles, dateRange.start, dateRange.end],
+    queryFn: () =>
+      withQueryTimeout(
+        fetchKeywordDailyAggregate(scopeProfiles, dateRange.start, dateRange.end),
+        ADS_ENGINE_FUNNEL_TIMEOUT_MS,
+      ),
+    enabled: sellerReady && scopeProfiles.length > 0,
+    ...OVERVIEW_QUERY_CACHE,
+  });
+  useQuery({
+    queryKey: ["ads-engine-search-terms-daily", scopeProfiles, dateRange.start, dateRange.end],
+    queryFn: () =>
+      withQueryTimeout(
+        fetchSearchTermDailyAggregate(scopeProfiles, dateRange.start, dateRange.end),
+        ADS_ENGINE_FUNNEL_TIMEOUT_MS,
+      ),
+    enabled: sellerReady && scopeProfiles.length > 0,
     ...OVERVIEW_QUERY_CACHE,
   });
 
   const prevRoyaltiesQ = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyaltiesPrev, selectedProfileIds, dateRange.start, dateRange.end],
+    queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyaltiesPrev, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () => {
       const prev = previousRange(dateRange.start, dateRange.end);
-      return withQueryTimeout(fetchKdpRoyaltiesRange(selectedProfileIds, prev.start, prev.end));
+      return withQueryTimeout(fetchKdpRoyaltiesRange(royaltyProfiles, prev.start, prev.end));
     },
-    enabled: sellerSecondary,
+    enabled: sellerSecondary && royaltyProfiles.length > 0,
     ...OVERVIEW_QUERY_CACHE,
     meta: financialQueryMeta(),
   });
 
   const topCampaignsQ = useQuery({
-    queryKey: ["top-campaigns-range-v2", scopeProfiles, dateRange.start, dateRange.end],
+    queryKey: ["top-campaigns-range-v2", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () =>
       withQueryTimeout(
         fetchTopCampaignsRange({
@@ -497,7 +557,7 @@ export default function OverviewScreen() {
     if (!sellerSecondary || scopeProfiles.length === 0) return;
     if (!topCampaignsQ.isSuccess) return;
     void queryClient.prefetchQuery({
-      queryKey: ["campaigns-list-range-v2", adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end],
+      queryKey: ["campaigns-list-range-v2", adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
       queryFn: () =>
         withQueryTimeout(
           fetchTopCampaignsRange({
@@ -517,15 +577,17 @@ export default function OverviewScreen() {
     dateRange.start,
     dateRange.end,
     adminFilterUserId,
+    primaryCurrency,
     queryClient,
   ]);
 
   const topBooksQ = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.topBooks, adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end],
+    queryKey: [FINANCIAL_QUERY_ROOTS.topBooks, adminFilterUserId ?? "self", scopeProfiles, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () =>
       withQueryTimeout(
         fetchTopBooksRange({
           profileIds: scopeProfiles,
+          kdpProfileIds: royaltyProfiles,
           start: dateRange.start,
           end: dateRange.end,
           royaltyRate: 0,
@@ -539,42 +601,33 @@ export default function OverviewScreen() {
     meta: financialQueryMeta(),
   });
 
-  // Warm the Books tab list so Overview → Books is cache-first (same pattern as Campaigns).
-  useEffect(() => {
-    if (!sellerSecondary || scopeProfiles.length === 0) return;
-    if (!topBooksQ.isSuccess) return;
-    void queryClient.prefetchQuery({
-      queryKey: [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end],
-      queryFn: () =>
-        withQueryTimeout(
-          fetchTopBooksRange({
-            profileIds: scopeProfiles,
-            start: dateRange.start,
-            end: dateRange.end,
-            royaltyRate: 0,
-            limit: 300,
-            filterUserId: adminFilterUserId,
-          }),
-        ),
-      ...LIST_PERIOD_QUERY_CACHE,
-      meta: financialQueryMeta(),
-    });
-  }, [
-    sellerSecondary,
-    topBooksQ.isSuccess,
-    scopeProfiles,
-    dateRange.start,
-    dateRange.end,
-    adminFilterUserId,
-    queryClient,
-  ]);
+  // Same Books / Product Ads catalog the web Ads Engine uses for overall BE.
+  const catalogBooksQ = useQuery({
+    queryKey: [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", scopeProfiles, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () =>
+      withQueryTimeout(
+        fetchTopBooksRange({
+          profileIds: scopeProfiles,
+          kdpProfileIds: royaltyProfiles,
+          start: dateRange.start,
+          end: dateRange.end,
+          royaltyRate: 0,
+          limit: 300,
+          activityDays: 0,
+          filterUserId: adminFilterUserId,
+        }),
+      ),
+    enabled: sellerSecondary && scopeProfiles.length > 0,
+    ...LIST_PERIOD_QUERY_CACHE,
+    meta: financialQueryMeta(),
+  });
 
   // Warm Targets keywords for the active period (client filters stay local).
   useEffect(() => {
     if (!sellerSecondary || scopeProfiles.length === 0) return;
-    const periodKey = periodQueryKey(dateRange, scopeProfiles);
+    const periodKey = financialPeriodQueryKey(dateRange, scopeProfiles, primaryCurrency);
     void queryClient.prefetchQuery({
-      queryKey: ["targeting-keywords", adminFilterUserId ?? "self", periodKey],
+      queryKey: ["targeting-keywords", adminFilterUserId ?? "self", user?.id ?? "anon", periodKey],
       queryFn: () =>
         withQueryTimeout(
           fetchKeywords(scopeProfiles, {
@@ -582,6 +635,7 @@ export default function OverviewScreen() {
             end: dateRange.end,
             limit: TARGETING_LIST_LIMIT,
             filterUserId: adminFilterUserId,
+            ownerUserId: adminFilterUserId && adminFilterUserId !== user?.id ? null : user?.id ?? null,
           }),
           TARGETING_QUERY_TIMEOUT_MS,
         ),
@@ -593,6 +647,8 @@ export default function OverviewScreen() {
     dateRange.start,
     dateRange.end,
     adminFilterUserId,
+    primaryCurrency,
+    user?.id,
     queryClient,
   ]);
   useEffect(() => {
@@ -609,52 +665,52 @@ export default function OverviewScreen() {
   }, [topBooksQ.data]);
 
   const placementMixQ = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.placementMix, selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => withQueryTimeout(fetchPlacementMixRange(selectedProfileIds, dateRange.start, dateRange.end)),
+    queryKey: [FINANCIAL_QUERY_ROOTS.placementMix, scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () => withQueryTimeout(fetchPlacementMixRange(scopeProfiles, dateRange.start, dateRange.end)),
     enabled: sellerSecondary,
     ...FINANCIAL_QUERY_CACHE,
   });
 
   const syncLogsQ = useQuery({
-    queryKey: ["sync-logs", selectedProfileIds],
-    queryFn: () => withQueryTimeout(fetchProfileSyncLogs(selectedProfileIds)),
+    queryKey: ["sync-logs", scopeProfiles],
+    queryFn: () => withQueryTimeout(fetchProfileSyncLogs(scopeProfiles)),
     enabled: sellerSecondary,
     ...OVERVIEW_LIVE_QUERY_CACHE,
   });
 
   const todayMetricsQ = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetricsToday, selectedProfileIds, todayStr],
-    queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(selectedProfileIds, todayStr, todayStr)),
+    queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetricsToday, scopeProfiles, todayStr, primaryCurrency],
+    queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(scopeProfiles, todayStr, todayStr)),
     enabled: sellerSecondary,
     ...FINANCIAL_LIVE_QUERY_CACHE,
   });
 
   const allBudgetsQ = useQuery({
-    queryKey: ["all-campaign-budgets", selectedProfileIds],
-    queryFn: () => withQueryTimeout(fetchAllCampaignBudgets(selectedProfileIds)),
+    queryKey: ["all-campaign-budgets", scopeProfiles],
+    queryFn: () => withQueryTimeout(fetchAllCampaignBudgets(scopeProfiles)),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
   });
 
   const ruleExecsQ = useQuery({
-    queryKey: ["rule-executions-dashboard", user?.id, selectedProfileIds],
-    queryFn: () => withQueryTimeout(fetchRuleExecutions({ userId: user!.id, profileIds: selectedProfileIds })),
+    queryKey: ["rule-executions-dashboard", user?.id, scopeProfiles],
+    queryFn: () => withQueryTimeout(fetchRuleExecutions({ userId: user!.id, profileIds: scopeProfiles })),
     enabled: sellerSecondary && !!user?.id,
     ...OVERVIEW_LIVE_QUERY_CACHE,
   });
 
   // Rule names for Automation Pulse display
   const rulesQ = useQuery({
-    queryKey: ["optimization-rules", user?.id, selectedProfileIds],
-    queryFn: () => withQueryTimeout(fetchOptimizationRules(user!.id, selectedProfileIds)),
+    queryKey: ["optimization-rules", user?.id, scopeProfiles],
+    queryFn: () => withQueryTimeout(fetchOptimizationRules(user!.id, scopeProfiles)),
     enabled: sellerSecondary && !!user?.id,
     ...OVERVIEW_QUERY_CACHE,
   });
 
   // Today's execution stats from rule_execution_batches
   const todayStatsQ = useQuery({
-    queryKey: ["today-execution-stats", user?.id, selectedProfileIds, todayStr],
-    queryFn: () => withQueryTimeout(fetchTodayExecutionStats(user!.id, selectedProfileIds)),
+    queryKey: ["today-execution-stats", user?.id, scopeProfiles, todayStr],
+    queryFn: () => withQueryTimeout(fetchTodayExecutionStats(user!.id, scopeProfiles)),
     enabled: sellerSecondary && !!user?.id,
     ...OVERVIEW_LIVE_QUERY_CACHE,
   });
@@ -662,37 +718,44 @@ export default function OverviewScreen() {
   // Hourly metrics from ams_messages for heatmap (last 7 days)
   const last7Start = toDateString(addDays(todayDate, -6));
   const hourlyQ = useQuery({
-    queryKey: ["hourly-metrics", selectedProfileIds, last7Start, todayStr],
-    queryFn: () => fetchHourlyMetrics(selectedProfileIds, last7Start, todayStr),
+    queryKey: ["hourly-metrics", scopeProfiles, last7Start, todayStr],
+    queryFn: () => fetchHourlyMetrics(scopeProfiles, last7Start, todayStr),
     enabled: false,
     ...OVERVIEW_QUERY_CACHE,
   });
 
   const searchTermsPulseQ = useQuery({
-    queryKey: ["search-terms-pulse", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => fetchSearchTerms(selectedProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80 }),
+    queryKey: ["search-terms-pulse", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () => fetchSearchTerms(scopeProfiles, { start: dateRange.start, end: dateRange.end, limit: 80 }),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
   });
 
   const bleedersQ = useQuery({
-    queryKey: ["bleeding-keywords", adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => withQueryTimeout(fetchKeywords(selectedProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80, filterUserId: adminFilterUserId })),
+    queryKey: ["bleeding-keywords", adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () => withQueryTimeout(fetchKeywords(scopeProfiles, { start: dateRange.start, end: dateRange.end, limit: 80, filterUserId: adminFilterUserId })),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
   });
 
   const adGroupsQ = useQuery({
-    queryKey: ["overview-ad-groups", adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
+    queryKey: ["overview-ad-groups", adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () =>
-      withQueryTimeout(fetchAdGroups(selectedProfileIds, undefined, { start: dateRange.start, end: dateRange.end })),
+      withQueryTimeout(
+        fetchAdGroups(scopeProfiles, undefined, {
+          start: dateRange.start,
+          end: dateRange.end,
+          limit: 80,
+          enrichCounts: false,
+        }),
+      ),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
   });
 
   const activeBookKeysQ = useQuery({
-    queryKey: ["books-activity-60d", selectedProfileIds],
-    queryFn: () => withQueryTimeout(fetchActiveBookKeysForProfiles(selectedProfileIds)),
+    queryKey: ["books-activity-60d", scopeProfiles],
+    queryFn: () => withQueryTimeout(fetchActiveBookKeysForProfiles(scopeProfiles)),
     enabled: viewingAsAdmin && selectedProfileIds.length > 0,
     staleTime: 5 * 60_000,
     gcTime: 12 * 60 * 60_000,
@@ -717,7 +780,7 @@ export default function OverviewScreen() {
   const adminTopBooks = viewingAsAdmin ? bootstrapToTopBooks(bootstrapQ.data) : null;
   const adminBleeders = viewingAsAdmin ? bootstrapToBleeders(bootstrapQ.data) : null;
 
-  const activePeriodKey = periodQueryKey(dateRange, selectedProfileIds);
+  const activePeriodKey = financialPeriodQueryKey(dateRange, scopeProfiles, primaryCurrency);
   const periodLoading = viewingAsAdmin
     ? queryStillWaiting(bootstrapQ)
     : periodFinancePending(metricsQ, royaltiesQ);
@@ -786,7 +849,7 @@ export default function OverviewScreen() {
       }),
       { impressions: 0, clicks: 0, orders: 0, spend: 0, sales: 0 },
     );
-    const royalties = royaltyRange?.hasKdpData ? royaltyRange.totalRoyalties : 0;
+    const royalties = knownKdpRoyaltyTotal(royaltyRange);
     const bookOrders = royaltyRange?.hasKdpData ? royaltyRange.totalOrders : acc.orders;
     const organicOrders = royaltyRange?.hasKdpData ? Math.max(0, bookOrders - acc.orders) : 0;
     const net = kdpReady ? netRoyaltiesKnown(royalties, acc.spend) : null;
@@ -796,27 +859,11 @@ export default function OverviewScreen() {
     return { ...acc, royalties, bookOrders, organicOrders, net, acos, ctr, cvr };
   }, [daily, royaltyRange, kdpReady]);
 
-  const breakEvenAcos = useMemo(() => {
-    const royaltyPerBookOrder =
-      kdpReady && totals.bookOrders > 0
-        ? safeDivide(totals.royalties, totals.bookOrders)
-        : 0;
-    const adSalePerOrder = totals.orders > 0 ? safeDivide(totals.sales, totals.orders) : 0;
-    const realBreakEven =
-      royaltyPerBookOrder > 0 && adSalePerOrder > 0
-        ? (royaltyPerBookOrder / adSalePerOrder) * 100
-        : 0;
-
-    // Break-even ACoS comes only from real KDP royalty data (per book, like the
-    // Top Books widget) — no manual/settings override.
-    return Number.isFinite(realBreakEven) && realBreakEven > 0 ? realBreakEven : 0;
-  }, [
-    kdpReady,
-    totals.bookOrders,
-    totals.orders,
-    totals.royalties,
-    totals.sales,
-  ]);
+  const catalogBooks = viewingAsAdmin ? adminTopBooks ?? [] : catalogBooksQ.data ?? [];
+  const breakEvenAcos = useMemo(
+    () => computeOverallBreakEvenAcos(catalogBooks),
+    [catalogBooks],
+  );
 
   const prevTotals = useMemo(() => {
     const acc = prevDaily.reduce(
@@ -829,7 +876,7 @@ export default function OverviewScreen() {
       }),
       { impressions: 0, clicks: 0, orders: 0, spend: 0, sales: 0 },
     );
-    const royalties = prevRoyaltyRange?.hasKdpData ? prevRoyaltyRange.totalRoyalties : 0;
+    const royalties = knownKdpRoyaltyTotal(prevRoyaltyRange);
     return {
       ...acc,
       royalties,
@@ -1086,7 +1133,7 @@ export default function OverviewScreen() {
   // Period navigation
   const prefetchPeriodData = useCallback(
     (range: DateRange) => {
-      if (!sellerReady || selectedProfileIds.length === 0) return;
+      if (!sellerReady || scopeProfiles.length === 0) return;
       const t0 = Date.now();
       // #region agent log
       debugIngest("index.tsx:prefetchPeriod", "period prefetch start", { start: range.start, end: range.end }, "F");
@@ -1094,17 +1141,19 @@ export default function OverviewScreen() {
       const prev = previousRange(range.start, range.end);
       const prefetchMetrics = (start: string, end: string) =>
         queryClient.prefetchQuery({
-          queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetrics, selectedProfileIds, start, end],
-          queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(selectedProfileIds, start, end)),
+          queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetrics, scopeProfiles, start, end, primaryCurrency],
+          queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(scopeProfiles, start, end)),
           ...FINANCIAL_QUERY_CACHE,
         });
-      const prefetchRoyalties = (start: string, end: string) =>
-        queryClient.prefetchQuery({
-          queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, selectedProfileIds, start, end],
-          queryFn: () => withQueryTimeout(fetchKdpRoyaltiesRange(selectedProfileIds, start, end)),
+      const prefetchRoyalties = (start: string, end: string) => {
+        if (royaltyProfiles.length === 0) return Promise.resolve();
+        return queryClient.prefetchQuery({
+          queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, royaltyProfiles, start, end, primaryCurrency],
+          queryFn: () => withQueryTimeout(fetchKdpRoyaltiesRange(royaltyProfiles, start, end)),
           ...OVERVIEW_QUERY_CACHE,
           meta: financialQueryMeta(),
         });
+      };
 
       void prefetchMetrics(range.start, range.end)
         .finally(() => {
@@ -1116,18 +1165,26 @@ export default function OverviewScreen() {
       void prefetchMetrics(prev.start, prev.end);
       void prefetchRoyalties(prev.start, prev.end);
     },
-    [sellerReady, selectedProfileIds, queryClient],
+    [sellerReady, scopeProfiles, royaltyProfiles, primaryCurrency, queryClient],
   );
 
   useEffect(() => {
-    if (!sellerReady || selectedProfileIds.length === 0) return;
+    if (!sellerReady || scopeProfiles.length === 0) return;
     const anchor = parseDateOnly(todayStr);
+    prefetchPeriodData(makeDashboardDayRange(anchor));
     prefetchPeriodData(makeDashboardMonthRange(anchor));
     prefetchPeriodData(makeDashboardWeekRange(anchor));
-  }, [sellerReady, selectedProfileIds.join("|"), prefetchPeriodData, todayStr]);
+  }, [sellerReady, scopeProfiles.join("|"), primaryCurrency, prefetchPeriodData, todayStr]);
 
   function shiftPeriod(dir: -1 | 1) {
     void playHaptic("select", reduceMotion);
+    if (periodMode === "custom") return;
+    if (periodMode === "day") {
+      const next = makeDashboardDayRange(addDays(parseDateOnly(dateRange.start), dir));
+      prefetchPeriodData(next);
+      setDateRange(next);
+      return;
+    }
     if (periodMode === "month") {
       const start = parseDateOnly(dateRange.start);
       start.setMonth(start.getMonth() + dir, 1);
@@ -1142,14 +1199,26 @@ export default function OverviewScreen() {
     setDateRange(next);
   }
 
-  function applyPeriodMode(mode: "month" | "week") {
+  function applyPeriodMode(mode: OverviewPeriodMode) {
+    if (mode === "custom") return;
     if (mode === periodMode) return;
     void playHaptic("select", reduceMotion);
     setPeriodMode(mode);
     const next =
-      mode === "month" ? makeDashboardMonthRange(todayDate) : makeDashboardWeekRange(todayDate);
+      mode === "month"
+        ? makeDashboardMonthRange(todayDate)
+        : mode === "week"
+          ? makeDashboardWeekRange(todayDate)
+          : makeDashboardDayRange(todayDate);
     prefetchPeriodData(next);
     setDateRange(next);
+  }
+
+  function applyCustomRange(range: DateRange) {
+    void playHaptic("select", reduceMotion);
+    setPeriodMode("custom");
+    prefetchPeriodData(range);
+    setDateRange(range);
   }
 
   const canGoNextPeriod = parseDateOnly(dateRange.end) < todayDate;
@@ -1184,11 +1253,6 @@ export default function OverviewScreen() {
       : t.colors.tone_danger;
   const profitColor = !netKnown ? t.colors.text_tertiary : profitAccentColor;
   const heroAcos = chartDay ? safeDivide(chartDay.spend, chartDay.sales) * 100 : totals.acos;
-  const profitVerdict = loading
-    ? null
-    : chartDay
-      ? chartDay.label
-      : null;
   const profitMargin = heroNet == null
     ? null
     : safeDivide(heroNet, heroRoyalties) * 100;
@@ -1248,7 +1312,7 @@ export default function OverviewScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    const primary: Promise<unknown>[] = [snapshotQ.refetch(), metricsQ.refetch(), royaltiesQ.refetch(), syncLogsQ.refetch()];
+    const primary: Promise<unknown>[] = [snapshotQ.refetch(), metricsQ.refetch(), royaltiesQ.refetch(), syncLogsQ.refetch(), royaltySetup.refetchAccounts()];
     if (viewingAsAdmin) primary.push(bootstrapQ.refetch());
     await Promise.all(primary);
     setRefreshing(false);
@@ -1289,7 +1353,7 @@ export default function OverviewScreen() {
         <View style={{ flex: 1, justifyContent: "center" }}>
           <RetryState
             title="Accounts are taking too long"
-            subtitle="Cached Home data was kept. Retry when the network is ready."
+            subtitle="Showing cached data"
             onRetry={() => {
               setProfilesWaitExpired(false);
               void refetchProfiles();
@@ -1377,6 +1441,7 @@ export default function OverviewScreen() {
             profileLabel={primaryProfile}
             currency={primaryCurrency}
             onProfilePress={() => router.push("/more/accounts")}
+            onCurrencyPress={() => router.push("/more/accounts")}
             syncColor={syncColor}
             syncCompact={syncCompactLabel}
             syncA11y={
@@ -1393,56 +1458,61 @@ export default function OverviewScreen() {
             onNext={() => shiftPeriod(1)}
             periodMode={periodMode}
             onPeriodModeChange={applyPeriodMode}
+            dateRange={dateRange}
+            onCustomRange={applyCustomRange}
           />
         </View>
 
         <View style={{ paddingHorizontal: dashboard.pageInset, paddingTop: dashboard.compactGap }}>
+          {royaltySetup.ask ? (
+            <KdpRoyaltySetupCard plan={royaltySetup.ask} onAction={royaltySetup.onAction} />
+          ) : null}
           <FirstReveal>
           <HorizonPane watchKey={activePeriodKey}>
           <DashboardSurface tone="hero" style={{ marginBottom: dashboard.sectionGap, overflow: "hidden" }} testID="home-net-royalties">
             <PressableScale
               onPress={chartDay ? clearChartSelection : undefined}
               accessibilityRole={chartDay ? "button" : "text"}
-              accessibilityLabel={chartDay ? `${chartDay.label}. Tap to show period total.` : `${NET_ROYALTIES_LABEL} for ${periodLabel}`}
+              accessibilityLabel={chartDay ? `${chartDay.label}. Release to show the period total.` : `${GROSS_ROYALTIES_LABEL} royalties for ${periodLabel}. Hold a day on the chart to inspect it.`}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
                 <VerifiedValue
-                  value={chartDay ? chartDay.label : "Net"}
-                  style={[t.typography.footnote, { color: t.colors.text_secondary }]}
+                  value={chartDay ? chartDay.label : GROSS_ROYALTIES_LABEL}
+                  style={[t.typography.caption1, { color: t.colors.text_tertiary, fontWeight: "600", letterSpacing: 0.2 }]}
                   accessibilityRole="header"
                 />
                 <VerifiedValue
-                  value={profitVerdict ?? (!chartDay ? periodLabel : "")}
-                  style={[t.typography.caption2, { color: t.colors.text_tertiary }]}
+                  value={!chartDay ? periodLabel : ""}
+                  style={[t.typography.caption2, { color: t.colors.text_tertiary, flexShrink: 1 }]}
                 />
               </View>
             </PressableScale>
             <VerifiedValue
-              value={netDisplay}
-              color={profitColor}
+              value={royaltiesDisplay}
+              color={royaltiesKnown ? t.colors.text_primary : t.colors.text_tertiary}
               style={[
                 t.typography.metric_massive,
                 {
-                  marginTop: t.spacing.sm,
+                  marginTop: t.spacing.tight,
                   fontVariant: ["tabular-nums"],
                 },
               ]}
               accessible
-              accessibilityLabel={`${NET_ROYALTIES_LABEL}, ${netDisplay}`}
-              testID="home-hero-net"
+              accessibilityLabel={`${GROSS_ROYALTIES_LABEL} royalties, ${royaltiesDisplay}`}
+              testID="home-hero-gross"
             />
             {kdpPartial && !loading ? (
               <Text style={[t.typography.caption2, { color: t.colors.tone_warning, marginTop: t.spacing.xs }]}>
                 Partial royalties — net may be low.
               </Text>
             ) : null}
-            {!loading && netKnown && prevKdpReady && !chartDay && (
+            {!loading && royaltiesKnown && prevKdpReady && !chartDay && (
               <View style={{ marginTop: t.spacing.sm }}>
-                <StatBadge delta={deltas.net} suffix="vs prior" />
+                <StatBadge delta={deltas.royalties} suffix="vs prior" />
               </View>
             )}
             {financeCaption ? (
-              <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: t.spacing.sm }]}>
+              <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: t.spacing.sm }]}>
                 {financeCaption}
               </Text>
             ) : null}
@@ -1458,11 +1528,11 @@ export default function OverviewScreen() {
             )}
 
             <View
-              style={[styles.heroMetricGrid, { marginTop: t.spacing.md }]}
+              style={[styles.heroMetricGrid, { marginTop: dashboard.metricGap }]}
               accessible
-              accessibilityLabel={`Royalties, ${royaltiesDisplay}. Ad spend, ${spendDisplay}. ACoS, ${acosDisplay}. Margin, ${marginDisplay}.`}
+              accessibilityLabel={`${NET_ROYALTIES_LABEL}, ${netDisplay}. Ad spend, ${spendDisplay}. ACoS, ${acosDisplay}. Margin, ${marginDisplay}.`}
             >
-              <HeroMetric label="Royalties" value={royaltiesDisplay} t={t} />
+              <HeroMetric label="Net" value={netDisplay} t={t} color={profitColor} />
               <HeroMetric label="Ad spend" value={spendDisplay} t={t} />
               <HeroMetric label="ACoS" value={acosDisplay} t={t} color={acosValueColor} />
               <HeroMetric label="Margin" value={marginDisplay} t={t} />
@@ -1517,7 +1587,7 @@ export default function OverviewScreen() {
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineKeywordsPage
-                      profileIds={selectedProfileIds}
+                      profileIds={scopeProfiles}
                       start={dateRange.start}
                       end={dateRange.end}
                       breakEvenAcos={breakEvenAcos}
@@ -1532,7 +1602,7 @@ export default function OverviewScreen() {
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineSearchTermsPage
-                      profileIds={selectedProfileIds}
+                      profileIds={scopeProfiles}
                       start={dateRange.start}
                       end={dateRange.end}
                       breakEvenAcos={breakEvenAcos}
@@ -1550,8 +1620,8 @@ export default function OverviewScreen() {
               testID="home-kdp-royalties-format"
               title="KDP Royalties"
               icon="royalties"
-              actionLabel="Helper"
-              onAction={() => router.push("/more/kdp-helper")}
+              actionLabel={royaltySetup.collectionLabel}
+              onAction={royaltySetup.openCollection}
               pages={[
                 {
                   key: "format-mix",
@@ -1565,7 +1635,7 @@ export default function OverviewScreen() {
                       loading={formatRoyaltiesQ.isPending && !formatRoyaltiesQ.data}
                       error={formatRoyaltiesQ.isError}
                       onRetry={() => void formatRoyaltiesQ.refetch()}
-                      onOpenHelper={() => router.push("/more/kdp-helper")}
+                      onImportRoyalties={royaltySetup.openCollection}
                     />
                   ),
                 },
@@ -1762,7 +1832,7 @@ export default function OverviewScreen() {
                           currency={primaryCurrency}
                           t={t}
                           isLast={idx === keywordBleeders.length - 1}
-                          onPress={() => router.push(`/target/${row.id}` as never)}
+                          onPress={() => router.push(`/keyword/${row.id}` as never)}
                         />
                       ))}
                     </WidgetRowList>
@@ -1782,7 +1852,7 @@ export default function OverviewScreen() {
                           currency={primaryCurrency}
                           t={t}
                           isLast={idx === keywordHighAcos.length - 1}
-                          onPress={() => router.push(`/target/${row.id}` as never)}
+                          onPress={() => router.push(`/keyword/${row.id}` as never)}
                         />
                       ))}
                     </WidgetRowList>
@@ -1802,6 +1872,7 @@ export default function OverviewScreen() {
                           currency={primaryCurrency}
                           t={t}
                           isLast={idx === termSpendNoOrders.length - 1}
+                          onPress={row.id ? () => router.push(`/search-term/${row.id}` as never) : undefined}
                         />
                       ))}
                     </WidgetRowList>
@@ -1821,6 +1892,7 @@ export default function OverviewScreen() {
                           currency={primaryCurrency}
                           t={t}
                           isLast={idx === termLowAcos.length - 1}
+                          onPress={row.id ? () => router.push(`/search-term/${row.id}` as never) : undefined}
                         />
                       ))}
                     </WidgetRowList>
@@ -1907,14 +1979,16 @@ export default function OverviewScreen() {
                       <SwipeEmpty message="Couldn't load books. Tap to retry." t={t} />
                     </TouchableOpacity>
                   ) : booksRoyalties.length === 0 ? (
-                    <SwipeEmpty
-                      message={
-                        kdpReady && totals.royalties > 0
-                          ? `Overview shows ${formatCurrency(totals.royalties, primaryCurrency)} KDP royalties, but no per-book breakdown in this period yet. Open Books or sync KDP on desktop.`
-                          : "No KDP royalties on books in this period."
-                      }
-                      t={t}
-                    />
+                    kdpReady && totals.royalties > 0 ? (
+                      <SwipeEmpty message="No per-book data" t={t} />
+                    ) : (
+                      <TouchableOpacity onPress={royaltySetup.openCollection} accessibilityRole="button">
+                        <SwipeEmpty
+                          message="No KDP royalties. Import with Chrome or the iPhone helper."
+                          t={t}
+                        />
+                      </TouchableOpacity>
+                    )
                   ) : (
                     <WidgetRowList>
                       {booksRoyalties.map((book, idx) => (
@@ -1924,6 +1998,7 @@ export default function OverviewScreen() {
                           currency={primaryCurrency}
                           t={t}
                           blur={blurBooks}
+                          marketplaceIndex={marketplaceIndex}
                           isLast={idx === booksRoyalties.length - 1}
                           onPress={() => openBook(book)}
                         />
@@ -1934,15 +2009,14 @@ export default function OverviewScreen() {
               {
                 key: "worst-profit",
                 label: "Worst profit",
-                hint: "Royalties minus ad spend",
                 hidden: booksPhase !== "success" && booksPhase !== "empty",
                 content:
                   booksProfit.length === 0 ? (
                     <SwipeEmpty
                       message={
                         kdpReady && totals.royalties > 0
-                          ? "No book-level net yet. Royalties may be account-only until KDP book sync completes."
-                          : "No book profit data for this period."
+                          ? "No book-level net"
+                          : "No book profit"
                       }
                       t={t}
                     />
@@ -1955,6 +2029,7 @@ export default function OverviewScreen() {
                           currency={primaryCurrency}
                           t={t}
                           blur={blurBooks}
+                          marketplaceIndex={marketplaceIndex}
                           isLast={idx === booksProfit.length - 1}
                           onPress={() => openBook(book)}
                         />
@@ -1969,7 +2044,7 @@ export default function OverviewScreen() {
                 hidden: booksPhase !== "success" && booksPhase !== "empty",
                 content:
                   booksHigh.length === 0 ? (
-                    <SwipeEmpty message="No ad-attributed book sales in this period. KDP royalties can still show on Top royalties." t={t} />
+                    <SwipeEmpty message="No ad sales" t={t} />
                   ) : (
                     <WidgetRowList>
                       {booksHigh.map((book, idx) => (
@@ -1979,6 +2054,7 @@ export default function OverviewScreen() {
                           currency={primaryCurrency}
                           t={t}
                           blur={blurBooks}
+                          marketplaceIndex={marketplaceIndex}
                           isLast={idx === booksHigh.length - 1}
                           onPress={() => openBook(book)}
                         />
@@ -2000,6 +2076,7 @@ export default function OverviewScreen() {
                         currency={primaryCurrency}
                         t={t}
                         blur={blurBooks}
+                          marketplaceIndex={marketplaceIndex}
                         isLast={idx === booksAdSpendNoSales.length - 1}
                         onPress={() => openBook(book)}
                       />
@@ -2027,6 +2104,7 @@ export default function OverviewScreen() {
                         currency={primaryCurrency}
                         t={t}
                         blur={blurBooks}
+                          marketplaceIndex={marketplaceIndex}
                         isLast={idx === booksLow.length - 1}
                         onPress={() => openBook(book)}
                       />
@@ -2155,13 +2233,13 @@ function HeroMetric({
     <GlassPanel
       strength="chip"
       style={[styles.heroMetricCell, { borderColor: t.colors.glass_stroke }]}
-      contentStyle={{ paddingVertical: 10, paddingHorizontal: 12 }}
+      contentStyle={{ paddingVertical: density.metricPadV, paddingHorizontal: density.metricPadH }}
     >
-      <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>{label}</Text>
+      <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, fontWeight: "600" }]}>{label}</Text>
       <VerifiedValue
         value={value}
         color={color ?? t.colors.text_primary}
-        style={[t.typography.metric_compact, { marginTop: 2 }]}
+        style={[t.typography.metric_compact, { marginTop: 4, textAlign: "left", alignSelf: "stretch" }]}
         numberOfLines={1}
       />
     </GlassPanel>

@@ -152,39 +152,38 @@ export function claimsKdpOrAllSources(label: string): boolean {
 
 /** Presentation helpers below. They do not change Nest scope or deriveSyncHero rules. */
 
-export const CHECKING_STATUS_LABEL = "Checking Amazon Ads status…";
-export const STATUS_UNAVAILABLE_LABEL = "Couldn't check Amazon Ads status";
-export const LOADING_LOGS_LABEL = "Loading Amazon Ads logs…";
-export const SELECT_PROFILE_FOR_FRESHNESS_LABEL = "Select a profile to see Ads freshness";
+export const CHECKING_STATUS_LABEL = "Checking…";
+export const STATUS_UNAVAILABLE_LABEL = "Couldn't check status";
+export const LOADING_LOGS_LABEL = "Loading logs…";
+export const SELECT_PROFILE_FOR_FRESHNESS_LABEL = "Select a profile";
 
-export const SCOPE_HELPER = "Showing selected profiles. Sync runs for all enabled profiles.";
+export const SCOPE_HELPER = "Selected profiles · Sync runs for all enabled";
 
-export const NO_SELECTED_TITLE = "No profiles in the current view";
-export const NO_SELECTED_SUBTITLE =
-  "Select a profile in the header to see its Ads logs. Sync now still runs for all enabled profiles.";
+export const NO_SELECTED_TITLE = "No profiles in view";
+export const NO_SELECTED_SUBTITLE = "Pick a profile for Ads logs. Sync still runs for all enabled.";
 
-export const NO_PROFILE_LOGS_TITLE = "No Amazon Ads sync history";
-export const NO_AMS_TITLE = "No Marketing Stream messages";
+export const NO_PROFILE_LOGS_TITLE = "No sync history";
+export const NO_AMS_TITLE = "No stream messages";
 
 export const AMS_SECTION_TITLE = "Marketing Stream";
-export const AMS_SECTION_SUBTITLE = "Live Amazon Marketing Stream. Sync now does not refresh this.";
+export const AMS_SECTION_SUBTITLE = "Not refreshed by Sync now";
 
 export const RECORDS_FOOTNOTE =
-  "Entity writes in this log window — campaigns, ad groups, keywords, product ads, and product targets. Not catalog size.";
+  "Writes in this window — not catalog size.";
 
-export const CANCEL_CONFIRM_TITLE = "Cancel current Amazon Ads sync?";
+export const CANCEL_CONFIRM_TITLE = "Cancel sync?";
 export const CANCEL_CONFIRM_MESSAGE =
-  "Stops the current job for all enabled profiles. Data already imported stays.";
+  "Stops the current job. Imported data stays.";
 
-export const VIEWING_CUSTOMER_BANNER = "Viewing a customer. Sync now and Cancel stay off.";
+export const VIEWING_CUSTOMER_BANNER = "Viewing customer — Sync off";
 
 export const REFRESH_A11Y_LABEL = "Refresh status and logs";
-export const REFRESH_A11Y_HINT = "Refetches Amazon Ads status and logs. Does not start a new sync.";
+export const REFRESH_A11Y_HINT = "Refreshes status and logs. Does not start sync.";
 
-export const SYNC_NOW_HINT = "Starts an Amazon Ads sync for all enabled profiles. Does not collect royalties.";
-export const CANCEL_SYNC_HINT = "Stops the current Amazon Ads job. Imported data stays.";
+export const SYNC_NOW_HINT = "Syncs Ads for all enabled profiles. Not royalties.";
+export const CANCEL_SYNC_HINT = "Stops the current job. Imported data stays.";
 
-export const RECONNECT_COPY = "Amazon may need to be reconnected in Accounts.";
+export const RECONNECT_COPY = "Reconnect Amazon in Accounts.";
 
 export function formatSyncWhen(
   iso: string | null | undefined,

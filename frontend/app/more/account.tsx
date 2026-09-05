@@ -9,15 +9,14 @@ import { dashboard, useTheme } from "@/src/lib/theme";
 import { BrandIcon } from "@/src/components/Primitives";
 import { IOSButton, IOSGroupedSection, IOSSettingsRow } from "@/src/components/ios/Native";
 import {
-  ACCOUNT_BILLING_FOOTER,
   ACCOUNT_BILLING_URL,
   ACCOUNT_GUEST_NOTE,
-  ACCOUNT_STATUS_UNAVAILABLE,
   ACCOUNT_VIEW_AS_NOTE,
-  accountPlanPresentation,
+  accountSubscriptionPresentation,
   amazonProfileViewSummary,
   signOutConfirmMessage,
 } from "@/src/lib/accountContract";
+import { useCurrentUserPlan } from "@/src/hooks/useCurrentUserPlan";
 
 export default function AccountScreen() {
   const t = useTheme();
@@ -30,6 +29,7 @@ export default function AccountScreen() {
     selectedProfileIds,
     adminFilterUserId,
   } = useApp();
+  const currentPlanQ = useCurrentUserPlan();
   const [signingOut, setSigningOut] = useState(false);
   const [billingBusy, setBillingBusy] = useState(false);
 
@@ -88,7 +88,10 @@ export default function AccountScreen() {
     }
   };
 
-  const plan = accountPlanPresentation({
+  // Prefer last Nest payload while refetching; only show Checking… on first load.
+  const subscription = accountSubscriptionPresentation({
+    nestPlan: currentPlanQ.nestPlan,
+    nestStatus: currentPlanQ.nestStatus,
     userMetadata: user?.user_metadata,
     appMetadata: user?.app_metadata,
   });
@@ -101,9 +104,7 @@ export default function AccountScreen() {
         : amazonProfileViewSummary(selectedProfileIds.length, profiles.length);
   const identityTitle = guestMode ? "Preview demo" : (user?.email ?? "Account unavailable");
   const identitySubtitle = guestMode ? "No InteliAds account is signed in" : "Signed-in InteliAds account";
-  const subscriptionFooter = plan.source
-    ? `Plan is shown from account metadata only. ${ACCOUNT_BILLING_FOOTER}`
-    : ACCOUNT_BILLING_FOOTER;
+  const subscriptionFooter = subscription.footer;
 
   return (
     <SubScreen title="My Account">
@@ -193,13 +194,13 @@ export default function AccountScreen() {
               <IOSSettingsRow
                 testID="my-account-plan"
                 label="Plan"
-                subtitle={plan.source ? "Account metadata only" : undefined}
-                value={plan.label}
+                subtitle={subscription.planSubtitle}
+                value={subscription.planLabel}
               />
               <IOSSettingsRow
                 testID="my-account-subscription-status"
                 label="Subscription status"
-                value={ACCOUNT_STATUS_UNAVAILABLE}
+                value={subscription.statusLabel}
               />
               <IOSSettingsRow
                 testID="my-account-billing"
@@ -214,16 +215,12 @@ export default function AccountScreen() {
 
             <IOSGroupedSection
               title={viewingCustomer ? "Viewed customer data" : "Amazon data"}
-              footer={
-                viewingCustomer
-                  ? "These profile counts belong to the customer currently in view, not your signed-in InteliAds account."
-                  : "Manage profile connections and the current data view in Amazon Accounts."
-              }
+              footer={viewingCustomer ? "Customer view" : undefined}
             >
               <IOSSettingsRow
                 testID="my-account-amazon-profiles"
-                label="Amazon profiles in current view"
-                subtitle={viewingCustomer ? "Customer data" : "Signed-in account data"}
+                label="Amazon profiles"
+                subtitle={viewingCustomer ? "Customer view" : undefined}
                 value={profileSummary}
                 symbol="building.2"
                 symbolColor={t.colors.tone_product}
@@ -235,7 +232,7 @@ export default function AccountScreen() {
 
             <IOSGroupedSection
               title="Session"
-              footer="Signing out clears this iPhone's InteliAds session. It does not disconnect Amazon Ads or delete your account."
+              footer="Clears this session"
             >
               <View style={styles.sessionAction}>
                 <IOSButton

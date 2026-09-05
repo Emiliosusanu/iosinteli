@@ -8,15 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
-		28F4F918F9D737F8130DD994 /* InteliAdsSyncStatusWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FF9C53AB4CA53244E2223E7 /* InteliAdsSyncStatusWidget.swift */; };
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
 		67D5EF200A3A4B2D8C9CB27B /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2F8B0300AB814CF4B1CFE3C5 /* PrivacyInfo.xcprivacy */; };
 		6D9184416B3F79C5C3007D03 /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC0D37385B77B1A26C4BE89F /* ExpoModulesProvider.swift */; };
-		93FD6D81DF2F68E889B892CA /* InteliAdsSyncWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 902A9FCAE2342379CB292128 /* InteliAdsSyncWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		ADA57241E8D992D8E8F173EA /* InteliAdsSyncWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A6457F044F462E71F790E0 /* InteliAdsSyncWidgetBundle.swift */; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
-		F65BC5BDAF6044A07D2CDB6E /* InteliAdsWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BFF514B44EB86F0A19341FE /* InteliAdsWidgetSnapshot.swift */; };
+		F11748522D0905050044C1D9 /* InteliAdsHermesLaunch.mm in Sources */ = {isa = PBXBuildFile; fileRef = F11748502D0905050044C1D9 /* InteliAdsHermesLaunch.mm */; };
 		FD841C9F957463A6AAF36699 /* libPods-InteliAds.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 1C26DF1407F4CEE4C2307008 /* libPods-InteliAds.a */; };
 /* End PBXBuildFile section */
 
@@ -693,13 +690,6 @@
 			remoteGlobalIDString = E722D6805379E92A6556CE4A121DBEEE;
 			remoteInfo = Subproject;
 		};
-		D1BAECC898E8972C97F97C6F /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = EAD5BCAE3701AEBC95A99B3B;
-			remoteInfo = InteliAdsSyncWidget;
-		};
 		D2A2802876D1A68F9BE37B8C /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 73A8F265C35BB45C127BDEF3 /* Pods.xcodeproj */;
@@ -856,31 +846,17 @@
 		};
 /* End PBXContainerItemProxy section */
 
-/* Begin PBXCopyFilesBuildPhase section */
-		40976FE42F6F8891E00B526A /* Embed Foundation Extensions */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 13;
-			files = (
-				93FD6D81DF2F68E889B892CA /* InteliAdsSyncWidget.appex in Embed Foundation Extensions */,
-			);
-			name = "Embed Foundation Extensions";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
-
 /* Begin PBXFileReference section */
 		0BFF514B44EB86F0A19341FE /* InteliAdsWidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncActivityShared/InteliAdsWidgetSnapshot.swift; sourceTree = "<group>"; };
-		229B8B355A6CE7C9F0BF6682 /* InteliAdsSyncWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = InteliAdsSyncWidget/InteliAdsSyncWidget.entitlements; sourceTree = "<group>"; };
-		4E8C1A2B3D4F5061728394A5 /* InteliAdsSyncWidget-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = InteliAdsSyncWidget/Info.plist; sourceTree = "<group>"; };
 		13B07F961A680F5B00A75B9A /* InteliAds.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = InteliAds.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = InteliAds/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = InteliAds/Info.plist; sourceTree = "<group>"; };
 		1C26DF1407F4CEE4C2307008 /* libPods-InteliAds.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-InteliAds.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		1E4F4950B7AB244E2F950D8A /* Pods-InteliAds.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-InteliAds.release.xcconfig"; path = "Target Support Files/Pods-InteliAds/Pods-InteliAds.release.xcconfig"; sourceTree = "<group>"; };
+		229B8B355A6CE7C9F0BF6682 /* InteliAdsSyncWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = InteliAdsSyncWidget/InteliAdsSyncWidget.entitlements; sourceTree = "<group>"; };
 		2F8B0300AB814CF4B1CFE3C5 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = PrivacyInfo.xcprivacy; path = InteliAds/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		33A6457F044F462E71F790E0 /* InteliAdsSyncWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteliAdsSyncWidget/InteliAdsSyncWidgetBundle.swift; sourceTree = "<group>"; };
+		4E8C1A2B3D4F5061728394A5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = InteliAdsSyncWidget/Info.plist; sourceTree = "<group>"; };
 		73A8F265C35BB45C127BDEF3 /* Pods.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = Pods.xcodeproj; path = Pods/Pods.xcodeproj; sourceTree = "<group>"; };
 		7FF9C53AB4CA53244E2223E7 /* InteliAdsSyncStatusWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteliAdsSyncWidget/InteliAdsSyncStatusWidget.swift; sourceTree = "<group>"; };
 		902A9FCAE2342379CB292128 /* InteliAdsSyncWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = InteliAdsSyncWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -890,6 +866,8 @@
 		E5E02F7FB503849154189D44 /* Pods-InteliAds.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-InteliAds.debug.xcconfig"; path = "Target Support Files/Pods-InteliAds/Pods-InteliAds.debug.xcconfig"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F11748412D0307B40044C1D9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = InteliAds/AppDelegate.swift; sourceTree = "<group>"; };
+		F11748502D0905050044C1D9 /* InteliAdsHermesLaunch.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = InteliAdsHermesLaunch.mm; path = InteliAds/InteliAdsHermesLaunch.mm; sourceTree = "<group>"; };
+		F11748512D0905050044C1D9 /* InteliAdsHermesLaunch.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = InteliAdsHermesLaunch.h; path = InteliAds/InteliAdsHermesLaunch.h; sourceTree = "<group>"; };
 		F11748442D0722820044C1D9 /* InteliAds-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "InteliAds-Bridging-Header.h"; path = "InteliAds/InteliAds-Bridging-Header.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -902,39 +880,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		39C0826AAA7D2F40B150A12D /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		8B6184605D607F7D45C2FA7C /* InteliAdsSyncWidget */ = {
-			isa = PBXGroup;
-			children = (
-				33A6457F044F462E71F790E0 /* InteliAdsSyncWidgetBundle.swift */,
-				7FF9C53AB4CA53244E2223E7 /* InteliAdsSyncStatusWidget.swift */,
-				4E8C1A2B3D4F5061728394A5 /* InteliAdsSyncWidget-Info.plist */,
-				229B8B355A6CE7C9F0BF6682 /* InteliAdsSyncWidget.entitlements */,
-			);
-			name = InteliAdsSyncWidget;
-			sourceTree = "<group>";
-		};
-		C1D2E3F405162738495A6B7C /* SyncActivityShared */ = {
-			isa = PBXGroup;
-			children = (
-				0BFF514B44EB86F0A19341FE /* InteliAdsWidgetSnapshot.swift */,
-			);
-			name = SyncActivityShared;
-			sourceTree = "<group>";
-		};
 		13B07FAE1A68108700A75B9A /* InteliAds */ = {
 			isa = PBXGroup;
 			children = (
 				F11748412D0307B40044C1D9 /* AppDelegate.swift */,
+				F11748512D0905050044C1D9 /* InteliAdsHermesLaunch.h */,
+				F11748502D0905050044C1D9 /* InteliAdsHermesLaunch.mm */,
 				F11748442D0722820044C1D9 /* InteliAds-Bridging-Header.h */,
 				BB2F792B24A3F905000567C9 /* Supporting */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
@@ -1131,6 +1085,17 @@
 			name = ExpoModulesProviders;
 			sourceTree = "<group>";
 		};
+		8B6184605D607F7D45C2FA7C /* InteliAdsSyncWidget */ = {
+			isa = PBXGroup;
+			children = (
+				33A6457F044F462E71F790E0 /* InteliAdsSyncWidgetBundle.swift */,
+				7FF9C53AB4CA53244E2223E7 /* InteliAdsSyncStatusWidget.swift */,
+				4E8C1A2B3D4F5061728394A5 /* Info.plist */,
+				229B8B355A6CE7C9F0BF6682 /* InteliAdsSyncWidget.entitlements */,
+			);
+			name = InteliAdsSyncWidget;
+			sourceTree = "<group>";
+		};
 		BB2F792B24A3F905000567C9 /* Supporting */ = {
 			isa = PBXGroup;
 			children = (
@@ -1138,6 +1103,14 @@
 			);
 			name = Supporting;
 			path = InteliAds/Supporting;
+			sourceTree = "<group>";
+		};
+		C1D2E3F405162738495A6B7C /* SyncActivityShared */ = {
+			isa = PBXGroup;
+			children = (
+				0BFF514B44EB86F0A19341FE /* InteliAdsWidgetSnapshot.swift */,
+			);
+			name = SyncActivityShared;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -1166,23 +1139,6 @@
 			productName = InteliAds;
 			productReference = 13B07F961A680F5B00A75B9A /* InteliAds.app */;
 			productType = "com.apple.product-type.application";
-		};
-		EAD5BCAE3701AEBC95A99B3B /* InteliAdsSyncWidget */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 5E2BABD0755F0D319788E9CF /* Build configuration list for PBXNativeTarget "InteliAdsSyncWidget" */;
-			buildPhases = (
-				E45EBF7813E37ACE98BAF484 /* Sources */,
-				39C0826AAA7D2F40B150A12D /* Frameworks */,
-				3E4B20310ADAFE5097905FAE /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = InteliAdsSyncWidget;
-			productName = InteliAdsSyncWidget;
-			productReference = 902A9FCAE2342379CB292128 /* InteliAdsSyncWidget.appex */;
-			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -2061,13 +2017,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		3E4B20310ADAFE5097905FAE /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
@@ -2225,17 +2174,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
+				F11748522D0905050044C1D9 /* InteliAdsHermesLaunch.mm in Sources */,
 				6D9184416B3F79C5C3007D03 /* ExpoModulesProvider.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		E45EBF7813E37ACE98BAF484 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				ADA57241E8D992D8E8F173EA /* InteliAdsSyncWidgetBundle.swift in Sources */,
-				28F4F918F9D737F8130DD994 /* InteliAdsSyncStatusWidget.swift in Sources */,
-				F65BC5BDAF6044A07D2CDB6E /* InteliAdsWidgetSnapshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2246,11 +2186,6 @@
 			isa = PBXTargetDependency;
 			name = "Pods-InteliAds";
 			targetProxy = 5648F06B487DAEFA26F973D4 /* PBXContainerItemProxy */;
-		};
-		E69DED38FCBD0F455942026D /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = EAD5BCAE3701AEBC95A99B3B /* InteliAdsSyncWidget */;
-			targetProxy = D1BAECC898E8972C97F97C6F /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -2264,7 +2199,7 @@
 				CODE_SIGN_ENTITLEMENTS = InteliAds/InteliAds.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 41;
+				CURRENT_PROJECT_VERSION = 55;
 				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -2303,7 +2238,7 @@
 				CODE_SIGN_ENTITLEMENTS = InteliAds/InteliAdsRelease.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 41;
+				CURRENT_PROJECT_VERSION = 55;
 				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
 				INFOPLIST_FILE = InteliAds/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
@@ -2326,30 +2261,6 @@
 				VERSIONING_SYSTEM = "apple-generic";
 			};
 			name = Release;
-		};
-		3D6E7A0BBE6518E088989A0E /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = InteliAdsSyncWidget/InteliAdsSyncWidget.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 41;
-				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = InteliAdsSyncWidget/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = io.inteliads.app.syncwidget;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Debug;
 		};
 		83CBBA201A601CBA00E9B192 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -2469,30 +2380,6 @@
 			};
 			name = Release;
 		};
-		ABE46CC96CE8E963281E0840 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = InteliAdsSyncWidget/InteliAdsSyncWidget.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 41;
-				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = InteliAdsSyncWidget/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = io.inteliads.app.syncwidget;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -2501,15 +2388,6 @@
 			buildConfigurations = (
 				13B07F941A680F5B00A75B9A /* Debug */,
 				13B07F951A680F5B00A75B9A /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		5E2BABD0755F0D319788E9CF /* Build configuration list for PBXNativeTarget "InteliAdsSyncWidget" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				3D6E7A0BBE6518E088989A0E /* Debug */,
-				ABE46CC96CE8E963281E0840 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

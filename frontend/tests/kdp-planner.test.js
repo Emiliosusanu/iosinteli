@@ -52,13 +52,14 @@ test("wake mode: push/interval are recent; enable/manual/foreground are processi
   assert.equal(resolveWakeMode("push", { force: true }), "processing");
 });
 
-test("recent wake only schedules today+yesterday (no onboarding)", () => {
+test("recent wake still advances one onboarding chunk so leftover is not abandoned", () => {
   const state = createInitialSyncState();
   const res = planSync(AT("2026-09-02"), state, { timeZone: TZ, wakeMode: "recent", force: true });
-  assert.equal((rangesByKind(res).onboarding || []).length, 0);
-  assert.equal((rangesByKind(res).steady || []).length, 1);
+  assert.equal((rangesByKind(res).onboarding || []).length, 1);
+  assert.match(res.reason, /onboarding\(/);
   assert.equal(res.continueSoon, false);
   assert.equal(res.nextState.onboardingDone, false);
+  assert.ok(res.nextState.onboardingCursor);
 });
 
 test("processing onboarding: 30-day milestone then extends to 90", () => {
@@ -300,6 +301,16 @@ test("locked-phone wake routing: refresh=recent, processing=backfill, Expo smart
   assert.equal(
     resolveBackgroundKdpWakeMode({
       pendingNativeKind: null,
+      hour: 14,
+      onboardingDone: false,
+      incompleteNightly: false,
+      deferredCount: 0,
+    }),
+    "processing",
+  );
+  assert.equal(
+    resolveBackgroundKdpWakeMode({
+      pendingNativeKind: "recent",
       hour: 14,
       onboardingDone: false,
       incompleteNightly: false,

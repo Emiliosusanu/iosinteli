@@ -27,7 +27,9 @@ import {
 } from "@/src/lib/kdpTitlePresentation";
 import { useApp } from "@/src/contexts/AppContext";
 import { useTheme, acosTone, toneColor, useReduceMotion } from "@/src/lib/theme";
-import { formatCurrency, formatPercent, formatInt } from "@/src/lib/format";
+import { formatCurrency, formatPercent, formatInt, parseDateOnly, toDateString } from "@/src/lib/format";
+import { useAuth } from "@/src/contexts/AuthContext";
+import { useKdpRoyaltySetupPrompt } from "@/src/hooks/useKdpRoyaltySetupPrompt";
 import { NET_ROYALTIES_LABEL, netRoyaltiesVoiceOver, resolveBookNet, bookNetIsKnown } from "@/src/lib/netRoyalties";
 import { buildBookColorMap, bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { TopBar } from "@/src/components/TopBar";
@@ -38,8 +40,12 @@ import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialRe
 import { LIST_PERIOD_QUERY_CACHE, sameScopeWarmPlaceholder, sortedProfileIds } from "@/src/lib/periodQuery";
 import { booksEmptyCopy } from "@/src/lib/booksListActivity";
 import { isIosHelperEnabled } from "@/src/lib/kdp/source";
+import { knownKdpRoyaltyTotal, selectKdpRoyaltyScope } from "@/src/lib/kdpRoyaltyScope";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import { loadBooksFilterMemory, saveBooksFilterMemory } from "@/src/lib/filterMemory";
+import { countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
+import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
+import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -87,7 +93,7 @@ function bookStatus(item: TopBookRow, hasBreakEven: boolean): { label: string; t
   return { label: "Net negative", tone: "danger" };
 }
 
-function bookA11yLabel(item: TopBookRow, status: { label: string }, currency: string) {
+function bookA11yLabel(item: TopBookRow, status: { label: string }, currency: string, marketplaceLabel?: string | null) {
   const title = item.title || item.asin || item.sku || "Untitled book";
   const royalties = bookKdpAvailable(item) ? formatCurrency(item.royalties!, currency) : "unavailable";
   const spend = formatCurrency(Number(item.spend) || 0, currency);
@@ -99,6 +105,7 @@ function bookA11yLabel(item: TopBookRow, status: { label: string }, currency: st
   const adsSales = Number(item.sales) > 0 ? formatCurrency(Number(item.sales), currency) : undefined;
   const parts = [
     title,
+    marketplaceLabel,
     status.label,
     netRoyaltiesVoiceOver({
       kdpRoyalties: royalties,
@@ -121,7 +128,15 @@ export default function ProductsScreen() {
   const t = useTheme();
   const router = useRouter();
   const reduceMotion = useReduceMotion();
-  const { selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource } = useApp();
+  const { profiles, selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource } = useApp();
+  const { guestMode } = useAuth();
+  const yesterdayYmd = useMemo(() => {
+    const today = parseDateOnly(toDateString(new Date()));
+    today.setDate(today.getDate() - 1);
+    return toDateString(today);
+  }, []);
+  const royaltyScope = useMemo(() => selectKdpRoyaltyScope(profiles), [profiles]);
+  const marketplaceIndex = useSponsoredMarketplaceIndex();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<Sort>("acos");
@@ -146,13 +161,19 @@ export default function ProductsScreen() {
   }, [sort]);
 
   const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
-  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end] as const;
+  const royaltyProfiles = useMemo(
+    () => sortedProfileIds(royaltyScope.profileIds),
+    [royaltyScope.profileIds],
+  );
+  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", scopeProfiles, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency] as const;
   const overviewBooksKey = [
     FINANCIAL_QUERY_ROOTS.topBooks,
     adminFilterUserId ?? "self",
     scopeProfiles,
+    royaltyProfiles,
     dateRange.start,
     dateRange.end,
+    primaryCurrency,
   ] as const;
 
   const { data: books = [], isPending, isError, isRefetching, isFetching, refetch, error } = useQuery({
@@ -162,6 +183,7 @@ export default function ProductsScreen() {
       return withQueryTimeout(
         fetchTopBooksRange({
           profileIds: scopeProfiles,
+          kdpProfileIds: royaltyProfiles,
           start: dateRange.start,
           end: dateRange.end,
           royaltyRate: 0,
@@ -191,11 +213,20 @@ export default function ProductsScreen() {
     queryStillWaiting({ isPending, isError, data: books }) && books.length === 0 && !overviewBooksWarm;
 
   const { data: periodRoyalties } = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, scopeProfiles, dateRange.start, dateRange.end],
-    queryFn: () => fetchKdpRoyaltiesRange(scopeProfiles, dateRange.start, dateRange.end),
-    enabled: scopeProfiles.length > 0 && !showBlockingSpinner && books.length === 0,
+    queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, royaltyProfiles, dateRange.start, dateRange.end],
+    queryFn: () => fetchKdpRoyaltiesRange(royaltyProfiles, dateRange.start, dateRange.end),
+    enabled: scopeProfiles.length > 0 && royaltyProfiles.length > 0 && !showBlockingSpinner && books.length === 0,
     ...LIST_PERIOD_QUERY_CACHE,
     meta: financialQueryMeta(),
+  });
+  const latestImportedYmd = periodRoyalties?.daily?.length
+    ? String(periodRoyalties.daily[periodRoyalties.daily.length - 1]?.date ?? "").slice(0, 10) || null
+    : null;
+  const royaltySetup = useKdpRoyaltySetupPrompt({
+    enabled: selectedProfileIds.length > 0 && !guestMode && !adminFilterUserId,
+    royaltyScopeReason: royaltyScope.reason,
+    latestImportedYmd,
+    yesterdayYmd,
   });
 
   const bookColorMap = useMemo(
@@ -288,7 +319,8 @@ export default function ProductsScreen() {
   };
 
   const hasLinkedKdp = selectedProfiles.some((p) => (p.kdp_account_count ?? 0) > 0);
-  const hasAccountRoyalties = (periodRoyalties?.totalRoyalties ?? 0) > 0;
+  const knownAccountRoyalties = knownKdpRoyaltyTotal(periodRoyalties);
+  const hasAccountRoyalties = knownAccountRoyalties != null && knownAccountRoyalties > 0;
   const empty = emptyCopy(search, {
     iosHelperOn: isIosHelperEnabled(kdpRoyaltySource),
     hasLinkedKdp,
@@ -361,16 +393,32 @@ export default function ProductsScreen() {
           data={filtered}
           keyExtractor={bookRowKey}
           contentContainerStyle={{ padding: t.layout.pagePad, paddingBottom: t.layout.tabClearance }}
+          initialNumToRender={16}
+          maxToRenderPerBatch={20}
+          windowSize={7}
+          removeClippedSubviews={Platform.OS !== "ios"}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />
           }
           ItemSeparatorComponent={ItemSeparator}
-          ListEmptyComponent={<EmptyState productIcon="books" title={empty.title} subtitle={empty.subtitle} />}
+          ListEmptyComponent={
+            <EmptyState
+              productIcon="books"
+              title={empty.title}
+              subtitle={empty.subtitle}
+              action={
+                empty.actionLabel && !guestMode
+                  ? { label: empty.actionLabel, onPress: royaltySetup.openCollection }
+                  : undefined
+              }
+            />
+          }
           renderItem={({ item, index }) => (
             <ProductCard
               item={item}
               currency={primaryCurrency}
               color={bookColorMap.get(bookColorKeyFor(item)) ?? fallbackBookColor(bookColorKeyFor(item), index)}
+              marketplaceIndex={marketplaceIndex}
               onOpen={openBook}
             />
           )}
@@ -389,11 +437,13 @@ const ProductCard = React.memo(function ProductCard({
   item,
   currency,
   color,
+  marketplaceIndex,
   onOpen,
 }: {
   item: TopBookRow;
   currency: string;
   color: string;
+  marketplaceIndex: SponsoredMarketplaceIndex;
   onOpen: (item: TopBookRow) => void;
 }) {
   const t = useTheme();
@@ -404,7 +454,11 @@ const ProductCard = React.memo(function ProductCard({
   const kdpAvailable = bookKdpAvailable(item);
   const kdpReady = bookKdpReady(item);
   const hasBreakEven = hasAuthoritativeBreakEven(item.breakeven_acos);
-  const tone = adsReady ? acosTone(item.acos, hasBreakEven ? item.breakeven_acos : 30) : acosTone(0);
+  const tone = adsReady
+    ? hasBreakEven
+      ? acosTone(item.acos, item.breakeven_acos)
+      : "inactive"
+    : acosTone(0);
   const netPos = (() => {
     const net = resolveBookNet(item);
     return net != null && net >= 0;
@@ -422,7 +476,12 @@ const ProductCard = React.memo(function ProductCard({
         <TouchableOpacity
           activeOpacity={1}
           accessibilityRole="button"
-          accessibilityLabel={bookA11yLabel(item, status, currency)}
+          accessibilityLabel={bookA11yLabel(
+            item,
+            status,
+            currency,
+            marketplaceFlagsA11y(countriesForSponsoredBook(marketplaceIndex, item)),
+          )}
           accessibilityHint="Opens book details"
           onPressIn={() => {
             if (reduceMotion) return;
@@ -444,9 +503,16 @@ const ProductCard = React.memo(function ProductCard({
             />
 
             <View style={styles.titleBlock}>
-              <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={3}>
-                {item.title || item.asin || item.sku}
-              </Text>
+              <View style={styles.titleWithFlags}>
+                <Text style={[t.typography.headline, { color: t.colors.text_primary, flex: 1, minWidth: 0 }]} numberOfLines={3}>
+                  {item.title || item.asin || item.sku}
+                </Text>
+                <BookMarketplaceFlags
+                  index={marketplaceIndex}
+                  book={item}
+                  style={t.typography.headline}
+                />
+              </View>
               <View
                 accessible={false}
                 importantForAccessibility="no"
@@ -530,6 +596,11 @@ const styles = StyleSheet.create({
   titleBlock: {
     flex: 1,
     minWidth: 0,
+  },
+  titleWithFlags: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
   },
   profitBlock: {
     alignItems: "flex-end",

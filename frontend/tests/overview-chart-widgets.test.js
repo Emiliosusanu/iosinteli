@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  adsEnginePeriodLabel,
+  dailyToAdsEngineSeries,
+} from "../src/lib/adsEngineSeries.ts";
+import {
   aggregateKdpFormatRoyalties,
   formatKdpChartDate,
   formatSharePct,
@@ -56,6 +60,35 @@ test("aggregateKdpFormatRoyalties marks totals-only rows as no format data", () 
   assert.equal(range.total, 50);
 });
 
+test("Ads Engine keyword/search-term funnel caps at the server page, not a silent full-table walk", () => {
+  const queries = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
+  const persist = readFileSync(new URL("../src/lib/queryPersist.ts", import.meta.url), "utf8");
+  const fn = queries.slice(
+    queries.indexOf("search_terms inherit profile via campaigns"),
+    queries.indexOf("export async function fetchKeywordDailyAggregate"),
+  );
+  assert.match(fn, /\.limit\(ADS_ENGINE_ENTITY_CAP\)/);
+  assert.match(fn, /if \(error\) throw error/);
+  assert.match(fn, /search_terms inherit profile via campaigns/);
+  assert.match(fn, /\.in\("campaign_id"/);
+  assert.doesNotMatch(fn, /from\(opts\.entityTable\)[\s\S]*amazon_profile_id/);
+  assert.match(persist, /ads-engine-keywords-daily/);
+  assert.match(persist, /ads-engine-search-terms-daily/);
+});
+
+test("dailyToAdsEngineSeries totals are the period sum, not a missing day", () => {
+  const series = dailyToAdsEngineSeries([
+    { date: "2026-09-01", impressions: 1000, clicks: 20, orders: 2, spend: 40, sales: 80 },
+    { date: "2026-09-02", impressions: 500, clicks: 10, orders: 1, spend: 20, sales: 40 },
+    { date: "2026-09-05", impressions: 0, clicks: 0, orders: 0, spend: 0, sales: 0 },
+  ]);
+  assert.equal(series.totals.impressions, 1500);
+  assert.equal(series.totals.clicks, 30);
+  assert.equal(series.totals.orders, 3);
+  assert.equal(series.totals.acos, 50);
+  assert.equal(adsEnginePeriodLabel(series), "09-01–09-05");
+});
+
 test("Overview wires Ads Engine + KDP Royalties swipe widgets", () => {
   assert.match(overview, /testID="home-ads-engine"/);
   assert.match(overview, /testID="home-kdp-royalties-format"/);
@@ -67,6 +100,19 @@ test("Overview wires Ads Engine + KDP Royalties swipe widgets", () => {
   assert.match(overview, /adsEngineSeries/);
   assert.match(overview, /adsEngineAcos/);
   assert.match(charts, /breakEvenAcos/);
+  assert.match(overview, /computeOverallBreakEvenAcos/);
+  assert.match(overview, /activityDays: 0/);
+  assert.doesNotMatch(overview, /royaltyPerBookOrder/);
+  assert.doesNotMatch(overview, /adSalePerOrder/);
+  assert.doesNotMatch(overview, /catalogBooksQ\.data \?\.length \? catalogBooksQ\.data : topBooksRaw/);
   assert.match(charts, /KdpFormatRoyaltiesChart/);
   assert.match(widgets, /Paperback/);
+  assert.match(widgets, /onImportRoyalties/);
+  assert.match(overview, /royaltySetup\.openCollection/);
+  assert.match(overview, /ads-engine-keywords-daily/);
+  assert.match(overview, /ads-engine-search-terms-daily/);
+  assert.match(charts, /Hold a day to inspect/);
+  assert.match(charts, /periodTotals/);
+  assert.match(overview, /GROSS_ROYALTIES_LABEL/);
+  assert.match(overview, /home-hero-gross/);
 });

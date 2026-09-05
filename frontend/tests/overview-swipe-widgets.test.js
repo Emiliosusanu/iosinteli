@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   compareByAcosSpendImpressionsSync,
@@ -163,6 +164,13 @@ test("fillOverviewWidgetRows never duplicates ids across tiers", () => {
     3,
   );
   assert.deepEqual(filled.map((row) => row.id), ["b", "a", "c"]);
+});
+
+test("Overview keyword rows open keyword detail, not product-target detail", () => {
+  const home = readFileSync(new URL("../app/(tabs)/index.tsx", import.meta.url), "utf8");
+  assert.match(home, /`\/keyword\/\$\{row\.id\}`/);
+  assert.match(home, /`\/search-term\/\$\{row\.id\}`/);
+  assert.doesNotMatch(home, /`\/target\/\$\{row\.id\}`/);
 });
 
 test("legacy: basic ACoS direction still holds when all rows convert", () => {

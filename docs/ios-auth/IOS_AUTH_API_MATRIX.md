@@ -122,7 +122,10 @@ Nest `JwtAuthGuard` + `resolveCallerFromBearer` was hotfixed onto `robo-ads-back
 - `GET /rules` missing/invalid bearer → 401
 - health live OK
 - `BIDBOT_AUTO_APPLY_ENABLED=false`
-- `SMART_NOTIFICATIONS_CANARY_ONLY=true`
+- Smart notifications mass-use (2026-09-05 live `.env` + container):
+  `SMART_NOTIFICATIONS_ENABLED=true`, `SMART_NOTIFICATIONS_CANARY_ONLY=false`,
+  `NEW_ORDER_PUSH_ENABLED=true`, `DAILY_REPORT_PUSH_ENABLED=true`
+  (Nest code defaults remain off/canary-only; production overrides via `.env`.)
 
 Previous bundle kept at `/tmp/inteliads-main-pre-mobile-auth.bak`. Original image backup remains `/tmp/inteliads-main-8809210c.bak`.
 

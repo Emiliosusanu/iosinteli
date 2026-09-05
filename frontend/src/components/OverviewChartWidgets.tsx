@@ -8,7 +8,12 @@ import {
   type KdpFormatStackDay,
 } from "@/src/components/Charts";
 import { SwipeEmpty } from "@/src/components/OverviewSwipeWidget";
-import { formatCurrency, formatPercent, safeDivide } from "@/src/lib/format";
+import { formatCurrency, formatPercent } from "@/src/lib/format";
+import {
+  adsEnginePeriodLabel,
+  dailyToAdsEngineSeries,
+  type AdsEngineSeries,
+} from "@/src/lib/adsEngineSeries";
 import {
   formatKdpChartDate,
   formatSharePct,
@@ -18,30 +23,13 @@ import {
   fetchKeywordDailyAggregate,
   fetchSearchTermDailyAggregate,
 } from "@/src/lib/queries";
-import { HOME_PERIOD_QUERY_CACHE } from "@/src/lib/periodQuery";
-import { withQueryTimeout } from "@/src/lib/queryTimeout";
+import { HOME_PERIOD_QUERY_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
+import { ADS_ENGINE_FUNNEL_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
+import { hasAuthoritativeBreakEven } from "@/src/lib/kdpTitlePresentation";
 import { dashboard, useTheme, type Theme } from "@/src/lib/theme";
 
-export type AdsEngineSeries = {
-  impressions: Array<{ value: number; label?: string }>;
-  clicks: Array<{ value: number; label?: string }>;
-  orders: Array<{ value: number; label?: string }>;
-  acos: Array<{ value: number; label?: string }>;
-};
-
-export function dailyToAdsEngineSeries(
-  daily: Array<{ date: string; impressions: number; clicks: number; orders: number; spend: number; sales: number }>,
-): AdsEngineSeries {
-  return {
-    impressions: daily.map((m) => ({ value: m.impressions, label: formatKdpChartDate(m.date) })),
-    clicks: daily.map((m) => ({ value: m.clicks, label: formatKdpChartDate(m.date) })),
-    orders: daily.map((m) => ({ value: m.orders, label: formatKdpChartDate(m.date) })),
-    acos: daily.map((m) => ({
-      value: safeDivide(m.spend, m.sales) * 100,
-      label: formatKdpChartDate(m.date),
-    })),
-  };
-}
+export type { AdsEngineSeries } from "@/src/lib/adsEngineSeries";
+export { adsEnginePeriodLabel, dailyToAdsEngineSeries } from "@/src/lib/adsEngineSeries";
 
 function FormatMixTile({
   label,
@@ -96,7 +84,7 @@ export function KdpRoyaltiesFormatPage({
   loading,
   error,
   onRetry,
-  onOpenHelper,
+  onImportRoyalties,
 }: {
   range: KdpFormatRoyaltyRange | undefined;
   currency: string;
@@ -104,7 +92,7 @@ export function KdpRoyaltiesFormatPage({
   loading?: boolean;
   error?: boolean;
   onRetry?: () => void;
-  onOpenHelper?: () => void;
+  onImportRoyalties?: () => void;
 }) {
   const t = useTheme();
 
@@ -118,9 +106,9 @@ export function KdpRoyaltiesFormatPage({
   }
   if (!range?.hasKdpData) {
     return (
-      <TouchableOpacity onPress={onOpenHelper} accessibilityRole="button">
+      <TouchableOpacity onPress={onImportRoyalties} accessibilityRole="button">
         <SwipeEmpty
-          message="No KDP royalties yet. Open KDP helper to sync Paperback / KU / Kindle mix."
+          message="No KDP royalties in this period. Import with Chrome or the iPhone helper."
           t={t}
         />
       </TouchableOpacity>
@@ -128,10 +116,12 @@ export function KdpRoyaltiesFormatPage({
   }
   if (!range.hasFormatData) {
     return (
-      <SwipeEmpty
-        message={`KDP royalties ${formatCurrency(range.total, currency)} are available, but format breakdown isn't in this sync yet. Re-sync with the KDP helper.`}
-        t={t}
-      />
+      <TouchableOpacity onPress={onImportRoyalties} accessibilityRole="button">
+        <SwipeEmpty
+          message={`KDP royalties ${formatCurrency(range.total, currency)} are available, but format breakdown isn't in this sync yet. Re-sync with Chrome or the iPhone helper.`}
+          t={t}
+        />
+      </TouchableOpacity>
     );
   }
 
@@ -197,6 +187,8 @@ export function AdsEngineCampaignsPage({
       clicksData={series.clicks}
       ordersData={series.orders}
       acosData={series.acos}
+      totals={series.totals}
+      periodLabel={adsEnginePeriodLabel(series)}
       breakEvenAcos={breakEvenAcos}
       width={width}
     />
@@ -218,13 +210,14 @@ export function AdsEngineKeywordsPage({
   width: number;
 }) {
   const t = useTheme();
+  const ids = useMemo(() => sortedProfileIds(profileIds), [profileIds]);
   const q = useQuery({
-    queryKey: ["ads-engine-keywords-daily", profileIds, start, end],
-    queryFn: () => withQueryTimeout(fetchKeywordDailyAggregate(profileIds, start, end)),
-    enabled: profileIds.length > 0,
+    queryKey: ["ads-engine-keywords-daily", ids, start, end],
+    queryFn: () => withQueryTimeout(fetchKeywordDailyAggregate(ids, start, end), ADS_ENGINE_FUNNEL_TIMEOUT_MS),
+    enabled: ids.length > 0,
     ...HOME_PERIOD_QUERY_CACHE,
   });
-  const series = useMemo(() => dailyToAdsEngineSeries(q.data ?? []), [q.data]);
+  const series = useMemo(() => dailyToAdsEngineSeries(q.data?.daily ?? []), [q.data]);
 
   if (q.isPending) return <SwipeEmpty message="Loading keyword funnel…" t={t} />;
   if (q.isError) {
@@ -239,7 +232,11 @@ export function AdsEngineKeywordsPage({
       series={series}
       breakEvenAcos={breakEvenAcos}
       width={width}
-      emptyMessage="No keyword metrics in this period."
+      emptyMessage={
+        (q.data?.entityCount ?? 0) === 0
+          ? "No keywords imported for these profiles yet."
+          : "No keyword metrics in this period."
+      }
     />
   );
 }
@@ -259,13 +256,14 @@ export function AdsEngineSearchTermsPage({
   width: number;
 }) {
   const t = useTheme();
+  const ids = useMemo(() => sortedProfileIds(profileIds), [profileIds]);
   const q = useQuery({
-    queryKey: ["ads-engine-search-terms-daily", profileIds, start, end],
-    queryFn: () => withQueryTimeout(fetchSearchTermDailyAggregate(profileIds, start, end)),
-    enabled: profileIds.length > 0,
+    queryKey: ["ads-engine-search-terms-daily", ids, start, end],
+    queryFn: () => withQueryTimeout(fetchSearchTermDailyAggregate(ids, start, end), ADS_ENGINE_FUNNEL_TIMEOUT_MS),
+    enabled: ids.length > 0,
     ...HOME_PERIOD_QUERY_CACHE,
   });
-  const series = useMemo(() => dailyToAdsEngineSeries(q.data ?? []), [q.data]);
+  const series = useMemo(() => dailyToAdsEngineSeries(q.data?.daily ?? []), [q.data]);
 
   if (q.isPending) return <SwipeEmpty message="Loading search-term funnel…" t={t} />;
   if (q.isError) {
@@ -280,12 +278,16 @@ export function AdsEngineSearchTermsPage({
       series={series}
       breakEvenAcos={breakEvenAcos}
       width={width}
-      emptyMessage="No search-term metrics in this period."
+      emptyMessage={
+        (q.data?.entityCount ?? 0) === 0
+          ? "No search terms imported for these profiles yet."
+          : "No search-term metrics in this period."
+      }
     />
   );
 }
 
 export function formatBreakEvenHint(breakEvenAcos: number): string {
-  if (!(breakEvenAcos > 0)) return "Impressions · clicks · orders · ACoS";
+  if (!hasAuthoritativeBreakEven(breakEvenAcos)) return "Impressions · clicks · orders · ACoS";
   return `Break-even ${formatPercent(breakEvenAcos, 0)}`;
 }

@@ -9,7 +9,7 @@ export type SourcePresentation = {
 };
 
 export const KDP_IPHONE_BOUNDARY =
-  "KDP royalties are imported by the Chrome helper. This iPhone refreshes linked KDP and Amazon Ads spend from InteliAds in the background.";
+  "KDP royalties are imported by the Chrome extension or the iPhone helper. This iPhone refreshes linked KDP and Amazon Ads spend from InteliAds in the background.";
 
 export function adsSourcePresentation(
   ads: DataCoverageOverview["ads"],

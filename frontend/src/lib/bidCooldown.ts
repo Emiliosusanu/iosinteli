@@ -9,6 +9,23 @@
 
 export const DEFAULT_ENTITY_COOLDOWN_HOURS = 48;
 
+/** Nest/user_settings `entity_cooldown_hours` — never invent a window. */
+export function resolveEntityCooldownHours(raw: unknown): number {
+  if (raw && typeof raw === "object" && raw !== null && "value" in raw) {
+    return resolveEntityCooldownHours((raw as { value: unknown }).value);
+  }
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 1 && n <= 168) return Math.round(n);
+  return DEFAULT_ENTITY_COOLDOWN_HOURS;
+}
+
+export function pickEntityCooldownHours(settings: Record<string, unknown> | null | undefined): number {
+  if (!settings) return DEFAULT_ENTITY_COOLDOWN_HOURS;
+  return resolveEntityCooldownHours(
+    settings.entity_cooldown_hours ?? settings.entityCooldownHours,
+  );
+}
+
 export type BidChangeSource =
   | "rule"
   | "bid_bot"
@@ -23,8 +40,14 @@ export type EntityBidCooldownFields = {
   bid_last_modified_at?: string | null;
   rule_last_modified_at?: string | null;
   bid_change_source?: string | null;
+  /** Campaign placement % provenance (Nest stamps alongside rule_last_modified_at). */
+  placement_adj_last_modified_at?: string | null;
+  placement_adj_change_source?: string | null;
   metrics_updated_at?: string | null;
 };
+
+/** Passed from cooldown chips — Nest forceCooldown only after Edit anyway. */
+export type CooldownOverridePress = (opts?: { forceCooldown?: boolean }) => void;
 
 export type EntityBidCooldownInfo = {
   isInCooldown: boolean;
@@ -54,12 +77,39 @@ function parseMs(raw: string | null | undefined): number | null {
 
 /** Latest verified change timestamp that should start cooldown. */
 export function resolveBidChangeAt(row: EntityBidCooldownFields): string | null {
-  const bidMs = parseMs(row.bid_last_modified_at);
-  const ruleMs = parseMs(row.rule_last_modified_at);
-  if (bidMs == null && ruleMs == null) return null;
-  if (bidMs == null) return row.rule_last_modified_at ?? null;
-  if (ruleMs == null) return row.bid_last_modified_at ?? null;
-  return bidMs >= ruleMs ? row.bid_last_modified_at! : row.rule_last_modified_at!;
+  const candidates: Array<{ at: string; ms: number }> = [];
+  for (const raw of [
+    row.bid_last_modified_at,
+    row.rule_last_modified_at,
+    row.placement_adj_last_modified_at,
+  ]) {
+    const ms = parseMs(raw);
+    if (ms != null && raw) candidates.push({ at: raw, ms });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.ms - a.ms);
+  return candidates[0]!.at;
+}
+
+/**
+ * Campaign settings cooldown (placement % and bidding strategy share Nest's
+ * rule_last_modified_at / placement_adj stamp — same window as entity bids).
+ */
+export function getCampaignSettingsCooldown(
+  row: EntityBidCooldownFields,
+  cooldownHours: number = DEFAULT_ENTITY_COOLDOWN_HOURS,
+  nowMs: number = Date.now(),
+): EntityBidCooldownInfo {
+  const source =
+    (row.placement_adj_change_source || row.bid_change_source || "unknown") as BidChangeSource;
+  return getEntityBidCooldown(
+    {
+      ...row,
+      bid_change_source: source,
+    },
+    cooldownHours,
+    nowMs,
+  );
 }
 
 export function getEntityBidCooldown(

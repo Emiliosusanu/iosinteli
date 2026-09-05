@@ -124,11 +124,27 @@ export const radii = {
   pill: 9999,
 };
 
+/** Compact density scale — prefer these over one-off padding literals. */
+export const density = {
+  chromePad: 10,
+  chromePadV: 8,
+  chromeGap: 8,
+  chipPadH: 10,
+  chipPadV: 6,
+  metricPadH: 12,
+  metricPadV: 10,
+  listRowPad: 10,
+  listGap: 5,
+  sectionGap: 14,
+  statusChipPadH: 8,
+  statusChipPadV: 4,
+} as const;
+
 export const layout = {
   pagePad: 16,
   filterPadTop: 8,
   filterGap: 8,
-  listGap: 5,
+  listGap: density.listGap,
   tabClearance: 108,
   minTap: 44,
   headerTitleSize: 17,
@@ -139,16 +155,16 @@ export const layout = {
 };
 
 /** One Home/Dashboard grid. Screens must not invent 16/18/20/22 independently.
- *  Radii / padding tuned toward Dribbble finance-dashboard iOS cards (soft
- *  continuous corners, airy padding) while staying SF System + HIG-native. */
+ *  Radii / padding tuned toward compact finance-dashboard iOS cards (soft
+ *  continuous corners) while staying SF System + HIG-native. */
 export const dashboard = {
   pageInset: 16,
-  sectionGap: 14,
+  sectionGap: density.sectionGap,
   cardPadding: 16,
   /** Dense list rows (Targets / Campaigns) — aim ~8–9 visible on iPhone. */
-  denseCardPadding: 10,
-  compactGap: 8,
-  metricGap: 12,
+  denseCardPadding: density.listRowPad,
+  compactGap: density.chromeGap,
+  metricGap: 10,
   cardRadius: 20,
   chipRadius: 12,
   metricChipRadius: 14,
@@ -160,14 +176,36 @@ export const dashboard = {
   iconEmpty: 28,
   iconStroke: 1.75,
   /** Overview V2 chrome denser than legacy sticky stack. */
-  chromeGap: 8,
+  chromeGap: density.chromeGap,
   accentEdge: 2,
   /** Overview header V3 — two-row compact control bar. */
   headerShellRadius: 18,
-  headerShellInset: 10,
-  headerShellPadV: 8,
+  headerShellInset: density.chromePad,
+  headerShellPadV: density.chromePadV,
   headerRowGap: 6,
+  /** Visual control height; pressables still use layout.minTap (44). */
   headerControl: 36,
+  tabBarHeight: 64,
+  tabBarRadius: 22,
+  statusChipRadius: 10,
+} as const;
+
+/** Semantic status chip fills — quiet, not marketing purple. */
+export const statusChip = {
+  light: {
+    good: { fg: "#248A3D", bg: "rgba(52,199,89,0.14)" },
+    warning: { fg: "#9A6700", bg: "rgba(255,149,0,0.14)" },
+    danger: { fg: "#D70015", bg: "rgba(255,59,48,0.14)" },
+    info: { fg: "#007AFF", bg: "rgba(0,122,255,0.12)" },
+    neutral: { fg: "#3C3C4399", bg: "rgba(60,60,67,0.08)" },
+  },
+  dark: {
+    good: { fg: "#3DDC84", bg: "rgba(61,220,132,0.18)" },
+    warning: { fg: "#FF9F0A", bg: "rgba(255,159,10,0.18)" },
+    danger: { fg: "#FF453A", bg: "rgba(255,69,58,0.18)" },
+    info: { fg: "#2F7CFF", bg: "rgba(47,124,255,0.18)" },
+    neutral: { fg: "#A1A1A6", bg: "rgba(255,255,255,0.08)" },
+  },
 } as const;
 
 export const shadows = {
@@ -220,14 +258,17 @@ export const shadows = {
 };
 
 export function useTheme() {
-  const scheme = (useColorScheme() ?? "light") as ColorScheme;
+  const raw = useColorScheme();
+  const scheme: ColorScheme = raw === "dark" ? "dark" : "light";
   return {
     scheme,
     colors: palette[scheme],
     shadow: shadows[scheme],
+    statusChip: statusChip[scheme],
     typography,
     spacing,
     radii,
+    density,
     layout,
     dashboard,
     motion,

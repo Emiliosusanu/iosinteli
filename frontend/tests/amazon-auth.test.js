@@ -54,7 +54,7 @@ test("iOS Amazon login uses auth session capture + Nest store + Supabase mint", 
 
 test("floating tab bar follows light chrome with equal labeled slots", () => {
   assert.match(floating, /tabbar_background/);
-  assert.match(floating, /tint=\{shell\.blurTint\}/);
+  assert.doesNotMatch(floating, /BlurView/);
   assert.doesNotMatch(floating, /rgba\(16, 16, 20/);
   assert.doesNotMatch(floating, /activePill|sliding/);
   assert.match(floating, /visual\.label/);

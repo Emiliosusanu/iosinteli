@@ -55,6 +55,14 @@ export function formatPercent(value: number, decimals = 1) {
   return `${value.toFixed(decimals)}%`;
 }
 
+/** Percent from Amazon/Nest only — never coerce null/missing to 0%. */
+export function formatOptionalPercent(value: unknown, decimals = 1) {
+  if (value == null || value === "") return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return formatPercent(n, decimals);
+}
+
 /** Parse a user-typed number. A lone comma is treated as the decimal mark (`0,65` → 0.65). */
 export function parseLocaleNumber(raw: string): number {
   const trimmed = String(raw ?? "").trim().replace(/\s/g, "");

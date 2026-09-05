@@ -18,13 +18,12 @@ import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
-import { alertMutationError } from "@/src/components/Mutations";
+import { alertMutationError, blockIfCannotWriteAmazon } from "@/src/components/Mutations";
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { acosTone, dashboard, layout, spacing, toneColor, useReduceMotion, useTheme } from "@/src/lib/theme";
-import { addSearchTermAsTarget, negateSearchTerm } from "@/src/lib/mutations";
+import { addSearchTermAsTarget, harvestAmazonWriteAlert, negateSearchTerm } from "@/src/lib/mutations";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
-import { SIGN_IN_TO_MUTATE_MESSAGE } from "@/src/lib/rulesApi";
 import { fetchSearchTerms } from "@/src/lib/queries";
 import { formatCurrency, formatInt, formatPercent } from "@/src/lib/format";
 import type { SearchTerm } from "@/src/lib/types";
@@ -64,10 +63,9 @@ export function searchTermLooksNegated(item: any): boolean {
   return status === "negated" || status.includes("negat");
 }
 
-function guardGuest(guestMode: boolean): boolean {
-  if (!guestMode) return true;
-  Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
-  return false;
+/** @returns true when add/negate may proceed. */
+function guardCanWrite(guestMode: boolean, viewAsOtherUser: boolean): boolean {
+  return !blockIfCannotWriteAmazon({ guestMode, viewAsOtherUser });
 }
 
 function presentChoices(title: string, message: string, options: { label: string; onPress: () => void }[]) {
@@ -94,11 +92,12 @@ function presentChoices(title: string, message: string, options: { label: string
 
 export function promptAddSearchTerm(args: {
   guestMode: boolean;
+  viewAsOtherUser?: boolean;
   id: string;
   term: string;
   onSuccess: () => Promise<void> | void;
 }) {
-  if (!guardGuest(args.guestMode)) return;
+  if (!guardCanWrite(args.guestMode, Boolean(args.viewAsOtherUser))) return;
   presentChoices("Add as keyword", `Add “${args.term}” with which match type?`, [
     { label: "Exact", onPress: () => confirmNegateSource("exact") },
     { label: "Phrase", onPress: () => confirmNegateSource("phrase") },
@@ -116,7 +115,8 @@ export function promptAddSearchTerm(args: {
   async function runAdd(matchType: AddMatch, negateInSource: boolean) {
     try {
       const result = await addSearchTermAsTarget(args.id, { matchType, negateInSource });
-      Alert.alert("Added", result?.message ?? "Added as a keyword.");
+      const copy = harvestAmazonWriteAlert("add", result);
+      Alert.alert(copy.title, copy.body);
       await args.onSuccess();
     } catch (error) {
       alertMutationError(error, "Couldn't add that search term.");
@@ -126,11 +126,12 @@ export function promptAddSearchTerm(args: {
 
 export function promptNegateSearchTerm(args: {
   guestMode: boolean;
+  viewAsOtherUser?: boolean;
   id: string;
   term: string;
   onSuccess: () => Promise<void> | void;
 }) {
-  if (!guardGuest(args.guestMode)) return;
+  if (!guardCanWrite(args.guestMode, Boolean(args.viewAsOtherUser))) return;
   presentChoices("Negate", `Negate “${args.term}” as…`, [
     { label: "Negative exact", onPress: () => void runNegate("negativeExact") },
     { label: "Negative phrase", onPress: () => void runNegate("negativePhrase") },
@@ -139,7 +140,8 @@ export function promptNegateSearchTerm(args: {
   async function runNegate(matchType: NegateMatch) {
     try {
       const result = await negateSearchTerm(args.id, { matchType });
-      Alert.alert("Negated", result?.message ?? "Search term negated.");
+      const copy = harvestAmazonWriteAlert("negate", result);
+      Alert.alert(copy.title, copy.body);
       await args.onSuccess();
     } catch (error) {
       alertMutationError(error, "Couldn't negate that search term.");
@@ -181,9 +183,10 @@ export default function SearchTermsScreen() {
   const t = useTheme();
   const router = useRouter();
   const reduceMotion = useReduceMotion();
-  const { guestMode } = useAuth();
+  const { guestMode, user } = useAuth();
   const invalidateAds = useInvalidateAds();
-  const { selectedProfileIds, primaryCurrency, dateRange } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
+  const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("orders");
   const [perfFilter, setPerfFilter] = useState<PerformanceFilter>("all");
@@ -281,24 +284,26 @@ export default function SearchTermsScreen() {
     (item: SearchTerm) => {
       promptAddSearchTerm({
         guestMode,
+        viewAsOtherUser,
         id: item.id,
         term: item.search_term ?? "search term",
         onSuccess: refreshTerms,
       });
     },
-    [guestMode, refreshTerms],
+    [guestMode, viewAsOtherUser, refreshTerms],
   );
 
   const onNegate = useCallback(
     (item: SearchTerm) => {
       promptNegateSearchTerm({
         guestMode,
+        viewAsOtherUser,
         id: item.id,
         term: item.search_term ?? "search term",
         onSuccess: refreshTerms,
       });
     },
-    [guestMode, refreshTerms],
+    [guestMode, viewAsOtherUser, refreshTerms],
   );
 
   const sortLabel = SORT_CONFIG.find((entry) => entry.key === sortKey)?.label ?? "Orders";
@@ -322,6 +327,14 @@ export default function SearchTermsScreen() {
 
   return (
     <SubScreen title="Search Terms" showDateRange>
+      {viewAsOtherUser ? (
+        <Text
+          testID="search-terms-viewing-customer"
+          style={[t.typography.caption2, { color: t.colors.tone_warning, marginHorizontal: layout.pagePad, marginTop: spacing.sm }]}
+        >
+          Viewing as customer — Amazon writes are blocked.
+        </Text>
+      ) : null}
       <FilterChrome>
         <FilterSearchRow>
           <View style={{ flex: 1, minWidth: 0 }}>
