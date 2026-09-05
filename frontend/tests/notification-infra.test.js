@@ -5,12 +5,14 @@ import { readFileSync } from "node:fs";
 import {
   NOTIFICATION_EVENTS,
   NOTIFICATION_ROUTES,
+  SERVER_NOTIFICATION_TYPES,
   bookNeedsAttention,
   buildNotificationPayload,
   canNotifyBookToday,
   isSafeNotificationHref,
   markBookNotified,
   newOrderDelta,
+  normalizeNotificationEvent,
   notificationIdentifier,
   parseNotificationPayload,
   preferenceAllowsEvent,
@@ -141,6 +143,49 @@ test("period compare uses last month same days and never invents a book title", 
   assert.match(notifications, /resolveBackgroundScope/);
 });
 
+test("server wire-format events map onto canonical events and route correctly", () => {
+  const user = "user-a";
+  // Server sends ads_new_orders / daily_ads_summary / transport_test — not our
+  // canonical ids. They must normalize, not fall through to null.
+  assert.equal(normalizeNotificationEvent(SERVER_NOTIFICATION_TYPES.adsNewOrders), NOTIFICATION_EVENTS.newOrders);
+  assert.equal(normalizeNotificationEvent(SERVER_NOTIFICATION_TYPES.dailyAdsSummary), NOTIFICATION_EVENTS.periodCompare);
+  assert.equal(normalizeNotificationEvent(SERVER_NOTIFICATION_TYPES.transportTest), NOTIFICATION_EVENTS.test);
+  assert.equal(normalizeNotificationEvent("new-orders"), NOTIFICATION_EVENTS.newOrders);
+  assert.equal(normalizeNotificationEvent("garbage"), null);
+  assert.equal(normalizeNotificationEvent(42), null);
+
+  // A real backend "new orders" push must deep-link to Campaigns, not Overview.
+  const newOrders = parseNotificationPayload({
+    event: SERVER_NOTIFICATION_TYPES.adsNewOrders,
+    userId: user,
+    eventId: "evt-1",
+    reportDate: "2026-09-03",
+    deltaOrders: 3,
+  });
+  assert.equal(newOrders?.event, NOTIFICATION_EVENTS.newOrders);
+  assert.equal(routeForNotification(newOrders, user).href, NOTIFICATION_ROUTES.campaigns);
+
+  const daily = parseNotificationPayload({ event: SERVER_NOTIFICATION_TYPES.dailyAdsSummary, userId: user });
+  assert.equal(routeForNotification(daily, user).href, NOTIFICATION_ROUTES.tabs);
+
+  const testPush = parseNotificationPayload({ event: SERVER_NOTIFICATION_TYPES.transportTest, userId: user });
+  assert.equal(routeForNotification(testPush, user).reason, "test");
+});
+
+test("push arrival repaints live screens and self-heals device tokens", () => {
+  // A landed push emits a refresh the app subscribes to (AppContext owns queryClient).
+  assert.match(notifications, /subscribeNotificationRefresh/);
+  assert.match(notifications, /emitNotificationRefresh/);
+  assert.match(app, /subscribeNotificationRefresh/);
+  assert.match(app, /refetchType: "active"/);
+  // Heavy KDP WebView replay is gated to silent wakes, not every visible banner.
+  assert.match(notifications, /if \(silent\) \{/);
+  // Re-registering a live device clears prior disable/invalidate so the sender resumes.
+  assert.match(notifications, /disabled_at: null/);
+  assert.match(notifications, /invalidated_at: null/);
+  assert.match(notifications, /bundle_id: "io\.inteliads\.app"/);
+});
+
 test("alert evaluation requires session and selected profiles, and skips view-as", () => {
   assert.equal(shouldEvaluateAlerts({ hasSession: true, profileIds: ["p1"] }), true);
   assert.equal(shouldEvaluateAlerts({ hasSession: false, profileIds: ["p1"] }), false);
@@ -156,13 +201,17 @@ test("token association and sign-out detach live in product code", () => {
   assert.match(notifications, /userId/);
   assert.match(notifications, /device_push_tokens/);
   assert.match(notifications, /clearNotificationIdentity/);
-  assert.match(notifications, /\.delete\(\)/);
+  // Soft-disable on detach (Nest parity); hard-delete would desync senders.
+  assert.match(notifications, /disabled_at: new Date\(\)\.toISOString\(\)/);
+  assert.doesNotMatch(notifications, /\.delete\(\)\s*\n\s*\.eq\("token"/);
   assert.match(auth, /clearNotificationIdentity/);
   assert.match(app, /clearNotificationIdentity/);
   assert.match(app, /requestPermission: false/);
   assert.match(app, /requestPermission: wants/);
   assert.match(notifications, /shouldSetBadge: false/);
   assert.match(notifications, /LOCAL_NEW_ORDER_AUTHORITY/);
+  assert.match(notifications, /LOCAL_NEW_ORDER_AUTHORITY &&/);
+  assert.doesNotMatch(notifications, /local new-order authority is forbidden/);
   assert.match(app, /runDualSourceBackgroundRefresh/);
   assert.match(app, /runAlertCheck\("foreground"\)/);
   assert.doesNotMatch(app, /setInterval\(\(\) => void runAlertCheck/);
@@ -170,4 +219,12 @@ test("token association and sign-out detach live in product code", () => {
   assert.match(notifications, /ALERT_CHECK_LAST_RUN_KEY/);
   assert.match(notifications, /adminFilterUserId: scope\.viewAs/);
   assert.doesNotMatch(notifications, /data: \{ url: "\/\(tabs\)" \}/);
+  // Mass-use: prefs default OFF; Nest owns morning digest.
+  assert.match(app, /newOrder: false/);
+  assert.match(app, /dailyDigest: false/);
+  assert.match(app, /bookAttention: false/);
+  assert.match(app, /campaignSpend: false/);
+  // All-off still syncs explicit OFF to Nest (no stale ON prefs).
+  assert.match(notifications, /Still push explicit OFF to Nest/);
+  assert.match(notifications, /newOrder: false,\s*\n\s*dailyDigest: false/);
 });

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { AppState } from "react-native";
+import { Alert, AppState } from "react-native";
 import { storage } from "@/src/utils/storage";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ADMIN_FILTER_KEY, fetchAmazonProfiles, fetchUserSettings, saveUserSetting } from "../lib/queries";
@@ -8,7 +8,7 @@ import { hasNestToken, NestApiError } from "../lib/rulesApi";
 import { AmazonProfile, DateRange } from "../lib/types";
 import { normalizeDateRange, rangePresets } from "../lib/format";
 import { useAuth } from "./AuthContext";
-import { configureNotifications, registerForPushAsync, clearNotificationIdentity, installBackgroundSyncWakeHandlers, runAlertCheck } from "../lib/notifications";
+import { configureNotifications, registerForPushAsync, clearNotificationIdentity, installBackgroundSyncWakeHandlers, runAlertCheck, subscribeNotificationRefresh } from "../lib/notifications";
 import { DEFAULT_KDP_ROYALTY_SOURCE, normalizeKdpRoyaltySource, type KdpRoyaltySource } from "../lib/kdp/source";
 import { getKdpRoyaltySource, setKdpRoyaltySource as persistKdpRoyaltySource } from "../lib/kdp/sourceStore";
 
@@ -28,12 +28,13 @@ export interface NotificationPrefs {
   includeKdpNet: boolean;
 }
 
+/** Opt-in defaults: match Nest smart-notification prefs (off until user enables). */
 const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
-  newOrder: true,
-  bookAttention: true,
-  campaignSpend: true,
+  newOrder: false,
+  bookAttention: false,
+  campaignSpend: false,
   spendThreshold: 25,
-  dailyDigest: true,
+  dailyDigest: false,
   includeKdpNet: false,
 };
 
@@ -256,11 +257,124 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     installBackgroundSyncWakeHandlers();
   }, []);
 
+  // A push just landed: repaint any open financial/Ads screens immediately
+  // instead of waiting for the query to go stale (~45s).
+  useEffect(() => {
+    const unsub = subscribeNotificationRefresh(() => {
+      void import("../lib/backgroundFinancialSync").then(({ backgroundFinancialQueryRoots }) => {
+        const roots = backgroundFinancialQueryRoots();
+        const adsPrefixes = [
+          "mobile-overview",
+          "top-campaigns",
+          "campaigns-list",
+          "campaign-metrics",
+          "top-books",
+          "products-range",
+        ];
+        void queryClient.invalidateQueries({
+          predicate: (query) => {
+            const key = query.queryKey[0];
+            if (typeof key !== "string") return false;
+            return roots.includes(key) || adsPrefixes.some((prefix) => key.startsWith(prefix));
+          },
+          refetchType: "active",
+        });
+      });
+    });
+    return () => unsub();
+  }, [queryClient]);
+
+  useEffect(() => {
+    let unsub = () => {};
+    void import("../lib/bulkOutbox").then(({ subscribeBulkOutboxDrain }) => {
+      unsub = subscribeBulkOutboxDrain((result) => {
+        if (result.succeeded <= 0 && result.failedPermanent <= 0 && !(result.failedItems?.length)) return;
+
+        // Permanent Amazon rejects must undo optimistic bids/state — never leave a fake value painted.
+        if (result.failedItems?.length) {
+          void import("../lib/invalidateAds").then(({ revertOptimisticEntityBid, revertOptimisticEntityState }) => {
+            for (const item of result.failedItems) {
+              if (item.action === "set_bid" || item.action === "bid_delta") {
+                if (item.entityKind === "keyword" || item.entityKind === "product_target") {
+                  revertOptimisticEntityBid(
+                    queryClient,
+                    item.entityKind,
+                    item.entityId,
+                    item.previousBid ?? null,
+                  );
+                }
+              } else if (item.action === "pause" || item.action === "enable") {
+                if (item.previousEnabled != null) {
+                  const kind =
+                    item.entityKind === "keyword"
+                      ? "keyword"
+                      : item.entityKind === "product_target"
+                        ? "product_target"
+                        : "campaign";
+                  revertOptimisticEntityState(queryClient, kind, item.entityId, item.previousEnabled);
+                }
+              }
+            }
+          });
+          const n = result.failedItems.length;
+          const detail = result.failedItems[0]?.lastError?.trim();
+          const restoredAny = result.failedItems.some(
+            (item) =>
+              ((item.action === "set_bid" || item.action === "bid_delta") &&
+                item.previousBid != null &&
+                Number.isFinite(Number(item.previousBid))) ||
+              ((item.action === "pause" || item.action === "enable") && item.previousEnabled != null),
+          );
+          Alert.alert(
+            n === 1 ? "Amazon rejected this change" : `Amazon rejected ${n} changes`,
+            detail
+              ? `${detail}\n\n${
+                  restoredAny
+                    ? "The app restored the previous on-screen bid/state. Confirm on Amazon if unsure, then retry from Targets."
+                    : "The app refreshed data from the server. Confirm the live bid/state on Amazon, then retry from Targets."
+                }`
+              : restoredAny
+                ? "Amazon Ads did not accept the write. The app restored the previous on-screen bid/state. Confirm on Amazon if unsure, then retry from Targets."
+                : "Amazon Ads did not accept the write. The app refreshed data from the server. Confirm the live bid/state on Amazon, then retry from Targets.",
+          );
+        }
+
+        void queryClient.invalidateQueries({
+          predicate: (query) => {
+            const key = query.queryKey[0];
+            return (
+              typeof key === "string" &&
+              (key.startsWith("targeting-") ||
+                key.startsWith("campaign") ||
+                key.startsWith("keyword") ||
+                key.startsWith("product-target") ||
+                key.startsWith("ad-group") ||
+                key === "ad-groups")
+            );
+          },
+          refetchType: "active",
+        });
+      });
+    });
+    return () => unsub();
+  }, [queryClient]);
+
   // Resume: dual-source refresh (Ads API + linked KDP from cloud), evaluate local
   // alerts, and invalidate active financial reads so cache paints fast overnight.
   useEffect(() => {
     if (!hydrated || !user?.id) return;
     const sub = AppState.addEventListener("change", (next) => {
+      if (next === "background") {
+        void import("../lib/bulkOutbox").then(({ drainBulkOutbox }) => drainBulkOutbox());
+        void import("../lib/kdp/importer").then(({ runKdpIosHelperTick }) =>
+          runKdpIosHelperTick("background", { profileIds: selectedProfileIds }),
+        );
+        return;
+      }
+      if (next === "inactive") {
+        void import("../lib/bulkOutbox").then(({ drainBulkOutbox }) => drainBulkOutbox());
+        return;
+      }
       if (next === "active") {
         void (async () => {
           const { runDualSourceBackgroundRefresh, backgroundFinancialQueryRoots } = await import(
@@ -270,6 +384,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const { runKdpIosHelperTick } = await import("../lib/kdp/importer");
           await runKdpIosHelperTick("foreground", { profileIds: selectedProfileIds });
           void runAlertCheck("foreground");
+          const { drainBulkOutbox } = await import("../lib/bulkOutbox");
+          void drainBulkOutbox();
           void queryClient.invalidateQueries({
             predicate: (query) => {
               const key = query.queryKey[0];
@@ -288,7 +404,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     void import("../lib/notifications").then(async (m) => {
       await m.ensureBackgroundRefreshRegistered();
       // Silent KDP wakes need a live APNs token even when alert prefs are off.
-      await m.registerForPushAsync();
+      await m.registerForPushAsync({ requestPermission: true });
     });
     const id = setInterval(() => {
       void import("../lib/kdp/importer").then((m) =>
@@ -304,11 +420,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (profiles.length === 0) return;
     const availableIds = new Set(profiles.map((p) => p.id));
     const enabledIds = profiles
-      .filter((p) => p.is_enabled === true)
+      .filter((p) => p.is_enabled !== false)
       .map((p) => p.id);
     const selectableIds = enabledIds.length > 0 ? new Set(enabledIds) : availableIds;
     const validSelectedProfiles = profiles.filter(
-      (profile) => selectedProfileIds.includes(profile.id) && selectableIds.has(profile.id),
+      (profile) =>
+        (selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id)) &&
+        selectableIds.has(profile.id),
     );
     const selectedCurrency = validSelectedProfiles[0]?.currency_code ?? "USD";
     const validSelectedIds = validSelectedProfiles
@@ -349,23 +467,53 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     else void storage.removeItem(ADMIN_FILTER_KEY);
     setSelectedProfileIdsState([]);
     void storage.setItem(STORAGE_KEYS.selectedProfiles, JSON.stringify([]));
+    // Drop customer-scoped finance/list caches so the next customer never
+    // briefly inherits the previous one's entities or period totals.
     void queryClient.invalidateQueries({ queryKey: ["amazon-profiles"] });
+    void queryClient.invalidateQueries({
+      predicate: (query) => {
+        const key = query.queryKey[0];
+        return (
+          typeof key === "string" &&
+          (key.startsWith("campaign") ||
+            key.startsWith("targeting-") ||
+            key.startsWith("top-") ||
+            key.startsWith("products") ||
+            key.startsWith("kdp-") ||
+            key.startsWith("mobile-overview") ||
+            key.startsWith("placement-") ||
+            key.startsWith("search-terms") ||
+            key.startsWith("bleeding-") ||
+            key.startsWith("overview-") ||
+            key.startsWith("hourly-") ||
+            key.startsWith("rule-") ||
+            key === "optimization-rules" ||
+            key === "all-campaign-budgets" ||
+            key === "sync-logs" ||
+            key === "today-execution-stats")
+        );
+      },
+    });
   }, [queryClient]);
 
   const toggleProfile = useCallback(
     (id: string) => {
-      if (selectedProfileIds.includes(id)) {
-        setSelectedProfileIds(selectedProfileIds.filter((profileId) => profileId !== id));
+      const nextProfile = profiles.find((profile) => profile.id === id || profile.profile_id === id);
+      const rowId = nextProfile?.id ?? id;
+      const adsId = nextProfile?.profile_id;
+      if (selectedProfileIds.includes(rowId) || (adsId ? selectedProfileIds.includes(adsId) : false)) {
+        setSelectedProfileIds(
+          selectedProfileIds.filter((profileId) => profileId !== rowId && profileId !== adsId),
+        );
         return;
       }
 
-      const nextProfile = profiles.find((profile) => profile.id === id);
       const nextCurrency = nextProfile?.currency_code ?? "USD";
       const compatibleIds = selectedProfileIds.filter((profileId) => {
-        const profile = profiles.find((candidate) => candidate.id === profileId);
+        const profile = profiles.find((candidate) => candidate.id === profileId || candidate.profile_id === profileId);
         return (profile?.currency_code ?? "USD") === nextCurrency;
       });
-      const next = [...compatibleIds, id];
+      const next = [...compatibleIds, rowId];
       setSelectedProfileIds(next);
     },
     [profiles, selectedProfileIds, setSelectedProfileIds],

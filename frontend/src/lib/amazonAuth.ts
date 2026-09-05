@@ -1,10 +1,9 @@
 /**
  * Amazon Login / Connect handoff for iOS.
  *
- * Mirrors the web OAuthCallback: Nest redirects to
- * https://dashboard.inteliads.io/auth/amazon/callback#accessToken=…&refreshToken=…
- * We capture that return URL with ASWebAuthenticationSession, store Nest JWTs,
- * then mint a Supabase session so RLS reads work the same as email sign-in.
+ * Same Nest OAuth as the web dashboard. Nest redirects Amazon → api callback →
+ * either the web dashboard (browser) or inteliads://auth/amazon/callback (iOS)
+ * when started with ?returnTo=. Tokens land in the URL fragment.
  */
 import * as WebBrowser from "expo-web-browser";
 import { Platform } from "react-native";
@@ -12,10 +11,13 @@ import { AMAZON_OAUTH_RETURN_URL, parseAmazonOAuthCallback } from "./amazonAuthC
 import { fetchAmazonConnectUrl, fetchAmazonLoginUrl } from "./mutations";
 import { nestLogout, storeNestSession } from "./rulesApi";
 import { supabase } from "./supabase";
+import { storage } from "@/src/utils/storage";
 
 export { AMAZON_OAUTH_RETURN_URL, parseAmazonOAuthCallback } from "./amazonAuthContract";
 
 WebBrowser.maybeCompleteAuthSession();
+
+const GUEST_KEY = "inteliads.guestMode";
 
 export type AmazonAuthResult =
   | { ok: true; mode: "login" | "connect" }
@@ -52,6 +54,7 @@ async function completeFromReturnUrl(returnUrl: string): Promise<AmazonAuthResul
   if (!stored) return { ok: false, error: "Couldn't save your Amazon session on this iPhone." };
 
   if (parsed.mode === "login") {
+    await storage.setItem(GUEST_KEY, false);
     const minted = await mintSupabaseSessionFromNest(parsed.accessToken);
     if (minted.error) return { ok: false, error: minted.error };
   }

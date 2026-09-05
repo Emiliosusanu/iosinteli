@@ -25,6 +25,8 @@ import {
 } from "./notificationContract";
 import {
   digestMetricsLine,
+  digestTitleForHour,
+  isMorningDigestHour,
   notificationBodyWithTotals,
   shouldSendDigestHour,
   type DigestTotals,
@@ -114,13 +116,12 @@ async function writeAlertState(state: AlertState): Promise<void> {
 }
 
 /**
- * Local alert evaluation: daily digests (all day), new orders, book attention,
- * and campaign overspend. Every alert body includes today's spend, orders, and ACoS.
+ * Local alert evaluation: daily digests (all day), book attention,
+ * and campaign overspend. New-order alerts are Nest-only while
+ * LOCAL_NEW_ORDER_AUTHORITY is false.
+ * Every alert body includes today's spend, orders, and ACoS.
  */
 export async function runAlertCheck(_source: "background" | "foreground" = "background"): Promise<number> {
-  if (LOCAL_NEW_ORDER_AUTHORITY) {
-    throw new Error("local new-order authority is forbidden");
-  }
   let sent = 0;
   try {
     if (!(await currentPermissionGranted())) return 0;
@@ -199,7 +200,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       }
     }
 
-    const totals: DigestTotals = { spend, orders, acos, royalties, net };
+    const todayTotals: DigestTotals = { spend, orders, acos, royalties, net };
     const includeKdpNet = !!prefs.includeKdpNet;
 
     const localHour = new Date().getHours();
@@ -208,18 +209,55 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.periodCompare) &&
       shouldSendDigestHour(localHour, alertState.lastDigestHour, today, alertState.digestDay)
     ) {
+      let digestTotals = todayTotals;
+      let yesterdayRoyalties: number | null = null;
+      let yesterdayNet: number | null = null;
+      if (isMorningDigestHour(localHour)) {
+        const ySpend = Number(snapshot.yesterday?.spend) || 0;
+        const yOrders = Number(snapshot.yesterday?.orders) || 0;
+        const ySales = Number(snapshot.yesterday?.sales) || 0;
+        const yAcos =
+          snapshot.yesterday?.acos ?? (ySales > 0 ? (ySpend / ySales) * 100 : null);
+        if (prefs.includeKdpNet) {
+          try {
+            const { fetchKdpRoyaltiesRange } = await import("./queries");
+            const yDate = String(snapshot.yesterday?.date || "").slice(0, 10);
+            if (yDate) {
+              const kdp = await fetchKdpRoyaltiesRange(scope.profileIds, yDate, yDate);
+              yesterdayRoyalties = kdp.totalRoyalties ?? null;
+              if (yesterdayRoyalties != null) {
+                yesterdayNet = netRoyaltiesKnown(yesterdayRoyalties, ySpend);
+              }
+            }
+          } catch {
+            yesterdayRoyalties = null;
+            yesterdayNet = null;
+          }
+        }
+        digestTotals = {
+          spend: ySpend,
+          orders: yOrders,
+          acos: yAcos,
+          royalties: yesterdayRoyalties,
+          net: yesterdayNet,
+        };
+      }
       await scheduleLocalAlert({
         identifier: notificationIdentifier(NOTIFICATION_EVENTS.periodCompare, today, String(localHour)),
         event: NOTIFICATION_EVENTS.periodCompare,
         userId,
-        title: "Today's performance",
-        body: digestMetricsLine(totals, currency, includeKdpNet),
+        title: digestTitleForHour(localHour),
+        body: digestMetricsLine(digestTotals, currency, includeKdpNet),
       });
       alertState = { ...alertState, digestDay: today, lastDigestHour: localHour };
       sent += 1;
     }
 
-    if (prefs.newOrder && preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.newOrders)) {
+    if (
+      LOCAL_NEW_ORDER_AUTHORITY &&
+      prefs.newOrder &&
+      preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.newOrders)
+    ) {
       const delta = newOrderDelta(orders, alertState.ordersNotified ?? 0);
       if (delta > 0) {
         await scheduleLocalAlert({
@@ -228,8 +266,8 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
           userId,
           title: delta === 1 ? "1 new ad order" : `${delta} new ad orders`,
           body: notificationBodyWithTotals(
-            `Ads-attributed orders today: ${orders}.`,
-            totals,
+            `Today so far · ${orders} orders total.`,
+            todayTotals,
             currency,
             includeKdpNet,
           ),
@@ -252,7 +290,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
             title: "Campaign overspending",
             body: notificationBodyWithTotals(
               "Today's ad spend is above your daily budget threshold.",
-              totals,
+              todayTotals,
               currency,
               includeKdpNet,
             ),
@@ -288,7 +326,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
           title: "Book needs attention",
           body: notificationBodyWithTotals(
             `${book.title || key} ACoS is above break-even.`,
-            totals,
+            todayTotals,
             currency,
             includeKdpNet,
           ),
@@ -314,32 +352,76 @@ export async function runBackgroundSyncWhenReady(): Promise<void> {
 
 let backgroundWakeInstalled = false;
 
+export type NotificationRefreshReason = "push-visible" | "push-silent";
+type NotificationRefreshListener = (reason: NotificationRefreshReason) => void;
+const notificationRefreshListeners = new Set<NotificationRefreshListener>();
+
+/**
+ * Let the app (which owns the React Query client) repaint live screens the
+ * instant a push lands. The plain notifications module can't reach queryClient,
+ * so it emits and AppContext subscribes — same pattern as the bulk outbox drain.
+ */
+export function subscribeNotificationRefresh(listener: NotificationRefreshListener): () => void {
+  notificationRefreshListeners.add(listener);
+  return () => {
+    notificationRefreshListeners.delete(listener);
+  };
+}
+
+function emitNotificationRefresh(reason: NotificationRefreshReason): void {
+  for (const listener of notificationRefreshListeners) {
+    try {
+      listener(reason);
+    } catch {
+      /* ignore subscriber errors */
+    }
+  }
+}
+
 /** Remote push + foreground resume: refresh cache and evaluate alerts when iOS wakes the app. */
 export function installBackgroundSyncWakeHandlers(): void {
   if (backgroundWakeInstalled || Platform.OS === "web") return;
   backgroundWakeInstalled = true;
 
   Notifications.addNotificationReceivedListener((notification) => {
-    const payload = parseNotificationPayload(notification.request.content.data);
+    const data = (notification.request.content.data ?? {}) as Record<string, unknown>;
+    const payload = parseNotificationPayload(data);
+    // Test / transport-test carries no new financial data — don't churn the app.
     if (payload?.event === NOTIFICATION_EVENTS.test) return;
+    const silent =
+      data.silent === true ||
+      data.event === "kdp-wake" ||
+      data["content-available"] === 1;
     void (async () => {
-      const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
-      await runDualSourceBackgroundRefresh("push", { force: true });
       try {
-        const { runKdpIosHelperTick } = await import("./kdp/importer");
-        await runKdpIosHelperTick("push");
+        const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
+        await runDualSourceBackgroundRefresh("push", { force: true });
       } catch (error) {
-        devWarn("KDP helper push wake skipped", error);
+        devWarn("push financial refresh skipped", error);
       }
-      await runAlertCheck("background");
+      // Heavy KDP WebView replay only for silent wakes (Royaltix). A visible
+      // Ads-order banner already refreshes today's KDP read above; the interval,
+      // resume, and background tasks cover the rest — no need to replay here.
+      if (silent) {
+        try {
+          const { runKdpIosHelperTick } = await import("./kdp/importer");
+          await runKdpIosHelperTick("push", { wakeMode: "recent" });
+        } catch (error) {
+          devWarn("KDP helper push wake skipped", error);
+        }
+      }
+      try {
+        await runAlertCheck("background");
+      } catch (error) {
+        devWarn("push alert check skipped", error);
+      }
+      // Poke live React Query so an open Overview/Campaigns paints the new data.
+      emitNotificationRefresh(silent ? "push-silent" : "push-visible");
     })();
   });
 }
 
 export async function refreshHomeCacheOpportunistic(): Promise<void> {
-  if (LOCAL_NEW_ORDER_AUTHORITY) {
-    throw new Error("local new-order authority is forbidden");
-  }
   const { refreshDualSourceFinancialCache } = await import("./backgroundFinancialSync");
   await refreshDualSourceFinancialCache("foreground");
 }
@@ -378,14 +460,37 @@ try {
 if (!TaskManager.isTaskDefined(INTELIADS_BACKGROUND_TASK)) {
   TaskManager.defineTask(INTELIADS_BACKGROUND_TASK, async () => {
     try {
-      const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
-      await runDualSourceBackgroundRefresh("background");
-      const { runKdpIosHelperTick } = await import("./kdp/importer");
-      await runKdpIosHelperTick("background");
-      await runAlertCheck("background");
+      try {
+        const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
+        await runDualSourceBackgroundRefresh("background");
+      } catch (error) {
+        devWarn("background financial refresh skipped", error);
+      }
+      try {
+        const { runKdpIosHelperTick } = await import("./kdp/importer");
+        const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
+        const wakeMode = await resolveLockedPhoneKdpWakeMode("background");
+        await runKdpIosHelperTick(wakeMode === "processing" ? "processing" : "background", {
+          wakeMode,
+        });
+      } catch (error) {
+        devWarn("KDP helper background wake skipped", error);
+      }
+      try {
+        await runAlertCheck("background");
+      } catch (error) {
+        devWarn("background alert check skipped", error);
+      }
+      try {
+        const { drainBulkOutbox } = await import("./bulkOutbox");
+        await drainBulkOutbox();
+      } catch (error) {
+        devWarn("background outbox drain skipped", error);
+      }
+      // Leftover nightly/deferred is expected work, not a failed wake (iOS throttles false).
       return BackgroundTask.BackgroundTaskResult.Success;
     } catch {
-      return BackgroundTask.BackgroundTaskResult.Failed;
+      return BackgroundTask.BackgroundTaskResult.Success;
     }
   });
 }
@@ -393,22 +498,48 @@ if (!TaskManager.isTaskDefined(INTELIADS_BACKGROUND_TASK)) {
 if (!TaskManager.isTaskDefined(INTELIADS_NOTIFICATION_TASK)) {
   TaskManager.defineTask(INTELIADS_NOTIFICATION_TASK, async () => {
     try {
-      const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
-      await runDualSourceBackgroundRefresh("background");
-      const { runKdpIosHelperTick } = await import("./kdp/importer");
-      await runKdpIosHelperTick("background");
-      await runAlertCheck("background");
+      try {
+        const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
+        await runDualSourceBackgroundRefresh("background");
+      } catch (error) {
+        devWarn("notification financial refresh skipped", error);
+      }
+      try {
+        const { runKdpIosHelperTick } = await import("./kdp/importer");
+        const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
+        // Push defaults to recent; native pending kind still wins if set.
+        const wakeMode = await resolveLockedPhoneKdpWakeMode("push");
+        await runKdpIosHelperTick("push", { wakeMode });
+      } catch (error) {
+        devWarn("KDP helper notification wake skipped", error);
+      }
+      try {
+        await runAlertCheck("background");
+      } catch (error) {
+        devWarn("notification alert check skipped", error);
+      }
+      try {
+        const { drainBulkOutbox } = await import("./bulkOutbox");
+        await drainBulkOutbox();
+      } catch (error) {
+        devWarn("notification outbox drain skipped", error);
+      }
       return BackgroundTask.BackgroundTaskResult.Success;
     } catch {
-      return BackgroundTask.BackgroundTaskResult.Failed;
+      return BackgroundTask.BackgroundTaskResult.Success;
     }
   });
 }
 
-export async function registerForPushAsync(): Promise<{ token: string | null; type: string | null }> {
+export async function registerForPushAsync(opts?: {
+  requestPermission?: boolean;
+}): Promise<{ token: string | null; type: string | null }> {
   if (Platform.OS === "web") return { token: null, type: null };
   try {
-    if (!(await currentPermissionGranted())) return { token: null, type: null };
+    const granted = opts?.requestPermission
+      ? await ensureNotificationPermission()
+      : await currentPermissionGranted();
+    if (!granted) return { token: null, type: null };
 
     const device = await Notifications.getDevicePushTokenAsync();
     const token = (device?.data as string) ?? null;
@@ -447,7 +578,10 @@ export async function registerForPushAsync(): Promise<{ token: string | null; ty
         if (previous.token && previous.userId && previous.userId !== userId) {
           await supabase
             .from("device_push_tokens")
-            .delete()
+            .update({
+              disabled_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
             .eq("token", previous.token)
             .eq("user_id", previous.userId);
           try {
@@ -466,6 +600,13 @@ export async function registerForPushAsync(): Promise<{ token: string | null; ty
               platform: Platform.OS,
               token_type: type,
               environment,
+              bundle_id: "io.inteliads.app",
+              last_seen_at: new Date().toISOString(),
+              // A live device re-registering proves the token is deliverable —
+              // clear any prior disable/invalidate so the sender stops skipping it,
+              // even when the Nest PUT below is unreachable.
+              disabled_at: null,
+              invalidated_at: null,
               updated_at: new Date().toISOString(),
             },
             { onConflict: "token" },
@@ -509,10 +650,14 @@ export async function clearNotificationIdentity(): Promise<void> {
     await Notifications.clearLastNotificationResponseAsync();
   } catch {}
   if (stored.token && stored.userId) {
+    // Soft-disable (Nest parity): keep the row so senders skip it; do not hard-delete.
     try {
       await supabase
         .from("device_push_tokens")
-        .delete()
+        .update({
+          disabled_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
         .eq("token", stored.token)
         .eq("user_id", stored.userId);
     } catch (e) {
@@ -541,8 +686,17 @@ export async function ensureBackgroundRefreshRegistered(): Promise<boolean> {
   } catch (error) {
     devWarn("Background refresh task unavailable.", error);
   }
-  // Keep remote-notification wakes registered even when alert prefs are off
-  // so silent KDP helper pushes can still run locked-screen ticks.
+  // Royaltix-parity dual BGTask metronome (BGAppRefresh + BGProcessing @ 15m).
+  // Expo's processing worker alone is not enough for locked-phone cadence.
+  try {
+    const { registerNativeMetronome } = await import("inteliads-native-sync");
+    const nativeOk = await registerNativeMetronome(true);
+    ok = ok || nativeOk;
+  } catch (error) {
+    devWarn("Native dual BGTask metronome unavailable.", error);
+  }
+  // Keep remote-notification wakes registered even when alert prefs are off:
+  // KDP silent wakes need it so the helper can still run locked-screen ticks.
   try {
     await Notifications.registerTaskAsync(INTELIADS_NOTIFICATION_TASK);
   } catch (error) {
@@ -563,14 +717,29 @@ export async function configureNotifications(
 
   const wantsNotifications =
     prefs.newOrder || prefs.bookAttention || prefs.campaignSpend || prefs.dailyDigest;
-  if (!wantsNotifications) {
-    // Do not unregister INTELIADS_NOTIFICATION_TASK — KDP silent wakes need it.
-    return { permission: "undetermined", backgroundRegistered };
-  }
 
+  // Always read OS permission — even when alert prefs are off — so KDP silent
+  // push registration can still proceed when the user already granted access.
   let permission: "granted" | "denied" | "undetermined" = "undetermined";
   try {
     const current = await Notifications.getPermissionsAsync();
+    if (!wantsNotifications) {
+      permission = current.granted ? "granted" : current.status === "denied" ? "denied" : "undetermined";
+      // Still push explicit OFF to Nest so mass-use defaults cannot leave stale ON prefs.
+      void persistNotificationPreferences({
+        newOrder: false,
+        dailyDigest: false,
+        includeKdpNet: prefs.includeKdpNet,
+        bookAttention: false,
+        campaignSpend: false,
+      });
+      // Keep APNs registration when already granted — KDP silent wakes need the token.
+      if (permission === "granted") {
+        void registerForPushAsync();
+        installBackgroundSyncWakeHandlers();
+      }
+      return { permission, backgroundRegistered };
+    }
     const finalStatus =
       current.granted || !opts?.requestPermission || current.status === "denied"
         ? current
@@ -578,6 +747,7 @@ export async function configureNotifications(
     permission = finalStatus.granted ? "granted" : finalStatus.status === "denied" ? "denied" : "undetermined";
   } catch (error) {
     devWarn("Could not request notification permission.", error);
+    if (!wantsNotifications) return { permission, backgroundRegistered };
   }
 
   if (Platform.OS === "android") {

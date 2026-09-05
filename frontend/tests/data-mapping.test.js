@@ -11,7 +11,7 @@ import {
   toDateString,
 } from "../src/lib/format.ts";
 import { biddingStrategyLabel, shouldShowActiveOrPausedWithData, statusLabel } from "../src/lib/campaigns.ts";
-import { describeProductTarget, extractTargetAsin, fallbackAsinCoverUrl, productTargetHeading } from "../src/lib/targeting.ts";
+import { describeProductTarget, extractTargetAsin, fallbackAsinCoverUrl, productTargetHeading, readTargetBid } from "../src/lib/targeting.ts";
 
 const queriesSource = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
 const overviewSource = readFileSync(new URL("../app/(tabs)/index.tsx", import.meta.url), "utf8");
@@ -188,6 +188,9 @@ test("product target helper resolves auto subtypes and ASIN expressions", () => 
     }),
     "Night School",
   );
+  assert.equal(readTargetBid({ bid: null }, 0.75), 0.75);
+  assert.equal(readTargetBid({ bid_amount: "0.40" }), 0.4);
+  assert.equal(readTargetBid({ bid: 0, bid_amount: null }), null);
 });
 
 test("campaign helpers label bidding strategy and hide only paused rows without data", () => {
@@ -197,7 +200,7 @@ test("campaign helpers label bidding strategy and hide only paused rows without 
   assert.equal(statusLabel("enabled"), "Active");
   assert.equal(statusLabel("paused"), "Paused");
   assert.equal(shouldShowActiveOrPausedWithData({ total_spend: 0 }, "enabled"), true);
-  assert.equal(shouldShowActiveOrPausedWithData({ total_spend: 0 }, "paused"), false);
+  assert.equal(shouldShowActiveOrPausedWithData({ total_spend: 0 }, "paused"), true);
   assert.equal(shouldShowActiveOrPausedWithData({ total_spend: 3 }, "paused"), true);
   assert.equal(shouldShowActiveOrPausedWithData({ total_spend: 3 }, "archived"), false);
 });
@@ -212,6 +215,10 @@ test("campaign screens surface imported placement, strategy, and product target 
   assert.equal(campaignsSource.includes("biddingStrategyLabel(item.bidding_strategy)"), true);
   assert.equal(campaignDetailSource.includes("describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression)"), true);
   assert.equal(campaignDetailSource.includes("productTargetHeading(pt)"), true);
+  assert.equal(campaignDetailSource.includes("readTargetBid"), true);
+  assert.equal(campaignDetailSource.includes("inheritedDefaultBid"), true);
+  assert.equal(campaignDetailSource.includes("resolveInheritedBid"), true);
+  assert.equal(campaignDetailSource.includes("campaignFallbackDefaultBid"), true);
   assert.equal(campaignDetailSource.includes("fallbackAsinCoverUrl(target.asin)"), true);
   assert.equal(campaignDetailSource.includes('pathname: "/product/[asin]"'), true);
   assert.equal(targetingSource.includes("book_image_url"), true);
@@ -223,8 +230,10 @@ test("overview charts use real derived series without advisory filler copy", () 
   assert.equal(overviewSource.includes("btRoyalties"), true);
   assert.equal(overviewSource.includes("btSpend"), true);
   assert.equal(overviewSource.includes("Low CTR: check creatives"), false);
-  assert.equal(campaignDetailSource.includes("AutoTargetSummaryRow"), true);
+  assert.equal(campaignDetailSource.includes("ProductTargetRow"), true);
   assert.equal(campaignDetailSource.includes('SectionCard title="Auto Targeting"'), true);
+  assert.equal(campaignDetailSource.includes("AutoTargetSummaryRow"), false);
+  assert.equal(campaignDetailSource.includes("cooldownRow={pt}"), true);
   assert.equal(queriesSource.includes("assembleLogicalBookRows"), true);
   assert.equal(queriesSource.includes("target_break_even_acos"), true);
   assert.equal(queriesSource.includes("pickUsableCoverUrl"), true);
@@ -238,7 +247,9 @@ test("search terms and ad group detail avoid fixed pagination gaps", () => {
   assert.equal(searchTermsSource.includes("limit: 200"), false);
   assert.equal(targetingSource.includes("TARGETING_LIST_LIMIT"), true);
   assert.equal(targetingSource.includes("placeholderData: noPeriodPlaceholder"), true);
-  assert.equal(targetingSource.includes("enabled: selectedProfileIds.length > 0"), true);
+  assert.equal(targetingSource.includes("enabled: scopeProfiles.length > 0"), true);
+  assert.equal(targetingSource.includes("LIST_PERIOD_QUERY_CACHE"), true);
+  assert.equal(targetingSource.includes("sortedProfileIds"), true);
   assert.equal(/enabled:[^\n]*segment/.test(targetingSource), false);
   assert.equal(targetingSource.includes("[inteliads:targeting]"), true);
   assert.equal(targetingSource.includes("TARGETING_QUERY_TIMEOUT_MS"), true);

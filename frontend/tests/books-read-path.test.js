@@ -143,8 +143,8 @@ test("selected Amazon profiles stay the Ads scope; KDP uses linked accounts", ()
   assert.equal(fetchFn.includes("from(\"amazon_profiles\")"), false);
 });
 
-test("failed Books results are not persisted over a good v4 cache", () => {
-  assert.equal(persistSource.includes("inteliads.queryCache.v4"), true);
+test("failed Books results are not persisted over a good v5 cache", () => {
+  assert.equal(persistSource.includes("inteliads.queryCache.v5"), true);
   assert.equal(persistSource.includes('q.state.status === "success"'), true);
   assert.equal(persistSource.includes("FINANCIAL_QUERY_ROOTS.products"), true);
 });

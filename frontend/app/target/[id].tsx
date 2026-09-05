@@ -3,16 +3,17 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, Vi
 import { BookCover } from "@/src/components/BookCover";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { EmptyState, RetryState, ScreenSpinner, SectionCard, ToneDot } from "@/src/components/Primitives";
 import { BidBudgetEditor, EntityStateSwitch } from "@/src/components/Mutations";
 import { EntityBidControl, EntityPerformance, ParentLinks, targetingPerfStatus } from "@/src/components/EntityDetail";
 import { useApp } from "@/src/contexts/AppContext";
-import { useInvalidateAds } from "@/src/lib/invalidateAds";
+import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { updateProductTargetManual } from "@/src/lib/mutations";
+import { enqueueEntityBidWrite } from "@/src/lib/bulkOutbox";
 import { fetchEntityDailyMetrics, fetchProductTargetById } from "@/src/lib/queries";
-import { describeProductTarget, fallbackAsinCoverUrl, isCategoryTarget, productTargetHeading } from "@/src/lib/targeting";
+import { describeProductTarget, fallbackAsinCoverUrl, isCategoryTarget, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
 import { formatCurrency } from "@/src/lib/format";
 import { layout, radii, spacing, toneColor, useTheme } from "@/src/lib/theme";
 import { enabledSpoken, targetingSpeech } from "@/src/lib/targetingA11y";
@@ -25,6 +26,7 @@ function paramId(value: string | string[] | undefined) {
 export default function TargetDetailScreen() {
   const t = useTheme();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const invalidateAds = useInvalidateAds();
   const { width } = useWindowDimensions();
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
@@ -92,7 +94,8 @@ export default function TargetDetailScreen() {
     );
   }
 
-  const bidLabel = item.bid ? formatCurrency(Number(item.bid), primaryCurrency) : "—";
+  const resolvedBid = readTargetBid(item);
+  const bidLabel = resolvedBid != null ? formatCurrency(resolvedBid, primaryCurrency) : "—";
 
   return (
     <SubScreen title={displayTitle} showDateRange>
@@ -104,8 +107,14 @@ export default function TargetDetailScreen() {
               enabled={item.state === "enabled"}
               noun="target"
               onChange={async (next) => {
-                await updateProductTargetManual(item.id, { state: next ? "enabled" : "paused" });
-                await invalidateAds(["target-detail"]);
+                const previous = applyOptimisticEntityState(queryClient, "product_target", item.id, next);
+                try {
+                  await updateProductTargetManual(item.id, { state: next ? "enabled" : "paused", forceCooldown: true });
+                  void invalidateEntityStateQueries(queryClient, "product_target");
+                } catch (error) {
+                  revertOptimisticEntityState(queryClient, "product_target", item.id, previous);
+                  throw error;
+                }
               }}
             />
             <BookCover
@@ -158,6 +167,7 @@ export default function TargetDetailScreen() {
           <EntityBidControl
             testID={`targeting-bid-${item.id}`}
             value={bidLabel}
+            cooldownRow={item}
             onPress={() => setBidOpen(true)}
           />
 
@@ -199,13 +209,23 @@ export default function TargetDetailScreen() {
       <BidBudgetEditor
         visible={bidOpen}
         title={displayTitle}
-        value={Number(item.bid) || 0}
+        value={resolvedBid ?? 0}
         currency={primaryCurrency}
         testID={`targeting-bid-editor-${item.id}`}
         onClose={() => setBidOpen(false)}
         onSave={async (next) => {
-          await updateProductTargetManual(item.id, { bid: next });
-          await invalidateAds(["target-detail"]);
+          const previousBid = applyOptimisticEntityBid(queryClient, "product_target", item.id, next);
+          try {
+            await enqueueEntityBidWrite({
+              entityKind: "product_target",
+              entityId: item.id,
+              bid: next,
+              previousBid,
+            });
+          } catch (error) {
+            revertOptimisticEntityBid(queryClient, "product_target", item.id, previousBid);
+            throw error;
+          }
         }}
       />
     </SubScreen>

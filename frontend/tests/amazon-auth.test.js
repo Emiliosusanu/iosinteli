@@ -29,9 +29,16 @@ test("Amazon OAuth callback parses Nest fragment tokens like the web app", () =>
 
   const failed = parseAmazonOAuthCallback(`${AMAZON_OAUTH_RETURN_URL}#error=denied`);
   assert.equal(failed.error, "denied");
+
+  // Web dashboard URL still parses (Nest may land here without returnTo).
+  const web = parseAmazonOAuthCallback(
+    "https://dashboard.inteliads.io/auth/amazon/callback#accessToken=w&refreshToken=x&mode=login",
+  );
+  assert.equal(web.accessToken, "w");
 });
 
 test("iOS Amazon login uses auth session capture + Nest store + Supabase mint", () => {
+  assert.equal(AMAZON_OAUTH_RETURN_URL, "inteliads://auth/amazon/callback");
   assert.match(amazonAuth, /openAuthSessionAsync/);
   assert.match(amazonAuth, /storeNestSession/);
   assert.match(amazonAuth, /amazon-mobile-session/);
@@ -40,6 +47,9 @@ test("iOS Amazon login uses auth session capture + Nest store + Supabase mint", 
   assert.doesNotMatch(login, /openBrowserAsync/);
   assert.match(accounts, /startAmazonConnect/);
   assert.doesNotMatch(accounts, /openBrowserAsync/);
+  const mutations = readFileSync(new URL("../src/lib/mutations.ts", import.meta.url), "utf8");
+  assert.match(mutations, /returnTo/);
+  assert.match(mutations, /inteliads:\/\/auth\/amazon\/callback/);
 });
 
 test("floating tab bar follows light chrome with equal labeled slots", () => {

@@ -6,8 +6,9 @@
  * into AsyncStorage, relaunches, and this module applies route + date + filter
  * seeds, then clears the key.
  */
-import { presetRangeFromLabel } from "./format";
-import type { DateRange } from "./types";
+import { presetRangeFromLabel } from "./format.ts";
+import type { TargetingAdvancedFilters } from "./targetingFilters.ts";
+import type { DateRange } from "./types.ts";
 
 export const QA_COMMAND_KEY = "inteliads.qa.command";
 
@@ -16,7 +17,14 @@ export type QaRoute =
   | "/(tabs)/campaigns"
   | "/(tabs)/targeting"
   | "/(tabs)/products"
-  | "/(tabs)/more";
+  | "/(tabs)/more"
+  | "/more/settings"
+  | "/more/accounts"
+  | "/more/kdp-helper"
+  | "/more/kdp-source"
+  | "/more/sync"
+  | "/more/ad-groups"
+  | "/more/search-terms";
 
 export type QaCommand = {
   id?: string;
@@ -30,8 +38,19 @@ export type QaCommand = {
   campaignsState?: "all" | "enabled" | "paused";
   campaignsSort?: "top" | "spend" | "orders" | "acos";
   targetsSegment?: "keywords" | "asins" | "auto" | "category" | "placement";
-  targetsPerf?: "all" | "wasting" | "high_acos" | "no_sales" | "profitable";
-  targetsSort?: "spend" | "acos" | "orders";
+  targetsPerf?:
+    | "all"
+    | "wasting"
+    | "high_acos"
+    | "low_acos"
+    | "no_sales"
+    | "profitable"
+    | "has_clicks"
+    | "has_orders"
+    | "has_impressions";
+  targetsSort?: "spend" | "acos" | "orders" | "clicks" | "impressions" | "bid";
+  /** Advanced min/max ranges (bid, ACoS, clicks, impressions). */
+  targetsAdvanced?: Partial<TargetingAdvancedFilters>;
   booksSort?: "net" | "spend" | "acos" | "orders";
 };
 

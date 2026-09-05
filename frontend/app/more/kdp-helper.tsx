@@ -50,7 +50,7 @@ export default function KdpHelperScreen() {
       <IOSGroupedSection
         footer={
           enabled
-            ? "Sign in to KDP below. The helper then imports royalties, orders, and KENP into the same tables as the Chrome extension — today + yesterday every ~15 minutes, 90 days on first enable, last 30 nights."
+            ? "Sign in to KDP below once. Every ~15 minutes this iPhone imports today and yesterday, then continues any leftover last-30 days — even if the phone was off overnight. After 2am it starts a full 30-day correction and keeps going until every day is in. Web history skips the first 30→90 backfill."
             : "Turn on Royalty source → Chrome + iPhone in Settings first."
         }
       >

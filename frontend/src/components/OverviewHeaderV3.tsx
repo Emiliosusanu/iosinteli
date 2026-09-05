@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -164,7 +165,10 @@ export function OverviewHeaderV3({
       ? "Updating period"
       : periodLabel;
 
+  const insets = useSafeAreaInsets();
+
   return (
+    <View style={{ paddingTop: Math.max(insets.top, 4) }}>
     <GlassPanel
       testID="home-header-v3"
       strength="chrome"
@@ -271,6 +275,7 @@ export function OverviewHeaderV3({
         <PeriodToggle value={periodMode} onChange={onPeriodModeChange} />
       </View>
     </GlassPanel>
+    </View>
   );
 }
 

@@ -213,13 +213,16 @@ Deno.serve(async (req) => {
 
   const { data: tokens, error } = await admin
     .from("device_push_tokens")
-    .select("token, environment, platform")
+    .select("token, environment, platform, disabled_at, invalidated_at")
     .eq("user_id", targetUserId);
 
   if (error) return json({ error: "token_lookup_failed", detail: error.message }, 500);
 
   const iosTokens = (tokens ?? []).filter(
-    (t) => !t.platform || t.platform === "ios",
+    (t) =>
+      (!t.platform || t.platform === "ios") &&
+      !t.disabled_at &&
+      !t.invalidated_at,
   );
   if (iosTokens.length === 0) {
     return json({ ok: true, sent: 0, failed: 0, results: [], note: "no_ios_tokens" });
@@ -276,9 +279,16 @@ Deno.serve(async (req) => {
     }
   }
 
-  // Prune tokens Apple says are no longer valid so we stop retrying them.
+  // Soft-invalidate (Nest / kdp-wake parity) so re-register can clear the flags.
   if (deadTokens.length > 0) {
-    await admin.from("device_push_tokens").delete().in("token", deadTokens);
+    await admin
+      .from("device_push_tokens")
+      .update({
+        invalidated_at: new Date().toISOString(),
+        disabled_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .in("token", deadTokens);
   }
 
   const sent = results.filter((r) => r.ok).length;

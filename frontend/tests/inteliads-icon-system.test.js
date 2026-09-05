@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const iconSrc = readFileSync(new URL("../src/components/InteliAdsIcon.tsx", import.meta.url), "utf8");
 const tabs = readFileSync(new URL("../app/(tabs)/_layout.tsx", import.meta.url), "utf8");
 const home = readFileSync(new URL("../app/(tabs)/index.tsx", import.meta.url), "utf8");
+const opsCards = readFileSync(new URL("../src/components/OverviewOpsCards.tsx", import.meta.url), "utf8");
 const bidBot = readFileSync(new URL("../app/more/bid-bot.tsx", import.meta.url), "utf8");
 const moreRoot = readFileSync(new URL("../src/lib/moreRoot.ts", import.meta.url), "utf8");
 const welcome = readFileSync(new URL("../app/auth/welcome.tsx", import.meta.url), "utf8");
@@ -57,10 +58,11 @@ test("product tabs use the custom family; More stays a system ellipsis", () => {
 });
 
 test("BidBot is a tool mark, not a character or AI chip", () => {
-  assert.match(home, /icon="bidBot"/);
+  assert.match(opsCards, /icon="bidBot"/);
   assert.match(bidBot, /productIcon="bidBot"|icon="bidBot"/);
   assert.doesNotMatch(moreRoot, /symbol: "cpu"/);
   assert.match(moreRoot, /slider\.horizontal\.3/);
   assert.doesNotMatch(home, /hardware-chip|sparkles|robot|brain/);
   assert.doesNotMatch(welcome, /iconBubble|sparkles|cpu/);
+  assert.doesNotMatch(opsCards, /hardware-chip|sparkles|robot|brain/);
 });

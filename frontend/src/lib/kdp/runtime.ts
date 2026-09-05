@@ -201,15 +201,115 @@ export function handleKdpWebViewMessage(raw: string) {
   }
 }
 
+/**
+ * Royaltix-style native replay: ephemeral fetch with Keychain Cookie/UA.
+ * Used on BGTask / silent-push wakes when the WebView is not attached.
+ */
+async function kdpNativeFetch(req: {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: string | null;
+}): Promise<PageFetchResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const method = String(req.method || "GET").toUpperCase();
+    const res = await fetch(req.url, {
+      method,
+      headers: req.headers,
+      body: method === "GET" || method === "HEAD" ? undefined : req.body ?? undefined,
+      signal: controller.signal,
+      // Cookie is attached manually from Keychain — do not merge document cookies.
+      credentials: "omit",
+    });
+    const text = await res.text();
+    const headersAny = res.headers as Headers & { getSetCookie?: () => string[] };
+    const setCookie =
+      typeof headersAny.getSetCookie === "function"
+        ? headersAny.getSetCookie().join("; ")
+        : res.headers.get("set-cookie");
+    if (setCookie) {
+      void mergeSessionFromCaptureHeaders({
+        ...req.headers,
+        cookie: mergeCookieHeader(req.headers, setCookie),
+      });
+    }
+    return {
+      ok: res.ok,
+      status: res.status,
+      text,
+      contentType: res.headers.get("content-type") ?? undefined,
+      finalUrl: typeof res.url === "string" ? res.url : undefined,
+      redirected: res.redirected,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function mergeCookieHeader(
+  requestHeaders: Record<string, string>,
+  setCookie: string,
+): string {
+  const prev =
+    Object.entries(requestHeaders).find(([k]) => k.toLowerCase() === "cookie")?.[1] || "";
+  // Keep prior jar; append name=value pairs from Set-Cookie (best-effort on RN).
+  const extras = String(setCookie)
+    .split(/,(?=[^;]+?=)/)
+    .map((part) => part.split(";")[0]?.trim())
+    .filter(Boolean);
+  if (!extras.length) return prev;
+  if (!prev) return extras.join("; ");
+  return `${prev}; ${extras.join("; ")}`;
+}
+
+function looksLoggedOut(result: PageFetchResult): boolean {
+  if (result.status === 401 || result.status === 403) return true;
+  const text = String(result.text || "").slice(0, 400).toLowerCase();
+  return text.includes("ap/signin") || text.includes("sign-in") || text.includes("<html");
+}
+
 export async function kdpPageFetch(req: {
   url: string;
   method: string;
   headers: Record<string, string>;
   body: string | null;
 }): Promise<PageFetchResult> {
-  if (!injectFn) return Promise.reject(new Error("KDP helper WebView is not attached"));
   const session = await loadKdpWebSession();
   const headers = applySessionToHeaders(req.headers, session);
+
+  // Prefer native Keychain replay (works in background without WKWebView).
+  if (session?.cookies?.trim()) {
+    try {
+      const native = await kdpNativeFetch({ ...req, headers });
+      if (!looksLoggedOut(native)) return native;
+      // Fall through to WebView when attached so the user can re-auth.
+      if (!injectFn) return native;
+    } catch (err) {
+      if (!injectFn) {
+        const message = err instanceof Error ? err.message : String(err);
+        return Promise.reject(
+          new Error(
+            message.includes("abort")
+              ? "KDP background replay timed out"
+              : message || "KDP background replay failed",
+          ),
+        );
+      }
+    }
+  }
+
+  if (!injectFn) {
+    return Promise.reject(
+      new Error(
+        session?.cookies?.trim()
+          ? "KDP background replay failed. Open the helper once while unlocked."
+          : "KDP helper WebView is not attached. Sign in on the helper screen first.",
+      ),
+    );
+  }
+
   const reqId = `kdp-${Date.now()}-${++reqSeq}`;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {

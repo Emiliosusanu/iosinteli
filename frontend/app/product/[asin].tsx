@@ -36,7 +36,6 @@ import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { acosTone, toneColor, useTheme } from "@/src/lib/theme";
 import { formatCurrency, formatInt, formatPercent, safeDivide } from "@/src/lib/format";
 import {
-  ADS_SALES_LABEL,
   ADS_SPEND_LABEL,
   KDP_ROYALTIES_LABEL,
   NET_ROYALTIES_CAPTION,
@@ -304,7 +303,8 @@ function BookHeader({
     ? [
         { label: KDP_ROYALTIES_LABEL, value: kdpAvailable ? formatCurrency(book.royalties!, currency, { compact: true }) : "—", color: kdpAvailable ? t.colors.tone_good : t.colors.text_tertiary },
         { label: ADS_SPEND_LABEL, value: adsReady ? formatCurrency(book.spend, currency, { compact: true }) : "—" },
-        { label: ADS_SALES_LABEL, value: adsReady ? formatCurrency(book.sales, currency, { compact: true }) : "—" },
+        { label: "Impr", value: adsReady ? formatInt(book.impressions) : "—" },
+        { label: "Clicks", value: adsReady ? formatInt(book.clicks) : "—" },
         {
           label: "Ads ACoS",
           value: adsReady && book.sales > 0 ? formatPercent(book.acos) : "—",
@@ -313,7 +313,8 @@ function BookHeader({
       ]
     : [
         { label: ADS_SPEND_LABEL, value: formatCurrency(adsTotals.spend, currency, { compact: true }) },
-        { label: ADS_SALES_LABEL, value: formatCurrency(adsTotals.sales, currency, { compact: true }) },
+        { label: "Impr", value: formatInt(adsTotals.impressions) },
+        { label: "Clicks", value: formatInt(adsTotals.clicks) },
         { label: "Ads orders", value: formatInt(adsTotals.orders) },
         {
           label: "ACoS",
@@ -337,8 +338,7 @@ function BookHeader({
                   kdpRoyalties: kdpAvailable ? formatCurrency(book.royalties!, currency) : "unavailable",
                   adsSpend: formatCurrency(book.spend, currency),
                   netRoyalties: netReady && resolvedNet != null ? formatCurrency(resolvedNet, currency) : "unavailable",
-                  adsSales: formatCurrency(book.sales, currency),
-                })}. Amazon Ads ACoS ${book.sales > 0 ? formatPercent(book.acos) : "not available"}`
+                })}. Amazon Ads ACoS ${book.sales > 0 ? formatPercent(book.acos) : "not available"}. ${formatInt(book.impressions)} impressions. ${formatInt(book.clicks)} clicks`
               : undefined,
           ]
             .filter(Boolean)
@@ -477,7 +477,8 @@ function CampaignRow({
                 color: toneColor(acosTone(item.acos), t.colors),
               },
               { label: "Spend", value: formatCurrency(item.spend, currency, { compact: true }) },
-              { label: "Sales", value: formatCurrency(item.sales, currency, { compact: true }) },
+              { label: "Impr", value: formatInt(item.impressions) },
+              { label: "Clicks", value: formatInt(item.clicks) },
               { label: "Orders", value: formatInt(item.orders) },
             ]}
           />

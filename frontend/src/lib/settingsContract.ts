@@ -10,7 +10,7 @@ export const KDP_SECTION_FOOTER =
 
 export const KDP_SOURCE_PICKER_TITLE = "Royalty source";
 export const KDP_SOURCE_PICKER_FOOTER =
-  "Choose where KDP royalties come from. The iPhone helper mirrors Chrome: today + yesterday every ~15 minutes, a 90-day backfill when you first turn it on, and a nightly last-30-day correction after 2am — including background wakes when iOS allows (Keychain session + BG refresh / push). Both write the same data, so running both is safe. Sign in to KDP once inside the app.";
+  "Choose where KDP royalties come from. The iPhone helper mirrors Royaltix + Chrome: short wakes pull today + yesterday every ~15 minutes, then continue leftover last-30 days; longer wakes run 30→90 day onboarding. A nightly last-30 correction starts after 2am and keeps retrying missed days until every day is imported. The phone backfill is skipped when the web app already imported history. Background replay uses the Keychain session (BG refresh / push). Both writers share the same tables.";
 
 export const KDP_ACCOUNTS_ROW_LABEL = "KDP accounts";
 export const KDP_ACCOUNTS_ROW_SUBTITLE = "Link and unlink Amazon Ads profiles";
@@ -77,7 +77,7 @@ export function notificationSwitchAccessibilityLabel(label: string, on: boolean)
 export const KDP_NET_ALERTS_LABEL = "Include KDP net in alerts";
 export const DAILY_DIGEST_LABEL = "Daily performance updates";
 export const DAILY_DIGEST_FOOTER =
-  "Performance digests arrive throughout the day at 8am, 10am, noon, 2pm, 4pm, 6pm, and 8pm. Each alert includes today's ad spend, orders, and ACoS.";
+  "When enabled, this iPhone sends daytime digests at 10am, noon, 2pm, 4pm, 6pm, and 8pm. The morning (8am) yesterday summary comes from InteliAds when server push is on — not twice. Each alert includes ad spend, orders, and ACoS.";
 
 export function notificationFooter(input: {
   guestMode: boolean;

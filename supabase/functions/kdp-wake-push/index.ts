@@ -28,6 +28,10 @@ const APNS_COLLAPSE_SLOT_SECONDS = 15 * 60;
 const APNS_EXPIRATION_SECONDS = 18 * 60;
 const TOKEN_PAGE = 500;
 const CONCURRENCY = 10;
+/** Skip tokens not seen recently (stale / churned devices). */
+const STALE_TOKEN_DAYS = Number(Deno.env.get("KDP_WAKE_STALE_TOKEN_DAYS") ?? "30");
+/** Hard cap per tick so a large fleet cannot fan out unbounded APNs. */
+const MAX_TOKENS_PER_TICK = Number(Deno.env.get("KDP_WAKE_MAX_TOKENS_PER_TICK") ?? "2000");
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -118,21 +122,71 @@ function jwtRole(jwt: string): string | null {
   }
 }
 
-type TokenRow = { token: string; environment: string | null; platform: string | null };
+type TokenRow = {
+  token: string;
+  environment: string | null;
+  platform: string | null;
+  last_seen_at?: string | null;
+  disabled_at?: string | null;
+  invalidated_at?: string | null;
+};
 
-async function loadTokens(admin: ReturnType<typeof createClient>): Promise<TokenRow[]> {
+async function loadTokens(admin: ReturnType<typeof createClient>): Promise<{
+  tokens: TokenRow[];
+  scanned: number;
+  skippedDisabled: number;
+  skippedStale: number;
+  capped: boolean;
+}> {
   const rows: TokenRow[] = [];
+  let skippedDisabled = 0;
+  let skippedStale = 0;
+  const staleCutoffMs = Date.now() - Math.max(1, STALE_TOKEN_DAYS) * 24 * 60 * 60 * 1000;
+  const maxTokens = Math.max(1, Math.floor(MAX_TOKENS_PER_TICK) || 2000);
+
   for (let from = 0; ; from += TOKEN_PAGE) {
+    // Prefer active rows by recency. Columns may be null on pre-migration rows.
     const { data, error } = await admin
       .from("device_push_tokens")
-      .select("token, environment, platform")
+      .select("token, environment, platform, last_seen_at, disabled_at, invalidated_at")
+      .order("last_seen_at", { ascending: false, nullsFirst: false })
       .range(from, from + TOKEN_PAGE - 1);
     if (error) throw new Error(error.message);
     const page = (data ?? []) as TokenRow[];
-    rows.push(...page);
-    if (page.length < TOKEN_PAGE) break;
+    for (const r of page) {
+      if (r.platform && r.platform !== "ios") continue;
+      if (r.disabled_at || r.invalidated_at) {
+        skippedDisabled += 1;
+        continue;
+      }
+      if (r.last_seen_at) {
+        const seen = Date.parse(r.last_seen_at);
+        if (Number.isFinite(seen) && seen < staleCutoffMs) {
+          skippedStale += 1;
+          continue;
+        }
+      }
+      rows.push(r);
+      if (rows.length >= maxTokens) {
+        return {
+          tokens: rows,
+          scanned: from + page.length,
+          skippedDisabled,
+          skippedStale,
+          capped: true,
+        };
+      }
+    }
+    if (page.length < TOKEN_PAGE) {
+      return {
+        tokens: rows,
+        scanned: from + page.length,
+        skippedDisabled,
+        skippedStale,
+        capped: false,
+      };
+    }
   }
-  return rows.filter((r) => !r.platform || r.platform === "ios");
 }
 
 async function runBounded<T>(
@@ -190,13 +244,33 @@ Deno.serve(async (req) => {
   }
 
   let tokens: TokenRow[];
+  let tokenMeta = {
+    scanned: 0,
+    skippedDisabled: 0,
+    skippedStale: 0,
+    capped: false,
+  };
   try {
-    tokens = await loadTokens(admin);
+    const loaded = await loadTokens(admin);
+    tokens = loaded.tokens;
+    tokenMeta = {
+      scanned: loaded.scanned,
+      skippedDisabled: loaded.skippedDisabled,
+      skippedStale: loaded.skippedStale,
+      capped: loaded.capped,
+    };
   } catch (e) {
     return json({ error: "token_lookup_failed", detail: String(e) }, 500);
   }
   if (tokens.length === 0) {
-    return json({ ok: true, sent: 0, failed: 0, pruned: 0, note: "no_ios_tokens" });
+    return json({
+      ok: true,
+      sent: 0,
+      failed: 0,
+      pruned: 0,
+      note: "no_ios_tokens",
+      ...tokenMeta,
+    });
   }
 
   const wakeSlot = Math.floor(Date.now() / 1000 / APNS_COLLAPSE_SLOT_SECONDS);
@@ -281,7 +355,15 @@ Deno.serve(async (req) => {
   });
 
   if (dead.length > 0) {
-    await admin.from("device_push_tokens").delete().in("token", dead);
+    // Soft-invalidate (Nest parity) so re-register can clear the flags.
+    await admin
+      .from("device_push_tokens")
+      .update({
+        invalidated_at: new Date().toISOString(),
+        disabled_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .in("token", dead);
   }
 
   return json({
@@ -292,5 +374,6 @@ Deno.serve(async (req) => {
     tokens: tokens.length,
     collapseId,
     failureSamples,
+    ...tokenMeta,
   });
 });

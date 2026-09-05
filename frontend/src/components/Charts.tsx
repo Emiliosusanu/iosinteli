@@ -8,6 +8,7 @@ import { PieChart, LineChart, BarChart } from "react-native-gifted-charts";
 import Svg, { Path, Circle, Rect, Line, Text as SvgText, Defs, LinearGradient, Stop, ClipPath, G } from "react-native-svg";
 import { useTheme, toneColor } from "../lib/theme";
 import { formatCompact, formatInt, formatPercent, safeDivide, formatCurrency } from "../lib/format";
+import { dayBarStep, dayXLayout } from "../lib/chartLayout";
 
 function innerChartWidth(width: number, padding = 40) {
   return Math.max(240, width - padding);
@@ -48,10 +49,10 @@ function rangeFor(series: ChartPoint[][], includeZero = true) {
 function pointsFor(data: ChartPoint[], width: number, height: number, min: number, max: number, inset = 10) {
   const plotWidth = Math.max(1, width - inset * 2);
   const plotHeight = Math.max(1, height - inset * 2);
-  const denom = Math.max(1, data.length - 1);
+  const layout = dayXLayout(data.length, plotWidth, inset);
   return data.map((point, index) => ({
     ...point,
-    x: inset + (index / denom) * plotWidth,
+    x: layout.xAt(index),
     y: inset + ((max - point.value) / (max - min)) * plotHeight,
   }));
 }
@@ -144,13 +145,8 @@ function useChartSelection(
         setIndex(null);
         return;
       }
-      const next = count <= 1
-        ? 0
-        : (() => {
-            const plotWidth = Math.max(1, width - inset * 2);
-            const pct = clamp((x - inset) / plotWidth, 0, 1);
-            return clamp(Math.round(pct * (count - 1)), 0, count - 1);
-          })();
+      const plotWidth = Math.max(1, width - inset * 2);
+      const next = dayXLayout(count, plotWidth, inset).indexAtX(x);
       if (!isControlled) {
         setUncontrolledIndex((prev) => {
           if (prev !== next) void playHaptic("select");
@@ -269,19 +265,17 @@ export function Funnel({ impressions, clicks, orders }: FunnelProps) {
   const ctr = safeDivide(clicks, impressions) * 100;
   const cvr = safeDivide(orders, clicks) * 100;
 
-  // Each bar "fills" based on conversion efficiency vs a realistic ad target,
-  // so the funnel is always readable and rewards good performance:
-  //   Impressions = reach baseline (always full)
-  //   Clicks      = CTR vs ~1% target
-  //   Orders      = CVR vs ~15% target
-  const clickFill = impressions > 0 ? Math.min(1, ctr / 1.0) : 0;
-  const orderFill = clicks > 0 ? Math.min(1, cvr / 15.0) : 0;
+  // True funnel widths: each stage is a fraction of the stage above
+  // (impressions → clicks → orders). Badges stay CTR / CVR math.
+  const clickFill = impressions > 0 ? Math.min(1, clicks / impressions) : 0;
+  const orderFill =
+    impressions > 0 ? Math.min(1, orders / impressions) : clicks > 0 ? Math.min(1, orders / clicks) : 0;
 
   const steps = [
     {
       label: "Impressions",
       value: impressions,
-      fill: 1,
+      fill: impressions > 0 ? 1 : 0,
       color: t.colors.tone_primary,
       badge: "Reach",
       badgeTone: t.colors.text_secondary,
@@ -289,7 +283,7 @@ export function Funnel({ impressions, clicks, orders }: FunnelProps) {
     {
       label: "Clicks",
       value: clicks,
-      fill: Math.max(clickFill, clicks > 0 ? 0.06 : 0),
+      fill: Math.max(clickFill, clicks > 0 ? 0.04 : 0),
       color: t.colors.tone_good,
       badge: `${formatPercent(ctr, 2)} CTR`,
       badgeTone: ctr >= 0.4 ? t.colors.tone_good : t.colors.tone_warning,
@@ -297,7 +291,7 @@ export function Funnel({ impressions, clicks, orders }: FunnelProps) {
     {
       label: "Orders",
       value: orders,
-      fill: Math.max(orderFill, orders > 0 ? 0.06 : 0),
+      fill: Math.max(orderFill, orders > 0 ? 0.04 : 0),
       color: t.colors.tone_warning,
       badge: `${formatPercent(cvr, 1)} CVR`,
       badgeTone: cvr >= 8 ? t.colors.tone_good : t.colors.tone_warning,
@@ -419,10 +413,10 @@ export function PerformanceChart({ spendData, salesData, width = 320, currency, 
   function scalePoints(data: ChartPoint[], seriesMax: number) {
     const plotW = Math.max(1, chartWidth - inset * 2);
     const plotH = Math.max(1, chartHeight - inset * 2);
-    const denom = Math.max(1, data.length - 1);
+    const layout = dayXLayout(data.length, plotW, inset);
     return data.map((pt, i) => ({
       ...pt,
-      x: inset + (i / denom) * plotW,
+      x: layout.xAt(i),
       y: inset + (1 - pt.value / seriesMax) * plotH,
     }));
   }
@@ -1080,130 +1074,281 @@ export function AcosGauge({ acos, breakeven, size = 180 }: AcosGaugeProps) {
   );
 }
 
-// Ads Engine chart — elegant dual normalized area chart:
-// Clicks (blue area) and Orders (green area), each on their own y-scale.
-// Impressions shown in tooltip only — keeps chart clean and readable.
+// Ads Engine chart — impressions as purple bars + clicks / orders / ACoS lines.
+// Each line is normalized to its own max (mobile-friendly; no crowded multi Y-axes).
 interface AdsEngineChartProps {
   impressionsData: ChartPoint[];
   clicksData: ChartPoint[];
   ordersData: ChartPoint[];
   acosData: ChartPoint[];
+  breakEvenAcos?: number;
   width?: number;
 }
 
-export function AdsEngineChart({ impressionsData, clicksData, ordersData, acosData, width = 320 }: AdsEngineChartProps) {
+export function AdsEngineChart({
+  impressionsData,
+  clicksData,
+  ordersData,
+  acosData,
+  breakEvenAcos = 0,
+  width = 320,
+}: AdsEngineChartProps) {
   const t = useTheme();
   const chartWidth = innerChartWidth(width, 0);
-  const chartHeight = 160;
+  const chartHeight = 168;
   const inset = 14;
   const { selectedIndex, gesture } = useChartSelection(impressionsData.length, chartWidth, inset);
   if (!impressionsData.length) return <View style={{ height: 200 }} />;
-  const baselineY = chartHeight - inset;
+
+  const imprColor = t.colors.tone_product;
+  const clickColor = t.colors.tone_primary;
+  const orderColor = t.colors.tone_good;
+  const acosColor = t.colors.tone_warning;
+  const breakEvenColor = t.colors.tone_danger;
 
   const maxClicks = Math.max(...clicksData.map((d) => d.value), 1);
   const maxOrders = Math.max(...ordersData.map((d) => d.value), 1);
-  const maxAcos   = Math.max(...acosData.map((d) => d.value), 1);
-  const maxImpr   = Math.max(...impressionsData.map((d) => d.value), 1);
+  const maxAcos = Math.max(...acosData.map((d) => d.value), breakEvenAcos || 0, 1);
+  const maxImpr = Math.max(...impressionsData.map((d) => d.value), 1);
 
   function scalePoints(data: ChartPoint[], seriesMax: number) {
     const plotW = Math.max(1, chartWidth - inset * 2);
     const plotH = Math.max(1, chartHeight - inset * 2);
-    const denom = Math.max(1, data.length - 1);
+    const layout = dayXLayout(data.length, plotW, inset);
     return data.map((pt, i) => ({
       ...pt,
-      x: inset + (i / denom) * plotW,
+      x: layout.xAt(i),
       y: inset + (1 - pt.value / seriesMax) * plotH,
     }));
   }
 
-  const clickPoints  = scalePoints(clicksData, maxClicks);
-  const orderPoints  = scalePoints(ordersData, maxOrders);
-  const acosPoints   = scalePoints(acosData, maxAcos);
-  const imprPoints   = scalePoints(impressionsData, maxImpr);
+  const clickPoints = scalePoints(clicksData, maxClicks);
+  const orderPoints = scalePoints(ordersData, maxOrders);
+  const acosPoints = scalePoints(acosData, maxAcos);
+  const imprPoints = scalePoints(impressionsData, maxImpr);
   const selectedLabel = impressionsData[selectedIndex]?.label ?? "—";
-  const selectedImpr  = impressionsData[selectedIndex]?.value ?? 0;
+  const selectedImpr = impressionsData[selectedIndex]?.value ?? 0;
   const selectedClicks = clicksData[selectedIndex]?.value ?? 0;
   const selectedOrders = ordersData[selectedIndex]?.value ?? 0;
   const selectedAcos = acosData[selectedIndex]?.value ?? 0;
   const baseY = chartHeight - inset;
-  const barStep = (chartWidth - inset * 2) / Math.max(1, impressionsData.length);
+  const plotW = Math.max(1, chartWidth - inset * 2);
+  const barStep = dayBarStep(impressionsData.length, plotW);
   const barW = clamp(barStep * 0.55, 2, 14);
+  const breakEvenY =
+    breakEvenAcos > 0 ? inset + (1 - breakEvenAcos / maxAcos) * (chartHeight - inset * 2) : null;
 
   return (
     <GestureDetector gesture={gesture}>
-    <View style={{ width: chartWidth, overflow: "hidden" }}>
-      <View style={chartStyles.tooltipRow}>
-        <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{selectedLabel}</Text>
-        <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={1}>
-          {formatCompact(selectedImpr)} impr · {formatInt(selectedClicks)} clicks · {formatInt(selectedOrders)} orders · {formatPercent(selectedAcos)} ACoS
-        </Text>
-      </View>
-      <Svg width={chartWidth} height={chartHeight + 30}>
-        <Defs>
-          <LinearGradient id="clicksGradient" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0" stopColor={t.colors.tone_primary} stopOpacity={0.32} />
-            <Stop offset="0.6" stopColor={t.colors.tone_primary} stopOpacity={0.10} />
-            <Stop offset="1" stopColor={t.colors.tone_primary} stopOpacity={0} />
-          </LinearGradient>
-          <LinearGradient id="ordersGradient" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0" stopColor={t.colors.tone_good} stopOpacity={0.40} />
-            <Stop offset="0.6" stopColor={t.colors.tone_good} stopOpacity={0.12} />
-            <Stop offset="1" stopColor={t.colors.tone_good} stopOpacity={0} />
-          </LinearGradient>
-        </Defs>
-        {/* Subtle single grid line */}
-        <Line x1={inset} x2={chartWidth - inset} y1={inset + (chartHeight - inset * 2) * 0.5} y2={inset + (chartHeight - inset * 2) * 0.5} stroke={t.colors.chart_grid} strokeWidth={1} opacity={0.35} />
-
-        {/* Impressions — soft background bars (the reach volume) */}
-        {imprPoints.map((p, i) => (
-          <Rect
-            key={i}
-            x={p.x - barW / 2}
-            y={p.y}
-            width={barW}
-            height={Math.max(1, baseY - p.y)}
-            rx={2}
-            fill={t.colors.chart_grid}
-            opacity={i === selectedIndex ? 0.9 : 0.45}
+      <View style={{ width: chartWidth, overflow: "hidden" }} accessibilityLabel="Ads Engine chart. Drag to inspect a day.">
+        <View style={chartStyles.tooltipRow}>
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{selectedLabel}</Text>
+          <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={1}>
+            {formatCompact(selectedImpr)} impr · {formatInt(selectedClicks)} clicks · {formatInt(selectedOrders)} orders · {formatPercent(selectedAcos)}
+          </Text>
+        </View>
+        <Svg width={chartWidth} height={chartHeight + 30}>
+          <Line
+            x1={inset}
+            x2={chartWidth - inset}
+            y1={inset + (chartHeight - inset * 2) * 0.5}
+            y2={inset + (chartHeight - inset * 2) * 0.5}
+            stroke={t.colors.chart_grid}
+            strokeWidth={1}
+            opacity={0.35}
+            strokeDasharray="4 4"
           />
-        ))}
 
-        {/* Clicks — blue smooth area */}
-        <Path d={makeSmoothAreaPath(clickPoints, baselineY)} fill="url(#clicksGradient)" />
-        <Path d={makeSmoothPath(clickPoints)} stroke={t.colors.tone_primary} strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-
-        {/* Orders — green smooth area (drawn on top) */}
-        <Path d={makeSmoothAreaPath(orderPoints, baselineY)} fill="url(#ordersGradient)" />
-        <Path d={makeSmoothPath(orderPoints)} stroke={t.colors.tone_good} strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.12} />
-        <Path d={makeSmoothPath(orderPoints)} stroke={t.colors.tone_good} strokeWidth={2.5} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-
-        {/* ACoS — dashed rate overlay, distinct from the volume series */}
-        <Path d={makeSmoothPath(acosPoints)} stroke={t.colors.tone_warning} strokeWidth={2} fill="none" strokeLinecap="round" strokeDasharray="5 4" opacity={0.85} />
-
-        {/* Selection crosshair + ringed dots */}
-        {clickPoints[selectedIndex] && orderPoints[selectedIndex] && (
-          <>
-            <Line
-              x1={clickPoints[selectedIndex].x} y1={inset}
-              x2={clickPoints[selectedIndex].x} y2={chartHeight - inset}
-              stroke={t.colors.text_tertiary} strokeWidth={1} opacity={0.28}
+          {imprPoints.map((p, i) => (
+            <Rect
+              key={i}
+              x={p.x - barW / 2}
+              y={p.y}
+              width={barW}
+              height={Math.max(1, baseY - p.y)}
+              rx={2}
+              fill={imprColor}
+              opacity={i === selectedIndex ? 0.55 : 0.28}
             />
-            <Circle cx={clickPoints[selectedIndex].x}  cy={clickPoints[selectedIndex].y}  r={5.5} fill={t.colors.background_secondary} />
-            <Circle cx={clickPoints[selectedIndex].x}  cy={clickPoints[selectedIndex].y}  r={3.5} fill={t.colors.tone_primary} />
-            <Circle cx={orderPoints[selectedIndex].x}  cy={orderPoints[selectedIndex].y}  r={5.5} fill={t.colors.background_secondary} />
-            <Circle cx={orderPoints[selectedIndex].x}  cy={orderPoints[selectedIndex].y}  r={3.5} fill={t.colors.tone_good} />
-            <Circle cx={acosPoints[selectedIndex].x}  cy={acosPoints[selectedIndex].y}  r={5} fill={t.colors.background_secondary} />
-            <Circle cx={acosPoints[selectedIndex].x}  cy={acosPoints[selectedIndex].y}  r={3} fill={t.colors.tone_warning} />
-          </>
-        )}
+          ))}
 
-        {xAxisLabels(impressionsData).map(({ index, label, key }) => (
-          <SvgText key={key} x={clickPoints[index]?.x ?? inset} y={chartHeight + 20} textAnchor={index === 0 ? "start" : index === impressionsData.length - 1 ? "end" : "middle"} fontSize={11} fill={t.colors.text_tertiary}>
-            {label}
-          </SvgText>
-        ))}
-      </Svg>
-    </View>
+          {breakEvenY != null ? (
+            <Line
+              x1={inset}
+              x2={chartWidth - inset}
+              y1={breakEvenY}
+              y2={breakEvenY}
+              stroke={breakEvenColor}
+              strokeWidth={1.5}
+              strokeDasharray="5 4"
+              opacity={0.9}
+            />
+          ) : null}
+
+          <Path d={makeSmoothPath(clickPoints)} stroke={clickColor} strokeWidth={2.25} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          <Path d={makeSmoothPath(orderPoints)} stroke={orderColor} strokeWidth={2.25} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          <Path d={makeSmoothPath(acosPoints)} stroke={acosColor} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+
+          {clickPoints[selectedIndex] && orderPoints[selectedIndex] && (
+            <>
+              <Line
+                x1={clickPoints[selectedIndex].x}
+                y1={inset}
+                x2={clickPoints[selectedIndex].x}
+                y2={chartHeight - inset}
+                stroke={t.colors.text_tertiary}
+                strokeWidth={1}
+                opacity={0.28}
+              />
+              <Circle cx={clickPoints[selectedIndex].x} cy={clickPoints[selectedIndex].y} r={5.5} fill={t.colors.background_secondary} />
+              <Circle cx={clickPoints[selectedIndex].x} cy={clickPoints[selectedIndex].y} r={3.5} fill={clickColor} />
+              <Circle cx={orderPoints[selectedIndex].x} cy={orderPoints[selectedIndex].y} r={5.5} fill={t.colors.background_secondary} />
+              <Circle cx={orderPoints[selectedIndex].x} cy={orderPoints[selectedIndex].y} r={3.5} fill={orderColor} />
+              <Circle cx={acosPoints[selectedIndex].x} cy={acosPoints[selectedIndex].y} r={5} fill={t.colors.background_secondary} />
+              <Circle cx={acosPoints[selectedIndex].x} cy={acosPoints[selectedIndex].y} r={3} fill={acosColor} />
+            </>
+          )}
+
+          {xAxisLabels(impressionsData).map(({ index, label, key }) => (
+            <SvgText
+              key={key}
+              x={clickPoints[index]?.x ?? inset}
+              y={chartHeight + 20}
+              textAnchor={index === 0 ? "start" : index === impressionsData.length - 1 ? "end" : "middle"}
+              fontSize={11}
+              fill={t.colors.text_tertiary}
+            >
+              {label}
+            </SvgText>
+          ))}
+        </Svg>
+        <View style={chartStyles.netLegend}>
+          <LegendSwatch color={imprColor} label="Impr" solid t={t} />
+          <LegendSwatch color={clickColor} label="Clicks" solid t={t} />
+          <LegendSwatch color={orderColor} label="Orders" solid t={t} />
+          <LegendSwatch color={acosColor} label="ACoS" solid t={t} />
+          {breakEvenAcos > 0 ? (
+            <LegendSwatch color={breakEvenColor} label={`BE ${formatPercent(breakEvenAcos, 0)}`} dashed t={t} />
+          ) : null}
+        </View>
+      </View>
+    </GestureDetector>
+  );
+}
+
+/** Format colors aligned with InteliAds web KDP Royalties widget. */
+export const KDP_FORMAT_CHART_COLORS = {
+  paperback: "#E67E22",
+  ku: "#9B59B6",
+  kindle: "#5AC8FA",
+} as const;
+
+export type KdpFormatStackDay = {
+  date: string;
+  label: string;
+  paperback: number;
+  ku: number;
+  kindle: number;
+  total: number;
+};
+
+interface KdpFormatRoyaltiesChartProps {
+  days: KdpFormatStackDay[];
+  width?: number;
+  currency?: string;
+}
+
+export function KdpFormatRoyaltiesChart({ days, width = 320, currency }: KdpFormatRoyaltiesChartProps) {
+  const t = useTheme();
+  const chartWidth = innerChartWidth(width, 0);
+  const chartHeight = 168;
+  const inset = 14;
+  const { selectedIndex, gesture } = useChartSelection(days.length, chartWidth, inset, true);
+  if (!days.length) return <View style={{ height: 200 }} />;
+
+  const maxTotal = Math.max(...days.map((d) => d.total), 1);
+  const plotW = Math.max(1, chartWidth - inset * 2);
+  const plotH = Math.max(1, chartHeight - inset * 2);
+  const layout = dayXLayout(days.length, plotW, inset);
+  const barStep = dayBarStep(days.length, plotW);
+  const barW = clamp(barStep * 0.62, 3, 16);
+  const baseY = chartHeight - inset;
+  const i = selectedIndex ?? days.length - 1;
+  const selected = days[i];
+  const colors = KDP_FORMAT_CHART_COLORS;
+
+  const points = days.map((day, index) => {
+    const x = layout.xAt(index);
+    const kindleH = (day.kindle / maxTotal) * plotH;
+    const kuH = (day.ku / maxTotal) * plotH;
+    const pbH = (day.paperback / maxTotal) * plotH;
+    const kindleY = baseY - kindleH;
+    const kuY = kindleY - kuH;
+    const pbY = kuY - pbH;
+    return { x, kindleY, kindleH, kuY, kuH, pbY, pbH };
+  });
+
+  const axisLabels = xAxisLabels(days.map((d) => ({ value: d.total, label: d.label })));
+
+  return (
+    <GestureDetector gesture={gesture}>
+      <View style={{ width: chartWidth, overflow: "hidden" }} accessibilityLabel="KDP royalties by format. Drag to inspect a day.">
+        <View style={chartStyles.tooltipRow}>
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{selected?.label ?? "—"}</Text>
+          <Text style={[t.typography.caption1, { color: t.colors.tone_good, fontWeight: "700" }]} numberOfLines={1}>
+            {formatCurrency(selected?.total ?? 0, currency, { compact: true })} total
+          </Text>
+        </View>
+        {selected ? (
+          <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: 4 }]} numberOfLines={1}>
+            PB {formatCurrency(selected.paperback, currency, { compact: true })} · KU {formatCurrency(selected.ku, currency, { compact: true })} · Kindle{" "}
+            {formatCurrency(selected.kindle, currency, { compact: true })}
+          </Text>
+        ) : null}
+        <Svg width={chartWidth} height={chartHeight + 30}>
+          {[0.25, 0.5, 0.75].map((frac) => {
+            const y = inset + (1 - frac) * plotH;
+            return (
+              <Line
+                key={frac}
+                x1={inset}
+                x2={chartWidth - inset}
+                y1={y}
+                y2={y}
+                stroke={t.colors.chart_grid}
+                strokeWidth={1}
+                opacity={0.45}
+                strokeDasharray="4 4"
+              />
+            );
+          })}
+          {points.map((p, idx) => (
+            <G key={idx} opacity={idx === i ? 1 : 0.82}>
+              {p.kindleH > 0.5 ? (
+                <Rect x={p.x - barW / 2} y={p.kindleY} width={barW} height={Math.max(1, p.kindleH)} fill={colors.kindle} />
+              ) : null}
+              {p.kuH > 0.5 ? (
+                <Rect x={p.x - barW / 2} y={p.kuY} width={barW} height={Math.max(1, p.kuH)} fill={colors.ku} />
+              ) : null}
+              {p.pbH > 0.5 ? (
+                <Rect x={p.x - barW / 2} y={p.pbY} width={barW} height={Math.max(1, p.pbH)} rx={idx === i ? 2 : 1} fill={colors.paperback} />
+              ) : null}
+            </G>
+          ))}
+          {axisLabels.map(({ index, label, key }) => (
+            <SvgText
+              key={key}
+              x={points[index]?.x ?? inset}
+              y={chartHeight + 20}
+              textAnchor={index === 0 ? "start" : index === days.length - 1 ? "end" : "middle"}
+              fontSize={11}
+              fill={t.colors.text_tertiary}
+            >
+              {label}
+            </SvgText>
+          ))}
+        </Svg>
+      </View>
     </GestureDetector>
   );
 }
@@ -1236,10 +1381,10 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
   function scale(data: ChartPoint[], seriesMax: number) {
     const plotW = Math.max(1, chartWidth - inset * 2);
     const plotH = Math.max(1, chartHeight - inset * 2);
-    const denom = Math.max(1, data.length - 1);
+    const layout = dayXLayout(data.length, plotW, inset);
     return data.map((pt, i) => ({
       ...pt,
-      x: inset + (i / denom) * plotW,
+      x: layout.xAt(i),
       y: inset + (1 - pt.value / seriesMax) * plotH,
     }));
   }
@@ -1249,7 +1394,8 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
   const orderPts  = scale(ordersData, maxOrders);
   const acosPts   = scale(acosData, maxAcos);
   const i = selectedIndex;
-  const barStep = (chartWidth - inset * 2) / Math.max(1, impressionsData.length);
+  const plotW = Math.max(1, chartWidth - inset * 2);
+  const barStep = dayBarStep(impressionsData.length, plotW);
   const barW = clamp(barStep * 0.55, 2, 14);
 
   const colSpend = t.colors.tone_warning;
@@ -1325,11 +1471,11 @@ export function BusinessTrendChart({ royaltiesData, spendData, netData, organicO
   const netPoints       = pointsFor(netData,        chartWidth, chartHeight, min, max, inset);
   const maxOrganicOrders = Math.max(...organicOrdersData.map((point) => point.value), 1);
   const plotWidth = Math.max(1, chartWidth - inset * 2);
-  const organicBarStep = plotWidth / Math.max(1, organicOrdersData.length);
+  const organicLayout = dayXLayout(organicOrdersData.length, plotWidth, inset);
+  const organicBarStep = dayBarStep(organicOrdersData.length, plotWidth);
   const organicBarWidth = clamp(organicBarStep * 0.5, 2, 12);
   const organicBars = organicOrdersData.map((point, index) => {
-    const denom = Math.max(1, organicOrdersData.length - 1);
-    const x = inset + (index / denom) * plotWidth;
+    const x = organicLayout.xAt(index);
     const height = ((chartHeight - inset * 2) * point.value) / maxOrganicOrders;
     return { ...point, x, y: chartHeight - inset - height, height };
   });

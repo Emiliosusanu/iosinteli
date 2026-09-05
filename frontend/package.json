@@ -11,6 +11,7 @@
     "lint": "expo lint",
     "test:unit": "node --test --experimental-strip-types tests/*.test.js",
     "test:stress": "bash ./scripts/stress-test-release.sh",
+    "test:cert": "bash ./scripts/certification-super-stress.sh",
     "release:testflight": "bash ./scripts/testflight-release.sh",
     "postinstall": "node ./scripts/patch-expo-constants-path.js"
   },
@@ -31,6 +32,7 @@
     "date-fns": "^4.2.1",
     "expo": "~54.0.35",
     "expo-background-task": "~1.0.10",
+    "inteliads-native-sync": "file:./modules/inteliads-native-sync",
     "expo-blur": "~15.0.8",
     "expo-constants": "~18.0.13",
     "expo-font": "~14.0.12",

@@ -1,5 +1,6 @@
 import React from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useTheme } from "@/src/lib/theme";
 import { AppScreen, elevatedCardStyle } from "@/src/components/ScreenAmbient";
@@ -16,6 +17,7 @@ import {
 
 export default function MoreScreen() {
   const t = useTheme();
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, guestMode } = useAuth();
   const { adminFilterUserId } = useApp();
@@ -26,8 +28,10 @@ export default function MoreScreen() {
 
   return (
     <AppScreen>
-      <ScrollView contentContainerStyle={styles.scroll} contentInsetAdjustmentBehavior="automatic">
-        <TouchableOpacity
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingTop: Math.max(insets.top, 8) }]}
+        contentInsetAdjustmentBehavior="never"
+      >        <TouchableOpacity
           testID="menu-account-banner"
           onPress={() => router.push("/more/account")}
           activeOpacity={0.55}

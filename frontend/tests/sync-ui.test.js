@@ -231,7 +231,7 @@ test("VoiceOver copy uses Amazon Ads state, not color-only status", () => {
 
 test("screen keeps Ads-only copy and view-as lock", () => {
   assert.doesNotMatch(screen, /All data up to date/);
-  assert.doesNotMatch(screen, /KDP/);
+  assert.match(screen, /KDP iPhone helper/);
   assert.doesNotMatch(screen, /Keep the app open/);
   assert.match(screen, /VIEWING_CUSTOMER_BANNER/);
   assert.equal(VIEWING_CUSTOMER_BANNER, "Viewing a customer. Sync now and Cancel stay off.");

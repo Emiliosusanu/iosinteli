@@ -1,5 +1,5 @@
 import React from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SFSymbol } from "./ios/Native";
 import { useRouter } from "expo-router";
 import { Funnel, CampaignDailyChart } from "./Charts";
@@ -7,6 +7,12 @@ import { MetricStrip, RetryState, ScreenSpinner, SectionCard } from "./Primitive
 import { elevatedCardStyle } from "./ScreenAmbient";
 import { formatCurrency, formatDateShort, formatInt, formatPercent, safeDivide } from "../lib/format";
 import type { EntityDailyPoint } from "../lib/queries";
+import {
+  cooldownAlertMessage,
+  getEntityBidCooldown,
+  type EntityBidCooldownFields,
+  type EntityBidCooldownInfo,
+} from "../lib/bidCooldown";
 import { acosTone, layout, spacing, toneColor, useTheme } from "../lib/theme";
 
 export function targetingPerfStatus(item: {
@@ -86,34 +92,70 @@ export function EntityBidControl({
   value,
   testID,
   onPress,
+  cooldown,
+  cooldownRow,
 }: {
   value: string;
   testID?: string;
   onPress: () => void;
+  cooldown?: EntityBidCooldownInfo | null;
+  cooldownRow?: EntityBidCooldownFields | null;
 }) {
   const t = useTheme();
+  const info = cooldown ?? (cooldownRow ? getEntityBidCooldown(cooldownRow) : null);
+  const locked = Boolean(info?.isInCooldown);
+  const openEditor = () => {
+    if (locked && info) {
+      Alert.alert("Cooldown", cooldownAlertMessage(info), [
+        { text: "Cancel", style: "cancel" },
+        { text: "Edit anyway", style: "destructive", onPress },
+      ]);
+      return;
+    }
+    onPress();
+  };
+
   return (
     <TouchableOpacity
       testID={testID}
       accessibilityRole="button"
-      accessibilityLabel={`Current bid ${value}. Edit bid.`}
-      accessibilityHint="Opens the bid editor. Saving writes Amazon Ads."
-      onPress={onPress}
+      accessibilityLabel={`Current bid ${value}${locked ? ". On cooldown" : ""}. Edit bid.`}
+      accessibilityHint={
+        locked
+          ? "Shows cooldown details. You can still edit and reset the cooldown."
+          : "Opens the bid editor. Saving writes Amazon Ads."
+      }
+      onPress={openEditor}
       activeOpacity={0.75}
-      style={[styles.bidRow, { borderTopColor: t.colors.separator }]}
+      style={[
+        styles.bidRow,
+        {
+          borderTopColor: t.colors.separator,
+          backgroundColor: locked ? t.colors.tone_warning + "14" : undefined,
+        },
+      ]}
     >
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>Current bid</Text>
+        <Text style={[t.typography.caption1, { color: locked ? t.colors.tone_warning : t.colors.text_tertiary }]}>
+          {locked ? "Current bid · Cooldown" : "Current bid"}
+        </Text>
         <Text
           style={[
             t.typography.title2,
-            { color: t.colors.text_primary, fontVariant: ["tabular-nums"], marginTop: 2 },
+            {
+              color: locked ? t.colors.tone_warning : t.colors.text_primary,
+              fontVariant: ["tabular-nums"],
+              marginTop: 2,
+              fontWeight: locked ? "700" : undefined,
+            },
           ]}
         >
           {value}
         </Text>
       </View>
-      <Text style={[t.typography.callout, { color: t.colors.tone_primary }]}>Edit</Text>
+      <Text style={[t.typography.callout, { color: locked ? t.colors.tone_warning : t.colors.tone_primary }]}>
+        {locked ? "Review" : "Edit"}
+      </Text>
     </TouchableOpacity>
   );
 }
@@ -177,7 +219,6 @@ export function EntityPerformance({
             },
             { label: "Spend", value: formatCurrency(spend, currency) },
             { label: "Orders", value: formatInt(orders) },
-            { label: "Sales", value: formatCurrency(sales, currency) },
           ]}
         />
         <View style={[styles.metricsSplit, { backgroundColor: t.colors.separator }]} />

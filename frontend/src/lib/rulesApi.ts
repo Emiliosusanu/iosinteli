@@ -9,6 +9,7 @@ import {
   nestSessionFlagAllowsWrites,
   nestTokenMatchesSupabaseUser,
   pickMobileApiToken,
+  readJwtSub,
   shouldRefreshNestToken,
 } from "@/src/lib/mobileAuthContract";
 import { storage } from "@/src/utils/storage";
@@ -49,8 +50,12 @@ export const nestApiConfigured = rulesApiConfigured;
 export type NestRequestInit = RequestInit & { allowAnonymous?: boolean };
 
 async function nestSessionAllowed(): Promise<boolean> {
+  const flag = nestSessionFlagAllowsWrites(await storage.getItem<boolean>(SESSION_VALID_KEY, false));
+  // Storage is source of truth after a successful storeNestSession. The in-memory
+  // invalidate bit only blocks leftover JWTs until login marks the session live.
+  if (flag) nestSessionInvalidated = false;
   if (nestSessionInvalidated) return false;
-  return nestSessionFlagAllowsWrites(await storage.getItem<boolean>(SESSION_VALID_KEY, false));
+  return flag;
 }
 
 export async function hasNestToken(): Promise<boolean> {
@@ -58,6 +63,13 @@ export async function hasNestToken(): Promise<boolean> {
   if (!(await nestSessionAllowed())) return false;
   const token = await storage.secureGet<string>(ACCESS_KEY, "");
   return !!token;
+}
+
+/** User id for KDP helper / background work when Supabase AS session is empty. */
+export async function resolveHelperUserId(): Promise<string | null> {
+  if (!(await nestSessionAllowed())) return null;
+  const token = await storage.secureGet<string>(ACCESS_KEY, "");
+  return readJwtSub(token);
 }
 
 export function assertCanMutate(guestMode: boolean) {
@@ -170,14 +182,15 @@ async function resolveMobileApiToken(): Promise<{ token: string; source: "nest" 
     nestAccessToken,
     supabaseUserId: liveSession.userId,
   });
-  if (nestAllowed && nestAccessToken && !nestMatches) {
-    await nestLogout();
-  }
-  return pickMobileApiToken({
-    nestSessionAllowed: nestAllowed && nestMatches,
+  // Prefer Nest when it matches this Supabase user. Do NOT nestLogout on mismatch —
+  // that wiped write credentials after Amazon/email login and forced a fake
+  // "sign out and sign in again" loop while the UI still looked signed in.
+  const picked = pickMobileApiToken({
+    nestSessionAllowed: nestAllowed && !!nestAccessToken && nestMatches,
     nestAccessToken,
     supabaseAccessToken: liveSession.accessToken,
   });
+  return picked;
 }
 
 export async function nestApiFetch(path: string, init: NestRequestInit = {}): Promise<Response> {
@@ -206,7 +219,10 @@ export async function nestApiFetch(path: string, init: NestRequestInit = {}): Pr
       res = await send(freshNest);
       if (res.status !== 401) return res;
     }
-    await nestLogout();
+    // Fall back to Supabase for this request only. Do NOT nestLogout() here —
+    // wiping Keychain Nest JWTs after one 401 left sellers signed in for reads
+    // (Supabase RLS) but unable to mutate until a perfect re-login, and the
+    // next background Nest call could wipe them again immediately.
     let supabaseToken = await readSupabaseAccessToken();
     if (supabaseToken) {
       res = await send(supabaseToken);
@@ -244,8 +260,11 @@ export async function parseNestError(res: Response, fallback: string): Promise<N
   }
   if (res.status === 402 || errorCode === "NO_PLAN_ACCESS" || errorCode === "NO_SYNC_ACCESS") {
     message = PLAN_MANAGE_MESSAGE;
-  } else if (res.status === 401 && /^unauthorized$/i.test(message.trim())) {
-    message = NEST_REAUTH_MESSAGE;
+  } else if (res.status === 401) {
+    const trimmed = message.trim();
+    if (/^unauthorized$/i.test(trimmed) || /invalid or expired token/i.test(trimmed) || /missing bearer/i.test(trimmed)) {
+      message = NEST_REAUTH_MESSAGE;
+    }
   }
   return new NestApiError(message, res.status, errorCode);
 }

@@ -11,7 +11,7 @@ import {
 import { BookCover } from "@/src/components/BookCover";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchCampaignById,
   fetchAdGroups,
@@ -34,13 +34,21 @@ import {
   safeDivide,
 } from "@/src/lib/format";
 import { EmptyState, ToneDot, SectionCard, MetricStrip, RetryState, ScreenSpinner } from "@/src/components/Primitives";
-import { BidBudgetEditor, EntityStateSwitch } from "@/src/components/Mutations";
+import { alertMutationError, BidBudgetEditor, EntityStateSwitch, MutationTap } from "@/src/components/Mutations";
 import { CampaignDailyChart, Funnel } from "@/src/components/Charts";
 import { SubScreen } from "@/src/components/SubScreen";
 import { biddingStrategyLabel, shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
-import { fetchCampaignApi, updateCampaign, updateCampaignState, type PlacementAdjustments } from "@/src/lib/mutations";
-import { useInvalidateAds } from "@/src/lib/invalidateAds";
-import { describeProductTarget, fallbackAsinCoverUrl, productTargetHeading } from "@/src/lib/targeting";
+import {
+  fetchCampaignApi,
+  updateAdGroupManual,
+  updateCampaign,
+  updateCampaignState,
+  type PlacementAdjustments,
+} from "@/src/lib/mutations";
+import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
+import { enqueueEntityBidWrite } from "@/src/lib/bulkOutbox";
+import { describeProductTarget, fallbackAsinCoverUrl, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
+import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 
 const PLACEMENT_EDITORS: {
   key: keyof PlacementAdjustments;
@@ -115,11 +123,19 @@ export default function CampaignDetail() {
   const { width: viewportWidth } = useWindowDimensions();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { primaryCurrency, dateRange, selectedProfileIds, profilesLoading, adminFilterUserId } = useApp();
+  const queryClient = useQueryClient();
   const invalidateAds = useInvalidateAds();
   const chartWidth = Math.max(240, viewportWidth - 64);
   const autoRange = last65Days();
   const [budgetOpen, setBudgetOpen] = useState(false);
   const [placementEdit, setPlacementEdit] = useState<(typeof PLACEMENT_EDITORS)[number] | null>(null);
+  const [entityBidEdit, setEntityBidEdit] = useState<{
+    kind: "keyword" | "target" | "adGroup";
+    id: string;
+    title: string;
+    value: number;
+    fallbackTargetIds?: string[];
+  } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const campaignQ = useQuery({
@@ -149,7 +165,7 @@ export default function CampaignDetail() {
   // has data (handles keyword, product-targeting, and mixed campaigns correctly).
   const keywordsQ = useQuery({
     queryKey: ["campaign-keywords", adminFilterUserId ?? "self", id, c?.amazon_profile_id, dateRange.start, dateRange.end],
-    queryFn: () => fetchKeywords([c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean), { campaignId: id!, limit: 8, start: dateRange.start, end: dateRange.end, filterUserId: adminFilterUserId }),
+    queryFn: () => fetchKeywords([c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean), { campaignId: id!, limit: 500, start: dateRange.start, end: dateRange.end, filterUserId: adminFilterUserId }),
     enabled: !!c && !isAuto,
   });
 
@@ -161,7 +177,7 @@ export default function CampaignDetail() {
 
   const searchTermsQ = useQuery({
     queryKey: ["campaign-search-terms-auto", id, c?.amazon_profile_id],
-    queryFn: () => fetchSearchTerms([c!.amazon_profile_id], { campaignId: id!, limit: 10, start: autoRange.start, end: autoRange.end }),
+    queryFn: () => fetchSearchTerms([c!.amazon_profile_id], { campaignId: id!, limit: 100, start: autoRange.start, end: autoRange.end }),
     enabled: !!c && isAuto,
   });
 
@@ -207,37 +223,59 @@ export default function CampaignDetail() {
   }), [daily]);
 
   const visibleAdGroups = useMemo(
-    () => (adGroupsQ.data ?? []).filter((ag) => shouldShowActiveOrPausedWithData(ag as any, ag.state)),
+    () =>
+      [...(adGroupsQ.data ?? []).filter((ag) => shouldShowActiveOrPausedWithData(ag as any, ag.state))].sort(
+        compareByAcosSpendImpressionsSync,
+      ),
     [adGroupsQ.data],
   );
+  const defaultBidByAdGroupId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const ag of adGroupsQ.data ?? []) {
+      const bid = readTargetBid(ag as any);
+      if (bid == null) continue;
+      map.set(ag.id, bid);
+      map.set(String(ag.id), bid);
+    }
+    return map;
+  }, [adGroupsQ.data]);
+  const campaignFallbackDefaultBid = useMemo(() => {
+    for (const ag of adGroupsQ.data ?? []) {
+      const bid = readTargetBid(ag as any);
+      if (bid != null) return bid;
+    }
+    return undefined;
+  }, [adGroupsQ.data]);
+  const resolveInheritedBid = (adGroupId: string | null | undefined) => {
+    if (adGroupId != null && adGroupId !== "") {
+      return defaultBidByAdGroupId.get(adGroupId) ?? defaultBidByAdGroupId.get(String(adGroupId)) ?? campaignFallbackDefaultBid;
+    }
+    return campaignFallbackDefaultBid;
+  };
   const visibleProductTargets = useMemo(
-    () => (productTargetsQ.data ?? []).filter((pt) => shouldShowActiveOrPausedWithData(pt as any, (pt as any).state)),
+    () =>
+      [...(productTargetsQ.data ?? []).filter((pt) => shouldShowActiveOrPausedWithData(pt as any, (pt as any).state))].sort(
+        compareByAcosSpendImpressionsSync,
+      ),
     [productTargetsQ.data],
   );
+  const visibleKeywords = useMemo(
+    () =>
+      [...(keywordsQ.data ?? []).filter((kw) => shouldShowActiveOrPausedWithData(kw as any, kw.status))].sort(
+        compareByAcosSpendImpressionsSync,
+      ),
+    [keywordsQ.data],
+  );
   const visibleProductAds = useMemo(
-    () => (productAdsQ.data ?? []).filter((pa) => shouldShowActiveOrPausedWithData(pa as any, pa.status)),
+    () =>
+      [...(productAdsQ.data ?? []).filter((pa) => shouldShowActiveOrPausedWithData(pa as any, pa.status))].sort(
+        compareByAcosSpendImpressionsSync,
+      ),
     [productAdsQ.data],
   );
-  const autoTargetSummaries = useMemo(() => {
-    const byLabel = new Map<string, { label: string; tone: any; impressions: number; clicks: number; orders: number; spend: number; sales: number }>();
-    for (const targetRow of visibleProductTargets) {
-      const target = describeProductTarget((targetRow as any).expression, (targetRow as any).expression_type);
-      const key = target.label;
-      const current =
-        byLabel.get(key) ??
-        { label: target.label, tone: target.tone, impressions: 0, clicks: 0, orders: 0, spend: 0, sales: 0 };
-      current.impressions += Number((targetRow as any).total_impressions ?? 0);
-      current.clicks += Number((targetRow as any).total_clicks ?? 0);
-      current.orders += Number((targetRow as any).total_orders ?? 0);
-      current.spend += Number((targetRow as any).total_spend ?? 0);
-      current.sales += Number((targetRow as any).total_sales ?? 0);
-      byLabel.set(key, current);
-    }
-    return Array.from(byLabel.values()).sort((a, b) => b.spend - a.spend || b.orders - a.orders || a.label.localeCompare(b.label));
-  }, [visibleProductTargets]);
 
   // Decide which targeting sections to show by what data actually exists
-  const hasKeywords = (keywordsQ.data ?? []).length > 0;
+  const hasKeywords = visibleKeywords.length > 0;
   const hasProductTargets = visibleProductTargets.length > 0;
 
   if (selectedProfileIds.length === 0 && !profilesLoading) {
@@ -354,8 +392,15 @@ export default function CampaignDetail() {
               noun="campaign"
               testID={`campaign-state-${c.id}`}
               onChange={async (next) => {
-                await updateCampaignState(c.id, next ? "enabled" : "paused");
-                await persistCampaign();
+                const previous = applyOptimisticEntityState(queryClient, "campaign", c.id, next);
+                try {
+                  await updateCampaignState(c.id, next ? "enabled" : "paused");
+                  await persistCampaign();
+                  void invalidateEntityStateQueries(queryClient, "campaign");
+                } catch (error) {
+                  revertOptimisticEntityState(queryClient, "campaign", c.id, previous);
+                  throw error;
+                }
               }}
             />
             <View
@@ -397,6 +442,21 @@ export default function CampaignDetail() {
             </View>
             <Text style={[t.typography.callout, { color: t.colors.tone_primary }]}>Edit</Text>
           </TouchableOpacity>
+          <View style={[styles.quickPlacements, { borderTopColor: t.colors.separator }]}>
+            <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginBottom: 6 }]}>Placements</Text>
+            <View style={styles.quickPlacementRow}>
+              {PLACEMENT_EDITORS.map((editor) => (
+                <MutationTap
+                  key={editor.key}
+                  testID={editor.testID}
+                  label={editor.label}
+                  compact
+                  value={formatPercent(placementAdjustments[editor.key], 0)}
+                  onPress={() => setPlacementEdit(editor)}
+                />
+              ))}
+            </View>
+          </View>
         </SectionCard>
 
         <View style={[styles.metricsCard, { backgroundColor: t.colors.background_secondary }]}>
@@ -424,7 +484,6 @@ export default function CampaignDetail() {
                   },
                   { label: "Spend", value: dash(formatCurrency(heroSpend, primaryCurrency)) },
                   { label: "Orders", value: dash(formatInt(heroOrders)) },
-                  { label: "Sales", value: dash(formatCurrency(heroSales, primaryCurrency)) },
                 ]}
               />
               <View style={[styles.metricsSplit, { backgroundColor: t.colors.separator }]} />
@@ -612,49 +671,78 @@ export default function CampaignDetail() {
             visibleAdGroups.map((ag, idx) => {
               const agAcos = Number(ag.total_acos);
               const agSales = Number(ag.total_sales);
+              const defaultBid = readTargetBid(ag as any);
+              const bidChipValue = defaultBid ?? campaignFallbackDefaultBid ?? null;
               return (
-                <TouchableOpacity
+                <View
                   key={ag.id}
-                  activeOpacity={0.72}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${ag.name || "Ad Group"}, ${statusLabel(ag.state)}, ACoS ${agSales > 0 ? formatPercent(agAcos) : "none"}, spend ${formatCurrency(Number(ag.total_spend), primaryCurrency)}, ${formatInt(Number(ag.total_orders))} orders`}
-                  onPress={() =>
-                    router.push({
-                      pathname: "/more/ad-group/[id]",
-                      params: {
-                        id: ag.id,
-                        name: ag.name || "Ad Group",
-                        isAuto: String(!!(ag as any).is_auto),
-                        spend: String(ag.total_spend ?? 0),
-                        orders: String(ag.total_orders ?? 0),
-                        acos: String(ag.total_acos ?? 0),
-                        ctr: String(ag.total_ctr || safeDivide(ag.total_clicks, ag.total_impressions) * 100),
-                        clicks: String(ag.total_clicks ?? 0),
-                        impressions: String(ag.total_impressions ?? 0),
-                      },
-                    })
-                  }
                   style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: idx === visibleAdGroups.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
                 >
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center" }}>
-                      <ToneDot value={agAcos} />
-                      <Text style={[t.typography.callout, { color: t.colors.text_primary, marginLeft: spacing.sm, flex: 1 }]} numberOfLines={2}>
-                        {ag.name || "Ad Group"}
+                  <TouchableOpacity
+                    activeOpacity={0.72}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${ag.name || "Ad Group"}, ${statusLabel(ag.state)}, ACoS ${agSales > 0 ? formatPercent(agAcos) : "none"}, spend ${formatCurrency(Number(ag.total_spend), primaryCurrency)}, ${formatInt(Number(ag.total_orders))} orders`}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/more/ad-group/[id]",
+                        params: {
+                          id: ag.id,
+                          name: ag.name || "Ad Group",
+                          isAuto: String(!!(ag as any).is_auto),
+                          spend: String(ag.total_spend ?? 0),
+                          orders: String(ag.total_orders ?? 0),
+                          acos: String(ag.total_acos ?? 0),
+                          ctr: String(ag.total_ctr || safeDivide(ag.total_clicks, ag.total_impressions) * 100),
+                          clicks: String(ag.total_clicks ?? 0),
+                          impressions: String(ag.total_impressions ?? 0),
+                        },
+                      })
+                    }
+                    style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center" }}
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center" }}>
+                        <ToneDot value={agAcos} />
+                        <Text style={[t.typography.callout, { color: t.colors.text_primary, marginLeft: spacing.sm, flex: 1 }]} numberOfLines={2}>
+                          {ag.name || "Ad Group"}
+                        </Text>
+                      </View>
+                      <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginLeft: 16, marginTop: 3 }]}>
+                        {statusLabel(ag.state)} · {formatCurrency(Number(ag.total_spend), primaryCurrency)} spend · {formatInt(Number(ag.total_impressions))} impr · {formatInt(Number(ag.total_clicks))} clicks · {formatInt(Number(ag.total_orders))} orders
                       </Text>
                     </View>
-                    <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginLeft: 16, marginTop: 3 }]}>
-                      {statusLabel(ag.state)} · {formatCurrency(Number(ag.total_spend), primaryCurrency)} spend · {formatInt(Number(ag.total_orders))} orders
-                    </Text>
+                    <View style={{ alignItems: "flex-end", marginLeft: spacing.sm }}>
+                      <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>ACoS</Text>
+                      <Text style={[t.typography.callout, { color: toneColor(acosTone(agAcos), t.colors), fontVariant: ["tabular-nums"] }]}>
+                        {agSales > 0 ? formatPercent(agAcos) : "—"}
+                      </Text>
+                    </View>
+                    <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
+                  </TouchableOpacity>
+                  <View onStartShouldSetResponder={() => true} onTouchEnd={(e) => e.stopPropagation()} style={{ marginLeft: 8 }}>
+                    <MutationTap
+                      testID={`campaign-adgroup-bid-${ag.id}`}
+                      label="Bid"
+                      compact
+                      value={bidChipValue != null ? formatCurrency(bidChipValue, primaryCurrency) : "Set"}
+                      cooldownRow={ag as any}
+                      onPress={() =>
+                        setEntityBidEdit({
+                          kind: "adGroup",
+                          id: ag.id,
+                          title: `${ag.name || "Ad Group"} default bid`,
+                          value: bidChipValue ?? 0.02,
+                          fallbackTargetIds: (productTargetsQ.data ?? [])
+                            .filter((pt) => {
+                              if (pt.ad_group_id !== ag.id) return false;
+                              return describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression).isAuto;
+                            })
+                            .map((pt) => pt.id),
+                        })
+                      }
+                    />
                   </View>
-                  <View style={{ alignItems: "flex-end", marginLeft: spacing.sm }}>
-                    <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>ACoS</Text>
-                    <Text style={[t.typography.callout, { color: toneColor(acosTone(agAcos), t.colors), fontVariant: ["tabular-nums"] }]}>
-                      {agSales > 0 ? formatPercent(agAcos) : "—"}
-                    </Text>
-                  </View>
-                  <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
-                </TouchableOpacity>
+                </View>
               );
             })
           ) : (
@@ -667,41 +755,75 @@ export default function CampaignDetail() {
         </SectionCard>
 
         {!isAuto && hasKeywords ? (
-          <SectionCard title="Top Keywords">
-            {keywordsQ.data!.map((kw, idx) => (
-              <TouchableOpacity
+          <SectionCard title="Keywords">
+            {visibleKeywords.map((kw, idx) => (
+              <View
                 key={kw.id}
-                activeOpacity={0.75}
-                accessibilityRole="button"
-                accessibilityLabel={`${kw.keyword_text || "Keyword"}${kw.match_type ? `, ${kw.match_type}` : ""}`}
-                onPress={() => router.push(`/keyword/${kw.id}` as any)}
-                style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: idx === keywordsQ.data!.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
+                style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: idx === visibleKeywords.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
               >
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>{kw.keyword_text}</Text>
-                  <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                    {[kw.match_type, `Bid ${kw.bid_amount ? formatCurrency(Number(kw.bid_amount), primaryCurrency) : "—"}`, `${formatInt(kw.total_clicks)} clicks`, `${formatInt(kw.total_orders)} orders`].filter(Boolean).join(" · ")}
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${kw.keyword_text || "Keyword"}${kw.match_type ? `, ${kw.match_type}` : ""}`}
+                  onPress={() => router.push(`/keyword/${kw.id}` as any)}
+                  style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center" }}
+                >
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>{kw.keyword_text}</Text>
+                    <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
+                      {[kw.match_type, `${formatInt(kw.total_clicks)} clicks`, `${formatInt(kw.total_orders)} orders`].filter(Boolean).join(" · ")}
+                    </Text>
+                  </View>
+                  <Text style={[t.typography.caption1, { color: toneColor(acosTone(Number(kw.total_acos)), t.colors), marginLeft: spacing.sm }]}>
+                    {kw.total_sales > 0 ? formatPercent(Number(kw.total_acos)) : "—"} ACoS
                   </Text>
+                  <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
+                </TouchableOpacity>
+                <View onStartShouldSetResponder={() => true} onTouchEnd={(e) => e.stopPropagation()} style={{ marginLeft: 8 }}>
+                  <MutationTap
+                    testID={`campaign-keyword-bid-${kw.id}`}
+                    label="Bid"
+                    compact
+                    value={(() => {
+                      const bid = readTargetBid(kw as any, resolveInheritedBid(kw.ad_group_id));
+                      return bid != null ? formatCurrency(bid, primaryCurrency) : "Set";
+                    })()}
+                    cooldownRow={kw as any}
+                    onPress={() =>
+                      setEntityBidEdit({
+                        kind: "keyword",
+                        id: kw.id,
+                        title: kw.keyword_text || "Keyword bid",
+                        value: readTargetBid(kw as any, resolveInheritedBid(kw.ad_group_id)) ?? 0.02,
+                      })
+                    }
+                  />
                 </View>
-                <Text style={[t.typography.caption1, { color: toneColor(acosTone(Number(kw.total_acos)), t.colors), marginLeft: spacing.sm }]}>
-                  {kw.total_sales > 0 ? formatPercent(Number(kw.total_acos)) : "—"} ACoS
-                </Text>
-                <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
-              </TouchableOpacity>
+              </View>
             ))}
           </SectionCard>
         ) : null}
 
         {!isAuto && hasProductTargets ? (
-          <SectionCard title="Top Products Targeted">
+          <SectionCard title="Product targets">
             {visibleProductTargets.map((pt: any, idx) => (
               <ProductTargetRow
                 key={pt.id}
                 pt={pt}
                 isLast={idx === visibleProductTargets.length - 1}
                 primaryCurrency={primaryCurrency}
+                inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
                 onOpenTarget={(targetId) => router.push(`/target/${targetId}` as any)}
+                onEditBid={() => {
+                  const bid = readTargetBid(pt, resolveInheritedBid(pt.ad_group_id));
+                  setEntityBidEdit({
+                    kind: "target",
+                    id: pt.id,
+                    title: productTargetHeading(pt),
+                    value: bid ?? 0.02,
+                  });
+                }}
               />
             ))}
           </SectionCard>
@@ -727,21 +849,32 @@ export default function CampaignDetail() {
           <SectionCard title="Targeting">
             <EmptyState
               icon="search-outline"
-              title="No targets in this range"
-              subtitle="No keywords or product targets with data for the selected dates."
+              title="No targets synced"
+              subtitle="No enabled or paused keywords/product targets for this campaign yet."
             />
           </SectionCard>
         ) : null}
 
-        {isAuto && autoTargetSummaries.length > 0 ? (
+        {isAuto && hasProductTargets ? (
           <SectionCard title="Auto Targeting">
-            {autoTargetSummaries.map((row, idx) => (
-              <AutoTargetSummaryRow
-                key={row.label}
-                row={row}
-                isLast={idx === autoTargetSummaries.length - 1}
+            {visibleProductTargets.map((pt: any, idx) => (
+              <ProductTargetRow
+                key={pt.id}
+                pt={pt}
+                isLast={idx === visibleProductTargets.length - 1}
                 primaryCurrency={primaryCurrency}
+                inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
+                onOpenTarget={(targetId) => router.push(`/target/${targetId}` as any)}
+                onEditBid={() => {
+                  const bid = readTargetBid(pt, resolveInheritedBid(pt.ad_group_id));
+                  setEntityBidEdit({
+                    kind: "target",
+                    id: pt.id,
+                    title: productTargetHeading(pt),
+                    value: bid ?? 0.02,
+                  });
+                }}
               />
             ))}
           </SectionCard>
@@ -762,7 +895,7 @@ export default function CampaignDetail() {
             ) : searchTermsQ.isLoading && (searchTermsQ.data ?? []).length === 0 ? (
               <ScreenSpinner />
             ) : (searchTermsQ.data ?? []).length > 0 ? (
-              searchTermsQ.data!.slice(0, 10).map((st: any, idx) => {
+              searchTermsQ.data!.map((st: any, idx) => {
                 const isWinner = st.total_orders > 0;
                 return (
                   <TouchableOpacity
@@ -860,6 +993,78 @@ export default function CampaignDetail() {
           await persistCampaign();
         }}
       />
+      <BidBudgetEditor
+        visible={entityBidEdit != null}
+        title={entityBidEdit?.title ?? "Bid"}
+        value={entityBidEdit?.value ?? 0.02}
+        currency={primaryCurrency}
+        kind="money"
+        onClose={() => setEntityBidEdit(null)}
+        onSave={async (next) => {
+          if (!entityBidEdit) return;
+          const edit = entityBidEdit;
+          let previousBid: number | null = null;
+          if (edit.kind === "keyword" || edit.kind === "target") {
+            previousBid = applyOptimisticEntityBid(
+              queryClient,
+              edit.kind === "keyword" ? "keyword" : "product_target",
+              edit.id,
+              next,
+            );
+          } else if (edit.kind === "adGroup") {
+            queryClient.setQueriesData(
+              {
+                predicate: (query) => {
+                  const key = query.queryKey[0];
+                  return typeof key === "string" && (key.startsWith("campaign") || key.startsWith("ad-group") || key === "ad-groups");
+                },
+              },
+              (old: unknown) => {
+              if (Array.isArray(old)) {
+                return old.map((row: any) =>
+                  row?.id === edit.id ? { ...row, default_bid: next, bid_last_modified_at: new Date().toISOString() } : row,
+                );
+              }
+              return old;
+            });
+          }
+          const write =
+            edit.kind === "adGroup"
+              ? updateAdGroupManual(edit.id, { defaultBid: next, forceCooldown: true }, edit.fallbackTargetIds ?? [])
+              : enqueueEntityBidWrite({
+                  entityKind: edit.kind === "keyword" ? "keyword" : "product_target",
+                  entityId: edit.id,
+                  bid: next,
+                  previousBid,
+                });
+          void write
+            .then(() => {
+              if (edit.kind === "adGroup") {
+                void invalidateAds([
+                  "campaign",
+                  "campaign-keywords",
+                  "campaign-product-targets",
+                  "campaign-adgroups",
+                  "keywords",
+                  "product-targets",
+                  "ad-groups",
+                ]);
+                void Promise.all([keywordsQ.refetch(), productTargetsQ.refetch(), adGroupsQ.refetch()]);
+              }
+            })
+            .catch((error) => {
+              if (edit.kind === "keyword" || edit.kind === "target") {
+                revertOptimisticEntityBid(
+                  queryClient,
+                  edit.kind === "keyword" ? "keyword" : "product_target",
+                  edit.id,
+                  previousBid,
+                );
+              }
+              alertMutationError(error);
+            });
+        }}
+      />
     </SubScreen>
   );
 }
@@ -889,7 +1094,8 @@ function PlacementBlock({
     name,
     adjLabel ? `Bid adjustment ${adjLabel}` : null,
     row ? `Spend ${formatCurrency(row.spend, primaryCurrency)}` : null,
-    row ? `Sales ${formatCurrency(row.sales, primaryCurrency)}` : null,
+    row ? `${formatInt(row.impressions)} impressions` : null,
+    row ? `${formatInt(row.clicks)} clicks` : null,
     row ? `ACoS ${row.sales > 0 ? formatPercent(row.acos) : "none"}` : null,
     onEdit ? "Edit placement" : null,
   ].filter(Boolean).join(". ");
@@ -912,9 +1118,15 @@ function PlacementBlock({
             </Text>
           </View>
           <View style={styles.placementFact}>
-            <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>Sales</Text>
+            <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>Impr</Text>
             <Text style={[t.typography.callout, { color: t.colors.text_primary, fontVariant: ["tabular-nums"] }]}>
-              {formatCurrency(row.sales, primaryCurrency)}
+              {formatInt(row.impressions)}
+            </Text>
+          </View>
+          <View style={styles.placementFact}>
+            <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>Clicks</Text>
+            <Text style={[t.typography.callout, { color: t.colors.text_primary, fontVariant: ["tabular-nums"] }]}>
+              {formatInt(row.clicks)}
             </Text>
           </View>
           <View style={styles.placementFact}>
@@ -960,94 +1172,67 @@ function PlacementBlock({
   return <View style={wrapStyle}>{body}</View>;
 }
 
-function AutoTargetSummaryRow({
-  row,
-  isLast,
-  primaryCurrency,
-  t,
-}: {
-  row: { label: string; tone: any; impressions: number; clicks: number; orders: number; spend: number; sales: number };
-  isLast: boolean;
-  primaryCurrency: string;
-  t: any;
-}) {
-  const acos = safeDivide(row.spend, row.sales) * 100;
-  const ctr = safeDivide(row.clicks, row.impressions) * 100;
-
-  return (
-    <View style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth }]}>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.tight, flexWrap: "wrap" }}>
-          <ToneDot value={acos} />
-          <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>
-            {row.label}
-          </Text>
-        </View>
-        <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginLeft: 16, marginTop: 3 }]}>
-          Auto · {formatCurrency(row.spend, primaryCurrency)} spend · {formatInt(row.orders)} orders · {formatPercent(ctr, 2)} CTR
-        </Text>
-      </View>
-      <View style={{ alignItems: "flex-end", marginLeft: 10 }}>
-        <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>ACoS</Text>
-        <Text style={[t.typography.callout, { color: toneColor(acosTone(acos), t.colors), fontVariant: ["tabular-nums"] }]}>
-          {row.sales > 0 ? formatPercent(acos) : "—"}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
 function ProductTargetRow({
   pt,
   isLast,
   primaryCurrency,
+  inheritedDefaultBid,
   t,
   onOpenTarget,
+  onEditBid,
 }: {
   pt: any;
   isLast: boolean;
   primaryCurrency: string;
+  inheritedDefaultBid?: number;
   t: any;
   onOpenTarget: (targetId: string) => void;
+  onEditBid: () => void;
 }) {
   const target = describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression);
   const fallbackCover = fallbackAsinCoverUrl(target.asin);
   const title = productTargetHeading(pt);
   const acos = safeDivide(Number(pt.total_spend ?? 0), Number(pt.total_sales ?? 0)) * 100;
-  const content = (
-    <>
-      <BookCover
-        uri={pt.image_url}
-        fallbackUri={fallbackCover}
-        asin={target.asin}
-        size="xs"
-        placeholder={target.isAuto ? "auto" : target.asin ? "book" : "cube"}
-        recyclingKey={target.asin || pt.id}
-      />
-      <View style={{ flex: 1, marginLeft: 10, minWidth: 0 }}>
-        <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>
-          {title}
-        </Text>
-        <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 3 }]} numberOfLines={2}>
-          {[target.label, statusLabel(pt.state), target.asin, `${formatCurrency(Number(pt.total_spend ?? 0), primaryCurrency)} spend`, `${formatInt(Number(pt.total_orders ?? 0))} orders`, Number(pt.total_sales ?? 0) > 0 ? `${formatPercent(acos)} ACoS` : null].filter(Boolean).join(" · ")}
-        </Text>
-      </View>
-    </>
-  );
-
-  const rowStyle = [styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth }];
+  const bid = readTargetBid(pt, inheritedDefaultBid);
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.82}
-      accessibilityRole="button"
-      accessibilityLabel={`${title}, ${target.label}, ${statusLabel(pt.state)}`}
-      style={rowStyle}
-      onPress={() => onOpenTarget(pt.id)}
-    >
-      {content}
-      <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
-    </TouchableOpacity>
+    <View style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth }]}>
+      <TouchableOpacity
+        activeOpacity={0.82}
+        accessibilityRole="button"
+        accessibilityLabel={`${title}, ${target.label}, ${statusLabel(pt.state)}`}
+        style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center" }}
+        onPress={() => onOpenTarget(pt.id)}
+      >
+        <BookCover
+          uri={pt.image_url}
+          fallbackUri={fallbackCover}
+          asin={target.asin}
+          size="xs"
+          placeholder={target.isAuto ? "auto" : target.asin ? "book" : "cube"}
+          recyclingKey={target.asin || pt.id}
+        />
+        <View style={{ flex: 1, marginLeft: 10, minWidth: 0 }}>
+          <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>
+            {title}
+          </Text>
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 3 }]} numberOfLines={2}>
+            {[target.label, statusLabel(pt.state), target.asin, `${formatCurrency(Number(pt.total_spend ?? 0), primaryCurrency)} spend`, `${formatInt(Number(pt.total_orders ?? 0))} orders`, Number(pt.total_sales ?? 0) > 0 ? `${formatPercent(acos)} ACoS` : null].filter(Boolean).join(" · ")}
+          </Text>
+        </View>
+        <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
+      </TouchableOpacity>
+      <View onStartShouldSetResponder={() => true} onTouchEnd={(e) => e.stopPropagation()} style={{ marginLeft: 8 }}>
+        <MutationTap
+          testID={`campaign-target-bid-${pt.id}`}
+          label="Bid"
+          compact
+          value={bid != null ? formatCurrency(bid, primaryCurrency) : "Set"}
+          cooldownRow={pt}
+          onPress={onEditBid}
+        />
+      </View>
+    </View>
   );
 }
 
@@ -1124,6 +1309,16 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     marginTop: spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.sm,
+  },
+  quickPlacements: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  quickPlacementRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: spacing.sm,
   },
   metricsCard: {

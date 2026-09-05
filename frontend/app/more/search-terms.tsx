@@ -35,7 +35,7 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-type SortKey = "acos" | "orders" | "spend" | "sales";
+type SortKey = "acos" | "orders" | "spend" | "clicks" | "impressions";
 type PerformanceFilter = "all" | "converting" | "wasted";
 type AddMatch = "exact" | "phrase" | "broad";
 type NegateMatch = "negativeExact" | "negativePhrase";
@@ -44,7 +44,8 @@ const SORT_CONFIG: { key: SortKey; label: string }[] = [
   { key: "orders", label: "Orders" },
   { key: "acos", label: "ACoS" },
   { key: "spend", label: "Spend" },
-  { key: "sales", label: "Sales" },
+  { key: "clicks", label: "Clicks" },
+  { key: "impressions", label: "Impr" },
 ];
 
 function truthyFlag(value: unknown): boolean {
@@ -220,8 +221,10 @@ export default function SearchTermsScreen() {
           return (Number(a.total_acos) || Infinity) - (Number(b.total_acos) || Infinity);
         case "spend":
           return Number(b.total_spend) - Number(a.total_spend);
-        case "sales":
-          return Number(b.total_sales) - Number(a.total_sales);
+        case "clicks":
+          return Number(b.total_clicks) - Number(a.total_clicks);
+        case "impressions":
+          return Number(b.total_impressions) - Number(a.total_impressions);
         default:
           return Number(b.total_orders) - Number(a.total_orders);
       }
@@ -478,8 +481,9 @@ const TermRow = React.memo(function TermRow({
                 color: toneColor(acosTone(Number(item.total_acos)), t.colors),
               },
               { label: "Spend", value: formatCurrency(Number(item.total_spend), currency, { compact: true }) },
+              { label: "Impr", value: formatInt(Number(item.total_impressions)) },
+              { label: "Clicks", value: formatInt(Number(item.total_clicks)) },
               { label: "Orders", value: formatInt(Number(item.total_orders)) },
-              { label: "Sales", value: formatCurrency(Number(item.total_sales), currency, { compact: true }) },
             ]}
           />
         </View>

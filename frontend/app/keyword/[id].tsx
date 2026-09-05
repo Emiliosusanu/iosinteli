@@ -1,14 +1,15 @@
 import React, { useState } from "react";
 import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { EmptyState, RetryState, ScreenSpinner, SectionCard, ToneDot } from "@/src/components/Primitives";
 import { BidBudgetEditor, EntityStateSwitch } from "@/src/components/Mutations";
 import { EntityBidControl, EntityPerformance, ParentLinks, targetingPerfStatus } from "@/src/components/EntityDetail";
 import { useApp } from "@/src/contexts/AppContext";
-import { useInvalidateAds } from "@/src/lib/invalidateAds";
+import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { updateKeywordManual } from "@/src/lib/mutations";
+import { enqueueEntityBidWrite } from "@/src/lib/bulkOutbox";
 import { fetchEntityDailyMetrics, fetchKeywordById } from "@/src/lib/queries";
 import { formatCurrency } from "@/src/lib/format";
 import { layout, spacing, toneColor, useTheme } from "@/src/lib/theme";
@@ -21,6 +22,7 @@ function paramId(value: string | string[] | undefined) {
 
 export default function KeywordDetailScreen() {
   const t = useTheme();
+  const queryClient = useQueryClient();
   const invalidateAds = useInvalidateAds();
   const { width } = useWindowDimensions();
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
@@ -92,8 +94,14 @@ export default function KeywordDetailScreen() {
               enabled={item.status === "enabled"}
               noun="keyword"
               onChange={async (next) => {
-                await updateKeywordManual(item.id, { status: next ? "enabled" : "paused" });
-                await invalidateAds(["keyword-detail"]);
+                const previous = applyOptimisticEntityState(queryClient, "keyword", item.id, next);
+                try {
+                  await updateKeywordManual(item.id, { status: next ? "enabled" : "paused", forceCooldown: true });
+                  void invalidateEntityStateQueries(queryClient, "keyword");
+                } catch (error) {
+                  revertOptimisticEntityState(queryClient, "keyword", item.id, previous);
+                  throw error;
+                }
               }}
             />
             <View style={{ flex: 1, minWidth: 0 }}>
@@ -134,6 +142,7 @@ export default function KeywordDetailScreen() {
           <EntityBidControl
             testID={`targeting-bid-${item.id}`}
             value={bidLabel}
+            cooldownRow={item}
             onPress={() => setBidOpen(true)}
           />
         </SectionCard>
@@ -161,8 +170,18 @@ export default function KeywordDetailScreen() {
         testID={`targeting-bid-editor-${item.id}`}
         onClose={() => setBidOpen(false)}
         onSave={async (next) => {
-          await updateKeywordManual(item.id, { bid: next });
-          await invalidateAds(["keyword-detail"]);
+          const previousBid = applyOptimisticEntityBid(queryClient, "keyword", item.id, next);
+          try {
+            await enqueueEntityBidWrite({
+              entityKind: "keyword",
+              entityId: item.id,
+              bid: next,
+              previousBid,
+            });
+          } catch (error) {
+            revertOptimisticEntityBid(queryClient, "keyword", item.id, previousBid);
+            throw error;
+          }
         }}
       />
     </SubScreen>

@@ -638,7 +638,8 @@ export function SectionHeader({
   );
 }
 
-// ─── StatBadge: compact delta / trend pill. Returns null when flat. ───────────
+// ─── StatBadge: compact delta / trend pill. Up and down are deliberately
+// different shapes so direction reads without relying on color alone. ─────────
 export function StatBadge({
   delta,
   inverse = false,
@@ -652,23 +653,27 @@ export function StatBadge({
 }) {
   const t = useTheme();
   if (!isFinite(delta) || delta === 0) return null;
+  const up = delta > 0;
   const good = inverse ? delta < 0 : delta > 0;
   const col = neutral ? t.colors.text_tertiary : good ? t.colors.tone_good : t.colors.tone_danger;
   return (
     <View
+      accessibilityLabel={`${up ? "Up" : "Down"} ${Math.abs(delta).toFixed(1)} percent${suffix ? ` ${suffix}` : ""}`}
       style={{
         flexDirection: "row",
         alignItems: "center",
         alignSelf: "flex-start",
-        backgroundColor: col + "1A",
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        borderRadius: 6,
-        gap: 1,
+        backgroundColor: up ? col + "22" : "transparent",
+        borderWidth: up ? 0 : StyleSheet.hairlineWidth * 2,
+        borderColor: col,
+        paddingHorizontal: up ? 7 : 6,
+        paddingVertical: up ? 3 : 2,
+        borderRadius: up ? 999 : 6,
+        gap: 2,
       }}
     >
-      <SFSymbol name={delta > 0 ? "arrow.up" : "arrow.down"} size={11} color={col} />
-      <Text style={[t.typography.caption1, { color: col, fontWeight: "600", fontVariant: ["tabular-nums"] }]}>
+      <SFSymbol name={up ? "arrow.up.right" : "arrow.down.right"} size={10} color={col} />
+      <Text style={[t.typography.caption1, { color: col, fontWeight: "700", fontVariant: ["tabular-nums"] }]}>
         {Math.abs(delta).toFixed(1)}%{suffix ? ` ${suffix}` : ""}
       </Text>
     </View>

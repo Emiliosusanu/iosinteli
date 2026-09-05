@@ -12,6 +12,7 @@ const campaign = readFileSync(new URL("../app/campaign/[id].tsx", import.meta.ur
 const adGroup = readFileSync(new URL("../app/more/ad-group/[id].tsx", import.meta.url), "utf8");
 const primitives = readFileSync(new URL("../src/components/Primitives.tsx", import.meta.url), "utf8");
 const mutations = readFileSync(new URL("../src/components/Mutations.tsx", import.meta.url), "utf8");
+const mutationsApi = readFileSync(new URL("../src/lib/mutations.ts", import.meta.url), "utf8");
 
 test("spoken match types stay human and do not invent metrics", () => {
   assert.equal(matchTypeSpoken("broad"), "Broad keyword");
@@ -28,9 +29,9 @@ test("spoken match types stay human and do not invent metrics", () => {
 });
 
 test("Targets rows combine identity without swallowing the pause switch", () => {
-  assert.match(targeting, /accessibilityHint="Opens keyword details"/);
-  assert.match(targeting, /accessibilityHint="Opens target details"/);
-  assert.match(targeting, /accessibilityHint="Opens campaign details"/);
+  assert.match(targeting, /accessibilityHint=\{selectMode \? "Toggles bulk selection" : "Opens keyword details"\}/);
+  assert.match(targeting, /accessibilityHint=\{selectMode \? "Toggles bulk selection" : "Opens target details"\}/);
+  assert.match(targeting, /accessibilityHint=\{selectMode \? "Toggles bulk selection" : "Opens campaign details"\}/);
   assert.match(targeting, /accessibilityLabel=\{rowLabel\}/);
   assert.match(targeting, /accessibilityLabel=\{`Clear \$\{perfLabel\} filter`\}/);
   assert.match(targeting, /accessibilityLabel=\{`Clear sort\. Currently \$\{sortLabel\}`\}/);
@@ -58,12 +59,14 @@ test("mutation-sensitive details keep identity grouped and switches independent"
   assert.match(campaign, /c\.state === "enabled" \? "Enabled" : "Paused"/);
   assert.match(adGroup, /Default bid \$\{defaultBid\}\. Read only\./);
   assert.match(adGroup, /groupState === "enabled" \? "Enabled" : "Paused"/);
+  assert.doesNotMatch(mutationsApi, /ad-groups\/\$\{adGroupId\}\/manual/);
+  assert.match(mutationsApi, /fallbackTargetIds/);
 });
 
 test("shared decorative tone and bid tap stay labeled without swallowing siblings", () => {
   assert.match(primitives, /export function ToneDot/);
   assert.match(primitives, /accessibilityElementsHidden/);
-  assert.match(mutations, /\$\{label\} \$\{value\}\. Edit \$\{label\.toLowerCase\(\)\}\./);
-  assert.match(mutations, /\$\{noun\} is \$\{enabled \? "active" : "paused"\}/);
+  assert.match(mutations, /\$\{label\} \$\{value\}\$\{locked \? "\. On cooldown" : ""\}\. Edit \$\{label\.toLowerCase\(\)\}\./);
+  assert.match(mutations, /\$\{noun\} is \$\{shown \? "active" : "paused"\}/);
   assert.match(mutations, /Changing this writes Amazon Ads\./);
 });

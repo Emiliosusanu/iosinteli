@@ -1,7 +1,8 @@
 // Nest API writes — same paths the web dashboard uses.
 // Reads stay on Supabase RLS. nestApiFetch sends Nest JWT or the Supabase bearer.
 
-import { nestApiFetch, nestApiJson, nestLogout, parseNestError } from "./rulesApi";
+import { nestApiFetch, nestApiJson, nestLogout, parseNestError, NestApiError } from "./rulesApi";
+import { supabase } from "./supabase";
 import type { AmazonProfile } from "./types";
 
 export type EntityState = "enabled" | "paused";
@@ -160,6 +161,35 @@ export async function fetchCampaignApi(campaignId: string) {
   }>(`/campaigns/${campaignId}`, { method: "GET" }, "Couldn't load campaign.");
 }
 
+/** Prefetch placement % for list rows so UI never paints forever-dashes as if Amazon has no bid. */
+export async function prefetchCampaignPlacementAdjustments(
+  campaignIds: string[],
+  opts: { concurrency?: number } = {},
+): Promise<Record<string, PlacementAdjustments>> {
+  const ids = [...new Set(campaignIds.map(String).filter(Boolean))];
+  const out: Record<string, PlacementAdjustments> = {};
+  if (!ids.length) return out;
+  const concurrency = Math.max(1, Math.min(8, opts.concurrency ?? 6));
+  let cursor = 0;
+  async function worker() {
+    while (cursor < ids.length) {
+      const id = ids[cursor];
+      cursor += 1;
+      try {
+        const api = await fetchCampaignApi(id);
+        // Never invent 0% — missing/null stays omitted so the row keeps "…" / "—".
+        if (api.placementAdjustments) {
+          out[id] = api.placementAdjustments;
+        }
+      } catch {
+        /* leave missing — row keeps loading state until tap/retry */
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, () => worker()));
+  return out;
+}
+
 export async function updateCampaign(campaignId: string, payload: UpdateCampaignPayload) {
   return nestApiJson<{ id: string; budget?: number; placementAdjustments?: PlacementAdjustments }>(
     `/campaigns/${campaignId}`,
@@ -200,6 +230,32 @@ export async function updateAdGroupState(adGroupId: string, state: EntityState) 
   );
 }
 
+export async function updateAdGroupManual(
+  adGroupId: string,
+  payload: { defaultBid?: number; forceCooldown?: boolean },
+  fallbackTargetIds: string[] = [],
+) {
+  // Nest has no `/ad-groups/:id/manual`. Default bid is PATCH `/ad-groups/:id`,
+  // same shape as campaign budget. If that route is missing, set the auto
+  // targeting clause bids (close/loose/complements/substitutes) instead.
+  try {
+    return await nestApiJson(
+      `/ad-groups/${adGroupId}`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+      "Couldn't update ad group bid.",
+    );
+  } catch (error) {
+    const status = error instanceof NestApiError ? error.status : 0;
+    const message = error instanceof Error ? error.message : "";
+    const missingRoute = status === 404 || /Cannot PATCH/i.test(message);
+    if (!missingRoute || payload.defaultBid == null || fallbackTargetIds.length === 0) throw error;
+    for (const targetId of fallbackTargetIds) {
+      await updateProductTargetManual(targetId, { bid: payload.defaultBid, forceCooldown: payload.forceCooldown });
+    }
+    return { id: adGroupId, defaultBid: payload.defaultBid };
+  }
+}
+
 // ── Search terms ───────────────────────────────────────────────────────────
 
 export async function addSearchTermAsTarget(
@@ -231,7 +287,16 @@ export function fetchSyncStatus(options?: { filterUserId?: string | null }) {
   const path = filterUserId
     ? `/amazon/sync/status?filterUserId=${encodeURIComponent(filterUserId)}`
     : "/amazon/sync/status";
-  return nestApiJson<SyncStatus>(path, { method: "GET" }, "Couldn't check sync status.");
+  // Cap wait so Sync UI does not sit on "Checking Amazon Ads status…" for ages.
+  const signal =
+    typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(12_000)
+      : undefined;
+  return nestApiJson<SyncStatus>(
+    path,
+    { method: "GET", ...(signal ? { signal } : {}) },
+    "Couldn't check sync status.",
+  );
 }
 
 export function triggerSync() {
@@ -245,13 +310,19 @@ export async function cancelSync() {
 // ── Amazon / KDP ───────────────────────────────────────────────────────────
 
 export function fetchAmazonConnectUrl() {
-  return nestApiJson<AmazonConnectResponse>("/auth/amazon/connect", { method: "GET" }, "Couldn't start Amazon connect.");
+  const q = new URLSearchParams({ returnTo: "inteliads://auth/amazon/callback" });
+  return nestApiJson<AmazonConnectResponse>(
+    `/auth/amazon/connect?${q.toString()}`,
+    { method: "GET" },
+    "Couldn't start Amazon connect.",
+  );
 }
 
 export async function fetchAmazonLoginUrl() {
   await nestLogout();
+  const q = new URLSearchParams({ returnTo: "inteliads://auth/amazon/callback" });
   return nestApiJson<AmazonConnectResponse>(
-    "/auth/amazon/login",
+    `/auth/amazon/login?${q.toString()}`,
     { method: "GET", allowAnonymous: true },
     "Couldn't start Amazon login.",
   );
@@ -339,13 +410,116 @@ export async function fetchNestAmazonProfiles(filterUserId?: string | null): Pro
   }).filter((p) => p.id);
 }
 
-export async function toggleAmazonProfile(profileId: string, isEnabled: boolean) {
-  const data = await nestApiJson<{ message?: string; profile?: { id: string; is_enabled?: boolean } }>(
-    `/amazon/profiles/${profileId}/toggle`,
+async function persistUserAmazonProfileEnabled(
+  candidateIds: string[],
+  enabled: boolean,
+  preferInsertId: string,
+) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const userId = session?.user?.id;
+  if (!userId) throw new NestApiError("Sign in to change profiles.", 401);
+
+  const ids = [...new Set(candidateIds.map((id) => String(id || "").trim()).filter(Boolean))];
+  if (!ids.length) throw new NestApiError("Missing Amazon profile id.", 400);
+
+  // Prefer the Ads profile id Nest uses; still try every candidate.
+  const ordered = [
+    preferInsertId,
+    ...ids.filter((id) => id !== preferInsertId),
+  ].filter(Boolean);
+
+  let lastError: unknown = null;
+  for (const id of ordered) {
+    // Do NOT rely on UPDATE … RETURNING — RLS often hides the row and we
+    // falsely fall through to INSERT → unique violation → "Couldn't update".
+    const { error: updateErr } = await supabase
+      .from("user_amazon_profiles")
+      .update({ is_enabled: enabled })
+      .eq("user_id", userId)
+      .eq("amazon_profile_id", id);
+    if (updateErr) {
+      lastError = updateErr;
+    } else {
+      const { data: row, error: readErr } = await supabase
+        .from("user_amazon_profiles")
+        .select("amazon_profile_id, is_enabled")
+        .eq("user_id", userId)
+        .eq("amazon_profile_id", id)
+        .maybeSingle();
+      if (readErr) lastError = readErr;
+      else if (row) {
+        if (row.is_enabled === enabled) return;
+        // Row exists but value didn't stick — try upsert path below.
+      } else {
+        const { error: insertErr } = await supabase.from("user_amazon_profiles").insert({
+          user_id: userId,
+          amazon_profile_id: id,
+          is_enabled: enabled,
+        });
+        if (!insertErr) return;
+        // Unique race: another writer inserted — update again.
+        if (/duplicate|unique/i.test(String((insertErr as { message?: string }).message || ""))) {
+          const { error: retryErr } = await supabase
+            .from("user_amazon_profiles")
+            .update({ is_enabled: enabled })
+            .eq("user_id", userId)
+            .eq("amazon_profile_id", id);
+          if (!retryErr) return;
+          lastError = retryErr;
+        } else {
+          lastError = insertErr;
+        }
+        continue;
+      }
+    }
+
+    const { error: upsertErr } = await supabase.from("user_amazon_profiles").upsert(
+      {
+        user_id: userId,
+        amazon_profile_id: id,
+        is_enabled: enabled,
+      },
+      { onConflict: "user_id,amazon_profile_id" },
+    );
+    if (!upsertErr) return;
+    lastError = upsertErr;
+  }
+
+  const message =
+    lastError && typeof lastError === "object" && "message" in lastError
+      ? String((lastError as { message?: string }).message || "")
+      : "";
+  throw new NestApiError(
+    message || "Couldn't update that Amazon profile flag.",
+    500,
+  );
+}
+
+export async function toggleAmazonProfile(
+  profileId: string,
+  isEnabled: boolean,
+  opts?: { rowId?: string | null; adsProfileId?: string | null },
+) {
+  // Nest is the product source of truth for enable/disable (rules + AMS) — same as web.
+  // Local Supabase pivot mirrors Nest so the Accounts list stays honest.
+  const adsProfileId = String(opts?.adsProfileId || profileId).trim();
+  const rowId = String(opts?.rowId || profileId).trim();
+
+  const nestResult = await nestApiJson<{ message?: string; profile?: { id: string; is_enabled?: boolean } }>(
+    `/amazon/profiles/${adsProfileId}/toggle`,
     { method: "PATCH", body: JSON.stringify({ isEnabled }) },
     "Couldn't update profile.",
   );
-  return data.profile ?? data;
+
+  try {
+    await persistUserAmazonProfileEnabled([rowId, adsProfileId, profileId], isEnabled, adsProfileId || rowId);
+  } catch {
+    // Nest already flipped — list may catch up on next refetch.
+  }
+
+  return { is_enabled: nestResult.profile?.is_enabled ?? isEnabled };
 }
 
 export async function updateProfileNickname(profileId: string, nickname: string) {

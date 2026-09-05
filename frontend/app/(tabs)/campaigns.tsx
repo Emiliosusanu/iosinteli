@@ -22,25 +22,46 @@ import { biddingStrategyLabel, shouldShowActiveOrPausedWithData, statusLabel } f
 import { useApp } from "@/src/contexts/AppContext";
 import { useTheme, acosTone, toneColor, useReduceMotion, dashboard, spacing, layout } from "@/src/lib/theme";
 import { formatCurrency, formatPercent, formatInt } from "@/src/lib/format";
-import { updateCampaign, updateCampaignState } from "@/src/lib/mutations";
-import { useInvalidateAds } from "@/src/lib/invalidateAds";
+import {
+  fetchCampaignApi,
+  prefetchCampaignPlacementAdjustments,
+  updateCampaign,
+  updateCampaignState,
+  type PlacementAdjustments,
+} from "@/src/lib/mutations";
+import { applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { TopBar } from "@/src/components/TopBar";
-import { BidBudgetEditor, EntityStateSwitch } from "@/src/components/Mutations";
-import { EmptyState, ToneDot, RetryState, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard } from "@/src/components/Primitives";
+import { alertMutationError, BidBudgetEditor, EntityStateSwitch, MutationTap } from "@/src/components/Mutations";
+import { EmptyState, RetryState, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard } from "@/src/components/Primitives";
 import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
 import { withQueryTimeout } from "@/src/lib/queryTimeout";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
+import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
+import { loadCampaignsFilterMemory, saveCampaignsFilterMemory } from "@/src/lib/filterMemory";
+import {
+  LIST_PERIOD_QUERY_CACHE,
+  sameScopeWarmPlaceholder,
+  sortedProfileIds,
+} from "@/src/lib/periodQuery";
 
-function campaignVerdict(item: any): { label: string; tone: "good" | "warning" | "danger" | "inactive" } {
+type PlacementField = keyof PlacementAdjustments;
+
+const PLACEMENT_FIELDS: { key: PlacementField; label: string; title: string }[] = [
+  { key: "top_of_search", label: "Top", title: "Top of search" },
+  { key: "product_pages", label: "Product", title: "Product pages" },
+  { key: "rest_of_search", label: "Rest", title: "Rest of search" },
+];
+
+function campaignVerdict(item: any): { label: string; tone: "good" | "warning" | "danger" | "inactive"; direction: "up" | "down" | "flat" } {
   const spend = Number(item.spend) || 0;
   const orders = Number(item.orders) || 0;
   const sales = Number(item.sales) || 0;
   const acos = Number(item.acos) || 0;
-  if (spend > 0 && orders === 0) return { label: "Wasting spend", tone: "danger" };
-  if (sales > 0 && acos > 35) return { label: "High ACoS", tone: "warning" };
-  if (sales > 0) return { label: "Profitable", tone: "good" };
-  return { label: "No spend yet", tone: "inactive" };
+  if (spend > 0 && orders === 0) return { label: "Wasting spend", tone: "danger", direction: "down" };
+  if (sales > 0 && acos > 35) return { label: "High ACoS", tone: "warning", direction: "down" };
+  if (sales > 0) return { label: "Profitable", tone: "good", direction: "up" };
+  return { label: "No spend yet", tone: "inactive", direction: "flat" };
 }
 
 function emptyCopy(search: string, stateFilter: StateFilter) {
@@ -81,33 +102,68 @@ export default function CampaignsScreen() {
   const invalidateAds = useInvalidateAds();
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("top");
+  const [sortKey, setSortKey] = useState<SortKey>("acos");
   const [filterOpen, setFilterOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [budgetEdit, setBudgetEdit] = useState<{ id: string; value: number } | null>(null);
+  const [placementAdj, setPlacementAdj] = useState<Record<string, PlacementAdjustments>>({});
+  const [placementEdit, setPlacementEdit] = useState<{
+    id: string;
+    field: PlacementField;
+    title: string;
+    value: number;
+  } | null>(null);
 
   useEffect(() => {
     const qa = takePendingQaFilters();
-    if (!qa) return;
-    if (qa.campaignsState) setStateFilter(qa.campaignsState);
-    if (qa.campaignsSort) setSortKey(qa.campaignsSort);
-    if (qa.campaignsState || qa.campaignsSort) {
-      console.log(
-        `[inteliads:qa] campaigns filters state=${qa.campaignsState ?? "-"} sort=${qa.campaignsSort ?? "-"}`,
-      );
+    if (qa) {
+      if (qa.campaignsState) setStateFilter(qa.campaignsState);
+      if (qa.campaignsSort) setSortKey(qa.campaignsSort);
+      if (qa.campaignsState || qa.campaignsSort) {
+        console.log(
+          `[inteliads:qa] campaigns filters state=${qa.campaignsState ?? "-"} sort=${qa.campaignsSort ?? "-"}`,
+        );
+      }
+      return;
     }
+    void loadCampaignsFilterMemory().then((mem) => {
+      if (mem.stateFilter === "all" || mem.stateFilter === "enabled" || mem.stateFilter === "paused") {
+        setStateFilter(mem.stateFilter);
+      }
+      if (mem.sortKey && SORT_CONFIG.some((s) => s.key === mem.sortKey)) {
+        setSortKey(mem.sortKey as SortKey);
+      }
+    });
   }, []);
 
-  const overviewWarm = queryClient.getQueryData(
-    ["top-campaigns-range-v2", selectedProfileIds, dateRange.start, dateRange.end],
-  ) as TopCampaignRow[] | undefined;
+  useEffect(() => {
+    void saveCampaignsFilterMemory({ sortKey, stateFilter });
+  }, [sortKey, stateFilter]);
 
-  const { data: campaigns = [], isPending, isError, isRefetching, isFetching, refetch } = useQuery({
-    queryKey: ["campaigns-list-range-v2", adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
+  const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
+  const campaignsListKey = [
+    "campaigns-list-range-v2",
+    adminFilterUserId ?? "self",
+    scopeProfiles,
+    dateRange.start,
+    dateRange.end,
+  ] as const;
+  const overviewWarmKey = ["top-campaigns-range-v2", scopeProfiles, dateRange.start, dateRange.end] as const;
+
+  const {
+    data: campaigns = [],
+    isPending,
+    isError,
+    isRefetching,
+    isFetching,
+    isPlaceholderData,
+    refetch,
+  } = useQuery({
+    queryKey: campaignsListKey,
     queryFn: ({ signal }) =>
       withQueryTimeout(
         fetchTopCampaignsRange({
-          profileIds: selectedProfileIds,
+          profileIds: scopeProfiles,
           start: dateRange.start,
           end: dateRange.end,
           limit: 500,
@@ -116,14 +172,21 @@ export default function CampaignsScreen() {
         undefined,
         signal,
       ),
-    enabled: selectedProfileIds.length > 0,
-    staleTime: 5 * 60_000,
-    gcTime: 12 * 60 * 60_000,
-    placeholderData: (previous) => previous ?? overviewWarm,
+    enabled: scopeProfiles.length > 0,
+    ...LIST_PERIOD_QUERY_CACHE,
+    // Same period+profiles Overview warm only — never keepPreviousData.
+    placeholderData: () =>
+      sameScopeWarmPlaceholder(
+        queryClient.getQueryData(overviewWarmKey) as TopCampaignRow[] | undefined,
+      ),
     retry: false,
   });
 
-  const showBlockingSpinner = isPending && campaigns.length === 0 && !overviewWarm;
+  const overviewWarm = queryClient.getQueryData(overviewWarmKey) as TopCampaignRow[] | undefined;
+  const showBlockingSpinner =
+    (isPending || !!isPlaceholderData) && campaigns.length === 0 && !overviewWarm;
+  const listUpdating = (isFetching || !!isPlaceholderData) && campaigns.length > 0 && !isError;
+  const listTruncated = !isError && campaigns.length >= 500;
 
   const filtered = useMemo(() => {
     let arr = campaigns.filter((c) => {
@@ -134,13 +197,53 @@ export default function CampaignsScreen() {
     });
     return [...arr].sort((a, b) => {
       switch (sortKey) {
-        case "spend":   return b.spend - a.spend;
-        case "orders":  return b.orders - a.orders;
-        case "acos":    return (a.acos || Infinity) - (b.acos || Infinity);
-        default:        return b.roas - a.roas;
+        case "spend":
+          return b.spend - a.spend;
+        case "orders":
+          return b.orders - a.orders;
+        case "top":
+          return b.roas - a.roas;
+        case "acos":
+        default:
+          return compareByAcosSpendImpressionsSync(
+            {
+              total_acos: a.acos,
+              total_spend: a.spend,
+              total_sales: a.sales,
+              total_impressions: a.impressions,
+              metrics_updated_at: (a as any).metrics_updated_at,
+              updated_at: (a as any).updated_at,
+            },
+            {
+              total_acos: b.acos,
+              total_spend: b.spend,
+              total_sales: b.sales,
+              total_impressions: b.impressions,
+              metrics_updated_at: (b as any).metrics_updated_at,
+              updated_at: (b as any).updated_at,
+            },
+          );
       }
     });
   }, [campaigns, search, stateFilter, sortKey]);
+
+  useEffect(() => {
+    if (!filtered.length) return;
+    let cancelled = false;
+    const missing = filtered
+      .map((row) => String(row.id || ""))
+      .filter((id) => id && placementAdj[id] == null)
+      .slice(0, 40);
+    if (!missing.length) return;
+    void prefetchCampaignPlacementAdjustments(missing).then((map) => {
+      if (cancelled || !Object.keys(map).length) return;
+      setPlacementAdj((prev) => ({ ...map, ...prev }));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered]);
 
   function animateList() {
     if (reduceMotion) return;
@@ -170,8 +273,29 @@ export default function CampaignsScreen() {
     setRefreshing(false);
   };
 
-  const sortLabel = SORT_CONFIG.find((entry) => entry.key === sortKey)?.label ?? "ROAS";
-  const sortActive = sortKey !== "top";
+  const openPlacementEditor = async (item: TopCampaignRow, field: PlacementField) => {
+    try {
+      let adj = placementAdj[item.id];
+      if (!adj) {
+        const api = await fetchCampaignApi(item.id);
+        adj = api.placementAdjustments ?? {};
+        setPlacementAdj((prev) => ({ ...prev, [item.id]: adj! }));
+      }
+      const meta = PLACEMENT_FIELDS.find((entry) => entry.key === field);
+      Haptics.selectionAsync();
+      setPlacementEdit({
+        id: item.id,
+        field,
+        title: meta?.title ?? "Placement",
+        value: Number(adj[field] ?? 0),
+      });
+    } catch (error) {
+      alertMutationError(error, "Couldn't load placement bids.");
+    }
+  };
+
+  const sortLabel = SORT_CONFIG.find((entry) => entry.key === sortKey)?.label ?? "ACoS";
+  const sortActive = sortKey !== "acos";
   const empty = emptyCopy(search, stateFilter);
   const showCount = search.trim().length > 0 || stateFilter !== "all" || sortActive;
 
@@ -227,14 +351,14 @@ export default function CampaignsScreen() {
               testID="campaigns-filter-chip-sort"
               label={`Sort: ${sortLabel}`}
               accessibilityLabel={`Clear sort. Currently ${sortLabel}`}
-              onPress={() => applySort("top")}
+              onPress={() => applySort("acos")}
             />
           </ActiveFilterRow>
         ) : null}
         {showCount && !showBlockingSpinner && !isError ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>
             {filtered.length === 1 ? "1 campaign" : `${filtered.length} campaigns`}
-            {isFetching && campaigns.length > 0 ? " · updating" : ""}
+            {listUpdating ? " · updating" : ""}
           </Text>
         ) : null}
       </FilterChrome>
@@ -258,6 +382,20 @@ export default function CampaignsScreen() {
           }
           ItemSeparatorComponent={() => <View style={{ height: t.layout.listGap }} />}
           ListEmptyComponent={<EmptyState icon="megaphone-outline" title={empty.title} subtitle={empty.subtitle} />}
+          ListFooterComponent={
+            listTruncated ? (
+              <Text
+                style={[
+                  t.typography.footnote,
+                  { color: t.colors.text_secondary, textAlign: "center", marginTop: t.spacing.md },
+                ]}
+              >
+                Showing up to 500 fetched across {scopeProfiles.length} profile
+                {scopeProfiles.length === 1 ? "" : "s"} for this period (fair per-profile fetch). Active filters may
+                hide more rows. Narrow the date range or profiles to load a different set.
+              </Text>
+            ) : null
+          }
           renderItem={({ item }) => {
             const colorKey = bookColorKeyFor(item);
             const campaignColor = colorKey ? fallbackBookColor(colorKey) : t.colors.tone_primary;
@@ -281,8 +419,14 @@ export default function CampaignsScreen() {
                         noun="campaign"
                         testID={`campaign-state-${item.id}`}
                         onChange={async (next) => {
-                          await updateCampaignState(item.id, next ? "enabled" : "paused");
-                          await invalidateAds(["campaign-api", "campaign"]);
+                          const previous = applyOptimisticEntityState(queryClient, "campaign", item.id, next);
+                          try {
+                            await updateCampaignState(item.id, next ? "enabled" : "paused");
+                            void invalidateEntityStateQueries(queryClient, "campaign");
+                          } catch (error) {
+                            revertOptimisticEntityState(queryClient, "campaign", item.id, previous);
+                            throw error;
+                          }
                         }}
                       />
                     </View>
@@ -297,35 +441,42 @@ export default function CampaignsScreen() {
                         <View onStartShouldSetResponder={() => true}>
                           <TouchableOpacity
                             testID={`campaign-budget-${item.id}`}
+                            accessibilityRole="button"
                             accessibilityLabel={
                               item.budget != null
-                                ? `Daily budget ${formatCurrency(Number(item.budget), primaryCurrency)}. Edit budget.`
-                                : "No budget. Edit budget."
+                                ? `Daily budget ${formatCurrency(Number(item.budget), primaryCurrency)}. Double tap to edit.`
+                                : "No budget set. Double tap to edit."
                             }
+                            accessibilityHint="Opens the budget editor. Saving writes Amazon Ads."
                             activeOpacity={0.7}
-                            onPress={() => setBudgetEdit({ id: item.id, value: Number(item.budget) || 0 })}
+                            onPress={() => {
+                              Haptics.selectionAsync();
+                              setBudgetEdit({ id: item.id, value: Number(item.budget) || 0 });
+                            }}
                             style={[
                               styles.budgetChip,
                               {
-                                backgroundColor: t.colors.glass_background,
-                                borderColor: t.colors.glass_stroke,
+                                backgroundColor: t.colors.tone_primary + "12",
+                                borderColor: t.colors.tone_primary + "44",
                               },
                             ]}
                           >
-                            <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>Budget</Text>
-                            <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "600" }]}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                              <Text style={[t.typography.caption2, { color: t.colors.tone_primary, fontWeight: "600" }]}>
+                                Budget
+                              </Text>
+                              <SFSymbol name="pencil" size={11} color={t.colors.tone_primary} />
+                            </View>
+                            <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "700" }]}>
                               {item.budget != null
                                 ? `${formatCurrency(Number(item.budget), primaryCurrency, { compact: true })}/d`
-                                : "—"}
+                                : "Set…"}
                             </Text>
                           </TouchableOpacity>
                         </View>
                       </View>
                       <View style={styles.metaRow}>
-                        <ToneDot value={item.acos} />
-                        <Text style={[t.typography.caption2, { color: toneColor(verdict.tone, t.colors), fontWeight: "600" }]}>
-                          {verdict.label}
-                        </Text>
+                        <CampaignVerdictBadge verdict={verdict} t={t} />
                         <Text style={[t.typography.caption2, { color: t.colors.text_secondary }]}>{strategy}</Text>
                       </View>
                       <DenseMetricLine
@@ -336,11 +487,16 @@ export default function CampaignsScreen() {
                             color: toneColor(acosTone(item.acos), t.colors),
                           },
                           { label: "Spend", value: formatCurrency(item.spend, primaryCurrency, { compact: true }) },
-                          { label: "Sales", value: formatCurrency(item.sales, primaryCurrency, { compact: true }) },
+                          { label: "Impr", value: formatInt(Number(item.impressions) || 0) },
+                          { label: "Clicks", value: formatInt(Number(item.clicks) || 0) },
                           { label: "Ord", value: formatInt(item.orders) },
                         ]}
                       />
-                      <PlacementSharePills item={item} t={t} />
+                      <PlacementSharePills
+                        item={item}
+                        adjustments={placementAdj[item.id]}
+                        onEdit={(field) => void openPlacementEditor(item, field)}
+                      />
                     </View>
                   </View>
                 </ListCard>
@@ -361,6 +517,29 @@ export default function CampaignsScreen() {
         onSave={async (next) => {
           if (!budgetEdit) return;
           await updateCampaign(budgetEdit.id, { budget: next });
+          await invalidateAds(["campaign-api", "campaign"]);
+          await refetch();
+        }}
+      />
+
+      <BidBudgetEditor
+        visible={placementEdit != null}
+        title={`${placementEdit?.title ?? "Placement"} %`}
+        value={placementEdit?.value ?? 0}
+        kind="percent"
+        min={0}
+        max={900}
+        testID={placementEdit ? `campaign-placement-editor-${placementEdit.id}` : undefined}
+        onClose={() => setPlacementEdit(null)}
+        onSave={async (next) => {
+          if (!placementEdit) return;
+          // Patch only the edited field — never default missing siblings to 0.
+          const payload: PlacementAdjustments = { [placementEdit.field]: next };
+          await updateCampaign(placementEdit.id, { placementAdjustments: payload });
+          setPlacementAdj((prev) => ({
+            ...prev,
+            [placementEdit.id]: { ...(prev[placementEdit.id] ?? {}), ...payload },
+          }));
           await invalidateAds(["campaign-api", "campaign"]);
           await refetch();
         }}
@@ -467,19 +646,66 @@ function AnimatedCard({
   );
 }
 
-function PlacementSharePills({ item, t }: { item: any; t: any }) {
-  const shares = [
-    { label: "Top", value: Number(item.placement_top_share ?? 0), color: t.colors.tone_warning },
-    { label: "Product", value: Number(item.placement_product_share ?? 0), color: t.colors.tone_placement },
-    { label: "Rest", value: Number(item.placement_rest_share ?? 0), color: t.colors.tone_good },
-  ].filter((row) => row.value > 0);
-
-  if (!shares.length) return null;
-
+function CampaignVerdictBadge({
+  verdict,
+  t,
+}: {
+  verdict: { label: string; tone: "good" | "warning" | "danger" | "inactive"; direction: "up" | "down" | "flat" };
+  t: ReturnType<typeof useTheme>;
+}) {
+  const col = toneColor(verdict.tone, t.colors);
+  const up = verdict.direction === "up";
+  const down = verdict.direction === "down";
   return (
-    <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, flexShrink: 1 }]} numberOfLines={1}>
-      {shares.map((row) => `${row.label} ${formatPercent(row.value, 0)}`).join(" · ")}
-    </Text>
+    <View
+      accessibilityLabel={verdict.label}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+        paddingHorizontal: up ? 8 : 7,
+        paddingVertical: 3,
+        borderRadius: up ? 999 : 7,
+        backgroundColor: up ? col + "1F" : down ? "transparent" : t.colors.background_tertiary,
+        borderWidth: down ? StyleSheet.hairlineWidth * 2 : 0,
+        borderColor: down ? col : "transparent",
+      }}
+    >
+      {up ? <SFSymbol name="arrow.up.right" size={10} color={col} /> : null}
+      {down ? <SFSymbol name="arrow.down.right" size={10} color={col} /> : null}
+      <Text style={[t.typography.caption2, { color: col, fontWeight: "700" }]}>{verdict.label}</Text>
+    </View>
+  );
+}
+
+function PlacementSharePills({
+  item,
+  adjustments,
+  onEdit,
+}: {
+  item: any;
+  adjustments?: PlacementAdjustments;
+  onEdit: (field: PlacementField) => void;
+}) {
+  return (
+    <View onStartShouldSetResponder={() => true} style={styles.placementTaps}>
+      {PLACEMENT_FIELDS.map((field) => (
+        <MutationTap
+          key={field.key}
+          testID={`campaign-placement-${field.key}-${item.id}`}
+          label={field.label}
+          compact
+          value={
+            adjustments
+              ? adjustments[field.key] == null || !Number.isFinite(Number(adjustments[field.key]))
+                ? "—"
+                : formatPercent(Number(adjustments[field.key]), 0)
+              : "…"
+          }
+          onPress={() => onEdit(field.key)}
+        />
+      ))}
+    </View>
   );
 }
 
@@ -529,6 +755,12 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 4,
+  },
+  placementTaps: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 6,
   },
   campaignMeta: {
     flexDirection: "row",

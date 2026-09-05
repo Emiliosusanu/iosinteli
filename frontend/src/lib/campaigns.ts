@@ -34,7 +34,9 @@ export function hasPeriodData(row: Record<string, unknown>): boolean {
 
 export function shouldShowActiveOrPausedWithData(row: Record<string, unknown>, state: string | null | undefined): boolean {
   const normalized = String(state ?? "").toLowerCase();
-  if (normalized === "enabled" || normalized === "active") return true;
-  if (normalized === "paused") return hasPeriodData(row);
-  return normalized !== "archived" && hasPeriodData(row);
+  // Show every synced non-archived entity (enabled + paused), even with $0 in
+  // the selected period — hiding paused zeros made lists look incomplete.
+  if (normalized === "archived") return false;
+  if (normalized === "enabled" || normalized === "active" || normalized === "paused") return true;
+  return hasPeriodData(row);
 }

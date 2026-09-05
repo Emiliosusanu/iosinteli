@@ -119,16 +119,14 @@ export default function SyncScreen() {
     queryFn: () =>
       fetchSyncOverview(user!.id, selectedProfileIds, { includeSessions: !viewingCustomer }),
     enabled: !!user?.id && hasSelectedProfiles,
-    staleTime: 0,
-    placeholderData: undefined,
+    staleTime: 30_000,
   });
 
   const statusQ = useQuery({
     queryKey: syncStatusQueryKey(user?.id, adminFilterUserId),
     queryFn: () => fetchSyncStatus({ filterUserId: adminFilterUserId }),
     enabled: canRead,
-    staleTime: 0,
-    placeholderData: undefined,
+    staleTime: 15_000,
     refetchOnMount: "always",
     refetchInterval: (query) => (query.state.data?.isSyncInProgress ? 4000 : false),
   });
@@ -137,9 +135,44 @@ export default function SyncScreen() {
     queryKey: amsIntradayQueryKey(user?.id, selectedProfileIds, adminFilterUserId),
     queryFn: () => fetchIntradayMessages(selectedProfileIds),
     enabled: !!user?.id && hasSelectedProfiles,
-    staleTime: 0,
-    placeholderData: undefined,
+    staleTime: 60_000,
     retry: false,
+  });
+
+  const kdpHelperQ = useQuery({
+    queryKey: ["kdp-helper-sync-overview", user?.id],
+    queryFn: async () => {
+      const [
+        { loadHelperSyncState, loadHelperDeferredDays, loadHelperReplayCurrency },
+        { loadKdpActivityLog, buildKdpHelperOverview },
+        { getKdpHelperStatus },
+      ] = await Promise.all([
+        import("@/src/lib/kdp/persist"),
+        import("@/src/lib/kdp/activity"),
+        import("@/src/lib/kdp/runtime"),
+      ]);
+      const [state, deferredDays, currency, activity] = await Promise.all([
+        loadHelperSyncState(),
+        loadHelperDeferredDays(),
+        loadHelperReplayCurrency(),
+        loadKdpActivityLog(),
+      ]);
+      const live = getKdpHelperStatus();
+      return {
+        rows: buildKdpHelperOverview({
+          state,
+          deferredDays,
+          currency,
+          lastMessage: live.lastMessage,
+          lastError: live.lastError,
+          running: live.running,
+        }),
+        activity,
+      };
+    },
+    enabled: canRead,
+    staleTime: 10_000,
+    refetchInterval: (query) => (query.state.data?.rows?.some((row) => row.id === "running") ? 4_000 : false),
   });
 
   const inProgress = !!statusQ.data?.isSyncInProgress;
@@ -259,9 +292,9 @@ export default function SyncScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([syncQ.refetch(), statusQ.refetch(), intraQ.refetch()]);
+    await Promise.all([syncQ.refetch(), statusQ.refetch(), intraQ.refetch(), kdpHelperQ.refetch()]);
     setRefreshing(false);
-  }, [intraQ, statusQ, syncQ]);
+  }, [intraQ, kdpHelperQ, statusQ, syncQ]);
 
   const statusLoading = !statusKnown && statusQ.isLoading;
   const syncNowDisabled =
@@ -272,7 +305,8 @@ export default function SyncScreen() {
       title="Sync"
       rightAction={{
         icon: "refresh",
-        onPress: () => void Promise.all([syncQ.refetch(), statusQ.refetch(), intraQ.refetch()]),
+        onPress: () =>
+          void Promise.all([syncQ.refetch(), statusQ.refetch(), intraQ.refetch(), kdpHelperQ.refetch()]),
         testID: "sync-refresh",
         accessibilityLabel: REFRESH_A11Y_LABEL,
         accessibilityHint: REFRESH_A11Y_HINT,
@@ -393,6 +427,90 @@ export default function SyncScreen() {
               accessibilityHint="Opens Amazon accounts to reconnect."
               full
             />
+          </View>
+        ) : null}
+
+        {canRead ? (
+          <View style={{ marginTop: 12 }}>
+            <SectionCard title="KDP iPhone helper">
+              {kdpHelperQ.isError && !(kdpHelperQ.data?.rows?.length) ? (
+                <RetryState
+                  title="Couldn't load KDP helper logs"
+                  subtitle="Local helper state on this iPhone. Retry does not start Ads sync."
+                  onRetry={() => void kdpHelperQ.refetch()}
+                  retrying={kdpHelperQ.isFetching}
+                />
+              ) : (kdpHelperQ.data?.rows ?? []).length === 0 && kdpHelperQ.isLoading ? (
+                <View style={{ paddingVertical: 12, alignItems: "center" }}>
+                  <ActivityIndicator color={t.colors.tone_primary} />
+                  <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 8 }]}>
+                    Loading KDP helper logs…
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  {(kdpHelperQ.data?.rows ?? []).map((row, index, rows) => (
+                    <View
+                      key={row.id}
+                      accessible
+                      accessibilityRole="text"
+                      accessibilityLabel={`${row.title}. ${row.detail || ""}`}
+                      style={[
+                        styles.row,
+                        {
+                          borderBottomColor: t.colors.separator,
+                          borderBottomWidth: index === rows.length - 1 ? 0 : StyleSheet.hairlineWidth,
+                          alignItems: "flex-start",
+                        },
+                      ]}
+                    >
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600" }]}>
+                          {row.title}
+                        </Text>
+                        {row.detail ? (
+                          <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
+                            {row.detail}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <Pill
+                        label={
+                          row.tone === "ok"
+                            ? "OK"
+                            : row.tone === "warn"
+                              ? "Check"
+                              : row.tone === "danger"
+                                ? "Error"
+                                : "Info"
+                        }
+                        tone={
+                          row.tone === "ok"
+                            ? "good"
+                            : row.tone === "warn"
+                              ? "warning"
+                              : row.tone === "danger"
+                                ? "danger"
+                                : "inactive"
+                        }
+                      />
+                    </View>
+                  ))}
+                  {(kdpHelperQ.data?.activity ?? []).slice(0, 8).map((entry) => (
+                    <Text
+                      key={entry.id}
+                      style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 8, lineHeight: 15 }]}
+                    >
+                      {formatSyncWhen(new Date(entry.atMs).toISOString())}: {entry.message}
+                    </Text>
+                  ))}
+                  <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 10, lineHeight: 15 }]}>
+                    Local helper only — 15 min today/yesterday, night backfill after 02:00 for 30 days. Errors stay
+                    here until the next successful tick.
+                  </Text>
+                </>
+              )}
+            </SectionCard>
           </View>
         ) : null}
 

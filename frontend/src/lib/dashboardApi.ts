@@ -211,17 +211,18 @@ export async function fetchAggregatedCampaigns(params: {
       state: entity.state ?? null,
       budget: entity.budget ?? null,
       bidding_strategy: null,
-      placement_top_share: 0,
-      placement_product_share: 0,
-      placement_rest_share: 0,
+      // Nest aggregation has no placement traffic mix — leave unset (not fake 0%).
+      placement_top_share: null,
+      placement_product_share: null,
+      placement_rest_share: null,
       impressions: n(entity.metrics?.impressions),
       clicks: n(entity.metrics?.clicks),
       orders: n(entity.metrics?.orders),
       spend,
       sales,
-      acos: sales > 0 ? (spend / sales) * 100 : n(entity.metrics?.acos),
-      roas: spend > 0 ? sales / spend : n(entity.metrics?.roas),
-      net: 0,
+      acos: sales > 0 ? (spend / sales) * 100 : null,
+      roas: spend > 0 ? sales / spend : null,
+      net: null,
     };
   });
 }
@@ -498,6 +499,9 @@ export function mapNestKeyword(row: unknown): Keyword {
     amazon_profile_id: (r.amazonProfileId ?? r.amazon_profile_id ?? null) as string | null,
     created_at: str(r.createdAt ?? r.created_at),
     updated_at: str(r.updatedAt ?? r.updated_at),
+    bid_last_modified_at: (r.bidLastModifiedAt ?? r.bid_last_modified_at ?? null) as string | null,
+    rule_last_modified_at: (r.ruleLastModifiedAt ?? r.rule_last_modified_at ?? null) as string | null,
+    bid_change_source: (r.bidChangeSource ?? r.bid_change_source ?? null) as string | null,
     ...metricTotals(r),
   };
 }
@@ -513,11 +517,14 @@ export function mapNestProductTarget(row: unknown): ProductTarget {
     expression_type: (r.expressionType ?? r.expression_type ?? null) as string | null,
     resolved_expression: r.resolvedExpression ?? r.resolved_expression ?? null,
     state: (r.state ?? r.status ?? null) as string | null,
-    bid: r.bid != null ? n(r.bid) : null,
+    bid: r.bid != null || r.bid_amount != null ? n(r.bid ?? r.bid_amount) : null,
     title: (r.title ?? null) as string | null,
     image_url: (r.imageUrl ?? r.image_url ?? null) as string | null,
     created_at: str(r.createdAt ?? r.created_at),
     updated_at: str(r.updatedAt ?? r.updated_at),
+    bid_last_modified_at: (r.bidLastModifiedAt ?? r.bid_last_modified_at ?? null) as string | null,
+    rule_last_modified_at: (r.ruleLastModifiedAt ?? r.rule_last_modified_at ?? null) as string | null,
+    bid_change_source: (r.bidChangeSource ?? r.bid_change_source ?? null) as string | null,
     ...metricTotals(r),
   };
 }

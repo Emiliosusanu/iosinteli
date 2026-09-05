@@ -151,6 +151,18 @@ export function describeProductTarget(
   };
 }
 
+/** Live Amazon bid: explicit target/keyword bid, else inherited ad-group default. */
+export function readTargetBid(
+  row: { bid?: unknown; bid_amount?: unknown; default_bid?: unknown } | null | undefined,
+  inheritedDefaultBid?: unknown,
+): number | null {
+  for (const raw of [row?.bid, row?.bid_amount, row?.default_bid, inheritedDefaultBid]) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
 export function productTargetHeading(item: {
   title?: string | null;
   campaign_name?: string | null;

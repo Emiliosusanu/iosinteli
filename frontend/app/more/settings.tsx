@@ -159,7 +159,11 @@ export default function SettingsScreen() {
               disabled={alertsLocked}
               onChange={(v) => setNotifications({ ...notifications, dailyDigest: v })}
               testID="notif-daily-digest"
-              accessibilityLabel={notificationSwitchAccessibilityLabel("Daily performance updates", notifications.dailyDigest)}
+              accessibilityLabel={notificationSwitchAccessibilityLabel(
+                "Daily performance updates. Morning yesterday totals and today spend orders ACoS",
+                notifications.dailyDigest,
+              )}
+              accessibilityHint="Morning: yesterday spend, orders, ACoS. Daytime: today so far."
             />
             <IOSSwitchRow
               label="Include KDP net in alerts"

@@ -112,3 +112,14 @@ test("More describes My Account without promising a known plan", () => {
   const item = MORE_GROUPS.flatMap((group) => group.items).find((candidate) => candidate.key === "account");
   assert.equal(item?.subtitle, "InteliAds account and session");
 });
+
+test("email sign-in fails closed when Nest write session is missing", () => {
+  assert.match(auth, /Couldn't start a write session/);
+  assert.match(auth, /Use Continue with Amazon/);
+  assert.match(auth, /await nestLogin\(email, password\)/);
+});
+
+test("Nest 401 recovery does not wipe write credentials", () => {
+  assert.match(rulesApi, /Do NOT nestLogout/);
+  assert.match(rulesApi, /Fall back to Supabase for this request only/);
+});

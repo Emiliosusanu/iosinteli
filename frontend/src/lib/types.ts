@@ -56,6 +56,9 @@ export interface AdGroup extends MetricsTotals {
   state: string | null;
   amazon_profile_id: string | null;
   targeting_type: string | null;
+  bid_last_modified_at?: string | null;
+  rule_last_modified_at?: string | null;
+  bid_change_source?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -69,6 +72,10 @@ export interface Keyword extends MetricsTotals {
   status: string | null;
   bid_amount: number | null;
   amazon_profile_id: string | null;
+  bid_last_modified_at?: string | null;
+  rule_last_modified_at?: string | null;
+  bid_change_source?: string | null;
+  bid_previous_value?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -85,6 +92,10 @@ export interface ProductTarget extends MetricsTotals {
   bid: number | null;
   title: string | null;
   image_url: string | null;
+  bid_last_modified_at?: string | null;
+  rule_last_modified_at?: string | null;
+  bid_change_source?: string | null;
+  bid_previous_value?: number | null;
   created_at: string;
   updated_at: string;
 }

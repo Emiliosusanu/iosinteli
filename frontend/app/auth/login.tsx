@@ -31,10 +31,12 @@ import {
 import { startAmazonLogin } from "@/src/lib/amazonAuth";
 import { useTheme } from "@/src/lib/theme";
 import { storage } from "@/src/utils/storage";
+import { useQueryClient } from "@tanstack/react-query";
 
 export default function LoginScreen() {
   const t = useTheme();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { signIn, enterGuestMode } = useAuth();
   const passwordRef = useRef<TextInput>(null);
   const [email, setEmail] = useState("");
@@ -78,7 +80,12 @@ export default function LoginScreen() {
     setAmazonBusy(true);
     try {
       const result = await startAmazonLogin();
-      if (result.ok) return;
+      if (result.ok) {
+        await queryClient.invalidateQueries({ queryKey: ["nest-token"] });
+        await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+        await queryClient.invalidateQueries({ queryKey: ["amazon-profiles"] });
+        return;
+      }
       if (result.cancelled) return;
       setError(result.error || "Couldn't finish Amazon sign-in.");
     } catch (e) {

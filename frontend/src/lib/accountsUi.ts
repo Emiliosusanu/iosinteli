@@ -6,10 +6,10 @@ export function profileEnabled(profile: Pick<AmazonProfile, "is_enabled">): bool
 }
 
 export function profileInView(
-  profile: Pick<AmazonProfile, "id">,
+  profile: Pick<AmazonProfile, "id" | "profile_id">,
   selectedProfileIds: string[],
 ): boolean {
-  return selectedProfileIds.includes(profile.id);
+  return selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id);
 }
 
 export function profileDisplayName(profile: Pick<AmazonProfile, "nickname" | "account_name">): string {
@@ -56,6 +56,9 @@ export function profileSwitchAccessibilityLabel(name: string, enabled: boolean):
 export const PROFILE_SWITCH_ON_HINT =
   "Turns off InteliAds for this Amazon profile. Does not disconnect Amazon.";
 export const PROFILE_SWITCH_OFF_HINT = "Enables this Amazon profile for InteliAds.";
+
+export const VIEW_ADD_HINT = "Adds this enabled profile to the dashboard current view.";
+export const VIEW_REMOVE_HINT = "Removes this profile from the dashboard current view. InteliAds stays enabled.";
 
 export const KDP_SECTION_FOOTER =
   "Royalties come from the Chrome helper and/or the iPhone KDP helper (Settings → Royalty source). Linking here only attaches KDP data to Amazon Ads profiles. This iPhone also refreshes linked KDP and ad spend in the background.";

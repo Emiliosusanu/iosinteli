@@ -13,6 +13,12 @@ export const NOTIFICATION_EVENTS = {
 /** Backend is the sole new-order authority. Local evaluators must not generate this type. */
 export const LOCAL_NEW_ORDER_AUTHORITY = false;
 
+/**
+ * Nest `daily_ads_summary` owns the ~08:00 morning digest when smart notifications
+ * are enabled. Local digests start at 10am so mass rollouts do not double-fire.
+ */
+export const LOCAL_MORNING_DIGEST_AUTHORITY = false;
+
 export type NotificationEvent = (typeof NOTIFICATION_EVENTS)[keyof typeof NOTIFICATION_EVENTS];
 
 export const NOTIFICATION_ROUTES = {
@@ -61,6 +67,32 @@ export type NotificationRoute = {
 
 const EVENT_SET = new Set<string>(Object.values(NOTIFICATION_EVENTS));
 const ASIN_RE = /^[A-Z0-9]{8,16}$/i;
+
+/**
+ * Wire-format event ids the server (Nest smart-notifications) puts in the APNs
+ * payload. They differ from the app's canonical events, so map them onto our
+ * routing vocabulary. Without this, real backend pushes parse to null and every
+ * tap falls back to Overview instead of the intended screen.
+ */
+export const SERVER_NOTIFICATION_TYPES = {
+  adsNewOrders: "ads_new_orders",
+  dailyAdsSummary: "daily_ads_summary",
+  transportTest: "smart_notification_transport_test",
+} as const;
+
+const SERVER_EVENT_ALIASES: Record<string, NotificationEvent> = {
+  [SERVER_NOTIFICATION_TYPES.adsNewOrders]: NOTIFICATION_EVENTS.newOrders,
+  [SERVER_NOTIFICATION_TYPES.dailyAdsSummary]: NOTIFICATION_EVENTS.periodCompare,
+  [SERVER_NOTIFICATION_TYPES.transportTest]: NOTIFICATION_EVENTS.test,
+};
+
+/** Accept both the app's canonical events and the server's wire-format ids. */
+export function normalizeNotificationEvent(raw: unknown): NotificationEvent | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (EVENT_SET.has(value)) return value as NotificationEvent;
+  return SERVER_EVENT_ALIASES[value] ?? null;
+}
 
 export function preferenceAllowsEvent(prefs: NotificationPrefsInput, event: NotificationEvent): boolean {
   if (event === NOTIFICATION_EVENTS.test) return true;
@@ -163,12 +195,12 @@ export function safeAsin(value: unknown): string | null {
 export function parseNotificationPayload(raw: unknown): NotificationPayload | null {
   if (!raw || typeof raw !== "object") return null;
   const data = raw as Record<string, unknown>;
-  const event = typeof data.event === "string" ? data.event : "";
-  if (!EVENT_SET.has(event)) return null;
+  const event = normalizeNotificationEvent(data.event);
+  if (!event) return null;
   const userId = typeof data.userId === "string" ? data.userId.trim() : "";
   if (!userId) return null;
   const asin = safeAsin(data.asin);
-  const payload: NotificationPayload = { event: event as NotificationEvent, userId };
+  const payload: NotificationPayload = { event, userId };
   if (asin) payload.asin = asin;
   return payload;
 }

@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "io.inteliads.app",
-      "buildNumber": "22",
+      "buildNumber": "41",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "UIBackgroundModes": [
@@ -20,6 +20,8 @@
           "remote-notification"
         ],
         "BGTaskSchedulerPermittedIdentifiers": [
+          "io.inteliads.app.refresh",
+          "io.inteliads.app.processing",
           "com.expo.modules.backgroundtask.processing"
         ]
       },
@@ -89,6 +91,7 @@
       "expo-router",
       "expo-notifications",
       "expo-background-task",
+      "./modules/inteliads-native-sync/plugin/withInteliAdsNativeSync.js",
       [
         "expo-splash-screen",
         {

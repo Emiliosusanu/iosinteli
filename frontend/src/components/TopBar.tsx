@@ -10,12 +10,16 @@ import {
   Switch,
   Platform,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import { useApp } from "../contexts/AppContext";
 import { dashboard, useTheme } from "../lib/theme";
 import { formatDateRangeLabel, rangePresets } from "../lib/format";
 import { DateRange } from "../lib/types";
 import { IOSDateField, SFSymbol, sfFromIonicon } from "./ios/Native";
+import { GlassPanel } from "./GlassPanel";
+import { PressableScale } from "./Motion";
 
 interface TopBarProps {
   title?: string;
@@ -90,6 +94,77 @@ function DatePresetList({
   );
 }
 
+/**
+ * Premium iOS header pill — frosted glass, a tinted leading icon bubble, and a
+ * stacked micro-label + value. Modeled on modern iOS finance-dashboard selectors
+ * (Dribbble ios-app-design): clear hierarchy, 44pt tap target, spring press.
+ */
+function HeaderPill({
+  icon,
+  caption,
+  value,
+  trailing,
+  onPress,
+  accessibilityLabel,
+  testID,
+  flex = false,
+  fullWidth = false,
+  maxWidth,
+}: {
+  icon: SFSymbolName;
+  caption: string;
+  value: string;
+  trailing?: React.ReactNode;
+  onPress: () => void;
+  accessibilityLabel: string;
+  testID?: string;
+  flex?: boolean;
+  fullWidth?: boolean;
+  maxWidth?: number;
+}) {
+  const t = useTheme();
+  return (
+    <PressableScale
+      testID={testID}
+      onPress={onPress}
+      accessibilityLabel={accessibilityLabel}
+      style={[
+        flex && { flex: 1, minWidth: 0 },
+        fullWidth && { alignSelf: "stretch" },
+        maxWidth != null && !fullWidth ? { maxWidth } : null,
+      ]}
+    >
+      <GlassPanel
+        strength="chip"
+        style={[styles.pillGlass, { borderColor: t.colors.glass_highlight }, t.shadow.card]}
+        contentStyle={styles.pillInner}
+      >
+        <View
+          style={[
+            styles.iconBubble,
+            {
+              backgroundColor: t.colors.tone_primary + "14",
+              borderColor: t.colors.tone_primary + "2E",
+            },
+          ]}
+        >
+          <SFSymbol name={icon} size={15} color={t.colors.tone_primary} />
+        </View>
+        <View style={styles.pillLabel}>
+          <Text style={[styles.pillCaption, { color: t.colors.text_tertiary }]} numberOfLines={1}>
+            {caption}
+          </Text>
+          <Text style={[styles.pillValue, { color: t.colors.text_primary }]} numberOfLines={1}>
+            {value}
+          </Text>
+        </View>
+        {trailing}
+        <SFSymbol name="chevron.down" size={11} color={t.colors.text_tertiary} />
+      </GlassPanel>
+    </PressableScale>
+  );
+}
+
 export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean }) {
   const t = useTheme();
   const { dateRange, setDateRange } = useApp();
@@ -118,27 +193,16 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
 
   return (
     <>
-      <TouchableOpacity
-        accessibilityLabel={`Date range: ${dateLabel}`}
+      <HeaderPill
         testID="date-range-btn"
+        icon="calendar"
+        caption="Period"
+        value={dateLabel}
         onPress={() => setDateOpen(true)}
-        style={[
-          styles.chip,
-          fullWidth && styles.fullWidthChip,
-          {
-            backgroundColor: t.colors.glass_background,
-            borderWidth: StyleSheet.hairlineWidth,
-            borderColor: t.colors.glass_stroke,
-          },
-        ]}
-        activeOpacity={0.7}
-      >
-        <SFSymbol name="calendar" size={14} color={t.colors.tone_primary} />
-        <Text style={[t.typography.caption1, { color: t.colors.text_primary, marginLeft: 4, flexShrink: 1 }]} numberOfLines={1}>
-          {dateLabel}
-        </Text>
-        <SFSymbol name="chevron.down" size={10} color={t.colors.text_secondary} />
-      </TouchableOpacity>
+        accessibilityLabel={`Date range: ${dateLabel}`}
+        fullWidth={fullWidth}
+        maxWidth={220}
+      />
 
       <Modal
         visible={dateOpen}
@@ -207,6 +271,7 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
 
 export function TopBar({ title, showProfileSelector = true, showDateRange = true, rightAction }: TopBarProps) {
   const t = useTheme();
+  const insets = useSafeAreaInsets();
   const {
     profiles,
     selectedProfileIds,
@@ -231,11 +296,11 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
 
   return (
     <>
-      <View style={[styles.bar, { borderBottomColor: t.colors.border }]}> 
+      <View style={[styles.bar, { borderBottomColor: t.colors.border, paddingTop: Math.max(insets.top - 4, 4) }]}>
         {(title || rightAction) && (
           <View style={styles.headerRow}>
             {title ? (
-              <Text style={[t.typography.largeTitle, styles.title, { color: t.colors.text_primary }]} numberOfLines={1}>
+              <Text style={[t.typography.title2, styles.title, { color: t.colors.text_primary }]} numberOfLines={1}>
                 {title}
               </Text>
             ) : <View style={{ flex: 1 }} />}
@@ -261,32 +326,24 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
         )}
         {(showProfileSelector || showDateRange || (rightAction && !title)) && <View style={[styles.controls, title && { marginTop: 8 }]}> 
           {showProfileSelector && (
-            <TouchableOpacity
-              accessibilityLabel={`Profiles: ${selectedLabel}, currency ${primaryCurrency}`}
+            <HeaderPill
               testID="profile-selector-btn"
+              icon="building.2"
+              caption="Profiles"
+              value={`${viewingUser?.email ? viewingUser.email.split("@")[0] + " · " : ""}${selectedLabel}`}
               onPress={() => setProfileOpen(true)}
-              style={[
-                styles.chip,
-                {
-                  backgroundColor: t.colors.glass_background,
-                  borderWidth: StyleSheet.hairlineWidth,
-                  borderColor: t.colors.glass_stroke,
-                },
-              ]}
-              activeOpacity={0.7}
-            >
-              <SFSymbol name="building.2" size={13} color={t.colors.tone_primary} />
-              <Text style={[t.typography.caption1, { color: t.colors.text_primary, marginLeft: 4, flexShrink: 1 }]} numberOfLines={1}>
-                {viewingUser?.email ? viewingUser.email.split("@")[0] + " · " : ""}
-                {selectedLabel}
-              </Text>
-              {selectedProfileIds.length > 0 && (
-                <View style={[styles.currencyTag, { backgroundColor: t.colors.tone_primary + "16" }]}> 
-                  <Text style={[t.typography.caption2, { color: t.colors.tone_primary }]}>{primaryCurrency}</Text>
-                </View>
-              )}
-              <SFSymbol name="chevron.down" size={10} color={t.colors.text_secondary} />
-            </TouchableOpacity>
+              accessibilityLabel={`Profiles: ${selectedLabel}, currency ${primaryCurrency}`}
+              flex
+              trailing={
+                selectedProfileIds.length > 0 ? (
+                  <View style={[styles.currencyTag, { backgroundColor: t.colors.tone_primary + "1A" }]}>
+                    <Text style={[t.typography.caption2, { color: t.colors.tone_primary, fontWeight: "700" }]}>
+                      {primaryCurrency}
+                    </Text>
+                  </View>
+                ) : null
+              }
+            />
           )}
           {showDateRange && <DateRangeControl />}
           {rightAction && !title && (
@@ -452,7 +509,6 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
 const styles = StyleSheet.create({
   bar: {
     paddingHorizontal: 16,
-    paddingTop: 8,
     paddingBottom: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
@@ -472,27 +528,52 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
   },
-  chip: {
+  pillGlass: {
+    borderRadius: 16,
+    borderCurve: "continuous",
+  },
+  pillInner: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 10,
+    gap: 8,
+    paddingLeft: 7,
+    paddingRight: 11,
     paddingVertical: 6,
-    borderRadius: dashboard.chipRadius,
+    minHeight: 44,
+  },
+  iconBubble: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
     borderCurve: "continuous",
-    maxWidth: 210,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pillLabel: {
+    flex: 1,
     minWidth: 0,
-    flexShrink: 1,
+    justifyContent: "center",
+  },
+  pillCaption: {
+    fontSize: 9.5,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    lineHeight: 12,
+  },
+  pillValue: {
+    fontSize: 14,
+    fontWeight: "600",
+    letterSpacing: -0.2,
+    lineHeight: 18,
+    marginTop: 1,
   },
   currencyTag: {
-    marginLeft: 6,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  fullWidthChip: {
-    maxWidth: "100%",
-    alignSelf: "stretch",
-    justifyContent: "center",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 7,
+    borderCurve: "continuous",
   },
   iconBtn: {
     width: 38,

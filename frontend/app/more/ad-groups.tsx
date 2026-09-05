@@ -14,12 +14,12 @@ import {
 } from "react-native";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { EntityStateSwitch } from "@/src/components/Mutations";
 import { useApp } from "@/src/contexts/AppContext";
 import { useTheme, acosTone, dashboard, toneColor, useReduceMotion, layout, spacing } from "@/src/lib/theme";
-import { useInvalidateAds } from "@/src/lib/invalidateAds";
+import { applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityState } from "@/src/lib/invalidateAds";
 import { updateAdGroupState } from "@/src/lib/mutations";
 import { fetchAdGroups } from "@/src/lib/queries";
 import { statusLabel } from "@/src/lib/campaigns";
@@ -84,7 +84,7 @@ export default function AdGroupsScreen() {
   const t = useTheme();
   const router = useRouter();
   const reduceMotion = useReduceMotion();
-  const invalidateAds = useInvalidateAds();
+  const queryClient = useQueryClient();
   const { selectedProfileIds, primaryCurrency, dateRange } = useApp();
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
@@ -279,8 +279,14 @@ export default function AdGroupsScreen() {
                         enabled={item.state === "enabled"}
                         noun="ad group"
                         onChange={async (next) => {
-                          await updateAdGroupState(item.id, next ? "enabled" : "paused");
-                          await invalidateAds();
+                          const previous = applyOptimisticEntityState(queryClient, "ad_group", item.id, next);
+                          try {
+                            await updateAdGroupState(item.id, next ? "enabled" : "paused");
+                            void invalidateEntityStateQueries(queryClient, "ad_group");
+                          } catch (error) {
+                            revertOptimisticEntityState(queryClient, "ad_group", item.id, previous);
+                            throw error;
+                          }
                         }}
                       />
                     </View>
@@ -308,7 +314,8 @@ export default function AdGroupsScreen() {
                             color: toneColor(acosTone(Number(item.total_acos)), t.colors),
                           },
                           { label: "Spend", value: formatCurrency(item.total_spend, primaryCurrency, { compact: true }) },
-                          { label: "Sales", value: formatCurrency(item.total_sales, primaryCurrency, { compact: true }) },
+                          { label: "Impr", value: formatInt(item.total_impressions) },
+                          { label: "Clicks", value: formatInt(item.total_clicks) },
                           { label: "Ord", value: formatInt(item.total_orders) },
                         ]}
                       />

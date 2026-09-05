@@ -67,7 +67,16 @@ test("notification copy describes on-device digest alerts", () => {
       backgroundRegistered: true,
       anyEnabled: true,
     }),
-    /ad spend, orders, and ACoS/,
+    /10am, noon, 2pm/,
+  );
+  assert.doesNotMatch(
+    notificationFooter({
+      guestMode: false,
+      permission: "granted",
+      backgroundRegistered: true,
+      anyEnabled: true,
+    }),
+    /throughout the day at 8am/,
   );
   assert.match(
     notificationFooter({

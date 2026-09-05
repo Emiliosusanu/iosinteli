@@ -146,9 +146,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    await nestLogin(email, password);
+    guestModeRef.current = false;
+    setGuestMode(false);
+    await storage.setItem(GUEST_KEY, false);
+
+    let nestOk = await nestLogin(email, password);
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) return { error: error.message };
+
+    // Nest write session is required for campaign/bid/target mutations on the
+    // live API (JwtAuthGuard is Nest-JWT). Retry once if the first Nest login
+    // raced or failed while Supabase succeeded — and fail closed if still missing
+    // so we never leave a "signed in but can't save" session.
+    if (!nestOk) nestOk = await nestLogin(email, password);
+    if (!nestOk) {
+      console.warn("[auth] Supabase signed in but Nest write session is missing");
+      await supabase.auth.signOut({ scope: "local" });
+      await nestLogout();
+      setSession(null);
+      setUser(null);
+      setState("unauthenticated");
+      return {
+        error:
+          "Couldn't start a write session. Use Continue with Amazon, or check your email and password.",
+      };
+    }
+
     await queryClient.invalidateQueries({ queryKey: ["nest-token"] });
     await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
     await queryClient.invalidateQueries({ queryKey: ["amazon-profiles"] });

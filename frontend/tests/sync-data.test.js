@@ -55,7 +55,9 @@ test("hero never claims KDP or all sources, and acceptance is not completion", (
   assert.equal(claimsKdpOrAllSources(ADS_UP_TO_DATE_LABEL), false);
   assert.equal(claimsKdpOrAllSources("All data up to date"), true);
   assert.doesNotMatch(syncScreen, /All data up to date/);
-  assert.doesNotMatch(syncScreen, /KDP/);
+  // Ads hero copy must not claim KDP; the dedicated "KDP iPhone helper" section is fine.
+  assert.doesNotMatch(syncScreen, /KDP (?:and Ads|data|sync) up to date|All sources/);
+  assert.match(syncScreen, /KDP iPhone helper/);
   assert.match(queries, /includeSessions/);
 });
 

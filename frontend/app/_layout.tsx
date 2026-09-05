@@ -4,7 +4,7 @@ import * as Notifications from "expo-notifications";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { QueryClient, QueryClientProvider, keepPreviousData } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as SplashScreen from "expo-splash-screen";
 import { AuthProvider, useAuth } from "@/src/contexts/AuthContext";
 import { AppProvider } from "@/src/contexts/AppContext";
@@ -33,14 +33,13 @@ const handledNotificationIds = new Set<string>();
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 60_000,
-      // Keep data cached in memory for a day so revisits are instant
+      // Same-key hits stay instant via memory + AsyncStorage hydrate.
+      // Do NOT reuse a prior query's rows under a new period/profile key —
+      // that paints Week numbers under Month labels and wrong entities.
+      staleTime: 45_000,
       gcTime: 1000 * 60 * 60 * 24,
       retry: 1,
       refetchOnWindowFocus: false,
-      // Show the previous data while refetching (e.g. when changing date range
-      // or profile) so the UI never flashes empty — feels instant.
-      placeholderData: keepPreviousData,
     },
   },
 });
@@ -190,7 +189,7 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
+    <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
@@ -199,8 +198,8 @@ export default function RootLayout() {
               <KdpHelperHost />
               <SplashGate>
                 <RouteGuard>
-                  <StatusBar style="auto" />
-                  <Stack screenOptions={{ headerShown: false, animation: "slide_from_right" }}>
+                  <StatusBar style="auto" translucent />
+                  <Stack screenOptions={{ headerShown: false, animation: "slide_from_right", contentStyle: { backgroundColor: "transparent" } }}>
                     <Stack.Screen name="index" />
                     <Stack.Screen name="auth/welcome" />
                     <Stack.Screen name="auth/login" />
@@ -208,11 +207,11 @@ export default function RootLayout() {
                     <Stack.Screen name="auth/forgot" />
                     <Stack.Screen name="auth/reset" />
                     <Stack.Screen name="(tabs)" />
-                    <Stack.Screen name="campaign/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "" }} />
-                    <Stack.Screen name="product/[asin]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "" }} />
-                    <Stack.Screen name="keyword/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "" }} />
-                    <Stack.Screen name="target/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "" }} />
-                    <Stack.Screen name="search-term/[id]" options={{ headerShown: true, presentation: "card", headerBackTitle: "Back", headerTitle: "" }} />
+                    <Stack.Screen name="campaign/[id]" options={{ headerShown: false, presentation: "card" }} />
+                    <Stack.Screen name="product/[asin]" options={{ headerShown: false, presentation: "card" }} />
+                    <Stack.Screen name="keyword/[id]" options={{ headerShown: false, presentation: "card" }} />
+                    <Stack.Screen name="target/[id]" options={{ headerShown: false, presentation: "card" }} />
+                    <Stack.Screen name="search-term/[id]" options={{ headerShown: false, presentation: "card" }} />
                     <Stack.Screen name="more/settings" />
                     <Stack.Screen name="more/automation" />
                     <Stack.Screen name="more/rule-create" />

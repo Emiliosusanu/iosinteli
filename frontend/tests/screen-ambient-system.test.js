@@ -28,6 +28,7 @@ test("ScreenAmbient reuses the Overview wash, not a new palette", () => {
   assert.match(ambient, /export function AppScreen/);
   assert.match(ambient, /dashboard\.cardRadius/);
   assert.match(ambient, /glass_stroke/);
+  assert.match(ambient, /No top safe-area pad/);
 });
 
 test("tabs, SubScreen, and auth inherit the same wash", () => {

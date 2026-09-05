@@ -160,22 +160,32 @@ test("Amazon login URL is public and clears leftover Nest tokens", () => {
   assert.match(mutations, /allowAnonymous: true/);
 });
 
-test("leftover Nest JWT for another user is dropped", () => {
+test("leftover Nest JWT for another user is not sent (skip Nest, keep credentials)", () => {
   const nest = fakeJwt("user-a");
   assert.equal(readJwtSub(nest), "user-a");
   assert.equal(nestTokenMatchesSupabaseUser({ nestAccessToken: nest, supabaseUserId: "user-a" }), true);
   assert.equal(nestTokenMatchesSupabaseUser({ nestAccessToken: nest, supabaseUserId: "user-b" }), false);
   assert.match(rulesApi, /nestTokenMatchesSupabaseUser/);
   assert.match(rulesApi, /readSupabaseSession/);
+  // Wiping Nest on mismatch caused "sign out and sign in again" loops after Amazon login.
+  assert.doesNotMatch(
+    rulesApi,
+    /if \(nestAllowed && nestAccessToken && !nestMatches\) \{\s*await nestLogout/,
+  );
 });
 
-test("dead Nest JWT falls back to Supabase; expired Supabase refreshes on 401", () => {
+test("dead Nest JWT falls back to Supabase without wiping Nest Keychain", () => {
   assert.equal(canRetryMobileRequestAfter401("GET"), true);
   assert.equal(canRetryMobileRequestAfter401("HEAD"), true);
   assert.equal(canRetryMobileRequestAfter401("PATCH"), true);
   assert.equal(canRetryMobileRequestAfter401("POST"), true);
-  assert.match(rulesApi, /await nestLogout\(\)/);
+  assert.match(rulesApi, /refreshNestToken/);
   assert.match(rulesApi, /readSupabaseAccessToken/);
   assert.match(rulesApi, /refreshSupabaseAccessToken/);
-  assert.match(rulesApi, /refreshSupabaseAccessToken/);
+  // A single Nest 401 must not nestLogout — that wiped write credentials while
+  // Supabase reads still worked ("sign out and sign in again" loop).
+  assert.doesNotMatch(
+    rulesApi,
+    /if \(freshNest\) \{[\s\S]*?await nestLogout\(\);[\s\S]*?readSupabaseAccessToken/,
+  );
 });

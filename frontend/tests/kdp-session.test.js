@@ -45,10 +45,12 @@ test("Keychain session uses AfterFirstUnlock and wires into capture/replay", () 
   assert.match(runtime, /mergeSessionFromCaptureHeaders/);
   assert.match(runtime, /applySessionToHeaders/);
   assert.match(runtime, /SESSION_META/);
-  assert.match(notifications, /runKdpIosHelperTick\("push"\)/);
-  assert.match(notifications, /runKdpIosHelperTick\("background"\)/);
+  assert.match(notifications, /runKdpIosHelperTick\("push"/);
+  assert.match(notifications, /resolveLockedPhoneKdpWakeMode/);
+  assert.match(notifications, /wakeMode/);
   assert.match(notifications, /KDP silent wakes need it/);
   assert.match(notifications, /registerTaskAsync\(INTELIADS_NOTIFICATION_TASK\)/);
+  assert.match(notifications, /registerNativeMetronome/);
   assert.match(importer, /ensureBackgroundRefreshRegistered/);
   assert.match(app, /ensureBackgroundRefreshRegistered/);
 });

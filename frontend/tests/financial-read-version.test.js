@@ -27,11 +27,11 @@ const scope = {
   currency: "USD",
 };
 
-test("financial completeness generation is complete-v3 with a v4 cache", () => {
+test("financial completeness generation is complete-v3 with a v5 cache", () => {
   assert.equal(FINANCIAL_READ_VERSION, "complete-v3");
-  assert.equal(QUERY_CACHE_KEY, "inteliads.queryCache.v4");
-  assert.match(books, /inteliads\.queryCache\.v4/);
-  assert.match(persist, /inteliads\.queryCache\.v4/);
+  assert.equal(QUERY_CACHE_KEY, "inteliads.queryCache.v5");
+  assert.match(books, /inteliads\.queryCache\.v5/);
+  assert.match(persist, /inteliads\.queryCache\.v5/);
 });
 
 test("obsolete first-1000 financial roots cannot persist or hydrate", () => {

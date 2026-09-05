@@ -12,9 +12,9 @@ import {
 import { clearMobileHomeSnapshots } from "./mobileHomeSnapshot.ts";
 import { debugIngest } from "./debugIngest.ts";
 
-export const QUERY_CACHE_KEY = "inteliads.queryCache.v4";
+export const QUERY_CACHE_KEY = "inteliads.queryCache.v5";
 const CACHE_KEY = QUERY_CACHE_KEY;
-const MAX_AGE_MS = 1000 * 60 * 60 * 24; // keep cached data for 24h
+const MAX_AGE_MS = 1000 * 60 * 60 * 18; // 18h — cold start paint, not multi-day fiction
 const MAX_QUERY_AGE_MS = MAX_AGE_MS;
 const MAX_CACHE_BYTES = 2_500_000;
 const PERSIST_DEBOUNCE_MS = 3000;
@@ -65,6 +65,8 @@ const PERSISTED_QUERY_KEYS = new Set([
   "targeting-placements-v2",
   "targeting-keywords",
   "targeting-products",
+  "targeting-adgroup-default-bids",
+  "targeting-book-options",
   FINANCIAL_QUERY_ROOTS.topBooks,
   FINANCIAL_QUERY_ROOTS.topBooksYesterday,
   "sync-logs",

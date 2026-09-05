@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Platform, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
@@ -58,6 +58,11 @@ export function BookCover({
     () => pickUsableCoverUrl(fallbackUri, fallbackAsinCoverUrl(asin)),
     [fallbackUri, asin],
   );
+
+  // Recycled list rows change uri/asin — reset sticky failure from the prior row.
+  useEffect(() => {
+    setFailedPrimary(false);
+  }, [uri, fallbackUri, asin, recyclingKey, primary, amazonFallback]);
 
   const coverUrl = !failedPrimary
     ? primary ?? amazonFallback

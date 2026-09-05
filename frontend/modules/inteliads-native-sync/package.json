@@ -1,0 +1,15 @@
+{
+  "name": "inteliads-native-sync",
+  "version": "1.0.0",
+  "description": "Royaltix-parity dual BGTask metronome + App Group sync snapshot for InteliAds KDP helper",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {},
+  "keywords": ["react-native", "expo", "inteliads", "background-refresh"],
+  "license": "UNLICENSED",
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}

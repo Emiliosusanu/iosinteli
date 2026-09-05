@@ -24,6 +24,7 @@ import {
   fetchKdpAccounts,
   setKdpLinkedProfiles,
   toggleAmazonProfile,
+  triggerSync,
   unlinkKdpProfile,
   updateProfileNickname,
 } from "@/src/lib/mutations";
@@ -40,6 +41,8 @@ import {
   KDP_SECTION_FOOTER,
   PROFILE_SWITCH_OFF_HINT,
   PROFILE_SWITCH_ON_HINT,
+  VIEW_ADD_HINT,
+  VIEW_REMOVE_HINT,
   disableConfirmTitle,
   enabledStatusLabel,
   profileDisplayName,
@@ -115,6 +118,7 @@ export default function AmazonAccountsScreen() {
     selectedProfileIds,
     setSelectedProfileIds,
     adminFilterUserId,
+    toggleProfile,
   } = useApp();
   const { user, guestMode } = useAuth();
   const [connectBusy, setConnectBusy] = useState(false);
@@ -122,9 +126,30 @@ export default function AmazonAccountsScreen() {
   const [nicknameDraft, setNicknameDraft] = useState("");
   const [nicknameSaving, setNicknameSaving] = useState(false);
   const [kdpBusy, setKdpBusy] = useState<string | null>(null);
+  /** Sticky UI override so enable/disable never snaps back while refetch races. */
+  const [enabledOverrides, setEnabledOverrides] = useState<Record<string, boolean>>({});
+  /** Per-profile in-flight toggles — do not block other rows (was causing lag). */
+  const [togglePendingIds, setTogglePendingIds] = useState<Record<string, true>>({});
 
   const viewingCustomer = !!adminFilterUserId;
   const canMutate = !!user?.id && !guestMode && !viewingCustomer;
+
+  useEffect(() => {
+    if (!profiles.length || !Object.keys(enabledOverrides).length) return;
+    setEnabledOverrides((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const [id, forced] of Object.entries(prev)) {
+        const match = profiles.find((p) => p.id === id || p.profile_id === id);
+        if (!match) continue;
+        if (profileEnabled(match) === forced) {
+          delete next[id];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [profiles, enabledOverrides]);
 
   useEffect(() => {
     const sub = AppState.addEventListener("change", (next) => {
@@ -142,14 +167,87 @@ export default function AmazonAccountsScreen() {
     retry: false,
   });
 
+  const profilesQueryKey = ["amazon-profiles", user?.id ?? "guest", adminFilterUserId ?? "self"] as const;
+
   const profileToggle = useMutation({
-    mutationFn: ({ profileId, enabled }: { profileId: string; enabled: boolean }) =>
-      toggleAmazonProfile(profileId, enabled),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["amazon-profiles", user?.id ?? "guest"] });
+    mutationFn: ({
+      profileId,
+      enabled,
+      rowId,
+      adsProfileId,
+    }: {
+      profileId: string;
+      enabled: boolean;
+      rowId?: string;
+      adsProfileId?: string;
+    }) => toggleAmazonProfile(profileId, enabled, { rowId, adsProfileId }),
+    onMutate: async ({ enabled, rowId, adsProfileId, profileId }) => {
+      const matchIds = [rowId, adsProfileId, profileId]
+        .map((id) => String(id || "").trim())
+        .filter(Boolean);
+      setTogglePendingIds((prev) => {
+        const next = { ...prev };
+        for (const id of matchIds) next[id] = true;
+        return next;
+      });
+      await queryClient.cancelQueries({ queryKey: profilesQueryKey });
+      const previous = queryClient.getQueryData<AmazonProfile[]>(profilesQueryKey);
+      const matchSet = new Set(matchIds);
+      queryClient.setQueryData<AmazonProfile[]>(profilesQueryKey, (old) =>
+        (old ?? []).map((profile) =>
+          matchSet.has(profile.id) || matchSet.has(profile.profile_id)
+            ? { ...profile, is_enabled: enabled }
+            : profile,
+        ),
+      );
+      return { previous, matchIds };
     },
-    onError: (error) => {
+    onSuccess: (_data, vars) => {
+      void queryClient.invalidateQueries({ queryKey: ["amazon-profiles", user?.id ?? "guest"] });
+      // Match web: after enable, kick Ads sync so campaigns appear.
+      if (vars.enabled) {
+        void triggerSync().catch(() => {});
+      }
+    },
+    onError: (error, vars, ctx) => {
+      const matchSet = new Set(
+        (ctx?.matchIds ?? [vars?.rowId, vars?.adsProfileId, vars?.profileId])
+          .map((id) => String(id || "").trim())
+          .filter(Boolean),
+      );
+      if (matchSet.size) {
+        queryClient.setQueryData<AmazonProfile[]>(profilesQueryKey, (old) =>
+          (old ?? []).map((profile) => {
+            if (!matchSet.has(profile.id) && !matchSet.has(profile.profile_id)) return profile;
+            const prior = (ctx?.previous ?? []).find(
+              (p) => matchSet.has(p.id) || matchSet.has(p.profile_id),
+            );
+            return prior ? { ...profile, is_enabled: prior.is_enabled } : profile;
+          }),
+        );
+        setEnabledOverrides((prev) => {
+          const next = { ...prev };
+          for (const id of matchSet) delete next[id];
+          return next;
+        });
+      } else if (ctx?.previous) {
+        queryClient.setQueryData(profilesQueryKey, ctx.previous);
+      }
       alertMutationError(error, "Couldn't update profile.");
+      void refetchProfiles();
+    },
+    onSettled: (_data, _error, vars, ctx) => {
+      const ids =
+        ctx?.matchIds ??
+        [vars?.rowId, vars?.adsProfileId, vars?.profileId]
+          .map((id) => String(id || "").trim())
+          .filter(Boolean);
+      if (!ids.length) return;
+      setTogglePendingIds((prev) => {
+        const next = { ...prev };
+        for (const id of ids) delete next[id];
+        return next;
+      });
     },
   });
 
@@ -171,15 +269,35 @@ export default function AmazonAccountsScreen() {
 
   function applyProfileActive(contextId: string, enabled: boolean) {
     const match = profiles.find((p) => p.id === contextId || p.profile_id === contextId);
-    const previous = selectedProfileIds;
-    const nextSelected = enabled
-      ? [...new Set([...selectedProfileIds, contextId])]
-      : selectedProfileIds.filter((id) => id !== contextId);
-    setSelectedProfileIds(nextSelected);
-    profileToggle.mutate(
-      { profileId: match ? amazonAdsProfileId(match) : contextId, enabled },
-      { onError: () => setSelectedProfileIds(previous) },
+    const rowId = match?.id ?? contextId;
+    const adsId = match ? amazonAdsProfileId(match) : contextId;
+    const matchIds = new Set([rowId, adsId, contextId].map((id) => String(id || "").trim()).filter(Boolean));
+
+    // Flip is_enabled in the shared query cache BEFORE view selection so the
+    // AppContext sync effect does not strip a just-re-enabled profile.
+    setEnabledOverrides((prev) => {
+      const next = { ...prev };
+      for (const id of matchIds) next[id] = enabled;
+      return next;
+    });
+    queryClient.setQueryData<AmazonProfile[]>(profilesQueryKey, (old) =>
+      (old ?? []).map((profile) =>
+        matchIds.has(profile.id) || matchIds.has(profile.profile_id)
+          ? { ...profile, is_enabled: enabled }
+          : profile,
+      ),
     );
+
+    if (enabled) {
+      if (!profileInView(match ?? { id: rowId, profile_id: adsId }, selectedProfileIds)) {
+        toggleProfile(rowId);
+      }
+    } else {
+      setSelectedProfileIds(
+        selectedProfileIds.filter((id) => id !== rowId && id !== match?.profile_id && id !== contextId),
+      );
+    }
+    profileToggle.mutate({ profileId: adsId, enabled, rowId, adsProfileId: adsId });
   }
 
   function setProfileActive(profileId: string, enabled: boolean) {
@@ -205,7 +323,9 @@ export default function AmazonAccountsScreen() {
     try {
       const result = await startAmazonConnect();
       if (result.ok) {
+        await queryClient.invalidateQueries({ queryKey: ["nest-token"] });
         await queryClient.invalidateQueries({ queryKey: ["amazon-profiles"] });
+        void triggerSync().catch(() => {});
         return;
       }
       if (result.cancelled) return;
@@ -431,15 +551,23 @@ export default function AmazonAccountsScreen() {
                 footer={`${groupEnabled} of ${items.length} enabled`}
               >
                 {items.map((item, idx) => {
-                  const enabled = profileEnabled(item);
+                  const serverEnabled = profileEnabled(item);
+                  const enabled =
+                    enabledOverrides[item.id] ??
+                    enabledOverrides[item.profile_id] ??
+                    serverEnabled;
                   const inView = profileInView(item, selectedProfileIds);
                   const displayName = profileDisplayName(item);
                   const currency = currencyLabel(item.currency_code);
                   const marketplace = countryLabel(item.country_code);
                   const pending =
-                    profileToggle.isPending &&
-                    (profileToggle.variables?.profileId === item.id ||
-                      profileToggle.variables?.profileId === item.profile_id);
+                    !!togglePendingIds[item.id] ||
+                    !!togglePendingIds[item.profile_id] ||
+                    (profileToggle.isPending &&
+                      (profileToggle.variables?.profileId === item.id ||
+                        profileToggle.variables?.profileId === item.profile_id ||
+                        profileToggle.variables?.rowId === item.id ||
+                        profileToggle.variables?.adsProfileId === item.profile_id));
                   return (
                     <View
                       key={item.id}
@@ -471,9 +599,40 @@ export default function AmazonAccountsScreen() {
                       >
                         <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{displayName}</Text>
                         <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                          {enabledStatusLabel(enabled)} · {viewStatusLabel(inView)}
+                          {enabledStatusLabel(enabled)}
                           {currency ? ` · ${currency}` : ""}
                         </Text>
+                        <Pressable
+                          testID={`account-view-${item.profile_id}`}
+                          onPress={() => {
+                            if (!requireCanMutate()) return;
+                            if (!enabled) {
+                              Alert.alert(
+                                "Profile is off",
+                                "Turn this Amazon profile on first, then add it to the current view.",
+                              );
+                              return;
+                            }
+                            toggleProfile(item.id);
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel={viewStatusLabel(inView)}
+                          accessibilityHint={inView ? VIEW_REMOVE_HINT : VIEW_ADD_HINT}
+                          hitSlop={6}
+                          style={{ marginTop: 4, alignSelf: "flex-start" }}
+                        >
+                          <Text
+                            style={[
+                              t.typography.footnote,
+                              {
+                                color: inView ? t.colors.tone_primary : t.colors.tone_warning,
+                                fontWeight: "600",
+                              },
+                            ]}
+                          >
+                            {viewStatusLabel(inView)}
+                          </Text>
+                        </Pressable>
                       </Pressable>
                       <View style={styles.switchHit}>
                         <Switch
@@ -481,7 +640,8 @@ export default function AmazonAccountsScreen() {
                           onValueChange={(value) => setProfileActive(item.id, value)}
                           trackColor={{ false: t.colors.background_tertiary, true: t.colors.tone_primary }}
                           thumbColor="#fff"
-                          disabled={viewingCustomer || pending}
+                          disabled={viewingCustomer}
+                          accessibilityState={{ disabled: viewingCustomer, busy: pending }}
                           testID={`account-toggle-${item.profile_id}`}
                           accessibilityLabel={profileSwitchAccessibilityLabel(displayName, enabled)}
                           accessibilityValue={{ text: enabledStatusLabel(enabled) }}

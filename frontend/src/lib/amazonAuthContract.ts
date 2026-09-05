@@ -1,6 +1,14 @@
 /** Pure Amazon OAuth callback parsing — shared by app + contract tests. */
 
-export const AMAZON_OAUTH_RETURN_URL = "https://dashboard.inteliads.io/auth/amazon/callback";
+/** Dashboard callback (web). Nest still uses this when returnTo is absent. */
+export const AMAZON_OAUTH_WEB_RETURN_URL = "https://dashboard.inteliads.io/auth/amazon/callback";
+
+/**
+ * iOS ASWebAuthenticationSession return URL.
+ * Nest must redirect here when login/connect is started with ?returnTo=…
+ * (custom scheme — no Associated Domains required).
+ */
+export const AMAZON_OAUTH_RETURN_URL = "inteliads://auth/amazon/callback";
 
 export function parseAmazonOAuthCallback(url: string): {
   accessToken: string | null;

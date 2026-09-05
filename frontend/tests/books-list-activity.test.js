@@ -53,7 +53,7 @@ test("Overview admin books respect 60-day activity keys", () => {
 test("Books tab uses period-scoped list without 60-day gate", () => {
   assert.match(products, /activityDays: 0/);
   assert.match(products, /booksEmptyCopy/);
-  assert.match(products, /noPeriodPlaceholder/);
+  assert.match(products, /sameScopeWarmPlaceholder|noPeriodPlaceholder|LIST_PERIOD_QUERY_CACHE/);
   assert.doesNotMatch(products, /onCoreRows/);
 });
 

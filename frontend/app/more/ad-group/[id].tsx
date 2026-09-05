@@ -2,13 +2,13 @@ import React, { useMemo, useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { BookCover } from "@/src/components/BookCover";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol, sfFromIonicon } from "@/src/components/ios/Native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { EntityStateSwitch } from "@/src/components/Mutations";
 import { ParentLinks, targetingPerfStatus } from "@/src/components/EntityDetail";
 import { useApp } from "@/src/contexts/AppContext";
 import { acosTone, layout, radii, spacing, toneColor, useTheme } from "@/src/lib/theme";
-import { useInvalidateAds } from "@/src/lib/invalidateAds";
+import { applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityState } from "@/src/lib/invalidateAds";
 import { updateAdGroupState } from "@/src/lib/mutations";
 import { fetchAdGroupAutomationHistory, fetchAdGroups, fetchKeywords, fetchProductTargets, fetchSearchTerms } from "@/src/lib/queries";
 import { shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
@@ -27,7 +27,7 @@ function paramId(value: string | string[] | undefined) {
 export default function AdGroupDetailScreen() {
   const t = useTheme();
   const router = useRouter();
-  const invalidateAds = useInvalidateAds();
+  const queryClient = useQueryClient();
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
   const params = useLocalSearchParams<{
     id: string; name?: string; isAuto?: string; state?: string;
@@ -216,8 +216,14 @@ export default function AdGroupDetailScreen() {
               noun="ad group"
               onChange={async (next) => {
                 if (!id) return;
-                await updateAdGroupState(id, next ? "enabled" : "paused");
-                await invalidateAds();
+                const previous = applyOptimisticEntityState(queryClient, "ad_group", id, next);
+                try {
+                  await updateAdGroupState(id, next ? "enabled" : "paused");
+                  void invalidateEntityStateQueries(queryClient, "ad_group");
+                } catch (error) {
+                  revertOptimisticEntityState(queryClient, "ad_group", id, previous);
+                  throw error;
+                }
               }}
             />
             <View style={{ flex: 1, minWidth: 0 }}>
@@ -274,7 +280,6 @@ export default function AdGroupDetailScreen() {
                 },
                 { label: "Spend", value: formatCurrency(spendN, primaryCurrency) },
                 { label: "Orders", value: formatInt(ordersN) },
-                { label: "Sales", value: salesReady ? formatCurrency(salesN, primaryCurrency) : "—" },
               ]}
             />
             <View style={[styles.metricsSplit, { backgroundColor: t.colors.separator }]} />

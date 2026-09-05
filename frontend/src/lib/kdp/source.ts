@@ -11,8 +11,10 @@
  *   - "extension_ios"  → Chrome extension AND this iPhone. The iPhone helper
  *                        runs the same tables/logic as the extension:
  *                        today + yesterday every ~15 min, a 90-day onboarding
- *                        backfill on first enable, and a nightly last-30-day
- *                        correction pass. Never skip, never miss.
+ *                        backfill only when web history is missing, and a
+ *                        nightly last-30-day correction pass. Never skip,
+ *                        never miss. Background ticks replay Keychain sessions
+ *                        (Royaltix-style) without needing the WebView attached.
  *
  * Both writers target the SAME Supabase tables with the SAME conflict keys, so
  * enabling the iPhone helper alongside the extension is idempotent (upserts).
@@ -46,7 +48,7 @@ export function kdpRoyaltySourceOptionTitle(source: KdpRoyaltySource): string {
 /** One-line description for the option row inside the picker. */
 export function kdpRoyaltySourceOptionSubtitle(source: KdpRoyaltySource): string {
   return source === "extension_ios"
-    ? "This iPhone imports KDP the same way the Chrome helper does — today + yesterday every ~15 min, 90-day onboarding, nightly 30-day correction."
+    ? "This iPhone imports KDP like Royaltix: today + yesterday every ~15 min on short wakes; 30→90 day milestones and deferred retries on longer wakes; skips backfill when the web app already imported history."
     : "KDP is imported only by the Chrome helper on your computer. This iPhone refreshes the already-imported royalties.";
 }
 

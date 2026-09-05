@@ -1,8 +1,8 @@
 import React from "react";
-import { View, StyleSheet, TouchableOpacity } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { View, StyleSheet, TouchableOpacity, Text } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import { useTheme } from "../lib/theme";
 import { DateRangeControl } from "./TopBar";
 import { SFSymbol, sfFromIonicon } from "./ios/Native";
@@ -21,57 +21,129 @@ interface SubScreenProps {
   showDateRange?: boolean;
 }
 
+/**
+ * Edge-to-edge sub-screen: paint under the Dynamic Island, overlay back control
+ * in the former black header band, and keep the date chip in that same band.
+ */
 export function SubScreen({ title, children, rightAction, showDateRange = false }: SubScreenProps) {
   const t = useTheme();
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const topPad = Math.max(insets.top, 8);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: t.colors.background_primary }} edges={["bottom"]}>
+    <View style={{ flex: 1, backgroundColor: t.colors.background_primary }}>
       <ScreenAmbient />
-      {/* Native iOS header — back only; page titles removed for denser chrome. */}
       <Stack.Screen
         options={{
-          headerShown: true,
+          headerShown: false,
           title: "",
-          headerBackTitle: "",
-          headerAccessibilityLabel: title,
-          headerStyle: { backgroundColor: t.colors.background_primary },
-          headerTitleStyle: { color: t.colors.text_primary, fontSize: 17, fontWeight: "600" },
-          headerTintColor: t.colors.tone_primary,
-          headerShadowVisible: false,
-          ...(rightAction
-            ? {
-                headerRight: () => (
-                  <TouchableOpacity
-                    onPress={rightAction.onPress}
-                    testID={rightAction.testID}
-                    accessibilityRole="button"
-                    accessibilityLabel={rightAction.accessibilityLabel}
-                    accessibilityHint={rightAction.accessibilityHint}
-                    style={{ minWidth: t.layout.minTap, minHeight: t.layout.minTap, alignItems: "center", justifyContent: "center" }}
-                  >
-                    <SFSymbol name={sfFromIonicon(rightAction.icon)} size={22} color={t.colors.tone_primary} />
-                  </TouchableOpacity>
-                ),
-              }
-            : {}),
+          contentStyle: { backgroundColor: t.colors.background_primary },
         }}
       />
 
-      {showDateRange && (
-        <View style={[styles.dateBar, { borderBottomColor: t.colors.border }]}>
-          <DateRangeControl fullWidth />
+      <View
+        style={[
+          styles.topChrome,
+          {
+            paddingTop: topPad,
+            borderBottomColor: t.colors.border,
+            backgroundColor: "transparent",
+          },
+        ]}
+      >
+        <View style={styles.navRow}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            accessibilityRole="button"
+            accessibilityLabel={`Back. ${title}`}
+            hitSlop={8}
+            style={[
+              styles.backChip,
+              {
+                backgroundColor: t.colors.background_secondary + "CC",
+                borderColor: t.colors.separator,
+              },
+            ]}
+          >
+            <SFSymbol name="chevron.left" size={16} color={t.colors.tone_primary} />
+            <Text style={[t.typography.footnote, { color: t.colors.tone_primary, fontWeight: "600" }]}>Back</Text>
+          </TouchableOpacity>
+          <Text
+            accessibilityRole="header"
+            numberOfLines={1}
+            style={[
+              t.typography.headline,
+              styles.navTitle,
+              { color: t.colors.text_primary },
+            ]}
+          >
+            {title}
+          </Text>
+          {rightAction ? (
+            <TouchableOpacity
+              onPress={rightAction.onPress}
+              testID={rightAction.testID}
+              accessibilityRole="button"
+              accessibilityLabel={rightAction.accessibilityLabel}
+              accessibilityHint={rightAction.accessibilityHint}
+              style={{
+                minWidth: t.layout.minTap,
+                minHeight: t.layout.minTap,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <SFSymbol name={sfFromIonicon(rightAction.icon)} size={22} color={t.colors.tone_primary} />
+            </TouchableOpacity>
+          ) : (
+            <View style={{ width: 44 }} />
+          )}
         </View>
-      )}
+        {showDateRange ? (
+          <View style={styles.dateBar}>
+            <DateRangeControl fullWidth />
+          </View>
+        ) : null}
+      </View>
 
       <View style={{ flex: 1 }}>{children}</View>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  topChrome: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingBottom: 6,
+    gap: 6,
+  },
+  navRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    minHeight: 36,
+    gap: 8,
+  },
+  navTitle: {
+    flex: 1,
+    textAlign: "center",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  backChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 0,
+  },
   dateBar: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingBottom: 2,
   },
 });

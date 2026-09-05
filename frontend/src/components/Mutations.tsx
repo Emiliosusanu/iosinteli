@@ -14,10 +14,37 @@ import {
 } from "react-native";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { formatCurrency } from "@/src/lib/format";
+import {
+  cooldownAlertMessage,
+  getEntityBidCooldown,
+  type EntityBidCooldownFields,
+  type EntityBidCooldownInfo,
+} from "@/src/lib/bidCooldown";
 import { SIGN_IN_TO_MUTATE_MESSAGE, userMessageForNestError } from "@/src/lib/rulesApi";
+import {
+  BID_CHANGE_CONFIRM_PCT,
+  parseBidInput,
+  requiresBidChangeConfirm,
+  sanitizeBidForAmazon,
+} from "@/src/lib/targetingFilters";
 import { dashboard, useTheme } from "@/src/lib/theme";
 import { promptIOSNumber, SFSymbol } from "./ios/Native";
 import { PrimaryButton, SecondaryButton } from "./Primitives";
+
+function confirmLargeBidChange(from: number, to: number): Promise<boolean> {
+  if (!requiresBidChangeConfirm(from, to)) return Promise.resolve(true);
+  const pct = Math.round((Math.abs(to - from) / from) * 100);
+  return new Promise((resolve) => {
+    Alert.alert(
+      "Large bid change",
+      `This moves the bid by about ${pct}% (over ${BID_CHANGE_CONFIRM_PCT}%). Write to Amazon Ads anyway?`,
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+        { text: "Write to Amazon", style: "destructive", onPress: () => resolve(true) },
+      ],
+    );
+  });
+}
 
 export function alertMutationError(error: unknown, fallback = "Couldn't save that change.") {
   Alert.alert("Couldn't save", userMessageForNestError(error, fallback));
@@ -44,17 +71,29 @@ export function EntityStateSwitch({
   const t = useTheme();
   const { guestMode } = useAuth();
   const [busy, setBusy] = useState(false);
+  // Hold the user's choice until the parent `enabled` prop catches up from
+  // optimistic cache / refetch. Without this, a slow invalidateAds snaps the
+  // Switch back and feels like "can't re-enable".
+  const [optimistic, setOptimistic] = useState<boolean | null>(null);
+  const shown = optimistic ?? enabled;
   const locked = disabled || busy || guestMode;
+
+  React.useEffect(() => {
+    if (optimistic == null) return;
+    if (enabled === optimistic) setOptimistic(null);
+  }, [enabled, optimistic]);
 
   const apply = async (next: boolean) => {
     if (guestMode) {
       Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
       return;
     }
+    setOptimistic(next);
     setBusy(true);
     try {
       await onChange(next);
     } catch (error) {
+      setOptimistic(null);
       alertMutationError(error);
     } finally {
       setBusy(false);
@@ -65,11 +104,11 @@ export function EntityStateSwitch({
     <View style={compact ? styles.switchCompact : undefined}>
       <Switch
         testID={testID}
-        value={enabled}
+        value={shown}
         disabled={locked}
-        accessibilityLabel={`${noun} is ${enabled ? "active" : "paused"}${busy ? ". Updating" : ""}`}
+        accessibilityLabel={`${noun} is ${shown ? "active" : "paused"}${busy ? ". Updating" : ""}`}
         accessibilityHint="Changing this writes Amazon Ads."
-        accessibilityState={{ disabled: locked, checked: enabled, busy }}
+        accessibilityState={{ disabled: locked, checked: shown, busy }}
         onValueChange={(next) => {
           if (!next && confirmPause) {
             Alert.alert(`Pause ${noun}?`, "This writes to Amazon Ads.", [
@@ -93,11 +132,13 @@ export function BidBudgetEditor({
   value,
   currency,
   kind = "money",
-  min = 0.02,
+  min = 0.01,
   max = 1_000_000,
   onClose,
   onSave,
   testID,
+  /** When false, skip the >30% relative confirm (bulk $/% delta editors). */
+  confirmLargeChange = true,
 }: {
   visible: boolean;
   title: string;
@@ -109,12 +150,15 @@ export function BidBudgetEditor({
   onClose: () => void;
   onSave: (next: number) => void | Promise<void>;
   testID?: string;
+  confirmLargeChange?: boolean;
 }) {
   const t = useTheme();
   const { guestMode } = useAuth();
   const [draft, setDraft] = useState(String(value || ""));
   const [saving, setSaving] = useState(false);
   const usedNativePrompt = React.useRef(false);
+
+  const [forceSheet, setForceSheet] = useState(false);
 
   React.useEffect(() => {
     if (visible) setDraft(String(Number.isFinite(value) ? value : ""));
@@ -123,6 +167,7 @@ export function BidBudgetEditor({
   React.useEffect(() => {
     if (!visible) {
       usedNativePrompt.current = false;
+      setForceSheet(false);
       return;
     }
     if (guestMode) {
@@ -134,7 +179,10 @@ export function BidBudgetEditor({
     usedNativePrompt.current = true;
     const opened = promptIOSNumber({
       title,
-      message: kind === "percent" ? "0–900%. This writes to Amazon Ads." : `Current ${formatCurrency(value, currency)}. This writes to Amazon Ads.`,
+      message:
+        kind === "percent"
+          ? `Enter ${min}–${max}%. Queues a write to Amazon Ads — not confirmed until Amazon accepts.`
+          : `Shown value ${formatCurrency(value, currency)}. Minimum ${formatCurrency(min, currency)}. Queues a write to Amazon Ads — not confirmed until Amazon accepts.`,
       value,
       min,
       max,
@@ -142,18 +190,30 @@ export function BidBudgetEditor({
         usedNativePrompt.current = false;
         onClose();
       },
-      onSave: async (next) => {
-        try {
-          await onSave(next);
-        } catch (error) {
-          alertMutationError(error);
-        } finally {
-          usedNativePrompt.current = false;
-          onClose();
-        }
+      onSave: (next) => {
+        // Close first so the seller can edit the next bid immediately.
+        // Amazon writes continue via the caller's outbox / network path.
+        usedNativePrompt.current = false;
+        onClose();
+        void (async () => {
+          let resolved = next;
+          if (kind === "money") {
+            const sanitized = sanitizeBidForAmazon(String(next));
+            if (sanitized == null || sanitized < min || sanitized > max) {
+              Alert.alert("Check the number", `Enter a value between ${min} and ${max}.`);
+              return;
+            }
+            resolved = sanitized;
+            if (confirmLargeChange && !(await confirmLargeBidChange(value, resolved))) return;
+          }
+          await onSave(resolved);
+        })().catch((error) => alertMutationError(error));
       },
     });
-    if (!opened) usedNativePrompt.current = false;
+    if (!opened) {
+      usedNativePrompt.current = false;
+      setForceSheet(true);
+    }
     // Native UIAlertController owns the interaction; don't retrigger when parent callbacks change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
@@ -163,23 +223,36 @@ export function BidBudgetEditor({
       Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
       return;
     }
-    const next = Number(draft.replace(",", "."));
+    let next: number;
+    if (kind === "money") {
+      const sanitized = sanitizeBidForAmazon(draft);
+      if (sanitized == null) {
+        Alert.alert("Check the number", "Use digits only (optional decimal). No currency symbols or letters.");
+        return;
+      }
+      next = sanitized;
+    } else {
+      const parsed = parseBidInput(draft);
+      if (parsed == null) {
+        Alert.alert("Check the number", "Use digits only (optional decimal).");
+        return;
+      }
+      next = parsed;
+    }
     if (!Number.isFinite(next) || next < min || next > max) {
       Alert.alert("Check the number", `Enter a value between ${min} and ${max}.`);
       return;
     }
-    setSaving(true);
-    try {
-      await onSave(next);
-      onClose();
-    } catch (error) {
-      alertMutationError(error);
-    } finally {
-      setSaving(false);
-    }
+    if (kind === "money" && confirmLargeChange && !(await confirmLargeBidChange(value, next))) return;
+    setSaving(false);
+    onClose();
+    void Promise.resolve()
+      .then(() => onSave(next))
+      .catch((error) => alertMutationError(error));
   };
 
-  if (Platform.OS === "ios") return null;
+  const showSheet = Platform.OS !== "ios" || forceSheet;
+  if (!showSheet) return null;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -193,8 +266,8 @@ export function BidBudgetEditor({
             <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>{title}</Text>
             <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 4 }]}>
               {kind === "percent"
-                ? "0–900%. This writes to Amazon Ads."
-                : `Current ${formatCurrency(value, currency)}. This writes to Amazon Ads.`}
+                ? `Enter ${min}–${max}%. Queues a write to Amazon Ads — not confirmed until Amazon accepts.`
+                : `Shown ${formatCurrency(value, currency)}. Minimum ${formatCurrency(min, currency)}. Queues a write to Amazon Ads — not confirmed until Amazon accepts.`}
             </Text>
             <View style={[styles.inputRow, { borderColor: t.colors.border, backgroundColor: t.colors.background_primary }]}>
               <Text style={[t.typography.headline, { color: t.colors.text_secondary }]}>
@@ -228,27 +301,54 @@ export function MutationTap({
   onPress,
   testID,
   compact = false,
+  cooldown,
+  cooldownRow,
 }: {
   label: string;
   value: string;
   onPress: () => void;
   testID?: string;
   compact?: boolean;
+  /** Precomputed cooldown (preferred). */
+  cooldown?: EntityBidCooldownInfo | null;
+  /** Or pass the entity row and we derive cooldown. */
+  cooldownRow?: EntityBidCooldownFields | null;
 }) {
   const t = useTheme();
+  const info = cooldown ?? (cooldownRow ? getEntityBidCooldown(cooldownRow) : null);
+  const locked = Boolean(info?.isInCooldown);
+  const valueColor = locked ? t.colors.tone_warning : compact ? t.colors.text_primary : t.colors.text_secondary;
+
+  const openEditor = () => {
+    if (locked && info) {
+      Alert.alert("Cooldown", cooldownAlertMessage(info), [
+        { text: "Cancel", style: "cancel" },
+        { text: "Edit anyway", style: "destructive", onPress },
+      ]);
+      return;
+    }
+    onPress();
+  };
+
   return (
     <TouchableOpacity
       testID={testID}
       accessibilityRole="button"
-      accessibilityLabel={`${label} ${value}. Edit ${label.toLowerCase()}.`}
-      accessibilityHint="Opens the editor. Saving writes Amazon Ads."
-      onPress={onPress}
+      accessibilityLabel={`${label} ${value}${locked ? ". On cooldown" : ""}. Edit ${label.toLowerCase()}.`}
+      accessibilityHint={
+        locked
+          ? "Shows cooldown details. You can still edit and reset the cooldown."
+          : "Opens the editor. Saving writes Amazon Ads."
+      }
+      onPress={openEditor}
       activeOpacity={0.75}
       style={[
         compact ? styles.tapCompact : styles.tap,
         {
-          backgroundColor: t.colors.glass_background ?? t.colors.background_secondary,
-          borderColor: t.colors.glass_stroke ?? t.colors.separator,
+          backgroundColor: locked
+            ? t.colors.tone_warning + "1A"
+            : t.colors.glass_background ?? t.colors.background_secondary,
+          borderColor: locked ? t.colors.tone_warning + "66" : t.colors.glass_stroke ?? t.colors.separator,
         },
       ]}
     >
@@ -257,17 +357,19 @@ export function MutationTap({
       ) : null}
       <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
         {compact ? (
-          <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>{label}</Text>
+          <Text style={[t.typography.caption2, { color: locked ? t.colors.tone_warning : t.colors.text_tertiary }]}>
+            {locked ? "Cooldown" : label}
+          </Text>
         ) : null}
         <Text
           style={[
             compact ? t.typography.caption1 : t.typography.body,
-            { color: compact ? t.colors.text_primary : t.colors.text_secondary, fontVariant: ["tabular-nums"] },
+            { color: valueColor, fontVariant: ["tabular-nums"], fontWeight: locked ? "700" : undefined },
           ]}
         >
           {value}
         </Text>
-        <SFSymbol name="chevron.right" size={compact ? 10 : 12} color={t.colors.text_tertiary} />
+        <SFSymbol name="chevron.right" size={compact ? 10 : 12} color={locked ? t.colors.tone_warning : t.colors.text_tertiary} />
       </View>
     </TouchableOpacity>
   );

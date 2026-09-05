@@ -35,9 +35,11 @@ import { EmptyState, RetryState, MetricStrip, FilterChrome, ScreenSpinner, ListC
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
 import { isHomeQueryTimeout, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout, queryStillWaiting } from "@/src/lib/queryTimeout";
 import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialReadVersion";
-import { noPeriodPlaceholder } from "@/src/lib/periodQuery";
+import { LIST_PERIOD_QUERY_CACHE, sameScopeWarmPlaceholder, sortedProfileIds } from "@/src/lib/periodQuery";
 import { booksEmptyCopy } from "@/src/lib/booksListActivity";
 import { isIosHelperEnabled } from "@/src/lib/kdp/source";
+import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
+import { loadBooksFilterMemory, saveBooksFilterMemory } from "@/src/lib/filterMemory";
 
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -122,7 +124,7 @@ export default function ProductsScreen() {
   const { selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource } = useApp();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<Sort>("net");
+  const [sort, setSort] = useState<Sort>("acos");
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
@@ -130,13 +132,28 @@ export default function ProductsScreen() {
     if (qa?.booksSort) {
       setSort(qa.booksSort);
       console.log(`[inteliads:qa] books filters sort=${qa.booksSort}`);
+      return;
     }
+    void loadBooksFilterMemory().then((mem) => {
+      if (mem.sort === "net" || mem.sort === "spend" || mem.sort === "acos" || mem.sort === "orders") {
+        setSort(mem.sort);
+      }
+    });
   }, []);
 
-  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end] as const;
-  const overviewBooksWarm = queryClient.getQueryData(
-    [FINANCIAL_QUERY_ROOTS.topBooks, adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end],
-  ) as TopBookRow[] | undefined;
+  useEffect(() => {
+    void saveBooksFilterMemory({ sort });
+  }, [sort]);
+
+  const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
+  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end] as const;
+  const overviewBooksKey = [
+    FINANCIAL_QUERY_ROOTS.topBooks,
+    adminFilterUserId ?? "self",
+    scopeProfiles,
+    dateRange.start,
+    dateRange.end,
+  ] as const;
 
   const { data: books = [], isPending, isError, isRefetching, isFetching, refetch, error } = useQuery({
     queryKey: booksKey,
@@ -144,7 +161,7 @@ export default function ProductsScreen() {
       markPerf("books.query.start");
       return withQueryTimeout(
         fetchTopBooksRange({
-          profileIds: selectedProfileIds,
+          profileIds: scopeProfiles,
           start: dateRange.start,
           end: dateRange.end,
           royaltyRate: 0,
@@ -159,21 +176,25 @@ export default function ProductsScreen() {
         signal,
       );
     },
-    enabled: selectedProfileIds.length > 0,
-    staleTime: 5 * 60_000,
-    gcTime: 12 * 60 * 60_000,
-    placeholderData: () => overviewBooksWarm ?? noPeriodPlaceholder(),
+    enabled: scopeProfiles.length > 0,
+    ...LIST_PERIOD_QUERY_CACHE,
+    placeholderData: () =>
+      sameScopeWarmPlaceholder(
+        queryClient.getQueryData(overviewBooksKey) as TopBookRow[] | undefined,
+      ),
     retry: false,
     meta: financialQueryMeta(),
   });
 
-  const showBlockingSpinner = queryStillWaiting({ isPending, isError, data: books }) && books.length === 0 && !overviewBooksWarm;
+  const overviewBooksWarm = queryClient.getQueryData(overviewBooksKey) as TopBookRow[] | undefined;
+  const showBlockingSpinner =
+    queryStillWaiting({ isPending, isError, data: books }) && books.length === 0 && !overviewBooksWarm;
 
   const { data: periodRoyalties } = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => fetchKdpRoyaltiesRange(selectedProfileIds, dateRange.start, dateRange.end),
-    enabled: selectedProfileIds.length > 0 && !showBlockingSpinner && books.length === 0,
-    staleTime: 5 * 60_000,
+    queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, scopeProfiles, dateRange.start, dateRange.end],
+    queryFn: () => fetchKdpRoyaltiesRange(scopeProfiles, dateRange.start, dateRange.end),
+    enabled: scopeProfiles.length > 0 && !showBlockingSpinner && books.length === 0,
+    ...LIST_PERIOD_QUERY_CACHE,
     meta: financialQueryMeta(),
   });
 
@@ -197,16 +218,33 @@ export default function ProductsScreen() {
       switch (sort) {
         case "spend":
           return b.spend - a.spend;
-        case "acos":
-          return (a.acos || Infinity) - (b.acos || Infinity);
         case "orders":
           return b.orders - a.orders;
-        case "net":
-        default: {
+        case "net": {
           const netA = resolveBookNet(a) ?? Number.NEGATIVE_INFINITY;
           const netB = resolveBookNet(b) ?? Number.NEGATIVE_INFINITY;
           return netB - netA;
         }
+        case "acos":
+        default:
+          return compareByAcosSpendImpressionsSync(
+            {
+              total_acos: a.acos,
+              total_spend: a.spend,
+              total_sales: a.sales,
+              total_impressions: a.impressions,
+              metrics_updated_at: (a as any).metrics_updated_at,
+              updated_at: (a as any).updated_at,
+            },
+            {
+              total_acos: b.acos,
+              total_spend: b.spend,
+              total_sales: b.sales,
+              total_impressions: b.impressions,
+              metrics_updated_at: (b as any).metrics_updated_at,
+              updated_at: (b as any).updated_at,
+            },
+          );
       }
     });
   }, [books, search, sort]);

@@ -2,7 +2,7 @@
 // All queries are filtered by selected profile IDs and date range when applicable.
 
 import { supabase } from "./supabase";
-import { parseNestError, rulesApiFetch, hasNestToken } from "./rulesApi";
+import { parseNestError, rulesApiFetch, hasNestToken, nestApiJson } from "./rulesApi";
 import { fetchNestAmazonProfiles } from "./mutations";
 import {
   fetchAggregatedCampaigns,
@@ -23,6 +23,11 @@ import {
 } from "./kdpBookIdentity";
 import { assembleLogicalBookRows, emptyLogicalBook, type LogicalBookAccumulator } from "./kdpBooksRead";
 import { aggregateKdpDailyRows, kdpTrace } from "./kdpRoyaltiesTrace";
+import {
+  aggregateKdpFormatRoyalties,
+  emptyKdpFormatRoyaltyRange,
+  type KdpFormatRoyaltyRange,
+} from "./kdpFormatRoyalties";
 import {
   calculatorBreakEvenFromKdpTitle,
   pickUsableCoverUrl,
@@ -81,7 +86,7 @@ function chunkArray<T>(values: T[], size: number): T[][] {
 export const POSTGREST_PAGE_SIZE = 1000;
 /** Defensive cap so a stuck page cannot loop forever. 2500 × 1000 = 2.5M rows. */
 export const POSTGREST_MAX_PAGES = 2500;
-/** Targets tab: top spenders only — unbounded keyword reads stall on multi-profile accounts. */
+/** Targets tab: capped list so multi-profile keyword reads stay responsive. Not an Amazon write limit. */
 export const TARGETING_LIST_LIMIT = 500;
 
 export class IncompleteReadError extends Error {
@@ -518,6 +523,152 @@ export async function fetchKdpRoyaltiesRange(
   };
 }
 
+/** Paperback / KU / Kindle mix from kdp_book_daily_data for Overview charts. */
+export async function fetchKdpFormatRoyaltiesRange(
+  profileIds: string[],
+  startDate: string,
+  endDate: string,
+): Promise<KdpFormatRoyaltyRange> {
+  const accountIds = await fetchLinkedKdpAccountIds(profileIds);
+  if (!accountIds.length) return emptyKdpFormatRoyaltyRange();
+
+  const selectWithFormats =
+    "account_id, date, royalties, ebook_royalties, paperback_royalties, kenp_royalties";
+  let rows: any[] = [];
+  try {
+    rows = await fetchAllPages<any>((from, to) =>
+      supabase
+        .from("kdp_book_daily_data")
+        .select(selectWithFormats)
+        .in("account_id", accountIds)
+        .gte("date", startDate)
+        .lte("date", endDate)
+        .order("date", { ascending: true })
+        .order("asin", { ascending: true })
+        .range(from, to),
+    );
+  } catch {
+    // Older schemas may lack format columns — fall back to totals only.
+    try {
+      rows = await fetchAllPages<any>((from, to) =>
+        supabase
+          .from("kdp_book_daily_data")
+          .select("account_id, date, royalties")
+          .in("account_id", accountIds)
+          .gte("date", startDate)
+          .lte("date", endDate)
+          .order("date", { ascending: true })
+          .order("asin", { ascending: true })
+          .range(from, to),
+      );
+    } catch {
+      return emptyKdpFormatRoyaltyRange();
+    }
+  }
+
+  return aggregateKdpFormatRoyalties(rows);
+}
+
+const ADS_ENGINE_ENTITY_CAP = 250;
+
+type AdsEngineDailyPoint = {
+  date: string;
+  spend: number;
+  sales: number;
+  orders: number;
+  clicks: number;
+  impressions: number;
+};
+
+async function fetchEntityDailyAggregateForProfiles(
+  profileIds: string[],
+  start: string,
+  end: string,
+  opts: {
+    entityTable: "keywords" | "search_terms";
+    metricsTable: "keyword_metrics" | "search_term_metrics";
+    entityColumn: "keyword_id" | "search_term_id";
+  },
+): Promise<AdsEngineDailyPoint[]> {
+  if (!profileIds.length || !start || !end) return [];
+  const entities = await fetchAllPages<{ id: string }>((from, to) =>
+    supabase
+      .from(opts.entityTable)
+      .select("id")
+      .in("amazon_profile_id", profileIds)
+      .order("total_spend", { ascending: false })
+      .range(from, to),
+  );
+  const ids = entities.map((row) => row.id).slice(0, ADS_ENGINE_ENTITY_CAP);
+  if (!ids.length) return [];
+
+  const rows: CampaignMetric[] = [];
+  for (const chunk of chunkArray(ids, 80)) {
+    const page = await fetchAllPages<any>((from, to) =>
+      supabase
+        .from(opts.metricsTable)
+        .select(`date,impressions,clicks,orders,spend,sales,${opts.entityColumn}`)
+        .in(opts.entityColumn, chunk)
+        .gte("date", start)
+        .lte("date", end)
+        .order("date", { ascending: true })
+        .range(from, to),
+    );
+    for (const row of page) {
+      rows.push({
+        id: `${row[opts.entityColumn]}-${row.date}`,
+        campaign_id: String(row[opts.entityColumn] ?? ""),
+        date: String(row.date).slice(0, 10),
+        impressions: Number(row.impressions) || 0,
+        clicks: Number(row.clicks) || 0,
+        orders: Number(row.orders) || 0,
+        spend: Number(row.spend) || 0,
+        sales: Number(row.sales) || 0,
+        ctr: null,
+        acos: null,
+        roas: null,
+        cpc: null,
+        conversion_rate: null,
+      });
+    }
+  }
+  return aggregateDailyMetrics(rows);
+}
+
+/** Top keywords by spend — daily funnel for Ads Engine Keywords page. */
+export async function fetchKeywordDailyAggregate(
+  profileIds: string[],
+  start: string,
+  end: string,
+): Promise<AdsEngineDailyPoint[]> {
+  try {
+    return await fetchEntityDailyAggregateForProfiles(profileIds, start, end, {
+      entityTable: "keywords",
+      metricsTable: "keyword_metrics",
+      entityColumn: "keyword_id",
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** Top search terms by spend — daily funnel for Ads Engine Search terms page. */
+export async function fetchSearchTermDailyAggregate(
+  profileIds: string[],
+  start: string,
+  end: string,
+): Promise<AdsEngineDailyPoint[]> {
+  try {
+    return await fetchEntityDailyAggregateForProfiles(profileIds, start, end, {
+      entityTable: "search_terms",
+      metricsTable: "search_term_metrics",
+      entityColumn: "search_term_id",
+    });
+  } catch {
+    return [];
+  }
+}
+
 function ruleAppliesToProfiles(rule: Pick<OptimizationRule, "amazon_profile_ids">, profileIds?: string[]): boolean {
   if (!profileIds) return true;
   if (!profileIds.length) return false;
@@ -660,9 +811,15 @@ export async function fetchAmazonProfiles(
 
   const { data: directProfileLinks, error: directProfileLinksErr } = directProfileLinksRes;
   if (directProfileLinksErr) throw directProfileLinksErr;
-  const enabledByProfileId = new Map(
-    (directProfileLinks ?? []).map((link: any) => [link.amazon_profile_id, link.is_enabled !== false]),
-  );
+  const enabledByProfileId = new Map<string, boolean>();
+  for (const link of directProfileLinks ?? []) {
+    const key = String((link as any).amazon_profile_id || "").trim();
+    if (!key) continue;
+    // Explicit false wins if duplicate keys appear (UUID + Ads id rows).
+    const next = (link as any).is_enabled !== false;
+    if (enabledByProfileId.has(key) && enabledByProfileId.get(key) === false) continue;
+    enabledByProfileId.set(key, next);
+  }
 
   const { data: fullProfiles, error: fullProfilesErr } = fullProfilesRes;
   if (fullProfilesErr) throw fullProfilesErr;
@@ -692,12 +849,18 @@ export async function fetchAmazonProfiles(
     kdpCounts.set(id, (kdpCounts.get(id) ?? 0) + 1);
   }
 
+  const resolveEnabled = (rowId: string, adsId?: string | null) => {
+    if (enabledByProfileId.has(rowId)) return enabledByProfileId.get(rowId);
+    if (adsId && enabledByProfileId.has(adsId)) return enabledByProfileId.get(adsId);
+    return undefined;
+  };
+
   const profiles = linkedIds.map((id) => {
     const full = fullById.get(id);
     if (full) {
       return {
         ...full,
-        is_enabled: enabledByProfileId.get(id),
+        is_enabled: resolveEnabled(id, full.profile_id),
         campaign_count: campaignCounts.get(id) ?? 0,
         kdp_account_count: kdpCounts.get(id) ?? 0,
       };
@@ -719,7 +882,7 @@ export async function fetchAmazonProfiles(
       marketplace_id: null,
       account_type: "vendor",
       account_id: null,
-      is_enabled: enabledByProfileId.get(id),
+      is_enabled: resolveEnabled(id, id),
       campaign_count: profileCamps.length,
       kdp_account_count: kdpCounts.get(id) ?? 0,
       created_at: new Date().toISOString(),
@@ -825,6 +988,25 @@ const AUTO_EXPRESSION_TYPES = new Set([
   "asinsubstitutes", "close-match", "loose-match", "complements", "substitutes",
 ]);
 
+/** Lightweight ad-group default bids for targeting inheritance (auto close/loose/etc). */
+export async function fetchAdGroupDefaultBids(profileIds: string[]): Promise<Record<string, number>> {
+  if (!profileIds.length) return {};
+  const { data, error } = await supabase
+    .from("ad_groups")
+    .select("id, default_bid")
+    .in("amazon_profile_id", profileIds);
+  if (error) throw error;
+  const out: Record<string, number> = {};
+  for (const row of data ?? []) {
+    const bid = Number((row as any).default_bid);
+    if (!Number.isFinite(bid) || bid <= 0) continue;
+    const id = String((row as any).id || "");
+    if (!id) continue;
+    out[id] = bid;
+  }
+  return out;
+}
+
 export async function fetchAdGroups(
   profileIds: string[],
   campaignId?: string,
@@ -901,6 +1083,27 @@ export async function fetchKeywords(
     filterUserId?: string | null;
   } = {},
 ): Promise<Keyword[]> {
+  if (!profileIds.length) return [];
+  // Multi-profile: fair per-profile quota so one big profile can't hide the others
+  // (Nest + Supabase paths both recurse here).
+  if (
+    opts.limit &&
+    profileIds.length > 1 &&
+    !opts.campaignId &&
+    !opts.adGroupId
+  ) {
+    const per = Math.max(80, Math.ceil(opts.limit / profileIds.length));
+    const batches = await Promise.all(
+      profileIds.map((id) => fetchKeywords([id], { ...opts, limit: per })),
+    );
+    const byId = new Map<string, Keyword>();
+    for (const batch of batches) {
+      for (const row of batch) byId.set(row.id, row);
+    }
+    return [...byId.values()]
+      .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0))
+      .slice(0, opts.limit);
+  }
   if (opts.filterUserId && (await hasNestToken())) {
     return fetchNestKeywords({
       filterUserId: opts.filterUserId,
@@ -915,7 +1118,6 @@ export async function fetchKeywords(
       limit: opts.limit,
     });
   }
-  if (!profileIds.length) return [];
   const buildQuery = (from?: number, to?: number) => {
     let q = supabase
       .from("keywords")
@@ -948,7 +1150,8 @@ export async function fetchKeywords(
   ).catch((error) => {
     // eslint-disable-next-line no-console
     console.warn("[inteliads:targeting] keyword metrics enrichment failed", error);
-    return new Map<string, MetricsTotals>();
+    // Never paint lifetime totals or fake zeros as the selected period.
+    throw error instanceof Error ? error : new Error("Couldn't load period metrics for keywords.");
   });
   return rows.map((row) => applyMetricTotals(row, totals.get(row.id) ?? emptyTotals()));
 }
@@ -999,7 +1202,14 @@ export async function fetchProductTargetById(
   filterUserId?: string | null,
 ): Promise<(ProductTarget & EntityParentNames) | null> {
   if (filterUserId && (await hasNestToken())) {
-    return fetchNestProductTargetById(id);
+    const nest = await fetchNestProductTargetById(id);
+    if (!nest) return null;
+    const enrichIds = profileIds.length
+      ? profileIds
+      : [nest.amazon_profile_id].filter(Boolean);
+    // Nest admin detail historically skipped cover/title enrichment (blank BookCover).
+    const [enriched] = await enrichProductTargetDisplay([nest], enrichIds);
+    return enriched ?? nest;
   }
   if (!id || !profileIds.length) return null;
   const { data, error } = await supabase
@@ -1012,10 +1222,13 @@ export async function fetchProductTargetById(
   if (!data) return null;
   const totals = await fetchMetricTotalsByEntity("product_target_metrics", "product_target_id", [id], range?.start, range?.end);
   const parents = await fetchParentNames((data as ProductTarget).campaign_id, (data as ProductTarget).ad_group_id);
-  return {
+  const withMetrics = {
     ...applyMetricTotals(data as ProductTarget, range?.start && range?.end ? totals.get(id) ?? emptyTotals() : undefined),
     ...parents,
   };
+  // Same cover/title enrichment as the Targets list (ASIN ads → KDP titles → campaign product).
+  const [enriched] = await enrichProductTargetDisplay([withMetrics], profileIds);
+  return enriched ?? withMetrics;
 }
 
 export async function fetchSearchTermById(
@@ -1096,8 +1309,31 @@ export async function fetchProductTargets(
     start?: string;
     end?: string;
     filterUserId?: string | null;
+    /** Skip KDP title lookups — product_ads + campaign covers only (faster Category/Auto lists). */
+    skipKdpEnrich?: boolean;
   } = {},
 ): Promise<ProductTarget[]> {
+  if (!profileIds.length) return [];
+  // Multi-profile: fair per-profile quota so one big profile can't hide the others
+  // (Nest + Supabase paths both recurse here).
+  if (
+    opts.limit &&
+    profileIds.length > 1 &&
+    !opts.campaignId &&
+    !opts.adGroupId
+  ) {
+    const per = Math.max(80, Math.ceil(opts.limit / profileIds.length));
+    const batches = await Promise.all(
+      profileIds.map((id) => fetchProductTargets([id], { ...opts, limit: per })),
+    );
+    const byId = new Map<string, ProductTarget>();
+    for (const batch of batches) {
+      for (const row of batch) byId.set(row.id, row);
+    }
+    return [...byId.values()]
+      .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0))
+      .slice(0, opts.limit);
+  }
   if (opts.filterUserId && (await hasNestToken())) {
     const nestRows = await fetchNestProductTargets({
       filterUserId: opts.filterUserId,
@@ -1109,9 +1345,8 @@ export async function fetchProductTargets(
       state: opts.state,
       limit: opts.limit,
     });
-    return enrichProductTargetDisplay(nestRows, profileIds);
+    return enrichProductTargetDisplay(nestRows, profileIds, { skipKdp: opts.skipKdpEnrich === true });
   }
-  if (!profileIds.length) return [];
   const buildQuery = (from?: number, to?: number) => {
     let q = supabase
       .from("product_targets")
@@ -1143,11 +1378,12 @@ export async function fetchProductTargets(
     ).catch((error) => {
       // eslint-disable-next-line no-console
       console.warn("[inteliads:targeting] product target metrics enrichment failed", error);
-      return new Map<string, MetricsTotals>();
+      // Never paint lifetime totals or fake zeros as the selected period.
+      throw error instanceof Error ? error : new Error("Couldn't load period metrics for targets.");
     });
   }
   const enriched = rows.map((row) => applyMetricTotals(row, totals.get(row.id) ?? emptyTotals()));
-  return enrichProductTargetDisplay(enriched, profileIds);
+  return enrichProductTargetDisplay(enriched, profileIds, { skipKdp: opts.skipKdpEnrich === true });
 }
 
 function productTargetDisplayAsin(row: ProductTarget): string {
@@ -1163,6 +1399,7 @@ function productTargetDisplayAsin(row: ProductTarget): string {
 async function enrichProductTargetDisplay(
   enriched: ProductTarget[],
   profileIds: string[],
+  opts: { skipKdp?: boolean } = {},
 ): Promise<ProductTarget[]> {
   if (!enriched.length || !profileIds.length) return enriched;
 
@@ -1197,7 +1434,8 @@ async function enrichProductTargetDisplay(
         const asin = productTargetDisplayAsin(row);
         return asin && (!row.image_url || !row.title);
       });
-      if (stillMissing.length) {
+      // KDP lookup is the slow path for Category/Auto lists — skip on targeting list fetches.
+      if (stillMissing.length && !opts.skipKdp) {
         const kdpAccountIds = await fetchLinkedKdpAccountIds(profileIds);
         if (kdpAccountIds.length) {
           const { data: kdpTitles } = await supabase
@@ -1229,8 +1467,12 @@ async function enrichProductTargetDisplay(
     }
   }
 
-  // Auto / Category (and any ASIN still bare): cover + title from the campaign's advertised product.
-  const stillNeedCampaignCover = enriched.filter((row) => !row.image_url || !row.title);
+  // Auto / Category only (no product ASIN): cover + title from the campaign's advertised product.
+  // Never paint a product-ASIN row with the sponsored book — resolve that ASIN or leave bare.
+  const stillNeedCampaignCover = enriched.filter((row) => {
+    if (row.image_url && row.title) return false;
+    return !productTargetDisplayAsin(row);
+  });
   if (stillNeedCampaignCover.length) {
     const campaignIds = uniqueStrings(
       stillNeedCampaignCover.map((row) => row.campaign_id).filter(Boolean) as string[],
@@ -1292,12 +1534,13 @@ async function enrichProductTargetDisplay(
         }
 
         for (const row of enriched) {
+          if (productTargetDisplayAsin(row)) continue;
           if (row.image_url && row.title) continue;
           const meta = row.campaign_id ? byCampaign.get(row.campaign_id) : null;
           if (!meta) continue;
           if (!row.image_url && meta.image_url) (row as any).image_url = meta.image_url;
           if (!row.title && meta.title) (row as any).title = meta.title;
-          if (!(row as any).cover_asin && meta.asin && !productTargetDisplayAsin(row)) {
+          if (!(row as any).cover_asin && meta.asin) {
             (row as any).cover_asin = meta.asin;
           }
         }
@@ -1306,6 +1549,215 @@ async function enrichProductTargetDisplay(
   }
 
   return enriched;
+}
+
+export type TargetingBookOption = {
+  asin: string;
+  title: string;
+  image_url: string | null;
+  campaignIds: string[];
+  campaignCount?: number;
+};
+
+/**
+ * Books for the targeting filter — web parity (`GET /campaigns/books` /
+ * BookFilterButton): one entry per sponsored ASIN on **enabled** campaigns
+ * via an **enabled** product ad. Not the full KDP catalog.
+ */
+export async function fetchTargetingBookOptions(
+  profileIds: string[],
+  limitOrOpts: number | { limit?: number; filterUserId?: string | null } = 0,
+): Promise<TargetingBookOption[]> {
+  if (!profileIds.length) return [];
+  const opts =
+    typeof limitOrOpts === "number"
+      ? { limit: limitOrOpts }
+      : { limit: limitOrOpts.limit ?? 0, filterUserId: limitOrOpts.filterUserId };
+  const limit = opts.limit ?? 0;
+
+  // Prefer Nest (same source as the web Books modal) when available.
+  try {
+    if (await hasNestToken()) {
+      const search = new URLSearchParams();
+      if (opts.filterUserId) search.set("filterUserId", String(opts.filterUserId));
+      const q = search.toString() ? `?${search.toString()}` : "";
+      const payload = await nestApiJson<{ books?: Array<{
+        asin?: string;
+        title?: string | null;
+        imageUrl?: string | null;
+        image_url?: string | null;
+        campaignCount?: number;
+        campaignIds?: string[];
+        campaign_ids?: string[];
+      }> }>(`/campaigns/books${q}`, { method: "GET" }, "Couldn't load books for filter.");
+      const nestBooks = (payload.books ?? [])
+        .map((row) => {
+          const asin = String(row.asin || "")
+            .trim()
+            .toUpperCase();
+          if (!/^[A-Z0-9]{10}$/.test(asin)) return null;
+          const campaignIds = Array.isArray(row.campaignIds)
+            ? row.campaignIds.map(String)
+            : Array.isArray(row.campaign_ids)
+              ? row.campaign_ids.map(String)
+              : [];
+          return {
+            asin,
+            title: String(row.title || "").trim() || asin,
+            image_url: pickUsableCoverUrl(row.imageUrl, row.image_url),
+            campaignIds,
+            campaignCount: Number(row.campaignCount) || campaignIds.length || 0,
+          } satisfies TargetingBookOption;
+        })
+        .filter(Boolean) as TargetingBookOption[];
+
+      // Nest is account-scoped; keep ASINs that have ads on the selected profiles
+      // so the client campaign map still matches the active profile filter.
+      if (nestBooks.length) {
+        const profileLinked = await fetchEnabledSponsoredBooksForProfiles(profileIds);
+        const byAsin = new Map(profileLinked.map((b) => [b.asin, b]));
+        const merged = nestBooks
+          .map((book) => {
+            const local = byAsin.get(book.asin);
+            if (!local) return null;
+            return {
+              asin: book.asin,
+              title: book.title || local.title,
+              image_url: pickUsableCoverUrl(book.image_url, local.image_url),
+              campaignIds: local.campaignIds.length ? local.campaignIds : book.campaignIds,
+              campaignCount:
+                book.campaignCount ||
+                local.campaignCount ||
+                local.campaignIds.length ||
+                0,
+            } satisfies TargetingBookOption;
+          })
+          .filter(Boolean) as TargetingBookOption[];
+        if (merged.length) {
+          merged.sort((a, b) => a.title.localeCompare(b.title));
+          return limit > 0 ? merged.slice(0, limit) : merged;
+        }
+        // Fall through if Nest returned books but none match these profiles.
+      }
+    }
+  } catch {
+    // Supabase enabled-ads fallback below.
+  }
+
+  const books = await fetchEnabledSponsoredBooksForProfiles(profileIds);
+  return limit > 0 ? books.slice(0, limit) : books;
+}
+
+/** Enabled product ads on enabled campaigns for the selected profiles. */
+async function fetchEnabledSponsoredBooksForProfiles(
+  profileIds: string[],
+): Promise<TargetingBookOption[]> {
+  // Paginate product_ads so Nest placement rows aren't left "No linked book"
+  // just because their ads fell outside an arbitrary first-N sample.
+  // Web parity: only enabled ads on enabled campaigns.
+  let data: any[] = [];
+  try {
+    data = await fetchAllPages<any>((from, to) =>
+      supabase
+        .from("product_ads")
+        .select("asin, title, campaign_id, image_url, status, campaigns!inner(state)")
+        .in("amazon_profile_id", profileIds)
+        .eq("status", "enabled")
+        .eq("campaigns.state", "enabled")
+        .not("asin", "is", null)
+        .order("asin", { ascending: true })
+        .range(from, to),
+    );
+  } catch {
+    // Join may be unavailable under some RLS shapes — filter campaigns in a second pass.
+    const ads = await fetchAllPages<any>((from, to) =>
+      supabase
+        .from("product_ads")
+        .select("asin, title, campaign_id, image_url, status")
+        .in("amazon_profile_id", profileIds)
+        .eq("status", "enabled")
+        .not("asin", "is", null)
+        .order("asin", { ascending: true })
+        .range(from, to),
+    );
+    const campaignIds = [
+      ...new Set(ads.map((row) => String(row.campaign_id || "").trim()).filter(Boolean)),
+    ];
+    const enabledCampaignIds = new Set<string>();
+    for (let i = 0; i < campaignIds.length; i += 200) {
+      const chunk = campaignIds.slice(i, i + 200);
+      const { data: campaigns, error } = await supabase
+        .from("campaigns")
+        .select("id, state")
+        .in("id", chunk)
+        .eq("state", "enabled");
+      if (error) throw error;
+      for (const row of campaigns ?? []) {
+        enabledCampaignIds.add(String((row as any).id));
+      }
+    }
+    data = ads.filter((row) => enabledCampaignIds.has(String(row.campaign_id || "").trim()));
+  }
+
+  const byAsin = new Map<
+    string,
+    { title: string; image_url: string | null; campaignIds: Set<string> }
+  >();
+  for (const row of data ?? []) {
+    const asin = String((row as any).asin || "")
+      .trim()
+      .toUpperCase();
+    if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
+    if (String((row as any).status || "").toLowerCase() === "paused") continue;
+    const title = String((row as any).title || "").trim() || asin;
+    const campaignId = String((row as any).campaign_id || "").trim();
+    const imageUrl = String((row as any).image_url || "").trim() || null;
+    const campaignState = String((row as any).campaigns?.state || "").toLowerCase();
+    if (campaignState && campaignState !== "enabled") continue;
+    const cur = byAsin.get(asin) ?? { title, image_url: null, campaignIds: new Set<string>() };
+    if (!cur.title || cur.title === asin) cur.title = title;
+    if (!cur.image_url && imageUrl) cur.image_url = imageUrl;
+    if (campaignId) cur.campaignIds.add(campaignId);
+    byAsin.set(asin, cur);
+  }
+
+  // Prefer KDP catalog covers over Amazon product_ads image_url / blank P/ placeholders.
+  const asins = [...byAsin.keys()];
+  if (asins.length) {
+    const kdpAccountIds = await fetchLinkedKdpAccountIds(profileIds);
+    if (kdpAccountIds.length) {
+      for (let i = 0; i < asins.length; i += 200) {
+        const chunk = asins.slice(i, i + 200);
+        const { data: kdpTitles } = await supabase
+          .from("kdp_titles")
+          .select("asin, title, cover_url, amazon_image_url")
+          .in("account_id", kdpAccountIds)
+          .in("asin", chunk);
+        for (const title of kdpTitles ?? []) {
+          const asin = String((title as any).asin ?? "").toUpperCase();
+          const cur = byAsin.get(asin);
+          if (!cur) continue;
+          if ((title as any).title) cur.title = String((title as any).title).trim() || cur.title;
+          cur.image_url = pickUsableCoverUrl(
+            cur.image_url,
+            (title as any).cover_url,
+            (title as any).amazon_image_url,
+          );
+        }
+      }
+    }
+  }
+
+  return [...byAsin.entries()]
+    .map(([asin, v]) => ({
+      asin,
+      title: v.title,
+      image_url: v.image_url,
+      campaignIds: [...v.campaignIds],
+      campaignCount: v.campaignIds.size,
+    }))
+    .filter((book) => book.campaignIds.length > 0)
+    .sort((a, b) => a.title.localeCompare(b.title));
 }
 
 function extractAsinFromExpression(expression: any): string | null {
@@ -1357,11 +1809,12 @@ export async function fetchProductAds(
   const totals = await fetchMetricTotalsByEntity("product_ad_metrics", "product_ad_id", rows.map((row) => row.id), opts.start, opts.end);
   const enriched = rows.map((row) => applyMetricTotals(row, opts.start && opts.end ? totals.get(row.id) ?? emptyTotals() : undefined));
 
-  const missingDisplayRows = enriched.filter((row) => row.asin && (!row.image_url || !row.title));
-  if (missingDisplayRows.length) {
-    const asins = uniqueStrings(missingDisplayRows.map((row) => row.asin?.toUpperCase()));
+  // Always resolve title/cover from THIS row's ASIN (KDP catalog). Never leave a
+  // wrong sponsored-book image from Amazon sync if we have the product ASIN metadata.
+  const asins = uniqueStrings(enriched.map((row) => row.asin?.toUpperCase()).filter(Boolean) as string[]);
+  if (asins.length) {
     const kdpAccountIds = await fetchLinkedKdpAccountIds(profileIds);
-    if (asins.length && kdpAccountIds.length) {
+    if (kdpAccountIds.length) {
       const { data: kdpTitles } = await supabase
         .from("kdp_titles")
         .select("asin, title, cover_url, amazon_image_url")
@@ -1381,8 +1834,8 @@ export async function fetchProductAds(
       for (const row of enriched) {
         const match = row.asin ? titleByAsin.get(row.asin.toUpperCase()) : null;
         if (!match) continue;
-        if (!row.image_url && match.image_url) (row as any).image_url = match.image_url;
-        if (!row.title && match.title) (row as any).title = match.title;
+        if (match.image_url) (row as any).image_url = match.image_url;
+        if (match.title) (row as any).title = match.title;
       }
     }
   }
@@ -1924,17 +2377,18 @@ export interface TopCampaignRow {
   state: string | null;
   budget: number | null;
   bidding_strategy: string | null;
-  placement_top_share: number;
-  placement_product_share: number;
-  placement_rest_share: number;
+  amazon_profile_id?: string | null;
+  placement_top_share: number | null;
+  placement_product_share: number | null;
+  placement_rest_share: number | null;
   impressions: number;
   clicks: number;
   orders: number;
   spend: number;
   sales: number;
-  acos: number;
-  roas: number;
-  net: number; // computed later with royalty rate
+  acos: number | null;
+  roas: number | null;
+  net: number | null; // computed later with royalty rate; null when Nest omits royalties
   updated_at?: string | null;
   metrics_updated_at?: string | null;
   book_key?: string | null;
@@ -2020,7 +2474,58 @@ export async function fetchTopCampaignsRange(
 ): Promise<TopCampaignRow[]> {
   const { profileIds, start, end, limit = 5, royaltyRate = 0, filterUserId } = opts;
   if (!profileIds.length) return [];
-  if (filterUserId && (await hasNestToken())) {
+
+  const fairSlice = (rows: TopCampaignRow[]): TopCampaignRow[] => {
+    if (!limit || profileIds.length <= 1) return rows.slice(0, limit);
+    const per = Math.max(80, Math.ceil(limit / profileIds.length));
+    const taken = new Map<string, number>();
+    const out: TopCampaignRow[] = [];
+    for (const row of rows) {
+      const pid = String((row as any).amazon_profile_id ?? "");
+      const n = taken.get(pid) ?? 0;
+      if (n >= per) continue;
+      taken.set(pid, n + 1);
+      out.push(row);
+      if (out.length >= limit) break;
+    }
+    // If some profiles had fewer than `per`, fill remaining slots from leftovers.
+    if (out.length < limit) {
+      const picked = new Set(out.map((r) => r.id));
+      for (const row of rows) {
+        if (picked.has(row.id)) continue;
+        out.push(row);
+        if (out.length >= limit) break;
+      }
+    }
+    return out;
+  };
+
+  try {
+    // Prefer Nest period aggregation for every seller (not only admin filterUserId).
+    // Multi-profile: fair-share via per-profile fetches — Nest often omits amazon_profile_id.
+    if (profileIds.length > 1 && limit) {
+      const per = Math.max(80, Math.ceil(limit / profileIds.length));
+      const settled = await Promise.allSettled(
+        profileIds.map((id) =>
+          fetchTopCampaignsRange({ ...opts, profileIds: [id], limit: per }),
+        ),
+      );
+      const byId = new Map<string, TopCampaignRow>();
+      let nestOk = 0;
+      for (const result of settled) {
+        if (result.status !== "fulfilled") continue;
+        nestOk += 1;
+        for (const row of result.value) byId.set(row.id, row);
+      }
+      if (nestOk === 0) throw new Error("Nest campaign aggregation failed for all profiles");
+      return [...byId.values()]
+        .sort((a, b) =>
+          royaltyRate > 0
+            ? (Number(b.net) || 0) - (Number(a.net) || 0)
+            : b.spend - a.spend,
+        )
+        .slice(0, limit);
+    }
     const rows = await fetchAggregatedCampaigns({
       startDate: start,
       endDate: end,
@@ -2028,6 +2533,8 @@ export async function fetchTopCampaignsRange(
       filterUserId,
     });
     return rows.slice(0, limit);
+  } catch (error) {
+    console.warn("[inteliads] Nest campaign aggregation failed; falling back to Supabase", error);
   }
   const effectiveRoyaltyRate = royaltyRate > 0 ? royaltyRate : 0;
 
@@ -2170,6 +2677,7 @@ export async function fetchTopCampaignsRange(
       state: c.state,
       budget: c.budget,
       bidding_strategy: c.bidding_strategy,
+      amazon_profile_id: c.amazon_profile_id ?? null,
       updated_at: typeof c.updated_at === "string" ? c.updated_at : null,
       metrics_updated_at: typeof c.metrics_updated_at === "string" ? c.metrics_updated_at : null,
       ...(campaignBookById.get(c.id) ?? {
@@ -2208,10 +2716,11 @@ export async function fetchTopCampaignsRange(
     net: r.sales * (effectiveRoyaltyRate / 100) - r.spend,
   }));
 
-  return rows
-    .filter((r) => shouldShowActiveOrPausedWithData(r as any, r.state))
-    .sort((a, b) => (effectiveRoyaltyRate > 0 ? b.net - a.net : b.sales - a.sales))
-    .slice(0, limit);
+  return fairSlice(
+    rows
+      .filter((r) => shouldShowActiveOrPausedWithData(r as any, r.state))
+      .sort((a, b) => (effectiveRoyaltyRate > 0 ? b.net - a.net : b.sales - a.sales)),
+  );
 }
 
 export interface BookCampaignRow extends TopCampaignRow {
@@ -3280,28 +3789,34 @@ export interface SyncOverview {
   profiles: ProfileSyncLog[];
 }
 
+const SYNC_LOG_COLUMNS =
+  "id,user_id,sync_type,status,records_synced,records_failed,error_message,started_at,completed_at,created_at";
+const PROFILE_SYNC_LOG_COLUMNS =
+  "id,amazon_profile_id,profile_name,status,campaigns_synced,campaigns_failed,keywords_synced,keywords_failed,product_ads_synced,product_ads_failed,ad_groups_synced,ad_groups_failed,product_targets_synced,product_targets_failed,error_message,started_at,completed_at";
+
 export async function fetchSyncOverview(
   userId: string,
   profileIds: string[],
   options?: { includeSessions?: boolean },
 ): Promise<SyncOverview> {
   const includeSessions = options?.includeSessions !== false;
+  // Narrow columns + modest limits: select(*) over wide log rows was stalling Sync.
   const [sessionsResult, profileResult] = await Promise.all([
     includeSessions
       ? supabase
           .from("sync_logs")
-          .select("*")
+          .select(SYNC_LOG_COLUMNS)
           .eq("user_id", userId)
           .order("started_at", { ascending: false })
-          .limit(50)
+          .limit(20)
       : Promise.resolve({ data: [], error: null }),
     profileIds.length
       ? supabase
           .from("profile_sync_logs")
-          .select("*")
+          .select(PROFILE_SYNC_LOG_COLUMNS)
           .in("amazon_profile_id", profileIds)
           .order("started_at", { ascending: false })
-          .limit(80)
+          .limit(40)
       : Promise.resolve({ data: [], error: null }),
   ]);
 

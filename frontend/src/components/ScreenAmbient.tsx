@@ -1,12 +1,13 @@
 import React from "react";
-import { StyleSheet, type ViewStyle } from "react-native";
+import { StyleSheet, View, type ViewStyle } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { SafeAreaView, type Edge } from "react-native-safe-area-context";
+import { type Edge } from "react-native-safe-area-context";
 import { dashboard, useTheme, type Theme } from "@/src/lib/theme";
 
 /**
  * Soft top wash used on Overview. Same Dribbble finance-dashboard
  * atmosphere on every other screen — not a new palette per page.
+ * Drawn edge-to-edge (including under the status bar / Dynamic Island).
  */
 export function ScreenAmbient() {
   const t = useTheme();
@@ -20,9 +21,14 @@ export function ScreenAmbient() {
   );
 }
 
+/**
+ * Full-bleed screen shell. No top safe-area pad — chrome/headers apply
+ * insets only where interactive controls need clearance under the island.
+ * `edges` kept for call-site compatibility; top is intentionally ignored.
+ */
 export function AppScreen({
   children,
-  edges = ["top"],
+  edges: _edges = [],
   testID,
 }: {
   children: React.ReactNode;
@@ -31,14 +37,13 @@ export function AppScreen({
 }) {
   const t = useTheme();
   return (
-    <SafeAreaView
+    <View
       testID={testID}
       style={{ flex: 1, backgroundColor: t.colors.background_primary }}
-      edges={edges}
     >
       <ScreenAmbient />
       {children}
-    </SafeAreaView>
+    </View>
   );
 }
 
