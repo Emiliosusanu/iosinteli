@@ -261,22 +261,28 @@ export function viewCurrencyOfSelection(
   return null;
 }
 
+/** USD stays the reporting chip when the view mixes marketplaces. */
+export function displayCurrencyOfSelection(
+  profiles: AmazonProfile[],
+  selectedProfileIds: string[],
+): string {
+  const codes: string[] = [];
+  for (const id of selectedProfileIds) {
+    const match = profiles.find((p) => p.id === id || p.profile_id === id);
+    if (match) codes.push(currencyCodeOf(match));
+  }
+  if (codes.includes("USD")) return "USD";
+  return codes[0] || "USD";
+}
+
 export type ViewTogglePlan =
   | { kind: "remove"; nextIds: string[] }
   | { kind: "add"; nextIds: string[] }
-  | {
-      kind: "currency_conflict";
-      currentCurrency: string;
-      nextCurrency: string;
-      nextIdsIfSwitch: string[];
-      droppedCount: number;
-    }
   | { kind: "nest_disabled" };
 
 /**
  * TopBar / view-chip selection planner.
- * CAD cannot silently join a USD view — returns currency_conflict instead.
- * Nest-disabled profiles cannot stay in view.
+ * Mixed marketplaces stay in one view. Nest-disabled profiles cannot join.
  */
 export function planViewToggle(params: {
   profileId: string;
@@ -302,43 +308,19 @@ export function planViewToggle(params: {
     return { kind: "nest_disabled" };
   }
 
-  const nextCurrency = currencyCodeOf(nextProfile);
-  const currentCurrency = viewCurrencyOfSelection(profiles, selectedProfileIds);
-  const compatibleIds = selectedProfileIds.filter((id) => {
-    const profile = profiles.find((c) => c.id === id || c.profile_id === id);
-    return currencyCodeOf(profile) === nextCurrency;
-  });
-  const droppedCount = selectedProfileIds.length - compatibleIds.length;
-  const nextIdsIfSwitch = [...compatibleIds, rowId];
-
-  if (currentCurrency && currentCurrency !== nextCurrency && droppedCount > 0) {
-    return {
-      kind: "currency_conflict",
-      currentCurrency,
-      nextCurrency,
-      nextIdsIfSwitch,
-      droppedCount,
-    };
-  }
-
-  return { kind: "add", nextIds: nextIdsIfSwitch };
+  return { kind: "add", nextIds: [...selectedProfileIds, rowId] };
 }
 
-/** Select-all for TopBar: Nest-enabled only, same currency as the current view. */
-export function planSelectAllSameCurrency(params: {
+/** Select-all for TopBar: every Nest-enabled marketplace in the current view. */
+export function planSelectAllEnabled(params: {
   profiles: AmazonProfile[];
-  selectedProfileIds: string[];
+  selectedProfileIds?: string[];
 }): string[] {
-  const { profiles, selectedProfileIds } = params;
-  const enabled = profiles.filter((profile) => profileEnabled(profile));
-  const currency =
-    viewCurrencyOfSelection(profiles, selectedProfileIds) ??
-    (enabled[0] ? currencyCodeOf(enabled[0]) : null);
-  if (!currency) return [];
+  void params.selectedProfileIds;
   const ids: string[] = [];
   const seen = new Set<string>();
-  for (const profile of enabled) {
-    if (currencyCodeOf(profile) !== currency) continue;
+  for (const profile of params.profiles) {
+    if (!profileEnabled(profile)) continue;
     const id = profile.id;
     if (!id || seen.has(id)) continue;
     seen.add(id);
@@ -347,15 +329,13 @@ export function planSelectAllSameCurrency(params: {
   return ids;
 }
 
-export function viewCurrencyConflictMessage(
-  currentCurrency: string,
-  nextCurrency: string,
-): string {
-  void currentCurrency;
-  return `Switch view to ${nextCurrency}? Does not disable profiles.`;
+/** @deprecated Use planSelectAllEnabled — mixed marketplaces stay selected. */
+export function planSelectAllSameCurrency(params: {
+  profiles: AmazonProfile[];
+  selectedProfileIds: string[];
+}): string[] {
+  return planSelectAllEnabled(params);
 }
-
-export const VIEW_CURRENCY_CONFLICT_TITLE = "Different currency";
 
 export const NEST_DISABLED_VIEW_TITLE = "Profile is off in InteliAds";
 export const NEST_DISABLED_VIEW_MESSAGE = "Enable in Amazon Accounts first";
@@ -401,7 +381,7 @@ export const PROFILE_SWITCH_OFF_HINT = "Enables this profile for InteliAds.";
 export const VIEW_ADD_HINT = "Adds to current view.";
 export const VIEW_REMOVE_HINT = "Removes from current view. InteliAds stays enabled.";
 export const VIEW_SWITCH_HINT_ON = "Removes from current view.";
-export const VIEW_SWITCH_HINT_OFF = "Adds to current view (same currency).";
+export const VIEW_SWITCH_HINT_OFF = "Adds to current view. USD stays if the mix includes it.";
 
 /** Linking UI is self-explanatory — no permanent tutorial footer. */
 export const KDP_SECTION_FOOTER = "";

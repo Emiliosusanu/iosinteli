@@ -10,6 +10,7 @@ import { useTheme, toneColor } from "../lib/theme";
 import { formatCompact, formatInt, formatPercent, safeDivide, formatCurrency } from "../lib/format";
 import { hasAuthoritativeBreakEven } from "../lib/kdpTitlePresentation";
 import { dayBarStep, dayXLayout } from "../lib/chartLayout";
+import { useOverviewPeriodSwipeGesture } from "./OverviewPeriodSwipe";
 
 function innerChartWidth(width: number, padding = 40) {
   return Math.max(240, width - padding);
@@ -166,6 +167,7 @@ function useChartSelection(
     setIndex(null);
   }, [setIndex]);
 
+  const periodSwipe = useOverviewPeriodSwipeGesture();
   const gesture = React.useMemo(() => {
     const pan = Gesture.Pan().failOffsetY([-10, 10]);
     if (holdToInspect) {
@@ -173,12 +175,13 @@ function useChartSelection(
     } else {
       pan.activeOffsetX([-6, 6]);
     }
+    if (periodSwipe) pan.blocksExternalGesture(periodSwipe);
     pan.onStart((e) => runOnJS(selectByX)(e.x)).onUpdate((e) => runOnJS(selectByX)(e.x));
     if (!persistSelection) {
       pan.onFinalize(() => runOnJS(clearSelection)());
     }
     return pan;
-  }, [selectByX, clearSelection, persistSelection, holdToInspect]);
+  }, [selectByX, clearSelection, persistSelection, holdToInspect, periodSwipe]);
 
   return { selectedIndex, gesture, clearSelection };
 }
@@ -719,7 +722,7 @@ export function NetProfitChart({
     false,
     notifyDaySelect,
     controlledIndex,
-    true,
+    false,
   );
 
   const geometry = React.useMemo(() => {
@@ -793,7 +796,7 @@ export function NetProfitChart({
   const negGrad = "netNegFill";
 
   return (
-    <View style={{ width: chartWidth }} accessibilityLabel="Profit chart. Hold a day to inspect it. Release to show the period total.">
+    <View style={{ width: chartWidth }} accessibilityLabel="Profit chart. Swipe a day to inspect it. Release to show the period total.">
       <View style={chartStyles.netHeader}>
         {selected ? (
           <>
@@ -1113,7 +1116,7 @@ export function AdsEngineChart({
     false,
     undefined,
     undefined,
-    true,
+    false,
   );
   if (!impressionsData.length) return <View style={{ height: 200 }} />;
 
@@ -1167,7 +1170,7 @@ export function AdsEngineChart({
 
   return (
     <GestureDetector gesture={gesture}>
-      <View style={{ width: chartWidth, overflow: "hidden" }} accessibilityLabel="Ads Engine chart. Hold a day to inspect it. Release to show the period total.">
+      <View style={{ width: chartWidth, overflow: "hidden" }} accessibilityLabel="Ads Engine chart. Swipe a day to inspect it. Release to show the period total.">
         <View style={chartStyles.tooltipRow}>
           <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{selectedLabel}</Text>
           <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={1}>

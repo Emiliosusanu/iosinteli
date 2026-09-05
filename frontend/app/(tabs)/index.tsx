@@ -111,7 +111,12 @@ import {
 } from "@/src/components/OverviewOpsCards";
 import { DashboardSurface } from "@/src/components/DashboardSurface";
 import { OverviewHeaderV3, type OverviewPeriodMode } from "@/src/components/OverviewHeaderV3";
+import {
+  OverviewPeriodSwipeProvider,
+  createOverviewPeriodPan,
+} from "@/src/components/OverviewPeriodSwipe";
 import { FirstReveal, HorizonPane, PressableScale, VerifiedValue } from "@/src/components/Motion";
+import { GestureDetector } from "react-native-gesture-handler";
 import { GlassPanel } from "@/src/components/GlassPanel";
 import { syncChrome } from "@/src/lib/motion";
 import { playHaptic } from "@/src/lib/hapticPolicy";
@@ -1176,9 +1181,10 @@ export default function OverviewScreen() {
     prefetchPeriodData(makeDashboardWeekRange(anchor));
   }, [sellerReady, scopeProfiles.join("|"), primaryCurrency, prefetchPeriodData, todayStr]);
 
-  function shiftPeriod(dir: -1 | 1) {
-    void playHaptic("select", reduceMotion);
+  const shiftPeriod = useCallback((dir: -1 | 1) => {
     if (periodMode === "custom") return;
+    if (dir === 1 && parseDateOnly(dateRange.end) >= todayDate) return;
+    void playHaptic("select", reduceMotion);
     if (periodMode === "day") {
       const next = makeDashboardDayRange(addDays(parseDateOnly(dateRange.start), dir));
       prefetchPeriodData(next);
@@ -1197,7 +1203,12 @@ export default function OverviewScreen() {
     const next = makeDashboardWeekRange(end);
     prefetchPeriodData(next);
     setDateRange(next);
-  }
+  }, [dateRange.end, dateRange.start, periodMode, prefetchPeriodData, reduceMotion, setDateRange, todayDate]);
+
+  const periodSwipe = useMemo(
+    () => createOverviewPeriodPan(shiftPeriod, periodMode !== "custom"),
+    [periodMode, shiftPeriod],
+  );
 
   function applyPeriodMode(mode: OverviewPeriodMode) {
     if (mode === "custom") return;
@@ -1427,6 +1438,8 @@ export default function OverviewScreen() {
 
   return (
     <AppScreen testID="home-root">
+      <OverviewPeriodSwipeProvider gesture={periodSwipe}>
+      <GestureDetector gesture={periodSwipe}>
       <ScrollView
         contentContainerStyle={{ paddingBottom: 100 }}
         keyboardShouldPersistTaps="handled"
@@ -1473,7 +1486,7 @@ export default function OverviewScreen() {
             <PressableScale
               onPress={chartDay ? clearChartSelection : undefined}
               accessibilityRole={chartDay ? "button" : "text"}
-              accessibilityLabel={chartDay ? `${chartDay.label}. Release to show the period total.` : `${GROSS_ROYALTIES_LABEL} royalties for ${periodLabel}. Hold a day on the chart to inspect it.`}
+              accessibilityLabel={chartDay ? `${chartDay.label}. Release to show the period total.` : `${GROSS_ROYALTIES_LABEL} royalties for ${periodLabel}. Swipe a day on the chart to inspect it.`}
             >
               <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
                 <VerifiedValue
@@ -2119,6 +2132,8 @@ export default function OverviewScreen() {
 
         </View>
       </ScrollView>
+      </GestureDetector>
+      </OverviewPeriodSwipeProvider>
     </AppScreen>
   );
 }

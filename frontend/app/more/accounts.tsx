@@ -308,8 +308,7 @@ export default function AmazonAccountsScreen() {
     );
 
     // Enable does not change current-view selection — sellers use the "In current
-    // view" chip (VIEW_ADD_HINT) to add when they want. Auto-adding on enable
-    // would call toggleProfile and force single-currency view, dropping other markets.
+    // view" chip (VIEW_ADD_HINT) to add when they want.
     if (!enabled) {
       setSelectedProfileIds(
         selectedProfileIds.filter((id) => id !== rowId && id !== match?.profile_id && id !== contextId),

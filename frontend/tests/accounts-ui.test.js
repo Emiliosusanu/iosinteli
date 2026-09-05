@@ -23,6 +23,7 @@ import {
   isReadyToEnable,
   matchesReadyDefaultFilter,
   multiCountryFlagIcons,
+  displayCurrencyOfSelection,
   planSelectAllSameCurrency,
   planViewToggle,
   profileEnabled,
@@ -30,7 +31,6 @@ import {
   profileRowAccessibilityLabel,
   profileSwitchAccessibilityLabel,
   shortAdsAccountId,
-  viewCurrencyConflictMessage,
   viewStatusLabel,
 } from "../src/lib/accountsUi.ts";
 
@@ -99,7 +99,7 @@ test("ready default uses campaigns_enabled_count, not total campaign_count alone
   assert.equal(PROFILE_LIST_ALL_LABEL, "All profiles");
 });
 
-test("select-all keeps one currency and skips Nest-off profiles", () => {
+test("select-all includes every Nest-enabled marketplace and skips Nest-off profiles", () => {
   const profiles = [
     {
       id: "us",
@@ -162,13 +162,13 @@ test("select-all keeps one currency and skips Nest-off profiles", () => {
       updated_at: "",
     },
   ];
-  assert.deepEqual(planSelectAllSameCurrency({ profiles, selectedProfileIds: ["us"] }), ["us", "us2"]);
-  assert.deepEqual(planSelectAllSameCurrency({ profiles, selectedProfileIds: [] }), ["us", "us2"]);
-  assert.deepEqual(planSelectAllSameCurrency({ profiles, selectedProfileIds: ["uk"] }), ["uk"]);
-  assert.match(readFileSync(new URL("../src/contexts/AppContext.tsx", import.meta.url), "utf8"), /planSelectAllSameCurrency/);
+  assert.deepEqual(planSelectAllSameCurrency({ profiles, selectedProfileIds: ["us"] }), ["us", "us2", "uk"]);
+  assert.deepEqual(planSelectAllSameCurrency({ profiles, selectedProfileIds: [] }), ["us", "us2", "uk"]);
+  assert.deepEqual(planSelectAllSameCurrency({ profiles, selectedProfileIds: ["uk"] }), ["us", "us2", "uk"]);
+  assert.match(readFileSync(new URL("../src/contexts/AppContext.tsx", import.meta.url), "utf8"), /planSelectAllEnabled/);
 });
 
-test("CAD cannot silently join a USD current view", () => {
+test("CAD joins a USD view and the reporting chip stays USD", () => {
   const profiles = [
     {
       id: "us",
@@ -206,17 +206,14 @@ test("CAD cannot silently join a USD current view", () => {
     profiles,
     selectedProfileIds: ["us"],
   });
-  assert.equal(plan.kind, "currency_conflict");
-  if (plan.kind === "currency_conflict") {
-    assert.equal(plan.currentCurrency, "USD");
-    assert.equal(plan.nextCurrency, "CAD");
-    assert.equal(plan.droppedCount, 1);
-    assert.deepEqual(plan.nextIdsIfSwitch, ["ca"]);
+  assert.equal(plan.kind, "add");
+  if (plan.kind === "add") {
+    assert.deepEqual(plan.nextIds, ["us", "ca"]);
   }
+  assert.equal(displayCurrencyOfSelection(profiles, ["us", "ca"]), "USD");
   assert.match(appContext, /planViewToggle/);
-  assert.match(appContext, /VIEW_CURRENCY_CONFLICT_TITLE|currency_conflict/);
-  assert.match(viewCurrencyConflictMessage("USD", "CAD"), /Switch view to CAD\?/);
-  assert.match(viewCurrencyConflictMessage("USD", "CAD"), /Does not disable profiles/);
+  assert.match(appContext, /displayCurrencyOfSelection/);
+  assert.doesNotMatch(appContext, /VIEW_CURRENCY_CONFLICT_TITLE|currency_conflict/);
 });
 
 test("Nest-disabled profiles cannot stay selected in view planner", () => {
