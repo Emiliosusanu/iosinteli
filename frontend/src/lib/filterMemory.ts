@@ -18,6 +18,7 @@ export type TargetingFilterMemory = {
   perf?: string;
   sort?: string;
   bookAsin?: string;
+  stateFilter?: string;
   advanced?: TargetingAdvancedFilters;
 };
 

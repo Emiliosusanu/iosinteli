@@ -9,11 +9,10 @@ import { useAuth } from "@/src/contexts/AuthContext";
 import { useTheme } from "@/src/lib/theme";
 import { sendTestNotification } from "@/src/lib/notifications";
 import {
-  ACCOUNT_BILLING_FOOTER,
   ACCOUNT_BILLING_URL,
-  ACCOUNT_STATUS_UNAVAILABLE,
-  accountPlanPresentation,
+  accountSubscriptionPresentation,
 } from "@/src/lib/accountContract";
+import { useCurrentUserPlan } from "@/src/hooks/useCurrentUserPlan";
 import {
   ACCOUNT_SECTION_TITLE,
   ADS_SECTION_FOOTER,
@@ -21,6 +20,8 @@ import {
   APPEARANCE_VALUE,
   BID_BOT_ROW_LABEL,
   BID_BOT_ROW_SUBTITLE,
+  DAILY_DIGEST_FOOTER,
+  DAILY_DIGEST_LABEL,
   GUEST_SETTINGS_NOTE,
   IPHONE_ALERTS_LABEL,
   IPHONE_ALERTS_OFF,
@@ -61,7 +62,10 @@ export default function SettingsScreen() {
   const { notifications, setNotifications, notificationRuntime, adminFilterUserId, kdpRoyaltySource } = useApp();
   const kdpSourceValue = kdpRoyaltySourceValueLabel(kdpRoyaltySource);
   const helperOn = isIosHelperEnabled(kdpRoyaltySource);
-  const plan = accountPlanPresentation({
+  const currentPlanQ = useCurrentUserPlan();
+  const subscription = accountSubscriptionPresentation({
+    nestPlan: currentPlanQ.nestPlan,
+    nestStatus: currentPlanQ.nestStatus,
     userMetadata: user?.user_metadata,
     appMetadata: user?.app_metadata,
   });
@@ -77,9 +81,7 @@ export default function SettingsScreen() {
     notifications.dailyDigest;
   const permissionDenied = notificationRuntime.permission === "denied";
   const testRowStatus = guestMode ? "guest" : testStatus;
-  const subscriptionFooter = plan.source
-    ? `Plan is shown from account metadata only. ${ACCOUNT_BILLING_FOOTER}`
-    : ACCOUNT_BILLING_FOOTER;
+  const subscriptionFooter = subscription.footer;
 
   const handleTestNotification = async () => {
     if (guestMode) return;
@@ -132,12 +134,14 @@ export default function SettingsScreen() {
         <View testID="notification-settings-card">
           <IOSGroupedSection
             title="Notifications"
-            footer={notificationFooter({
-              guestMode,
-              permission: notificationRuntime.permission,
-              backgroundRegistered: notificationRuntime.backgroundRegistered,
-              anyEnabled: anyAlertOn,
-            })}
+            footer={
+              notificationFooter({
+                guestMode,
+                permission: notificationRuntime.permission,
+                backgroundRegistered: notificationRuntime.backgroundRegistered,
+                anyEnabled: anyAlertOn,
+              }) || undefined
+            }
           >
             {permissionDenied && !guestMode ? (
               <IOSSettingsRow
@@ -160,10 +164,10 @@ export default function SettingsScreen() {
               onChange={(v) => setNotifications({ ...notifications, dailyDigest: v })}
               testID="notif-daily-digest"
               accessibilityLabel={notificationSwitchAccessibilityLabel(
-                "Daily performance updates. Morning yesterday totals and today spend orders ACoS",
+                DAILY_DIGEST_LABEL,
                 notifications.dailyDigest,
               )}
-              accessibilityHint="Morning: yesterday spend, orders, ACoS. Daytime: today so far."
+              accessibilityHint={DAILY_DIGEST_FOOTER}
             />
             <IOSSwitchRow
               label="Include KDP net in alerts"
@@ -227,9 +231,11 @@ export default function SettingsScreen() {
                   minimumTrackTintColor={t.colors.tone_danger}
                   maximumTrackTintColor={t.colors.background_tertiary}
                 />
-                <Text style={[growType(t.typography.caption1), { color: t.colors.text_tertiary }]}>
-                  {SPEND_THRESHOLD_CAPTION}
-                </Text>
+                {SPEND_THRESHOLD_CAPTION ? (
+                  <Text style={[growType(t.typography.caption1), { color: t.colors.text_tertiary }]}>
+                    {SPEND_THRESHOLD_CAPTION}
+                  </Text>
+                ) : null}
               </View>
             ) : null}
             <IOSSettingsRow
@@ -260,22 +266,22 @@ export default function SettingsScreen() {
             <IOSSettingsRow
               testID="settings-plan"
               label={PLAN_ROW_LABEL}
-              subtitle={plan.source ? "Account metadata only" : undefined}
-              value={plan.label}
+              subtitle={subscription.planSubtitle}
+              value={subscription.planLabel}
               symbol="person.crop.circle"
               symbolColor={t.colors.tone_primary}
               onPress={() => router.push("/more/account" as Href)}
-              accessibilityLabel={`${PLAN_ROW_LABEL}. ${plan.label}`}
+              accessibilityLabel={`${PLAN_ROW_LABEL}. ${subscription.planLabel}`}
               accessibilityHint="Opens My Account."
             />
             <IOSSettingsRow
               testID="settings-subscription-status"
               label={SUBSCRIPTION_ROW_LABEL}
-              value={ACCOUNT_STATUS_UNAVAILABLE}
+              value={subscription.statusLabel}
               symbol="creditcard"
               symbolColor={t.colors.text_secondary}
               onPress={() => router.push("/more/account" as Href)}
-              accessibilityLabel={`${SUBSCRIPTION_ROW_LABEL}. ${ACCOUNT_STATUS_UNAVAILABLE}`}
+              accessibilityLabel={`${SUBSCRIPTION_ROW_LABEL}. ${subscription.statusLabel}`}
             />
             <IOSSettingsRow
               testID="settings-manage-billing"
@@ -289,20 +295,20 @@ export default function SettingsScreen() {
           </IOSGroupedSection>
         ) : null}
 
-        <IOSGroupedSection title="Ads" footer={ADS_SECTION_FOOTER}>
+        <IOSGroupedSection title="Ads" footer={ADS_SECTION_FOOTER || undefined}>
           <IOSSettingsRow
             testID="settings-open-bid-bot"
             label={BID_BOT_ROW_LABEL}
-            subtitle={BID_BOT_ROW_SUBTITLE}
+            subtitle={BID_BOT_ROW_SUBTITLE || undefined}
             symbol="slider.horizontal.3"
             symbolColor={t.colors.tone_primary}
             last
             onPress={() => router.push("/more/bid-bot")}
-            accessibilityLabel={`${BID_BOT_ROW_LABEL}. ${BID_BOT_ROW_SUBTITLE}`}
+            accessibilityLabel={BID_BOT_ROW_LABEL}
           />
         </IOSGroupedSection>
 
-        <IOSGroupedSection title="KDP data" footer={KDP_SECTION_FOOTER}>
+        <IOSGroupedSection title="KDP data" footer={KDP_SECTION_FOOTER || undefined}>
           <IOSSettingsRow
             testID="settings-kdp-source"
             label={KDP_PROFIT_LABEL}
@@ -315,23 +321,23 @@ export default function SettingsScreen() {
           <IOSSettingsRow
             testID="settings-kdp-accounts"
             label={KDP_ACCOUNTS_ROW_LABEL}
-            subtitle={KDP_ACCOUNTS_ROW_SUBTITLE}
+            subtitle={KDP_ACCOUNTS_ROW_SUBTITLE || undefined}
             symbol="link"
             symbolColor={t.colors.tone_product}
             onPress={() => router.push("/more/accounts" as Href)}
-            accessibilityLabel={`${KDP_ACCOUNTS_ROW_LABEL}. ${KDP_ACCOUNTS_ROW_SUBTITLE}`}
+            accessibilityLabel={KDP_ACCOUNTS_ROW_LABEL}
             accessibilityHint="Opens Amazon Accounts to link KDP."
           />
           <IOSSettingsRow
             testID="settings-kdp-helper"
             label={KDP_HELPER_ROW_LABEL}
-            subtitle={KDP_HELPER_ROW_SUBTITLE}
+            subtitle={KDP_HELPER_ROW_SUBTITLE || undefined}
             value={helperOn ? "On" : "Off"}
             symbol="iphone"
             symbolColor={t.colors.tone_primary}
             last
             onPress={() => router.push("/more/kdp-helper" as Href)}
-            accessibilityLabel={`${KDP_HELPER_ROW_LABEL}. ${helperOn ? "On" : "Off"}. ${KDP_HELPER_ROW_SUBTITLE}`}
+            accessibilityLabel={`${KDP_HELPER_ROW_LABEL}. ${helperOn ? "On" : "Off"}`}
           />
         </IOSGroupedSection>
 

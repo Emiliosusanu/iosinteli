@@ -48,8 +48,8 @@ export function kdpRoyaltySourceOptionTitle(source: KdpRoyaltySource): string {
 /** One-line description for the option row inside the picker. */
 export function kdpRoyaltySourceOptionSubtitle(source: KdpRoyaltySource): string {
   return source === "extension_ios"
-    ? "This iPhone imports KDP like Royaltix: today + yesterday every ~15 min on short wakes; 30→90 day milestones and deferred retries on longer wakes; skips backfill when the web app already imported history."
-    : "KDP is imported only by the Chrome helper on your computer. This iPhone refreshes the already-imported royalties.";
+    ? "Chrome + this iPhone import royalties"
+    : "Chrome helper only";
 }
 
 export function isIosHelperEnabled(source: KdpRoyaltySource): boolean {

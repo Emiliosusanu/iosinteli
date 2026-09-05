@@ -59,12 +59,12 @@ test("Books tab uses period-scoped list without 60-day gate", () => {
 
 test("empty books copy is not misleading when KDP was never imported", () => {
   const missing = booksEmptyCopy("", { iosHelperOn: false, hasLinkedKdp: false });
-  assert.equal(missing.title, "No KDP data yet");
-  assert.match(missing.subtitle, /Chrome \+ iPhone/);
+  assert.equal(missing.title, "Connect KDP");
+  assert.equal(missing.subtitle, "");
   const accountOnly = booksEmptyCopy("", { hasAccountRoyalties: true });
   assert.equal(accountOnly.title, "No per-book breakdown");
-  assert.match(accountOnly.subtitle, /book-level/);
+  assert.equal(accountOnly.subtitle, "");
   const inRange = booksEmptyCopy("", { iosHelperOn: true, hasLinkedKdp: true });
   assert.equal(inRange.title, "No book data in range");
-  assert.match(inRange.subtitle, /this period/);
+  assert.equal(inRange.subtitle, "");
 });

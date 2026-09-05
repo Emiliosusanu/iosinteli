@@ -66,7 +66,7 @@ const PERSISTED_QUERY_KEYS = new Set([
   "targeting-keywords",
   "targeting-products",
   "targeting-adgroup-default-bids",
-  "targeting-book-options",
+  "targeting-book-options-v2",
   FINANCIAL_QUERY_ROOTS.topBooks,
   FINANCIAL_QUERY_ROOTS.topBooksYesterday,
   "sync-logs",

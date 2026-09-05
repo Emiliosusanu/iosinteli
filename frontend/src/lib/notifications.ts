@@ -190,10 +190,16 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     let net: number | null = null;
     if (prefs.includeKdpNet) {
       try {
-        const { fetchKdpRoyaltiesRange } = await import("./queries");
-        const kdp = await fetchKdpRoyaltiesRange(scope.profileIds, today, today);
-        royalties = kdp.totalRoyalties ?? null;
-        if (royalties != null) net = netRoyaltiesKnown(royalties, spend);
+        const { fetchAmazonProfiles, fetchKdpRoyaltiesRange } = await import("./queries");
+        const { knownKdpRoyaltyTotal, selectKdpRoyaltyScope } = await import("./kdpRoyaltyScope");
+        const royaltyIds = selectKdpRoyaltyScope(
+          await fetchAmazonProfiles(userId, scope.viewAs),
+        ).profileIds;
+        if (royaltyIds.length) {
+          const kdp = await fetchKdpRoyaltiesRange(royaltyIds, today, today);
+          royalties = knownKdpRoyaltyTotal(kdp);
+          if (royalties != null) net = netRoyaltiesKnown(royalties, spend);
+        }
       } catch {
         royalties = null;
         net = null;
@@ -220,11 +226,15 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
           snapshot.yesterday?.acos ?? (ySales > 0 ? (ySpend / ySales) * 100 : null);
         if (prefs.includeKdpNet) {
           try {
-            const { fetchKdpRoyaltiesRange } = await import("./queries");
+            const { fetchAmazonProfiles, fetchKdpRoyaltiesRange } = await import("./queries");
+            const { knownKdpRoyaltyTotal, selectKdpRoyaltyScope } = await import("./kdpRoyaltyScope");
             const yDate = String(snapshot.yesterday?.date || "").slice(0, 10);
-            if (yDate) {
-              const kdp = await fetchKdpRoyaltiesRange(scope.profileIds, yDate, yDate);
-              yesterdayRoyalties = kdp.totalRoyalties ?? null;
+            const royaltyIds = selectKdpRoyaltyScope(
+              await fetchAmazonProfiles(userId, scope.viewAs),
+            ).profileIds;
+            if (yDate && royaltyIds.length) {
+              const kdp = await fetchKdpRoyaltiesRange(royaltyIds, yDate, yDate);
+              yesterdayRoyalties = knownKdpRoyaltyTotal(kdp);
               if (yesterdayRoyalties != null) {
                 yesterdayNet = netRoyaltiesKnown(yesterdayRoyalties, ySpend);
               }
@@ -306,9 +316,14 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     }
 
     if (prefs.bookAttention && preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.bookAttention)) {
-      const { fetchTopBooksRange } = await import("./queries");
+      const { fetchAmazonProfiles, fetchTopBooksRange } = await import("./queries");
+      const { selectKdpRoyaltyScope } = await import("./kdpRoyaltyScope");
+      const royaltyIds = selectKdpRoyaltyScope(
+        await fetchAmazonProfiles(userId, scope.viewAs),
+      ).profileIds;
       const books = await fetchTopBooksRange({
         profileIds: scope.profileIds,
+        kdpProfileIds: royaltyIds,
         start: today,
         end: today,
         limit: 5,
@@ -457,79 +472,89 @@ try {
   devWarn("Notification handler unavailable.", error);
 }
 
-if (!TaskManager.isTaskDefined(INTELIADS_BACKGROUND_TASK)) {
-  TaskManager.defineTask(INTELIADS_BACKGROUND_TASK, async () => {
-    try {
-      try {
-        const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
-        await runDualSourceBackgroundRefresh("background");
-      } catch (error) {
-        devWarn("background financial refresh skipped", error);
-      }
-      try {
-        const { runKdpIosHelperTick } = await import("./kdp/importer");
-        const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
-        const wakeMode = await resolveLockedPhoneKdpWakeMode("background");
-        await runKdpIosHelperTick(wakeMode === "processing" ? "processing" : "background", {
-          wakeMode,
-        });
-      } catch (error) {
-        devWarn("KDP helper background wake skipped", error);
-      }
-      try {
-        await runAlertCheck("background");
-      } catch (error) {
-        devWarn("background alert check skipped", error);
-      }
-      try {
-        const { drainBulkOutbox } = await import("./bulkOutbox");
-        await drainBulkOutbox();
-      } catch (error) {
-        devWarn("background outbox drain skipped", error);
-      }
-      // Leftover nightly/deferred is expected work, not a failed wake (iOS throttles false).
-      return BackgroundTask.BackgroundTaskResult.Success;
-    } catch {
-      return BackgroundTask.BackgroundTaskResult.Success;
-    }
-  });
+function defineLaunchSafeTask(
+  name: string,
+  runner: () => Promise<(typeof BackgroundTask)["BackgroundTaskResult"]["Success"]>,
+) {
+  try {
+    if (TaskManager.isTaskDefined(name)) return;
+    TaskManager.defineTask(name, runner);
+  } catch (error) {
+    // AppContext/AuthContext import this module on launch. A missing or
+    // half-linked TaskManager must not abort JS before the first paint.
+    devWarn(`Task ${name} unavailable.`, error);
+  }
 }
 
-if (!TaskManager.isTaskDefined(INTELIADS_NOTIFICATION_TASK)) {
-  TaskManager.defineTask(INTELIADS_NOTIFICATION_TASK, async () => {
+defineLaunchSafeTask(INTELIADS_BACKGROUND_TASK, async () => {
+  try {
     try {
-      try {
-        const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
-        await runDualSourceBackgroundRefresh("background");
-      } catch (error) {
-        devWarn("notification financial refresh skipped", error);
-      }
-      try {
-        const { runKdpIosHelperTick } = await import("./kdp/importer");
-        const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
-        // Push defaults to recent; native pending kind still wins if set.
-        const wakeMode = await resolveLockedPhoneKdpWakeMode("push");
-        await runKdpIosHelperTick("push", { wakeMode });
-      } catch (error) {
-        devWarn("KDP helper notification wake skipped", error);
-      }
-      try {
-        await runAlertCheck("background");
-      } catch (error) {
-        devWarn("notification alert check skipped", error);
-      }
-      try {
-        const { drainBulkOutbox } = await import("./bulkOutbox");
-        await drainBulkOutbox();
-      } catch (error) {
-        devWarn("notification outbox drain skipped", error);
-      }
-      return BackgroundTask.BackgroundTaskResult.Success;
-    } catch {
-      return BackgroundTask.BackgroundTaskResult.Success;
+      const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
+      await runDualSourceBackgroundRefresh("background");
+    } catch (error) {
+      devWarn("background financial refresh skipped", error);
     }
-  });
-}
+    try {
+      const { runKdpIosHelperTick } = await import("./kdp/importer");
+      const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
+      const wakeMode = await resolveLockedPhoneKdpWakeMode("background");
+      await runKdpIosHelperTick(wakeMode === "processing" ? "processing" : "background", {
+        wakeMode,
+      });
+    } catch (error) {
+      devWarn("KDP helper background wake skipped", error);
+    }
+    try {
+      await runAlertCheck("background");
+    } catch (error) {
+      devWarn("background alert check skipped", error);
+    }
+    try {
+      const { drainBulkOutbox } = await import("./bulkOutbox");
+      await drainBulkOutbox();
+    } catch (error) {
+      devWarn("background outbox drain skipped", error);
+    }
+    // Leftover nightly/deferred is expected work, not a failed wake (iOS throttles false).
+    return BackgroundTask.BackgroundTaskResult.Success;
+  } catch {
+    return BackgroundTask.BackgroundTaskResult.Success;
+  }
+});
+
+defineLaunchSafeTask(INTELIADS_NOTIFICATION_TASK, async () => {
+  try {
+    try {
+      const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
+      await runDualSourceBackgroundRefresh("background");
+    } catch (error) {
+      devWarn("notification financial refresh skipped", error);
+    }
+    try {
+      const { runKdpIosHelperTick } = await import("./kdp/importer");
+      const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
+      // Push defaults to recent; native pending kind still wins if set.
+      const wakeMode = await resolveLockedPhoneKdpWakeMode("push");
+      await runKdpIosHelperTick("push", { wakeMode });
+    } catch (error) {
+      devWarn("KDP helper notification wake skipped", error);
+    }
+    try {
+      await runAlertCheck("background");
+    } catch (error) {
+      devWarn("notification alert check skipped", error);
+    }
+    try {
+      const { drainBulkOutbox } = await import("./bulkOutbox");
+      await drainBulkOutbox();
+    } catch (error) {
+      devWarn("notification outbox drain skipped", error);
+    }
+    return BackgroundTask.BackgroundTaskResult.Success;
+  } catch {
+    return BackgroundTask.BackgroundTaskResult.Success;
+  }
+});
 
 export async function registerForPushAsync(opts?: {
   requestPermission?: boolean;
@@ -728,10 +753,7 @@ export async function configureNotifications(
       // Still push explicit OFF to Nest so mass-use defaults cannot leave stale ON prefs.
       void persistNotificationPreferences({
         newOrder: false,
-        dailyDigest: false,
-        includeKdpNet: prefs.includeKdpNet,
-        bookAttention: false,
-        campaignSpend: false,
+        dailyReport: false,
       });
       // Keep APNs registration when already granted — KDP silent wakes need the token.
       if (permission === "granted") {
@@ -776,10 +798,7 @@ export async function configureNotifications(
     void syncNotificationTimeZone();
     void persistNotificationPreferences({
       newOrder: prefs.newOrder,
-      dailyDigest: prefs.dailyDigest,
-      includeKdpNet: prefs.includeKdpNet,
-      bookAttention: prefs.bookAttention,
-      campaignSpend: prefs.campaignSpend,
+      dailyReport: prefs.dailyDigest,
     });
     void registerForPushAsync();
   }
@@ -833,17 +852,17 @@ export async function persistNotificationPreferences(prefs: {
   includeKdpNet?: boolean;
   bookAttention?: boolean;
   campaignSpend?: boolean;
+  spendThreshold?: number;
 }): Promise<boolean> {
   try {
+    // Nest ValidationPipe uses forbidNonWhitelisted. Only send fields the
+    // live preferences DTO accepts (newOrder + dailyReport). Extra iOS-only
+    // keys (dailyDigest, includeKdpNet, …) would 400 and leave Nest prefs OFF.
     await notificationNestJson("/notifications/preferences", {
       method: "PUT",
       body: JSON.stringify({
         newOrder: !!prefs.newOrder,
         dailyReport: !!(prefs.dailyReport ?? prefs.dailyDigest),
-        dailyDigest: !!prefs.dailyDigest,
-        includeKdpNet: !!prefs.includeKdpNet,
-        bookAttention: !!prefs.bookAttention,
-        campaignSpend: !!prefs.campaignSpend,
       }),
     });
     return true;

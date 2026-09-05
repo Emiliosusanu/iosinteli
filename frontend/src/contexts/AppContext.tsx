@@ -11,12 +11,22 @@ import { useAuth } from "./AuthContext";
 import { configureNotifications, registerForPushAsync, clearNotificationIdentity, installBackgroundSyncWakeHandlers, runAlertCheck, subscribeNotificationRefresh } from "../lib/notifications";
 import { DEFAULT_KDP_ROYALTY_SOURCE, normalizeKdpRoyaltySource, type KdpRoyaltySource } from "../lib/kdp/source";
 import { getKdpRoyaltySource, setKdpRoyaltySource as persistKdpRoyaltySource } from "../lib/kdp/sourceStore";
+import {
+  NEST_DISABLED_VIEW_MESSAGE,
+  NEST_DISABLED_VIEW_TITLE,
+  VIEW_CURRENCY_CONFLICT_TITLE,
+  planSelectAllSameCurrency,
+  planViewToggle,
+  viewCurrencyConflictMessage,
+} from "../lib/accountsUi";
 
 const STORAGE_KEYS = {
   selectedProfiles: "inteliads.selectedProfiles",
   dateRange: "inteliads.dateRange",
   royaltyRate: "inteliads.royaltyRate",
   notifications: "inteliads.notifications",
+  /** One-shot: flip mass-safe all-off installs to the current ON defaults. */
+  notificationsEnabledBundle: "inteliads.notifications.enabledBundle.v1",
 };
 
 export interface NotificationPrefs {
@@ -28,15 +38,39 @@ export interface NotificationPrefs {
   includeKdpNet: boolean;
 }
 
-/** Opt-in defaults: match Nest smart-notification prefs (off until user enables). */
+/** Mass-use defaults: alerts ON; Nest owns morning digest + new orders when synced. */
 const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
-  newOrder: false,
-  bookAttention: false,
-  campaignSpend: false,
+  newOrder: true,
+  bookAttention: true,
+  campaignSpend: true,
   spendThreshold: 25,
-  dailyDigest: false,
-  includeKdpNet: false,
+  dailyDigest: true,
+  includeKdpNet: true,
 };
+
+/** Map Nest `dailyReport` onto the iOS `dailyDigest` switch so remote prefs stay honest. */
+function coalesceNotificationPrefs(
+  raw: Record<string, unknown>,
+  base: NotificationPrefs = DEFAULT_NOTIFICATIONS,
+): NotificationPrefs {
+  const dailyDigest =
+    typeof raw.dailyDigest === "boolean"
+      ? raw.dailyDigest
+      : typeof raw.dailyReport === "boolean"
+        ? raw.dailyReport
+        : base.dailyDigest;
+  return {
+    newOrder: typeof raw.newOrder === "boolean" ? raw.newOrder : base.newOrder,
+    bookAttention: typeof raw.bookAttention === "boolean" ? raw.bookAttention : base.bookAttention,
+    campaignSpend: typeof raw.campaignSpend === "boolean" ? raw.campaignSpend : base.campaignSpend,
+    spendThreshold:
+      typeof raw.spendThreshold === "number" && Number.isFinite(raw.spendThreshold)
+        ? raw.spendThreshold
+        : base.spendThreshold,
+    dailyDigest,
+    includeKdpNet: typeof raw.includeKdpNet === "boolean" ? raw.includeKdpNet : base.includeKdpNet,
+  };
+}
 
 interface AppContextType {
   profiles: AmazonProfile[];
@@ -124,9 +158,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         try {
           const parsed = JSON.parse(nf);
           if (parsed && typeof parsed === "object") {
-            setNotificationsState({ ...DEFAULT_NOTIFICATIONS, ...parsed });
+            const bundle = await storage.getItem(STORAGE_KEYS.notificationsEnabledBundle, "");
+            if (!bundle) {
+              // Prior mass-safe default was all-off; enable the full alert set once.
+              setNotificationsState(DEFAULT_NOTIFICATIONS);
+              void storage.setItem(STORAGE_KEYS.notifications, JSON.stringify(DEFAULT_NOTIFICATIONS));
+              void storage.setItem(STORAGE_KEYS.notificationsEnabledBundle, "1");
+            } else {
+              setNotificationsState(coalesceNotificationPrefs(parsed as Record<string, unknown>));
+            }
           }
         } catch {}
+      } else {
+        void storage.setItem(STORAGE_KEYS.notificationsEnabledBundle, "1");
       }
       setHydrated(true);
     })();
@@ -231,7 +275,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (Number.isFinite(rate) && rate > 0 && rate <= 100) setRoyaltyRateState(rate);
     const nf = remoteSettings["notifications"];
     if (nf && typeof nf === "object") {
-      setNotificationsState((prev) => ({ ...prev, ...nf }));
+      setNotificationsState((prev) =>
+        coalesceNotificationPrefs(nf as Record<string, unknown>, prev),
+      );
     }
   }, [remoteSettings]);
 
@@ -325,17 +371,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 Number.isFinite(Number(item.previousBid))) ||
               ((item.action === "pause" || item.action === "enable") && item.previousEnabled != null),
           );
-          Alert.alert(
-            n === 1 ? "Amazon rejected this change" : `Amazon rejected ${n} changes`,
-            detail
-              ? `${detail}\n\n${
-                  restoredAny
-                    ? "The app restored the previous on-screen bid/state. Confirm on Amazon if unsure, then retry from Targets."
-                    : "The app refreshed data from the server. Confirm the live bid/state on Amazon, then retry from Targets."
-                }`
-              : restoredAny
-                ? "Amazon Ads did not accept the write. The app restored the previous on-screen bid/state. Confirm on Amazon if unsure, then retry from Targets."
-                : "Amazon Ads did not accept the write. The app refreshed data from the server. Confirm the live bid/state on Amazon, then retry from Targets.",
+          void import("../lib/bulkOutboxContract").then(
+            ({ bulkFailureAlertBody, bulkFailureAlertTitle, classifyBulkFailureSource }) => {
+              const sources = result.failedItems.map((item) =>
+                classifyBulkFailureSource(item.lastError),
+              );
+              const dominant =
+                sources.every((s) => s === "stale_or_unowned")
+                  ? "stale_or_unowned"
+                  : sources.every((s) => s === "amazon")
+                    ? "amazon"
+                    : sources.includes("stale_or_unowned") && !sources.includes("amazon")
+                      ? "stale_or_unowned"
+                      : sources.includes("amazon") && !sources.includes("stale_or_unowned")
+                        ? "amazon"
+                        : "other";
+              // Amazon rejected / Nest not-found titles come from bulkFailureAlertTitle.
+              Alert.alert(
+                bulkFailureAlertTitle(n, dominant),
+                bulkFailureAlertBody({ detail, source: dominant, restoredAny }),
+              );
+            },
           );
         }
 
@@ -386,6 +442,99 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           void runAlertCheck("foreground");
           const { drainBulkOutbox } = await import("../lib/bulkOutbox");
           void drainBulkOutbox();
+          // Nest durable bulk jobs continue server-side while the app is closed —
+          // poll on resume so optimistic paint can revert permanent fails.
+          void import("../lib/nestBulkJobs").then(async ({ refreshOpenNestBulkJobs }) => {
+            try {
+              const { newlyCompleted } = await refreshOpenNestBulkJobs();
+              if (!newlyCompleted.length) return;
+              const { revertOptimisticEntityBid, revertOptimisticEntityState } = await import(
+                "../lib/invalidateAds"
+              );
+              const {
+                bulkFailureAlertBody,
+                bulkFailureAlertTitle,
+                canRestoreBulkRevertItem,
+                classifyBulkFailureSource,
+                nestBulkConfirmedSucceeded,
+                nestBulkRevertPlan,
+                nestBulkSkipAlert,
+                shouldRevertNestBulkEntity,
+              } = await import("../lib/bulkOutboxContract");
+              for (const done of newlyCompleted) {
+                const plan = nestBulkRevertPlan({
+                  failedIds: done.failedIds,
+                  permanentFailIds: done.permanentFailIds,
+                  skippedIds: done.skippedIds,
+                  resultFailed: done.resultFailed,
+                  resultSucceeded: done.resultSucceeded,
+                  resultSkipped: done.resultSkipped,
+                });
+                let restoredAny = false;
+                for (const revert of done.revertItems || []) {
+                  if (!shouldRevertNestBulkEntity(revert.entityId, plan)) continue;
+                  if (!canRestoreBulkRevertItem(revert)) continue;
+                  if (revert.action === "pause" || revert.action === "enable") {
+                    revertOptimisticEntityState(
+                      queryClient,
+                      done.entityKind,
+                      revert.entityId,
+                      revert.previousEnabled as boolean,
+                    );
+                    restoredAny = true;
+                  } else {
+                    revertOptimisticEntityBid(
+                      queryClient,
+                      done.entityKind,
+                      revert.entityId,
+                      revert.previousBid ?? null,
+                    );
+                    restoredAny = true;
+                  }
+                }
+                const failCount =
+                  done.failedIds?.length ||
+                  done.permanentFailIds?.length ||
+                  done.resultFailed ||
+                  0;
+                if (failCount > 0) {
+                  const detail = done.permanentMessages?.[0] || done.lastError || null;
+                  const sources = (done.permanentMessages || [detail]).map((m) =>
+                    classifyBulkFailureSource(m),
+                  );
+                  const dominant =
+                    sources.every((s) => s === "stale_or_unowned")
+                      ? "stale_or_unowned"
+                      : sources.every((s) => s === "amazon")
+                        ? "amazon"
+                        : sources.includes("stale_or_unowned") && !sources.includes("amazon")
+                          ? "stale_or_unowned"
+                          : sources.includes("amazon") && !sources.includes("stale_or_unowned")
+                            ? "amazon"
+                            : "other";
+                  Alert.alert(
+                    bulkFailureAlertTitle(failCount, dominant),
+                    bulkFailureAlertBody({
+                      detail,
+                      source: dominant,
+                      restoredAny,
+                    }),
+                  );
+                } else if ((done.resultSkipped ?? done.skippedIds?.length ?? 0) > 0) {
+                  const skipAlert = nestBulkSkipAlert({
+                    succeeded: nestBulkConfirmedSucceeded({
+                      succeeded: done.resultSucceeded,
+                    }),
+                    skipped: done.resultSkipped ?? done.skippedIds?.length ?? 0,
+                    restoredAny,
+                  });
+                  Alert.alert(skipAlert.title, skipAlert.body);
+                }
+              }
+            } catch {
+              // Resume polling is best-effort; Targets screen also refreshes.
+            }
+          });
           void queryClient.invalidateQueries({
             predicate: (query) => {
               const key = query.queryKey[0];
@@ -399,13 +548,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => sub.remove();
   }, [hydrated, queryClient, user?.id, selectedProfileIds]);
 
+  // Always register the ~15m BG metronome when signed in (Ads refresh + KDP wakes).
+  // The JS interval only ticks the iPhone KDP helper while that source is selected.
   useEffect(() => {
-    if (!hydrated || !user?.id || kdpRoyaltySource !== "extension_ios") return;
+    if (!hydrated || !user?.id) return;
     void import("../lib/notifications").then(async (m) => {
       await m.ensureBackgroundRefreshRegistered();
-      // Silent KDP wakes need a live APNs token even when alert prefs are off.
+      // Silent KDP / server pushes need a live APNs token.
       await m.registerForPushAsync({ requestPermission: true });
     });
+    if (kdpRoyaltySource !== "extension_ios") return;
     const id = setInterval(() => {
       void import("../lib/kdp/importer").then((m) =>
         m.runKdpIosHelperTick("interval", { profileIds: selectedProfileIds }),
@@ -498,35 +650,52 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const toggleProfile = useCallback(
     (id: string) => {
-      const nextProfile = profiles.find((profile) => profile.id === id || profile.profile_id === id);
-      const rowId = nextProfile?.id ?? id;
-      const adsId = nextProfile?.profile_id;
-      if (selectedProfileIds.includes(rowId) || (adsId ? selectedProfileIds.includes(adsId) : false)) {
-        setSelectedProfileIds(
-          selectedProfileIds.filter((profileId) => profileId !== rowId && profileId !== adsId),
-        );
+      const plan = planViewToggle({
+        profileId: id,
+        profiles,
+        selectedProfileIds,
+      });
+
+      if (plan.kind === "remove" || plan.kind === "add") {
+        setSelectedProfileIds(plan.nextIds);
         return;
       }
 
-      const nextCurrency = nextProfile?.currency_code ?? "USD";
-      const compatibleIds = selectedProfileIds.filter((profileId) => {
-        const profile = profiles.find((candidate) => candidate.id === profileId || candidate.profile_id === profileId);
-        return (profile?.currency_code ?? "USD") === nextCurrency;
-      });
-      const next = [...compatibleIds, rowId];
-      setSelectedProfileIds(next);
+      if (plan.kind === "nest_disabled") {
+        Alert.alert(NEST_DISABLED_VIEW_TITLE, NEST_DISABLED_VIEW_MESSAGE);
+        return;
+      }
+
+      Alert.alert(
+        VIEW_CURRENCY_CONFLICT_TITLE,
+        viewCurrencyConflictMessage(plan.currentCurrency, plan.nextCurrency),
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: `Switch to ${plan.nextCurrency}`,
+            onPress: () => setSelectedProfileIds(plan.nextIdsIfSwitch),
+          },
+        ],
+      );
     },
     [profiles, selectedProfileIds, setSelectedProfileIds],
   );
 
   const selectAllProfiles = useCallback(() => {
-    const selectedProfile = profiles.find((profile) => selectedProfileIds.includes(profile.id));
-    const currency = selectedProfile?.currency_code ?? profiles[0]?.currency_code ?? "USD";
-    setSelectedProfileIds(
-      profiles
-        .filter((profile) => (profile.currency_code ?? "USD") === currency)
-        .map((profile) => profile.id),
-    );
+    const next =
+      typeof planSelectAllSameCurrency === "function"
+        ? planSelectAllSameCurrency({ profiles, selectedProfileIds })
+        : profiles
+            .filter((profile) => profile.is_enabled !== false)
+            .filter((profile, _, list) => {
+              const currency =
+                list.find((row) => selectedProfileIds.includes(row.id) || selectedProfileIds.includes(row.profile_id))
+                  ?.currency_code ??
+                list[0]?.currency_code;
+              return (profile.currency_code ?? "USD") === (currency ?? "USD");
+            })
+            .map((profile) => profile.id);
+    setSelectedProfileIds(next);
   }, [profiles, selectedProfileIds, setSelectedProfileIds]);
 
   const setDateRange = useCallback((range: DateRange) => {

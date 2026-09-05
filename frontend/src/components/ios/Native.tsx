@@ -14,6 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { requireOptionalNativeModule } from "expo-modules-core";
 import { SymbolView, type SFSymbol } from "expo-symbols";
 import { parseDateOnly, toDateString } from "@/src/lib/format";
+import { parseBidInput } from "@/src/lib/targetingFilters";
 import { dashboard, useTheme } from "@/src/lib/theme";
 
 // @expo/ui calls requireNativeView at import time. Loading it before a native
@@ -40,11 +41,14 @@ function loadSwiftUi() {
   }
 }
 
-const swiftUi = loadSwiftUi();
-type SwiftUiKit = NonNullable<typeof swiftUi>;
+type SwiftUiKit = NonNullable<ReturnType<typeof loadSwiftUi>>;
+let swiftUiMemo: SwiftUiKit | null | undefined;
 
+/** Lazy — Overview SF Symbols must not load ExpoUI at import time. */
 function nativeSwift(): SwiftUiKit | null {
-  return swiftUi;
+  if (swiftUiMemo !== undefined) return swiftUiMemo;
+  swiftUiMemo = loadSwiftUi();
+  return swiftUiMemo;
 }
 
 const ION_TO_SF: Record<string, SFSymbol> = {
@@ -357,8 +361,8 @@ export function promptIOSNumber(opts: {
         {
           text: "Save",
           onPress: (text?: string) => {
-            const next = Number(String(text ?? "").replace(",", "."));
-            if (!Number.isFinite(next) || next < (opts.min ?? -Infinity) || next > (opts.max ?? Infinity)) {
+            const next = parseBidInput(String(text ?? ""));
+            if (next == null || next < (opts.min ?? -Infinity) || next > (opts.max ?? Infinity)) {
               Alert.alert("Check the number", `Enter a value between ${opts.min ?? 0} and ${opts.max ?? 0}.`);
               return;
             }

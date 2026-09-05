@@ -45,25 +45,23 @@ export function booksEmptyCopy(
   opts: { iosHelperOn?: boolean; hasLinkedKdp?: boolean; hasAccountRoyalties?: boolean } = {},
 ): { title: string; subtitle: string } {
   if (search.trim()) {
-    return { title: "No matching books", subtitle: "Try a different title or ASIN." };
+    return { title: "No matching books", subtitle: "Try another search" };
   }
   if (opts.hasAccountRoyalties) {
     return {
       title: "No per-book breakdown",
-      subtitle:
-        "Account royalties exist for this period, but book-level KDP rows do not. Royalty source → Chrome + iPhone imports the same per-book tables as the Chrome helper.",
+      subtitle: "",
     };
   }
   if (!opts.hasLinkedKdp && !opts.iosHelperOn) {
     return {
-      title: "No KDP data yet",
-      subtitle:
-        "Turn on Royalty source → Chrome + iPhone in Settings, then sign in to KDP. This list stays empty until royalties are imported.",
+      title: "Connect KDP",
+      subtitle: "",
     };
   }
   return {
     title: "No book data in range",
-    subtitle: "No books with KDP royalties or Ads activity in this period.",
+    subtitle: "",
   };
 }
 

@@ -85,6 +85,20 @@ test("MutationTap and EntityBidControl mark cooldown yellow + popup", () => {
   assert.match(entityDetail, /Edit anyway/);
 });
 
+test("placement and up/down bidding surfaces reuse campaign settings cooldown", () => {
+  const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
+  const campaigns = readFileSync(new URL("../app/(tabs)/campaigns.tsx", import.meta.url), "utf8");
+  const campaignDetail = readFileSync(new URL("../app/campaign/[id].tsx", import.meta.url), "utf8");
+  const cooldown = readFileSync(new URL("../src/lib/bidCooldown.ts", import.meta.url), "utf8");
+  assert.match(cooldown, /placement_adj_last_modified_at/);
+  assert.match(cooldown, /getCampaignSettingsCooldown/);
+  assert.match(targeting, /getCampaignSettingsCooldown/);
+  assert.match(targeting, /cooldown=\{cooldown\}/);
+  assert.match(campaigns, /cooldown=\{settingsCooldown\}/);
+  assert.match(campaignDetail, /cooldown=\{settingsCooldown\}/);
+  assert.match(campaignDetail, /changeBiddingStrategy/);
+});
+
 test("target detail enriches cover like list path", () => {
   assert.match(queries, /enrichProductTargetDisplay\(\[withMetrics\]/);
 });

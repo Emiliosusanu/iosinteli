@@ -6,14 +6,13 @@ import {
   Text,
   View,
 } from "react-native";
-import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { InteliAdsIcon, type InteliAdsIconName } from "@/src/components/InteliAdsIcon";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { playHaptic } from "@/src/lib/hapticPolicy";
-import { dashboard, useTheme } from "@/src/lib/theme";
+import { dashboard, density, layout, useTheme } from "@/src/lib/theme";
 
-const BAR_HEIGHT = 64;
+const BAR_HEIGHT = dashboard.tabBarHeight;
 const H_PAD = 4;
 
 type TabVisual = {
@@ -63,7 +62,7 @@ export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBa
   const insets = useSafeAreaInsets();
   const routes = state.routes;
   const index = state.index;
-  const bottomPad = Math.max(insets.bottom, 8);
+  const bottomPad = Math.max(insets.bottom, density.chromeGap);
 
   const shell = useMemo(
     () => ({
@@ -72,7 +71,6 @@ export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBa
       inactive: t.colors.text_tertiary,
       active: t.colors.tone_primary,
       activeWell: t.scheme === "dark" ? "rgba(47,124,255,0.18)" : "rgba(0,122,255,0.12)",
-      blurTint: t.scheme === "dark" ? ("dark" as const) : ("light" as const),
     }),
     [t.colors, t.scheme],
   );
@@ -80,11 +78,8 @@ export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBa
   return (
     <View pointerEvents="box-none" style={[styles.wrap, { paddingBottom: bottomPad }]}>
       <View style={styles.shadowLift}>
+        {/* Translucent fill only — avoid stacking a live blur under every tab route. */}
         <View style={[styles.capsule, { borderColor: shell.stroke, backgroundColor: shell.bar }]}>
-          {Platform.OS === "ios" ? (
-            <BlurView intensity={t.scheme === "dark" ? 42 : 64} tint={shell.blurTint} style={StyleSheet.absoluteFillObject} />
-          ) : null}
-
           <View style={styles.track}>
             {routes.map((route, i) => {
               const focused = index === i;
@@ -169,26 +164,26 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     alignItems: "center",
-    paddingHorizontal: 16,
+    paddingHorizontal: dashboard.pageInset,
   },
   shadowLift: {
     width: "100%",
     maxWidth: 430,
-    borderRadius: 22,
+    borderRadius: dashboard.tabBarRadius,
     ...Platform.select({
       ios: {
         shadowColor: "#000",
-        shadowOpacity: 0.12,
-        shadowRadius: 16,
-        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.08,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
       },
-      android: { elevation: 8 },
+      android: { elevation: 6 },
       default: {},
     }),
   },
   capsule: {
     height: BAR_HEIGHT,
-    borderRadius: 22,
+    borderRadius: dashboard.tabBarRadius,
     borderCurve: "continuous",
     borderWidth: StyleSheet.hairlineWidth,
     overflow: "hidden",
@@ -204,13 +199,14 @@ const styles = StyleSheet.create({
     height: BAR_HEIGHT,
     alignItems: "center",
     justifyContent: "center",
+    minHeight: layout.minTap,
   },
   itemInner: {
     minWidth: 56,
     maxWidth: 76,
     paddingHorizontal: 6,
-    paddingVertical: 6,
-    borderRadius: 14,
+    paddingVertical: density.chipPadV,
+    borderRadius: dashboard.metricChipRadius,
     borderCurve: "continuous",
     alignItems: "center",
     justifyContent: "center",

@@ -8,6 +8,8 @@ import { acosTone, dashboard, toneColor, type Theme } from "@/src/lib/theme";
 import { formatCurrency, formatInt, formatPercent } from "@/src/lib/format";
 import { resolveBookNet, bookNetIsKnown } from "@/src/lib/netRoyalties";
 import type { SearchTerm } from "@/src/lib/types";
+import type { SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
+import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 
 const ROW = StyleSheet.create({
   row: {
@@ -208,6 +210,7 @@ export function BookWidgetRow({
   blur,
   onPress,
   isLast,
+  marketplaceIndex,
 }: {
   book: TopBookRow;
   currency: string;
@@ -215,6 +218,7 @@ export function BookWidgetRow({
   blur?: boolean;
   onPress: () => void;
   isLast?: boolean;
+  marketplaceIndex?: SponsoredMarketplaceIndex;
 }) {
   const bookName = book.title || book.asin || book.sku || "Book";
   const bookKdpAvailable = book.kdp_state !== "missing" && book.royalties != null;
@@ -251,9 +255,14 @@ export function BookWidgetRow({
         ) : null}
       </View>
       <View style={{ flex: 1, marginHorizontal: t.spacing.md }}>
-        <Text style={[t.typography.subhead, { color: blur ? t.colors.text_tertiary : t.colors.text_primary, fontWeight: "600" }]} numberOfLines={2}>
-          {blur ? "Hidden title" : bookName}
-        </Text>
+        <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
+          <Text style={[t.typography.subhead, { color: blur ? t.colors.text_tertiary : t.colors.text_primary, fontWeight: "600", flex: 1, minWidth: 0 }]} numberOfLines={2}>
+            {blur ? "Hidden title" : bookName}
+          </Text>
+          {!blur && marketplaceIndex ? (
+            <BookMarketplaceFlags index={marketplaceIndex} book={book} style={t.typography.subhead} />
+          ) : null}
+        </View>
         <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 2 }]}>
           {bookKdpAvailable ? `${formatCurrency(book.royalties!, currency, { compact: true })} royalties · ` : ""}
           {formatCurrency(book.spend, currency, { compact: true })} spend ·{" "}

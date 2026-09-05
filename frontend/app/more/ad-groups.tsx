@@ -16,14 +16,17 @@ import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
-import { EntityStateSwitch } from "@/src/components/Mutations";
+import { EntityStateSwitch, assertNotViewingAsOtherUser } from "@/src/components/Mutations";
 import { useApp } from "@/src/contexts/AppContext";
+import { useAuth } from "@/src/contexts/AuthContext";
 import { useTheme, acosTone, dashboard, toneColor, useReduceMotion, layout, spacing } from "@/src/lib/theme";
 import { applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityState } from "@/src/lib/invalidateAds";
 import { updateAdGroupState } from "@/src/lib/mutations";
-import { fetchAdGroups } from "@/src/lib/queries";
+import { AD_GROUPS_LIST_LIMIT, fetchAdGroups } from "@/src/lib/queries";
 import { statusLabel } from "@/src/lib/campaigns";
 import { formatCurrency, formatInt, formatPercent, safeDivide } from "@/src/lib/format";
+import { LIST_PERIOD_QUERY_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
+import { HOME_QUERY_TIMEOUT_MS, isHomeQueryTimeout, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { EmptyState, ToneDot, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard, RetryState } from "@/src/components/Primitives";
 import { IOSSearchBar, IOSSegmentedControl } from "@/src/components/ios/Native";
 
@@ -85,18 +88,34 @@ export default function AdGroupsScreen() {
   const router = useRouter();
   const reduceMotion = useReduceMotion();
   const queryClient = useQueryClient();
-  const { selectedProfileIds, primaryCurrency, dateRange } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
+  const { user } = useAuth();
+  const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
+  const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("enabled");
   const [sortKey, setSortKey] = useState<SortKey>("spend");
   const [filterOpen, setFilterOpen] = useState(false);
 
-  const { data = [], isLoading, isError, isRefetching, refetch } = useQuery({
-    queryKey: ["ad-groups-list", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => fetchAdGroups(selectedProfileIds, undefined, { start: dateRange.start, end: dateRange.end }),
-    enabled: selectedProfileIds.length > 0,
+  const { data = [], isLoading, isError, isRefetching, error, refetch } = useQuery({
+    queryKey: ["ad-groups-list", scopeProfiles, dateRange.start, dateRange.end],
+    queryFn: ({ signal }) =>
+      withQueryTimeout(
+        fetchAdGroups(scopeProfiles, undefined, {
+          start: dateRange.start,
+          end: dateRange.end,
+          limit: AD_GROUPS_LIST_LIMIT,
+          enrichCounts: false,
+        }),
+        HOME_QUERY_TIMEOUT_MS * 2,
+        signal,
+      ),
+    enabled: scopeProfiles.length > 0,
+    ...LIST_PERIOD_QUERY_CACHE,
+    retry: false,
   });
+  const listTruncated = !isError && data.length >= AD_GROUPS_LIST_LIMIT;
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -150,7 +169,10 @@ export default function AdGroupsScreen() {
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      await refetch();
+      // Bound pull-to-refresh so a hung Supabase read cannot spin forever.
+      await withQueryTimeout(refetch({ throwOnError: false }), HOME_QUERY_TIMEOUT_MS * 2);
+    } catch {
+      /* timeout / abort — banner/retry handles empty+error */
     } finally {
       setRefreshing(false);
     }
@@ -161,7 +183,7 @@ export default function AdGroupsScreen() {
   const showCount = search.trim().length > 0 || stateFilter !== "enabled" || sortActive;
   const empty = emptyCopy(search, stateFilter, data.length);
 
-  if (selectedProfileIds.length === 0) {
+  if (scopeProfiles.length === 0) {
     return (
       <SubScreen title="Ad Groups" showDateRange>
         <EmptyState icon="business-outline" title="No account connected" subtitle="Connect an Amazon account to see ad groups." />
@@ -212,6 +234,7 @@ export default function AdGroupsScreen() {
         {showCount && !isLoading && !(isError && data.length === 0) ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>
             {filtered.length === 1 ? "1 ad group" : `${filtered.length} ad groups`}
+            {listTruncated ? ` · top ${AD_GROUPS_LIST_LIMIT} by spend` : ""}
           </Text>
         ) : null}
       </FilterChrome>
@@ -220,8 +243,12 @@ export default function AdGroupsScreen() {
         <ScreenSpinner />
       ) : isError && data.length === 0 ? (
         <RetryState
-          title="Couldn't load ad groups"
-          subtitle="Check your connection and try again."
+          title={isHomeQueryTimeout(error) ? "Ad groups took too long" : "Couldn't load ad groups"}
+          subtitle={
+            isHomeQueryTimeout(error)
+              ? "This period’s ad groups are still loading slowly. Retry, or narrow the date range."
+              : "Check your connection and try again."
+          }
           onRetry={() => void refetch()}
           retrying={isRefetching}
         />
@@ -279,6 +306,7 @@ export default function AdGroupsScreen() {
                         enabled={item.state === "enabled"}
                         noun="ad group"
                         onChange={async (next) => {
+                          assertNotViewingAsOtherUser(viewAsOtherUser);
                           const previous = applyOptimisticEntityState(queryClient, "ad_group", item.id, next);
                           try {
                             await updateAdGroupState(item.id, next ? "enabled" : "paused");

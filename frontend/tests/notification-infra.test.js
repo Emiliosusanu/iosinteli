@@ -31,6 +31,8 @@ import {
 } from "../src/lib/notificationPeriod.ts";
 
 const notifications = readFileSync(new URL("../src/lib/notifications.ts", import.meta.url), "utf8");
+const contract = readFileSync(new URL("../src/lib/notificationContract.ts", import.meta.url), "utf8");
+const digest = readFileSync(new URL("../src/lib/notificationDigest.ts", import.meta.url), "utf8");
 const layout = readFileSync(new URL("../app/_layout.tsx", import.meta.url), "utf8");
 const auth = readFileSync(new URL("../src/contexts/AuthContext.tsx", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src/contexts/AppContext.tsx", import.meta.url), "utf8");
@@ -212,6 +214,10 @@ test("token association and sign-out detach live in product code", () => {
   assert.match(notifications, /LOCAL_NEW_ORDER_AUTHORITY/);
   assert.match(notifications, /LOCAL_NEW_ORDER_AUTHORITY &&/);
   assert.doesNotMatch(notifications, /local new-order authority is forbidden/);
+  // Nest owns ~08:00 morning digest; local daytime digests start at 10am.
+  assert.match(contract, /LOCAL_MORNING_DIGEST_AUTHORITY = false/);
+  assert.match(digest, /LOCAL_MORNING_DIGEST_AUTHORITY/);
+  assert.match(digest, /DAYTIME_DIGEST_HOURS = \[10, 12, 14, 16, 18, 20\]/);
   assert.match(app, /runDualSourceBackgroundRefresh/);
   assert.match(app, /runAlertCheck\("foreground"\)/);
   assert.doesNotMatch(app, /setInterval\(\(\) => void runAlertCheck/);
@@ -219,12 +225,25 @@ test("token association and sign-out detach live in product code", () => {
   assert.match(notifications, /ALERT_CHECK_LAST_RUN_KEY/);
   assert.match(notifications, /adminFilterUserId: scope\.viewAs/);
   assert.doesNotMatch(notifications, /data: \{ url: "\/\(tabs\)" \}/);
-  // Mass-use: prefs default OFF; Nest owns morning digest.
-  assert.match(app, /newOrder: false/);
-  assert.match(app, /dailyDigest: false/);
-  assert.match(app, /bookAttention: false/);
-  assert.match(app, /campaignSpend: false/);
+  // Mass-use: prefs default ON; Nest owns morning digest + new-order push.
+  assert.match(app, /Mass-use defaults/);
+  assert.doesNotMatch(app, /off until user enables/);
+  assert.match(app, /newOrder: true/);
+  assert.match(app, /dailyDigest: true/);
+  assert.match(app, /bookAttention: true/);
+  assert.match(app, /campaignSpend: true/);
+  assert.match(app, /notificationsEnabledBundle/);
+  assert.match(app, /coalesceNotificationPrefs/);
+  assert.match(app, /dailyReport/);
+  assert.match(app, /ensureBackgroundRefreshRegistered/);
+  // Nest prefs DTO is whitelist-only (newOrder + dailyReport).
+  assert.match(notifications, /forbidNonWhitelisted/);
+  assert.match(notifications, /dailyReport: !!\(prefs\.dailyReport \?\? prefs\.dailyDigest\)/);
+  assert.doesNotMatch(
+    notifications,
+    /body: JSON\.stringify\(\{[\s\S]*dailyDigest: !!prefs\.dailyDigest[\s\S]*\}\)/,
+  );
   // All-off still syncs explicit OFF to Nest (no stale ON prefs).
   assert.match(notifications, /Still push explicit OFF to Nest/);
-  assert.match(notifications, /newOrder: false,\s*\n\s*dailyDigest: false/);
+  assert.match(notifications, /newOrder: false,\s*\n\s*dailyReport: false/);
 });

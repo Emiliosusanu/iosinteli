@@ -97,8 +97,14 @@ export async function refreshDualSourceFinancialCache(
 
     const today = toDateString(new Date());
     try {
-      const { fetchKdpRoyaltiesRange } = await import("./queries");
-      await fetchKdpRoyaltiesRange(scope.profileIds, today, today);
+      const { fetchAmazonProfiles, fetchKdpRoyaltiesRange } = await import("./queries");
+      const { selectKdpRoyaltyScope } = await import("./kdpRoyaltyScope");
+      const royaltyIds = selectKdpRoyaltyScope(
+        await fetchAmazonProfiles(scope.userId, scope.viewAs),
+      ).profileIds;
+      if (royaltyIds.length) {
+        await fetchKdpRoyaltiesRange(royaltyIds, today, today);
+      }
     } catch (error) {
       devWarn("KDP background read skipped", error);
     }

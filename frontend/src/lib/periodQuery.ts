@@ -20,6 +20,19 @@ export function periodQueryKey(range: PeriodRange, profileIds: readonly string[]
   return `${range.start}|${range.end}|${profiles}`;
 }
 
+/**
+ * Financial list/KPI cache identity — period + sorted profiles + currency.
+ * Prevents a late response for another currency from painting under the new label.
+ */
+export function financialPeriodQueryKey(
+  range: PeriodRange,
+  profileIds: readonly string[],
+  currency: string | null | undefined,
+): string {
+  const code = String(currency || "none").trim().toUpperCase() || "NONE";
+  return `${periodQueryKey(range, profileIds)}|${code}`;
+}
+
 /** Blocks any inherited placeholder — empty until this key has real data or same-scope warm. */
 export function noPeriodPlaceholder<T>(): T | undefined {
   return undefined;

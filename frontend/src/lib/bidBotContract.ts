@@ -343,12 +343,12 @@ export function runEngineConfirmMessage(mode: BidBotAutoMode): string {
 
 export function autoModeDescription(mode: BidBotAutoMode): string {
   if (mode === "high_confidence") {
-    return "Careful auto-applies high-confidence recommendations after a run. Medium recommendations stay visible for Apply.";
+    return "Auto-applies high-confidence after Run. Medium stays for Apply.";
   }
   if (mode === "aggressive") {
-    return "Aggressive auto-applies high- and medium-confidence recommendations after a run.";
+    return "Auto-applies high and medium after Run.";
   }
-  return "Off only generates recommendations. Run does not apply changes automatically.";
+  return "Off generates only. Run does not apply.";
 }
 
 export function confidenceCategoryLabel(value?: string | null): string | undefined {

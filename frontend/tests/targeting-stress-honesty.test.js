@@ -56,10 +56,11 @@ test("all five targeting segments are always wired (kw / asin / auto / cat / pla
 
 test("profile + date window isolation — no cross-period / cross-profile bleed", () => {
   assert.match(targeting, /sortedProfileIds/);
-  assert.match(targeting, /periodQueryKey/);
+  assert.match(targeting, /financialPeriodQueryKey/);
   assert.match(targeting, /noPeriodPlaceholder/);
   assert.match(targeting, /LIST_PERIOD_QUERY_CACHE/);
   assert.match(periodQuery, /export function periodQueryKey/);
+  assert.match(periodQuery, /export function financialPeriodQueryKey/);
   assert.match(periodQuery, /export function sortedProfileIds/);
   assert.match(periodQuery, /export function noPeriodPlaceholder/);
   // Empty selected profiles → empty state, not stale prior-account rows.
@@ -67,18 +68,23 @@ test("profile + date window isolation — no cross-period / cross-profile bleed"
   assert.match(targeting, /No Amazon account|No account connected/);
 });
 
-test("book filter: enabled sponsored ASINs only + cover grid (web parity)", () => {
-  assert.match(queries, /Books for the targeting filter — web parity/);
+test("book filter: campaign∪KDP eligible books + searchable cover rows", () => {
+  assert.match(queries, /Books for the targeting filter: union of/);
+  assert.match(queries, /selectEligibleTargetingBookOptions/);
+  assert.match(queries, /fetchKdpBooksForTargetingFilter/);
   assert.match(queries, /\.eq\("status", "enabled"\)/);
   assert.match(queries, /campaigns\.state", "enabled"/);
   assert.match(queries, /\/campaigns\/books/);
-  assert.match(targeting, /Sponsored ASINs on enabled campaigns/);
-  assert.match(targeting, /styles\.bookGrid/);
+  assert.match(queries, /dedupeTargetingBookOptions/);
+  assert.match(targeting, /styles\.bookList/);
+  assert.match(targeting, /targeting-book-search/);
+  assert.match(targeting, /filterTargetingBookOptions/);
   assert.match(targeting, /fetchTargetingBookOptions\(scopeProfiles/);
   assert.match(targeting, /Don't apply book filter until options are fetched/);
   assert.match(targeting, /bookCampaignIds/);
   assert.doesNotMatch(targeting, /No advertised books on these profiles yet\./);
-  assert.match(targeting, /No active sponsored books on these profiles yet\./);
+  assert.match(targeting, /No campaign or KDP books on these profiles yet\./);
+  assert.doesNotMatch(targeting, /Books with enabled campaigns or KDP data/);
 });
 
 test("perf + advanced ranges stress matrix (ACoS / bid / clicks / impr)", () => {
@@ -179,15 +185,36 @@ test("perf + advanced ranges stress matrix (ACoS / bid / clicks / impr)", () => 
   assert.equal(cleared.bidMax, null);
   assert.equal(advancedFiltersForSegment("keywords", withBid).bidMax, 1);
 
-  // Sort driven by active family
-  assert.equal(resolveTargetingSortKey("spend", withBid), "bid");
+  // Sort stays explicit — ranges only filter
+  assert.equal(resolveTargetingSortKey("spend", withBid), "spend");
 });
 
 test("filter persistence remembers book / perf / sort / advanced ranges", () => {
   assert.match(filterMemory, /inteliads\.filters\.targeting\.v2/);
   assert.match(targeting, /saveTargetingFilterMemory/);
   assert.match(targeting, /loadTargetingFilterMemory/);
+  assert.match(targeting, /DEFAULT_TARGETING_STATE_FILTER/);
+  assert.match(targeting, /resolveTargetingStateFilter/);
   assert.match(targeting, /bookAsin/);
+});
+
+test("default Active filter requires entity + ad group + campaign across segments", () => {
+  assert.match(targeting, /useState<EntityStateFilter>\(DEFAULT_TARGETING_STATE_FILTER\)/);
+  assert.match(targeting, /matchesLiveTargetingRow/);
+  assert.match(targeting, /testID="targeting-state-filter"/);
+  assert.match(targeting, /key: "enabled", label: "Active"/);
+  // Every non-placement segment passes parent states; placement is campaign-only.
+  assert.match(targeting, /adGroupState: \(k as any\)\.ad_group_state/);
+  assert.match(targeting, /adGroupState: p\.ad_group_state/);
+  assert.match(targeting, /campaignState: c\.state/);
+  for (const key of SEGMENTS) {
+    assert.match(targeting, new RegExp(`key:\\s*"${key}"`));
+  }
+  // Segment switch clears selection only — not stateFilter.
+  assert.doesNotMatch(targeting, /setSegment\([^)]+\);\s*setStateFilter/);
+  assert.match(queries, /attachParentEntityStates/);
+  assert.match(queries, /campaign_state:/);
+  assert.match(queries, /ad_group_state:/);
 });
 
 test("bulk bid stress: visible Bid ±, outbox drain, cooldown names, Placement gated", () => {
@@ -196,8 +223,8 @@ test("bulk bid stress: visible Bid ±, outbox drain, cooldown names, Placement g
   assert.match(targeting, /Bid −\$/);
   assert.match(targeting, /Bid \+%/);
   assert.match(targeting, /Bid −%/);
-  assert.match(targeting, /by amount/);
-  assert.match(targeting, /by percent/);
+  assert.doesNotMatch(targeting, />by amount</);
+  assert.doesNotMatch(targeting, />by percent</);
   assert.match(targeting, /Increase \/ decrease bid applies to keywords and targets/);
   assert.match(targeting, /selectedCooldownSummary/);
   assert.match(targeting, /targeting-cooldown-selected/);
@@ -226,8 +253,8 @@ test("period metrics honesty — fail closed, Nest null shares, no Sales labels"
   assert.match(queries, /Never paint lifetime totals or fake zeros/);
   assert.match(queries, /keyword metrics enrichment failed/);
   assert.match(queries, /product target metrics enrichment failed/);
-  assert.match(targeting, /Period metrics couldn't be loaded/);
-  assert.match(targeting, /No rows match these period filters — not missing data/);
+  assert.match(targeting, /Couldn't load metrics/);
+  assert.match(targeting, /No matches/);
   assert.doesNotMatch(targeting, /label:\s*"Sales"/);
   assert.match(targeting, /label:\s*"Impr"/);
   assert.match(targeting, /label:\s*"Clicks"/);
@@ -240,10 +267,12 @@ test("period metrics honesty — fail closed, Nest null shares, no Sales labels"
 test("list cap 500 is fetch-only — not Amazon write ceiling; entities not silently invented", () => {
   assert.match(queries, /TARGETING_LIST_LIMIT = 500/);
   assert.match(queries, /Not an Amazon write limit/);
-  assert.match(targeting, /List capped at \{TARGETING_LIST_LIMIT\}/);
-  assert.match(targeting, /Bulk Bid ± still writes every selected row/);
+  assert.match(targeting, /Showing \{TARGETING_LIST_LIMIT\} \(app limit\)/);
+  assert.doesNotMatch(targeting, /List capped at \{TARGETING_LIST_LIMIT\}/);
   // Empty states distinguish load error vs filter miss vs no data
   assert.match(targeting, /emptyCopy|No keywords|No campaigns|No product/);
+  assert.match(targeting, /Try All/);
+  assert.match(targeting, /Viewing customer — edits off/);
 });
 
 test("stress sort: ACoS / bid high→low on period metrics", () => {
@@ -261,6 +290,52 @@ test("stress sort: ACoS / bid high→low on period metrics", () => {
   assert.ok(compareTargetingRows(b, a, "spend") <= 0);
   assert.ok(compareTargetingRows(b, a, "clicks") <= 0);
   assert.ok(compareTargetingRows(b, a, "impressions") <= 0);
+});
+
+test("placement selection counts unique campaigns, not 3 rows each", () => {
+  assert.match(targeting, /const selectedWriteCount = useMemo/);
+  assert.match(targeting, /id\.split\("::"\)\[0\]/);
+  assert.match(targeting, /Select all \(\$\{visibleWriteCount\}\)/);
+  assert.match(targeting, /\$\{selectedWriteCount\} selected/);
+  assert.match(targeting, /Pause \$\{selectedWriteCount\}/);
+  assert.match(targeting, /Enable \$\{selectedWriteCount\}/);
+});
+
+test("view-as write guard covers single-row Targets mutations, not only bulk", () => {
+  const mutationsUi = readFileSync(new URL("../src/components/Mutations.tsx", import.meta.url), "utf8");
+  assert.match(mutationsUi, /VIEW_AS_WRITE_ALERT_TITLE/);
+  assert.match(mutationsUi, /Can't write while viewing as customer/);
+  assert.match(mutationsUi, /VIEW_AS_WRITE_ALERT_BODY/);
+  assert.match(mutationsUi, /Exit View as to edit/);
+  assert.match(mutationsUi, /assertNotViewingAsOtherUser/);
+  assert.match(mutationsUi, /blockIfViewingAs/);
+  assert.match(mutationsUi, /isViewAsWriteBlockedError/);
+  // Bulk + single-row paths all call the shared guest + view-as guard.
+  assert.match(targeting, /blockIfCannotWriteAmazon\(writeGuard\)/);
+  assert.match(targeting, /assertNotViewingAsOtherUser\(viewAsOtherUser\)/);
+  assert.match(targeting, /viewAsOtherUser=\{viewAsOtherUser\}/);
+  // Keyword / product-target toggles and bid / placement editors.
+  assert.equal(
+    (targeting.match(/assertNotViewingAsOtherUser\(viewAsOtherUser\)/g) || []).length >= 2,
+    true,
+  );
+  assert.equal(
+    (targeting.match(/blockIfCannotWriteAmazon\(writeGuard\)/g) || []).length >= 4,
+    true,
+  );
+});
+
+test("campaigns bidding-strategy onPick surfaces Nest/Amazon errors (no silent fail)", () => {
+  const campaigns = readFileSync(new URL("../app/(tabs)/campaigns.tsx", import.meta.url), "utf8");
+  assert.match(campaigns, /Couldn't update bidding strategy/);
+  assert.match(campaigns, /alertMutationError\(error, "Couldn't update bidding strategy\."\)/);
+  // Both iOS + Android sheets wrap onPick.
+  assert.equal(
+    (campaigns.match(/alertMutationError\(error, "Couldn't update bidding strategy\."\)/g) || []).length,
+    2,
+  );
+  assert.match(campaigns, /blockIfCannotWriteAmazon\(writeGuard\)/);
+  assert.match(campaigns, /assertNotViewingAsOtherUser\(viewAsOtherUser\)/);
 });
 
 function emptyAdv() {

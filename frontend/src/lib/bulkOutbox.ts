@@ -16,6 +16,7 @@ import { NestApiError } from "./rulesApi";
 import {
   bulkBackoffMs,
   clampAmazonBid,
+  isPermanentNotFoundBulkError,
   isTransientBulkError,
   type BulkActionKind,
   type BulkEntityKind,
@@ -37,6 +38,8 @@ export {
   BULK_MAX_ATTEMPTS_BEFORE_BACKOFF,
   clampAmazonBid,
   isTransientBulkError,
+  isPermanentNotFoundBulkError,
+  isBulkWritableTargetingRow,
 } from "./bulkOutboxContract";
 
 const OUTBOX_KEY = "inteliads.bulkOutbox.v1";
@@ -428,15 +431,68 @@ export async function drainBulkOutbox(): Promise<DrainResult> {
   return drainLock;
 }
 
-export async function retryPermanentBulkFailures(): Promise<void> {
+/** Move permanent failures back to pending (does not drain). Returns how many were requeued.
+ * Skips permanent "not found" rejects — Retry cannot resurrect dead Nest/Amazon IDs.
+ */
+export async function requeuePermanentBulkFailures(): Promise<number> {
   const state = await readOutbox();
   const stamp = nowIso();
-  await writeOutbox({
-    items: state.items.map((i) =>
-      i.status === "failed_permanent"
-        ? { ...i, status: "pending", nextAttemptAt: null, lastError: null, updatedAt: stamp }
-        : i,
-    ),
+  let count = 0;
+  const items = state.items.map((i) => {
+    if (i.status !== "failed_permanent") return i;
+    if (isPermanentNotFoundBulkError(i.lastError)) return i;
+    count += 1;
+    return {
+      ...i,
+      status: "pending" as const,
+      nextAttemptAt: null,
+      lastError: null,
+      updatedAt: stamp,
+    };
   });
-  await drainBulkOutbox();
+  if (count > 0) await writeOutbox({ items });
+  return count;
+}
+
+/** Retry permanent failures: requeue first so UI can show "Writing…", then drain. */
+export async function retryPermanentBulkFailures(): Promise<DrainResult> {
+  await requeuePermanentBulkFailures();
+  return drainBulkOutbox();
+}
+
+/** Drop permanent failures the seller has reviewed (Amazon already rejected; retry won't help). */
+export async function dismissPermanentBulkFailures(): Promise<number> {
+  const state = await readOutbox();
+  const kept = state.items.filter((i) => i.status !== "failed_permanent");
+  const removed = state.items.length - kept.length;
+  if (removed > 0) await writeOutbox({ items: kept });
+  return removed;
+}
+
+/** Auto-clear dead "not found" permanent fails so Retry does not loop forever. */
+export async function dismissNotFoundPermanentBulkFailures(): Promise<number> {
+  const state = await readOutbox();
+  const kept = state.items.filter(
+    (i) => !(i.status === "failed_permanent" && isPermanentNotFoundBulkError(i.lastError)),
+  );
+  const removed = state.items.length - kept.length;
+  if (removed > 0) await writeOutbox({ items: kept });
+  return removed;
+}
+
+export async function listPermanentFailEntityIds(): Promise<Set<string>> {
+  const { items } = await readOutbox();
+  const ids = new Set(
+    items
+      .filter((i) => i.status === "failed_permanent" && isPermanentNotFoundBulkError(i.lastError))
+      .map((i) => i.entityId),
+  );
+  try {
+    const { listNestPermanentFailEntityIds } = await import("./nestBulkJobs");
+    const nestIds = await listNestPermanentFailEntityIds();
+    for (const id of nestIds) ids.add(id);
+  } catch {
+    /* nest module optional during early boot */
+  }
+  return ids;
 }

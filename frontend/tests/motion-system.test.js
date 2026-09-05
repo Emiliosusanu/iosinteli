@@ -90,7 +90,9 @@ test("VerifiedValue and scrub cursor stay on opacity/transform tokens", () => {
   assert.match(motionSrc, /motion\.contentChange/);
   assert.doesNotMatch(motionSrc, /confetti|sparkles|BounceIn/);
   assert.match(glass, /BlurView/);
-  assert.match(glass, /systemChromeMaterial/);
+  assert.match(glass, /tint=\{dark \? "dark" : "light"\}/);
+  assert.doesNotMatch(glass, /systemChromeMaterial/);
+  assert.match(glass, /strength === "chrome"/);
   assert.match(home, /AppScreen/);
   assert.match(home, /GlassPanel/);
 });

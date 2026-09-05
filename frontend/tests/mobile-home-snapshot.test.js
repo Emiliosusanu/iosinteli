@@ -124,6 +124,10 @@ test("old schema and other users cannot use a cached snapshot", () => {
     isUsableMobileHomeSnapshot(snapshot(), { ...baseScope, profileIds: ["p1"] }),
     false,
   );
+  assert.equal(
+    isUsableMobileHomeSnapshot(snapshot(), { ...baseScope, currency: "GBP" }),
+    false,
+  );
 });
 
 test("missing and zero stay distinct, and ACoS stays null when sales are zero", () => {
@@ -223,8 +227,9 @@ test("Home uses one dashboard grid, persisted snapshot, and no entrance replay",
   assert.match(home, /dashboard\.pageInset/);
   assert.match(home, /DashboardSurface/);
   assert.match(home, /belowFoldReady/);
-  assert.match(home, /placeholderData: cachedSnapshot/);
+  assert.match(home, /usableCachedHomeSnapshot\(cachedSnapshot, homeScope, todayStr\)/);
   assert.match(home, /usableCachedHomeSnapshot/);
+  assert.doesNotMatch(home, /placeholderData: cachedSnapshot \?\? undefined/);
   assert.doesNotMatch(home, /FadeOnChange|adjustsFontSizeToFit|CARD_RADIUS|PAGE_PAD = 16/);
   assert.match(persist, /FINANCIAL_QUERY_ROOTS\.mobileOverview/);
   assert.match(persist, /stripObsoleteFinancialQueries/);

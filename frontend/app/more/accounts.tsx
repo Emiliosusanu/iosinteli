@@ -30,7 +30,7 @@ import {
 } from "@/src/lib/mutations";
 import { EmptyState, PrimaryButton, RetryState, SecondaryButton } from "@/src/components/Primitives";
 import { alertMutationError } from "@/src/components/Mutations";
-import { SIGN_IN_TO_MUTATE_MESSAGE } from "@/src/lib/rulesApi";
+import { SIGN_IN_TO_MUTATE_MESSAGE, userMessageForNestError } from "@/src/lib/rulesApi";
 import {
   amazonAdsProfileId,
   amazonAdsProfileIdsForSelection,
@@ -39,12 +39,22 @@ import {
 import {
   DISABLE_CONFIRM_MESSAGE,
   KDP_SECTION_FOOTER,
+  PROFILE_LIST_ALL_LABEL,
+  PROFILE_LIST_READY_LABEL,
   PROFILE_SWITCH_OFF_HINT,
   PROFILE_SWITCH_ON_HINT,
   VIEW_ADD_HINT,
   VIEW_REMOVE_HINT,
+  adsAccountGroupHeading,
+  countryFlagEmoji,
   disableConfirmTitle,
+  enableProfileFailedBody,
+  enableProfileFailedTitle,
   enabledStatusLabel,
+  filterProfilesBySheetMode,
+  groupProfilesByAdsAccount,
+  isReadyToEnable,
+  profileAssociationHint,
   profileDisplayName,
   profileEnabled,
   profileInView,
@@ -53,6 +63,7 @@ import {
   viewStatusLabel,
 } from "@/src/lib/accountsUi";
 import { IOSGroupedSection } from "@/src/components/ios/Native";
+import { ProfileCoverStrip } from "@/src/components/ProfileCoverStrip";
 import { AmazonProfile } from "@/src/lib/types";
 
 const COUNTRY_NAMES: Record<string, string> = {
@@ -130,6 +141,7 @@ export default function AmazonAccountsScreen() {
   const [enabledOverrides, setEnabledOverrides] = useState<Record<string, boolean>>({});
   /** Per-profile in-flight toggles — do not block other rows (was causing lag). */
   const [togglePendingIds, setTogglePendingIds] = useState<Record<string, true>>({});
+  const [listMode, setListMode] = useState<"ready" | "all">("ready");
 
   const viewingCustomer = !!adminFilterUserId;
   const canMutate = !!user?.id && !guestMode && !viewingCustomer;
@@ -233,7 +245,12 @@ export default function AmazonAccountsScreen() {
       } else if (ctx?.previous) {
         queryClient.setQueryData(profilesQueryKey, ctx.previous);
       }
-      alertMutationError(error, "Couldn't update profile.");
+      if (vars.enabled) {
+        const message = userMessageForNestError(error, "Couldn't update profile.");
+        Alert.alert(enableProfileFailedTitle(message), enableProfileFailedBody(message));
+      } else {
+        alertMutationError(error, "Couldn't update profile.");
+      }
       void refetchProfiles();
     },
     onSettled: (_data, _error, vars, ctx) => {
@@ -273,8 +290,8 @@ export default function AmazonAccountsScreen() {
     const adsId = match ? amazonAdsProfileId(match) : contextId;
     const matchIds = new Set([rowId, adsId, contextId].map((id) => String(id || "").trim()).filter(Boolean));
 
-    // Flip is_enabled in the shared query cache BEFORE view selection so the
-    // AppContext sync effect does not strip a just-re-enabled profile.
+    // Flip is_enabled in the shared query cache so the AppContext sync effect
+    // does not strip a just-re-enabled profile from selection if it was already in view.
     setEnabledOverrides((prev) => {
       const next = { ...prev };
       for (const id of matchIds) next[id] = enabled;
@@ -288,11 +305,10 @@ export default function AmazonAccountsScreen() {
       ),
     );
 
-    if (enabled) {
-      if (!profileInView(match ?? { id: rowId, profile_id: adsId }, selectedProfileIds)) {
-        toggleProfile(rowId);
-      }
-    } else {
+    // Enable does not change current-view selection — sellers use the "In current
+    // view" chip (VIEW_ADD_HINT) to add when they want. Auto-adding on enable
+    // would call toggleProfile and force single-currency view, dropping other markets.
+    if (!enabled) {
       setSelectedProfileIds(
         selectedProfileIds.filter((id) => id !== rowId && id !== match?.profile_id && id !== contextId),
       );
@@ -436,26 +452,11 @@ export default function AmazonAccountsScreen() {
   }
 
   const groupedProfiles = useMemo(() => {
-    const map = new Map<string, typeof profiles>();
-    for (const profile of profiles) {
-      const key = (profile.country_code ?? "other").toUpperCase();
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(profile);
-    }
-    return Array.from(map.entries())
-      .map(([code, items]) => ({
-        code,
-        name: countryLabel(code),
-        items,
-        enabledCount: items.filter((p) => profileEnabled(p)).length,
-      }))
-      .sort((a, b) => {
-        if (a.enabledCount > 0 && b.enabledCount === 0) return -1;
-        if (a.enabledCount === 0 && b.enabledCount > 0) return 1;
-        return a.name.localeCompare(b.name);
-      });
-  }, [profiles]);
+    const filtered = filterProfilesBySheetMode(profiles, listMode);
+    return groupProfilesByAdsAccount(filtered);
+  }, [profiles, listMode]);
 
+  const readyCount = profiles.filter((p) => isReadyToEnable(p) || profileEnabled(p)).length;
   const enabledCount = profiles.filter((p) => profileEnabled(p)).length;
   const viewCount = selectedProfileIds.length;
   const totalCount = profiles.length;
@@ -497,7 +498,7 @@ export default function AmazonAccountsScreen() {
             style={[styles.banner, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.separator }]}
           >
             <Text style={[t.typography.footnote, { color: t.colors.text_secondary }]}>
-              Demo. Amazon connect and profile changes need a signed-in account.
+              Demo. Sign in to connect Amazon.
             </Text>
           </View>
         ) : null}
@@ -506,7 +507,7 @@ export default function AmazonAccountsScreen() {
           accessibilityRole="header"
           accessibilityLabel={
             totalCount > 0
-              ? `${user?.email ?? "Guest"}. InteliAds account. ${enabledCount} of ${totalCount} enabled. ${viewCount} in current view`
+              ? `${user?.email ?? "Guest"}. InteliAds account. ${enabledCount} enabled · ${viewCount} in view`
               : `${user?.email ?? "Guest"}. InteliAds account`
           }
           style={styles.identity}
@@ -517,9 +518,7 @@ export default function AmazonAccountsScreen() {
           </Text>
           {totalCount > 0 ? (
             <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}>
-              {enabledCount} of {totalCount} enabled
-              {"\n"}
-              {viewCount} in current view
+              {enabledCount} enabled · {viewCount} in view
             </Text>
           ) : null}
         </View>
@@ -538,19 +537,76 @@ export default function AmazonAccountsScreen() {
             <EmptyState
               icon="business-outline"
               title="No Amazon profiles"
-              subtitle="Connect Amazon Ads in the browser. This does not disconnect an existing Amazon login."
+              subtitle="Connect Amazon Ads"
             />
             {canMutate ? <View style={{ marginTop: 4 }}>{connectButton}</View> : null}
           </View>
         ) : (
           <View>
-            {groupedProfiles.map(({ code, name, items, enabledCount: groupEnabled }) => (
-              <IOSGroupedSection
-                key={code}
-                title={`${name}${code !== "OTHER" ? ` · ${code}` : ""}`}
-                footer={`${groupEnabled} of ${items.length} enabled`}
+            <View style={styles.filterRow}>
+              <Pressable
+                testID="accounts-filter-ready"
+                onPress={() => setListMode("ready")}
+                style={[
+                  styles.filterChip,
+                  {
+                    backgroundColor: listMode === "ready" ? t.colors.tone_primary + "1A" : t.colors.background_tertiary,
+                  },
+                ]}
               >
-                {items.map((item, idx) => {
+                <Text
+                  style={[
+                    t.typography.footnote,
+                    {
+                      color: listMode === "ready" ? t.colors.tone_primary : t.colors.text_secondary,
+                      fontWeight: "700",
+                    },
+                  ]}
+                >
+                  {PROFILE_LIST_READY_LABEL}
+                  {readyCount ? ` (${readyCount})` : ""}
+                </Text>
+              </Pressable>
+              <Pressable
+                testID="accounts-filter-all"
+                onPress={() => setListMode("all")}
+                style={[
+                  styles.filterChip,
+                  {
+                    backgroundColor: listMode === "all" ? t.colors.tone_primary + "1A" : t.colors.background_tertiary,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    t.typography.footnote,
+                    {
+                      color: listMode === "all" ? t.colors.tone_primary : t.colors.text_secondary,
+                      fontWeight: "700",
+                    },
+                  ]}
+                >
+                  {PROFILE_LIST_ALL_LABEL}
+                </Text>
+              </Pressable>
+            </View>
+            {groupedProfiles.length === 0 ? (
+              <Text
+                testID="accounts-ready-empty"
+                style={[t.typography.footnote, { color: t.colors.text_secondary, paddingHorizontal: 16, paddingBottom: 8 }]}
+              >
+                None ready
+              </Text>
+            ) : null}
+            {groupedProfiles.map((group) => {
+              const groupEnabled = group.items.filter((p) => profileEnabled(p)).length;
+              return (
+              <IOSGroupedSection
+                key={group.key}
+                title={adsAccountGroupHeading(group)}
+                footer={`${groupEnabled} of ${group.items.length} enabled`}
+              >
+                {group.items.map((item, idx) => {
                   const serverEnabled = profileEnabled(item);
                   const enabled =
                     enabledOverrides[item.id] ??
@@ -560,6 +616,7 @@ export default function AmazonAccountsScreen() {
                   const displayName = profileDisplayName(item);
                   const currency = currencyLabel(item.currency_code);
                   const marketplace = countryLabel(item.country_code);
+                  const association = profileAssociationHint(item, group.items);
                   const pending =
                     !!togglePendingIds[item.id] ||
                     !!togglePendingIds[item.profile_id] ||
@@ -582,7 +639,7 @@ export default function AmazonAccountsScreen() {
                       })}
                       style={[
                         styles.profileRow,
-                        idx < items.length - 1 && {
+                        idx < group.items.length - 1 && {
                           borderBottomWidth: StyleSheet.hairlineWidth,
                           borderBottomColor: t.colors.separator,
                         },
@@ -597,11 +654,28 @@ export default function AmazonAccountsScreen() {
                         accessibilityHint="Shown only in InteliAds."
                         style={styles.profileCopy}
                       >
-                        <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{displayName}</Text>
-                        <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                          {enabledStatusLabel(enabled)}
-                          {currency ? ` · ${currency}` : ""}
+                        <Text style={[t.typography.body, { color: t.colors.text_primary }]}>
+                          {countryFlagEmoji(item.country_code)} {displayName}
                         </Text>
+                        <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}>
+                          {[marketplace, item.country_code, enabledStatusLabel(enabled), currency]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </Text>
+                        {association ? (
+                          <Text
+                            testID={`account-assoc-${item.profile_id}`}
+                            style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}
+                          >
+                            {association}
+                          </Text>
+                        ) : null}
+                        <ProfileCoverStrip
+                          profile={item}
+                          filterUserId={adminFilterUserId}
+                          enabled
+                          testID={`account-covers-${item.profile_id}`}
+                        />
                         <Pressable
                           testID={`account-view-${item.profile_id}`}
                           onPress={() => {
@@ -652,7 +726,8 @@ export default function AmazonAccountsScreen() {
                   );
                 })}
               </IOSGroupedSection>
-            ))}
+              );
+            })}
             {canMutate ? (
               <View style={{ marginTop: 16 }}>{connectButton}</View>
             ) : null}
@@ -681,7 +756,7 @@ export default function AmazonAccountsScreen() {
             </View>
           ) : kdpAccounts.length === 0 ? (
             <Text style={[t.typography.footnote, styles.kdpNote, { color: t.colors.text_secondary }]}>
-              No KDP accounts yet. Turn on Royalty source → iPhone helper in Settings, or connect with the Chrome helper — then link Ads profiles here.
+              No KDP accounts
             </Text>
           ) : (
             kdpAccounts.map((account, index) => {
@@ -798,6 +873,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 4,
     paddingBottom: 8,
+  },
+  filterRow: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    paddingTop: 4,
+  },
+  filterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderCurve: "continuous",
   },
   banner: {
     marginHorizontal: 16,

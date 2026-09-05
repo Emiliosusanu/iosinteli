@@ -11,7 +11,12 @@ export interface AmazonProfile {
   account_id: string | null;
   nickname: string | null;
   is_enabled?: boolean;
+  /** Enabled + paused campaigns (legacy total). Prefer campaigns_enabled_count for ready. */
   campaign_count?: number;
+  /** Nest `campaignsEnabledCount` — active sponsored campaigns on this profile. */
+  campaigns_enabled_count?: number;
+  /** Nest `campaignsPausedCount`. */
+  campaigns_paused_count?: number;
   kdp_account_count?: number;
   created_at: string;
   updated_at: string;
@@ -46,6 +51,9 @@ export interface Campaign extends MetricsTotals {
   created_at: string;
   updated_at: string;
   metrics_updated_at: string | null;
+  rule_last_modified_at?: string | null;
+  placement_adj_last_modified_at?: string | null;
+  placement_adj_change_source?: string | null;
 }
 
 export interface AdGroup extends MetricsTotals {

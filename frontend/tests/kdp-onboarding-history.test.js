@@ -47,6 +47,9 @@ test("background replay prefers Keychain native fetch (Royaltix-style)", () => {
   assert.match(history, /kdp_daily_data/);
 });
 
-test("settings copy mentions Royaltix-style wakes and milestones", () => {
-  assert.match(settings, /30→90|Royaltix|deferred/);
+test("KDP helper keeps 30→90 milestones and deferred wakes (settings UI stays short)", () => {
+  // User-facing settingsContract footers were shortened; behavior lives in planner/importer.
+  assert.doesNotMatch(settings, /Royaltix/);
+  assert.match(planner, /milestone30→90|ONBOARDING_DAYS = 90|deferredCount/);
+  assert.match(importer, /30→90|deferred|deferredDayLimitForWake/);
 });

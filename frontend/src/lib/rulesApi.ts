@@ -11,8 +11,8 @@ import {
   pickMobileApiToken,
   readJwtSub,
   shouldRefreshNestToken,
-} from "@/src/lib/mobileAuthContract";
-import { storage } from "@/src/utils/storage";
+} from "./mobileAuthContract";
+import { storage } from "../utils/storage";
 import { supabase } from "./supabase";
 
 const API_BASE = (process.env.EXPO_PUBLIC_RULES_API_URL ?? "").replace(/\/+$/, "");

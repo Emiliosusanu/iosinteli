@@ -323,7 +323,7 @@ export function bootstrapToTopBooks(boot: DashboardBootstrapResponse | undefined
       sales,
       royalties,
       acos: sales > 0 ? (spend / sales) * 100 : n(book.currentAcos),
-      roas: spend > 0 ? sales / spend : 0,
+      roas: spend > 0 ? sales / spend : null,
       net: netRoyaltiesKnown(royalties, spend),
       breakeven_acos: n(book.breakEvenAcos),
       ads_state: "ready" as const,
@@ -548,6 +548,13 @@ export function mapNestCampaign(row: unknown): Campaign {
     created_at: str(r.createdAt ?? r.created_at),
     updated_at: str(r.updatedAt ?? r.updated_at),
     metrics_updated_at: (r.metrics_updated_at ?? null) as string | null,
+    rule_last_modified_at: (r.ruleLastModifiedAt ?? r.rule_last_modified_at ?? null) as string | null,
+    placement_adj_last_modified_at: (r.placementAdjLastModifiedAt ??
+      r.placement_adj_last_modified_at ??
+      null) as string | null,
+    placement_adj_change_source: (r.placementAdjChangeSource ??
+      r.placement_adj_change_source ??
+      null) as string | null,
     total_impressions: n(r.total_impressions ?? metrics.impressions),
     total_clicks: n(r.total_clicks ?? metrics.clicks),
     total_orders: n(r.total_orders ?? metrics.orders),
@@ -675,19 +682,18 @@ export async function fetchNestBookCampaigns(params: {
       state: null,
       budget: null,
       bidding_strategy: null,
-      ...{
-        placement_top_share: 0,
-        placement_product_share: 0,
-        placement_rest_share: 0,
-      },
+      // This Nest payload has no placement mix or royalties — leave unset.
+      placement_top_share: null,
+      placement_product_share: null,
+      placement_rest_share: null,
       impressions: n(row.impressions),
       clicks: n(row.clicks),
       orders: n(row.orders),
       spend,
       sales,
       acos: sales > 0 ? (spend / sales) * 100 : n(row.acos),
-      roas: spend > 0 ? sales / spend : 0,
-      net: 0,
+      roas: spend > 0 ? sales / spend : null,
+      net: null,
       match_source: "product_ad" as const,
     };
   });
@@ -699,8 +705,15 @@ export async function fetchNestCampaignById(id: string): Promise<Campaign | null
   return mapNestCampaign(row);
 }
 
-export async function fetchNestKeywordById(id: string): Promise<(Keyword & { campaign_name?: string | null; ad_group_name?: string | null }) | null> {
-  const row = await nestApiJson<unknown>(`/keywords/${id}`, { method: "GET" }, "Couldn't load keyword.");
+export async function fetchNestKeywordById(
+  id: string,
+  range?: { start: string; end: string },
+): Promise<(Keyword & { campaign_name?: string | null; ad_group_name?: string | null }) | null> {
+  const row = await nestApiJson<unknown>(
+    `/keywords/${id}${qs({ startDate: range?.start, endDate: range?.end })}`,
+    { method: "GET" },
+    "Couldn't load keyword.",
+  );
   if (!row) return null;
   const r = asRecord(row);
   return {
@@ -710,8 +723,15 @@ export async function fetchNestKeywordById(id: string): Promise<(Keyword & { cam
   };
 }
 
-export async function fetchNestProductTargetById(id: string): Promise<(ProductTarget & { campaign_name?: string | null; ad_group_name?: string | null }) | null> {
-  const row = await nestApiJson<unknown>(`/product-targets/${id}`, { method: "GET" }, "Couldn't load target.");
+export async function fetchNestProductTargetById(
+  id: string,
+  range?: { start: string; end: string },
+): Promise<(ProductTarget & { campaign_name?: string | null; ad_group_name?: string | null }) | null> {
+  const row = await nestApiJson<unknown>(
+    `/product-targets/${id}${qs({ startDate: range?.start, endDate: range?.end })}`,
+    { method: "GET" },
+    "Couldn't load target.",
+  );
   if (!row) return null;
   const r = asRecord(row);
   return {

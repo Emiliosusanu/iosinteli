@@ -24,10 +24,11 @@ function paramId(value: string | string[] | undefined) {
 
 export default function SearchTermDetailScreen() {
   const t = useTheme();
-  const { guestMode } = useAuth();
+  const { guestMode, user } = useAuth();
   const invalidateAds = useInvalidateAds();
   const { width } = useWindowDimensions();
-  const { selectedProfileIds, primaryCurrency, dateRange } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
+  const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
   const params = useLocalSearchParams<{ id: string; term?: string; campaign?: string; adGroup?: string }>();
   const id = paramId(params.id);
   const chartWidth = Math.max(240, width - 64);
@@ -87,6 +88,7 @@ export default function SearchTermDetailScreen() {
   const addAction = () =>
     promptAddSearchTerm({
       guestMode,
+      viewAsOtherUser,
       id,
       term,
       onSuccess: refreshTerms,
@@ -94,6 +96,7 @@ export default function SearchTermDetailScreen() {
   const negateAction = () =>
     promptNegateSearchTerm({
       guestMode,
+      viewAsOtherUser,
       id,
       term,
       onSuccess: refreshTerms,

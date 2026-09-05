@@ -1,4 +1,4 @@
-import { requireNativeModule, Platform } from "expo-modules-core";
+import { requireOptionalNativeModule, Platform } from "expo-modules-core";
 
 export type NativeSyncStatus = {
   enabled: boolean;
@@ -40,7 +40,7 @@ type NativeModule = {
 
 const NativeSync =
   Platform.OS === "ios"
-    ? (requireNativeModule("InteliAdsNativeSync") as NativeModule)
+    ? ((requireOptionalNativeModule("InteliAdsNativeSync") as NativeModule | null) ?? null)
     : null;
 
 export const NATIVE_REFRESH_TASK_ID = "io.inteliads.app.refresh";

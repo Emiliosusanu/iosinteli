@@ -24,6 +24,8 @@ import {
 } from "@/src/components/Primitives";
 import { useApp } from "@/src/contexts/AppContext";
 import { fetchBookCampaignsRange, fetchTopBooksRange, type BookCampaignRow, type TopBookRow } from "@/src/lib/queries";
+import { selectKdpRoyaltyScope } from "@/src/lib/kdpRoyaltyScope";
+import { sortedProfileIds } from "@/src/lib/periodQuery";
 import { biddingStrategyLabel, statusLabel } from "@/src/lib/campaigns";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { bookRowMatchesOpenedAsin } from "@/src/lib/kdpBookIdentity";
@@ -45,6 +47,9 @@ import {
   bookNetIsKnown,
 } from "@/src/lib/netRoyalties";
 import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialReadVersion";
+import { countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
+import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
+import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 
 function paramValue(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] ?? "";
@@ -104,20 +109,26 @@ function campaignA11yLabel(item: BookCampaignRow, verdict: { label: string }, cu
 export default function ProductCampaignsScreen() {
   const t = useTheme();
   const router = useRouter();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
+  const { profiles, selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
+  const marketplaceIndex = useSponsoredMarketplaceIndex();
   const params = useLocalSearchParams<{ asin: string; title?: string; imageUrl?: string }>();
   const asin = paramValue(params.asin).toUpperCase();
   const paramTitle = paramValue(params.title);
   const paramImageUrl = paramValue(params.imageUrl);
   const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
-  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", selectedProfileIds, dateRange.start, dateRange.end] as const;
+  const royaltyProfiles = useMemo(
+    () => sortedProfileIds(selectKdpRoyaltyScope(profiles).profileIds),
+    [profiles],
+  );
+  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", selectedProfileIds, royaltyProfiles, dateRange.start, dateRange.end] as const;
 
   const booksQ = useQuery({
     queryKey: booksKey,
     queryFn: () =>
       fetchTopBooksRange({
         profileIds: selectedProfileIds,
+        kdpProfileIds: royaltyProfiles,
         start: dateRange.start,
         end: dateRange.end,
         royaltyRate: 0,
@@ -225,6 +236,7 @@ export default function ProductCampaignsScreen() {
             campaignsRetrying={campaignsQ.isRefetching}
             onRetryCampaigns={() => void campaignsQ.refetch()}
             currency={primaryCurrency}
+            marketplaceIndex={marketplaceIndex}
           />
         }
         ListEmptyComponent={
@@ -268,6 +280,7 @@ function BookHeader({
   campaignsRetrying,
   onRetryCampaigns,
   currency,
+  marketplaceIndex,
 }: {
   asin: string;
   title: string;
@@ -283,6 +296,7 @@ function BookHeader({
   campaignsRetrying: boolean;
   onRetryCampaigns: () => void;
   currency: string;
+  marketplaceIndex: SponsoredMarketplaceIndex;
 }) {
   const t = useTheme();
   const hasBreakEven = !!book && hasAuthoritativeBreakEven(book.breakeven_acos);
@@ -332,6 +346,7 @@ function BookHeader({
           style={{ width: "100%" }}
           accessibilityLabel={[
             title,
+            marketplaceFlagsA11y(countriesForSponsoredBook(marketplaceIndex, book ?? { title, asin })),
             status?.label,
             book
               ? `${netRoyaltiesVoiceOver({
@@ -354,9 +369,16 @@ function BookHeader({
             />
 
             <View style={styles.titleBlock}>
-              <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={3}>
-                {title}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
+                <Text style={[t.typography.headline, { color: t.colors.text_primary, flex: 1, minWidth: 0 }]} numberOfLines={3}>
+                  {title}
+                </Text>
+                <BookMarketplaceFlags
+                  index={marketplaceIndex}
+                  book={book ?? { title, asin }}
+                  style={t.typography.headline}
+                />
+              </View>
               {status ? (
                 <Text style={[t.typography.caption1, { color: statusColor, fontWeight: "600", marginTop: 6 }]}>
                   {status.label}

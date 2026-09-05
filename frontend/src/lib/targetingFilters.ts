@@ -123,32 +123,23 @@ export function matchesAdvancedFilters(
 }
 
 /**
- * When a numeric filter family is active, sort by that metric high→low.
- * Otherwise honor explicit sort, defaulting to ACoS high→low (web InteliAds).
+ * Sort is always the seller's explicit pick (default ACoS).
+ * Numeric ranges only filter rows — they never silently change sort order.
  */
 export function resolveTargetingSortKey(
   explicit: TargetingSortKey | null | undefined,
-  filters: TargetingAdvancedFilters,
+  _filters?: TargetingAdvancedFilters,
 ): TargetingSortKey {
-  const f = normalizeTargetingAdvancedFilters(filters);
-  if (f.bidMin != null || f.bidMax != null) return "bid";
-  if (f.acosMin != null || f.acosMax != null) return "acos";
-  if (f.impressionsMin != null || f.impressionsMax != null) return "impressions";
-  if (f.clicksMin != null || f.clicksMax != null) return "clicks";
   if (explicit) return explicit;
   return "acos";
 }
 
-/** True when an advanced range family forces sort away from the user's explicit pick. */
+/** @deprecated Ranges no longer override sort; kept so older call sites compile. */
 export function advancedSortOverridesExplicit(
-  explicit: TargetingSortKey | null | undefined,
-  filters: TargetingAdvancedFilters,
+  _explicit?: TargetingSortKey | null,
+  _filters?: TargetingAdvancedFilters,
 ): boolean {
-  if (!hasActiveAdvancedFilters(filters)) return false;
-  const forced = resolveTargetingSortKey(null, filters);
-  const chosen = explicit ?? "acos";
-  // When only acos ranges are on and explicit is acos, not an "override" for UI purposes.
-  return forced !== chosen;
+  return false;
 }
 
 /** Drop bid ranges on Placement (campaigns have no dollar bid — ranges would empty the list). */

@@ -14,10 +14,12 @@ test("fallback segmented control uses tablist/tab roles and 44pt targets", () =>
   assert.match(native, /accessibilityState=\{\{ selected: active \}\}/);
 });
 
-test("Overview keeps Month/Week period control without Today/Yesterday/7D horizon", () => {
+test("Overview keeps Day/Week/Month/Custom period control without Today/Yesterday/7D horizon", () => {
   assert.match(home, /OverviewHeaderV3/);
   assert.match(header, /home-period-month/);
   assert.match(header, /home-period-week/);
+  assert.match(header, /home-period-day/);
+  assert.match(header, /home-period-custom/);
   assert.doesNotMatch(home, /home-horizon/);
   assert.doesNotMatch(home, /home-today-7d/);
   assert.match(home, /"Net"/);

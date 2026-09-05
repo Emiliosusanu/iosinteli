@@ -7,9 +7,12 @@ import {
   ADS_SECTION_FOOTER,
   APPEARANCE_LABEL,
   APPEARANCE_VALUE,
+  DAILY_DIGEST_FOOTER,
+  GUEST_SETTINGS_NOTE,
   KDP_PROFIT_LABEL,
   KDP_PROFIT_VALUE,
   KDP_SECTION_FOOTER,
+  KDP_SOURCE_PICKER_FOOTER,
   SPEND_THRESHOLD_CAPTION,
   TEST_NOTIFICATION_BODY,
   TEST_NOTIFICATION_HINT,
@@ -28,8 +31,7 @@ const bidBot = readFileSync(new URL("../app/more/bid-bot.tsx", import.meta.url),
 
 test("iPhone min/max are not labeled as BidBot engine caps", () => {
   assert.match(screen, /ADS_SECTION_FOOTER/);
-  assert.match(ADS_SECTION_FOOTER, /not from this screen/);
-  assert.match(ADS_SECTION_FOOTER, /does not cap Amazon bids/);
+  assert.equal(ADS_SECTION_FOOTER, "");
   assert.doesNotMatch(screen, /Bid guardrails|Min bid|Max bid|Cooldown|Daily budget|mobileSettings|min-bid-input|max-bid-input/);
   assert.doesNotMatch(screen, /BidBot min bid|BidBot max bid|saveUserSetting|fetchUserSettings|primaryCurrency/);
   assert.match(bidBot, /MIN_MAX_DISPLAY_CAPTION/);
@@ -49,7 +51,7 @@ test("test notification is local and does not claim server push", () => {
   assert.equal(TEST_NOTIFICATION_LABEL, "Send a test on this iPhone");
   assert.match(TEST_NOTIFICATION_BODY, /local test/);
   assert.doesNotMatch(TEST_NOTIFICATION_BODY, /Notifications are working/);
-  assert.match(TEST_NOTIFICATION_HINT, /local alert on this iPhone/);
+  assert.equal(TEST_NOTIFICATION_HINT, "");
   assert.match(notifications, /requestServerTestPush/);
   assert.match(notifications, /scheduleLocalAlert/);
   assert.match(notifications, /Local first/);
@@ -59,15 +61,15 @@ test("test notification is local and does not claim server push", () => {
   assert.equal(testNotificationLabel("guest"), "Sign in to send a test");
 });
 
-test("notification copy describes on-device digest alerts", () => {
-  assert.match(
+test("notification copy stays short without inventing schedule walls", () => {
+  assert.equal(
     notificationFooter({
       guestMode: false,
       permission: "granted",
       backgroundRegistered: true,
       anyEnabled: true,
     }),
-    /10am, noon, 2pm/,
+    "Alerts on",
   );
   assert.doesNotMatch(
     notificationFooter({
@@ -76,51 +78,41 @@ test("notification copy describes on-device digest alerts", () => {
       backgroundRegistered: true,
       anyEnabled: true,
     }),
-    /throughout the day at 8am/,
+    /throughout the day at 8am|10am, noon, 2pm|15-min|Keychain/,
   );
-  assert.match(
-    notificationFooter({
-      guestMode: false,
-      permission: "granted",
-      backgroundRegistered: true,
-      anyEnabled: true,
-    }),
-    /KDP net/,
-  );
-  assert.match(
+  assert.equal(
     notificationFooter({
       guestMode: false,
       permission: "denied",
       backgroundRegistered: false,
       anyEnabled: true,
     }),
-    /cannot send alerts until you allow/,
+    "Allow alerts in iOS Settings",
   );
-  assert.match(
+  assert.equal(
     notificationFooter({
       guestMode: true,
       permission: "undetermined",
       backgroundRegistered: false,
       anyEnabled: true,
     }),
-    /cannot send notifications/,
+    "Sign in for alerts",
   );
+  assert.equal(GUEST_SETTINGS_NOTE, "Sign in for alerts");
+  assert.equal(DAILY_DIGEST_FOOTER, "Daytime digests");
   assert.equal(notificationSwitchAccessibilityLabel("New orders", true), "New orders, on");
-  assert.match(spendThresholdLabel(25), /campaign daily budgets/);
+  assert.equal(spendThresholdLabel(25), "Overspend vs daily budgets");
   assert.doesNotMatch(spendThresholdLabel(25), /optional daily budget|typed on this screen/);
   assert.match(screen, /SPEND_THRESHOLD_CAPTION/);
-  assert.match(SPEND_THRESHOLD_CAPTION, /not a number typed on this screen/);
+  assert.equal(SPEND_THRESHOLD_CAPTION, "");
   assert.match(screen, /notif-daily-digest/);
   assert.match(screen, /notif-include-kdp-net/);
 });
 
 test("KDP royalty source is switchable between Chrome and iPhone", () => {
   assert.equal(KDP_PROFIT_LABEL, "Royalty source");
-  assert.match(KDP_SECTION_FOOTER, /Chrome helper/);
-  assert.match(KDP_SECTION_FOOTER, /this iPhone/);
-  assert.match(KDP_SECTION_FOOTER, /same schedule/);
-  assert.match(KDP_SECTION_FOOTER, /Keychain/);
-  assert.match(KDP_SECTION_FOOTER, /Net Royalties = KDP royalties minus Amazon Ads spend/);
+  assert.equal(KDP_SECTION_FOOTER, "");
+  assert.equal(KDP_SOURCE_PICKER_FOOTER, "");
   assert.match(screen, /KDP_SECTION_FOOTER/);
   // The row now navigates to the picker and shows the live source value.
   assert.match(screen, /settings-kdp-source/);
@@ -140,6 +132,7 @@ test("guest cannot look like a remote settings save, and view-as stays self-scop
   assert.match(screen, /alertsLocked/);
   assert.match(screen, /VIEWING_CUSTOMER_SETTINGS_NOTE/);
   assert.match(VIEWING_CUSTOMER_SETTINGS_NOTE, /signed-in account/);
+  assert.match(VIEWING_CUSTOMER_SETTINGS_NOTE, /not the customer/);
   assert.doesNotMatch(screen, /saveUserSetting|Settings saved|Syncing settings/);
 });
 

@@ -3,6 +3,8 @@
 
 import { nestApiFetch, nestApiJson, nestLogout, parseNestError, NestApiError } from "./rulesApi";
 import { supabase } from "./supabase";
+import { normalizeNestUserPlanPayload, type NestUserPlan } from "./accountContract";
+import { isTransientEnableProfileError } from "./accountsUi";
 import type { AmazonProfile } from "./types";
 
 export type EntityState = "enabled" | "paused";
@@ -23,6 +25,29 @@ export interface HarvestResult {
   success?: boolean;
   message?: string;
   results?: unknown;
+}
+
+/** Search-term add/negate — never title Added/Negated unless Nest said success. */
+export function harvestAmazonWriteAlert(
+  kind: "add" | "negate",
+  result?: HarvestResult | null,
+): { title: string; body: string } {
+  if (result?.success === false) {
+    return {
+      title: kind === "add" ? "Not added on Amazon" : "Not negated on Amazon",
+      body: result.message ?? "Amazon didn't confirm this change.",
+    };
+  }
+  if (result?.success === true) {
+    return {
+      title: kind === "add" ? "Added" : "Negated",
+      body: result.message ?? (kind === "add" ? "Added as a keyword." : "Search term negated."),
+    };
+  }
+  return {
+    title: "Not confirmed on Amazon yet",
+    body: result?.message ?? "InteliAds accepted the request. Amazon confirmation is still pending.",
+  };
 }
 
 export interface SyncStatus {
@@ -368,6 +393,22 @@ export async function fetchNestMe() {
   );
 }
 
+/** Authoritative billing plan from Nest `GET /pricing-plans/current` (null = no plan). */
+export async function fetchCurrentUserPlan(): Promise<NestUserPlan | null> {
+  try {
+    const data = await nestApiJson<unknown>(
+      "/pricing-plans/current",
+      { method: "GET" },
+      "Couldn't load subscription.",
+    );
+    return normalizeNestUserPlanPayload(data);
+  } catch (error) {
+    // Older API builds 404'd plan-less users; treat as no plan.
+    if (error instanceof NestApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
 export async function fetchNestUsers(): Promise<NestUser[]> {
   const data = await nestApiJson<NestUser[] | { users?: NestUser[] }>(
     "/auth/users",
@@ -389,8 +430,8 @@ export async function fetchNestAmazonProfiles(filterUserId?: string | null): Pro
   return (data.profiles ?? []).map((p) => {
     const amazonId = String(p.profileId ?? p.profile_id ?? "");
     const id = amazonId || String(p.id ?? "");
-    const enabled = p.campaignsEnabledCount ?? 0;
-    const paused = p.campaignsPausedCount ?? 0;
+    const enabled = Number(p.campaignsEnabledCount ?? 0) || 0;
+    const paused = Number(p.campaignsPausedCount ?? 0) || 0;
     return {
       id,
       profile_id: amazonId || id,
@@ -402,12 +443,47 @@ export async function fetchNestAmazonProfiles(filterUserId?: string | null): Pro
       account_id: p.accountId ?? p.account_id ?? null,
       nickname: p.nickname ?? null,
       is_enabled: p.isEnabled ?? p.is_enabled,
+      campaigns_enabled_count: enabled,
+      campaigns_paused_count: paused,
       campaign_count: enabled + paused,
       kdp_account_count: 0,
       created_at: p.createdAt ?? new Date().toISOString(),
       updated_at: p.updatedAt ?? new Date().toISOString(),
     };
   }).filter((p) => p.id);
+}
+
+export type AmazonProfileBookPreview = {
+  asin: string;
+  title: string | null;
+  coverUrl: string | null;
+};
+
+/** Nest GET /amazon/profiles/:id/books — real sponsored/KDP covers only. */
+export async function fetchAmazonProfileBooks(
+  profileId: string,
+  opts?: { filterUserId?: string | null },
+): Promise<AmazonProfileBookPreview[]> {
+  const adsId = String(profileId || "").trim();
+  if (!adsId) return [];
+  const q = opts?.filterUserId
+    ? `?filterUserId=${encodeURIComponent(opts.filterUserId)}`
+    : "";
+  const data = await nestApiJson<{
+    books?: Array<{ asin?: string; title?: string | null; coverUrl?: string | null; amazonImageUrl?: string | null }>;
+  }>(`/amazon/profiles/${encodeURIComponent(adsId)}/books${q}`, { method: "GET" }, "Couldn't load profile books.");
+  return (data.books ?? [])
+    .map((book) => {
+      const asin = String(book.asin || "").trim();
+      const coverUrl = String(book.coverUrl || book.amazonImageUrl || "").trim() || null;
+      if (!asin || !coverUrl) return null;
+      return {
+        asin,
+        title: book.title ?? null,
+        coverUrl,
+      };
+    })
+    .filter((row): row is AmazonProfileBookPreview => !!row);
 }
 
 async function persistUserAmazonProfileEnabled(
@@ -497,6 +573,30 @@ async function persistUserAmazonProfileEnabled(
   );
 }
 
+const ENABLE_PROFILE_RETRY_MS = 400;
+
+async function nestToggleProfileEnabled(adsProfileId: string, isEnabled: boolean) {
+  const maxAttempts = isEnabled ? 3 : 1;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await nestApiJson<{ message?: string; profile?: { id: string; is_enabled?: boolean } }>(
+        `/amazon/profiles/${encodeURIComponent(adsProfileId)}/toggle`,
+        { method: "PATCH", body: JSON.stringify({ isEnabled }) },
+        "Couldn't update profile.",
+      );
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts && isTransientEnableProfileError(error)) {
+        await new Promise((resolve) => setTimeout(resolve, ENABLE_PROFILE_RETRY_MS * attempt));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
 export async function toggleAmazonProfile(
   profileId: string,
   isEnabled: boolean,
@@ -507,11 +607,7 @@ export async function toggleAmazonProfile(
   const adsProfileId = String(opts?.adsProfileId || profileId).trim();
   const rowId = String(opts?.rowId || profileId).trim();
 
-  const nestResult = await nestApiJson<{ message?: string; profile?: { id: string; is_enabled?: boolean } }>(
-    `/amazon/profiles/${adsProfileId}/toggle`,
-    { method: "PATCH", body: JSON.stringify({ isEnabled }) },
-    "Couldn't update profile.",
-  );
+  const nestResult = await nestToggleProfileEnabled(adsProfileId, isEnabled);
 
   try {
     await persistUserAmazonProfileEnabled([rowId, adsProfileId, profileId], isEnabled, adsProfileId || rowId);

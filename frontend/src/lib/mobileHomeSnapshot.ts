@@ -157,6 +157,10 @@ export function isUsableMobileHomeSnapshot(
     return false;
   }
   if (!profileScopeMatches(snapshot.scope?.profileIds, scope.profileIds)) return false;
+  // Currency is part of cache identity — never paint another currency under a new label.
+  const snapCurrency = (snapshot.scope?.currency ?? "none").toUpperCase();
+  const scopeCurrency = (scope.currency ?? "none").toUpperCase();
+  if (snapCurrency !== scopeCurrency) return false;
   return !!snapshot.today?.date && Array.isArray(snapshot.scope?.profileIds);
 }
 

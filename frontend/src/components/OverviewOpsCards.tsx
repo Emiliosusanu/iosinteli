@@ -42,16 +42,13 @@ function OpsCardShell({
       <GlassPanel
         testID={testID}
         strength="card"
-        style={[
-          {
-            marginTop: dashboard.sectionGap,
-            borderRadius: dashboard.cardRadius,
-            borderCurve: "continuous",
-            borderColor: t.colors.glass_stroke,
-            overflow: "hidden",
-          },
-          t.shadow.card,
-        ]}
+        style={{
+          marginTop: dashboard.sectionGap,
+          borderRadius: dashboard.cardRadius,
+          borderCurve: "continuous",
+          borderColor: t.colors.glass_stroke,
+          overflow: "hidden",
+        }}
         contentStyle={{ padding: 0 }}
       >
         <LinearGradient
@@ -381,15 +378,12 @@ export function OverviewBidBotCard({
           <GlassPanel
             testID="overview-bidbot"
             strength="card"
-            style={[
-              {
-                borderRadius: dashboard.cardRadius,
-                borderCurve: "continuous",
-                borderColor: t.colors.glass_stroke,
-                overflow: "hidden",
-              },
-              t.shadow.card,
-            ]}
+            style={{
+              borderRadius: dashboard.cardRadius,
+              borderCurve: "continuous",
+              borderColor: t.colors.glass_stroke,
+              overflow: "hidden",
+            }}
             contentStyle={{ padding: 0 }}
           >
             <View
@@ -482,15 +476,12 @@ export function OverviewAutomationCard({
           <GlassPanel
             testID="overview-automation"
             strength="card"
-            style={[
-              {
-                borderRadius: dashboard.cardRadius,
-                borderCurve: "continuous",
-                borderColor: t.colors.glass_stroke,
-                overflow: "hidden",
-              },
-              t.shadow.card,
-            ]}
+            style={{
+              borderRadius: dashboard.cardRadius,
+              borderCurve: "continuous",
+              borderColor: t.colors.glass_stroke,
+              overflow: "hidden",
+            }}
             contentStyle={{ padding: 0 }}
           >
             <LinearGradient

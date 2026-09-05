@@ -17,7 +17,7 @@ import { BookCover } from "@/src/components/BookCover";
 import { AppScreen } from "@/src/components/ScreenAmbient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { markPerf } from "@/src/lib/perf";
-import { noPeriodPlaceholder, periodQueryKey, LIST_PERIOD_QUERY_CACHE, STABLE_SCOPED_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
+import { noPeriodPlaceholder, financialPeriodQueryKey, LIST_PERIOD_QUERY_CACHE, STABLE_SCOPED_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { isHomeQueryTimeout, queryStillWaiting, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import {
@@ -26,22 +26,59 @@ import {
   fetchProductTargets,
   fetchTargetingBookOptions,
   fetchTopCampaignsRange,
+  restrictRowsToOwnedCampaigns,
   TARGETING_LIST_LIMIT,
   type TargetingBookOption,
 } from "@/src/lib/queries";
-import { shouldShowActiveOrPausedWithData } from "@/src/lib/campaigns";
+import { filterTargetingBookOptions } from "@/src/lib/targetingBookFilter";
+import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
+import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
+import {
+  DEFAULT_TARGETING_STATE_FILTER,
+  matchesLiveTargetingRow,
+  resolveTargetingStateFilter,
+  type EntityStateFilter,
+} from "@/src/lib/campaigns";
 import {
   clampAmazonBid,
+  dismissNotFoundPermanentBulkFailures,
+  dismissPermanentBulkFailures,
   drainBulkOutbox,
   enqueueBulkAmazonWrites,
   enqueueEntityBidWrite,
   getBulkOutboxSnapshot,
+  isBulkWritableTargetingRow,
+  listPermanentFailEntityIds,
   loadBulkSelectionMemory,
-  retryPermanentBulkFailures,
+  requeuePermanentBulkFailures,
   saveBulkSelectionMemory,
   type BulkEntityKind,
   type EnqueueBulkInput,
 } from "@/src/lib/bulkOutbox";
+import {
+  buildNestBulkItemsFromInputs,
+  collectFailedEntityIds,
+  collectNotFoundFailIds,
+  collectPermanentFailIds,
+  collectPermanentFailMessages,
+  collectSkippedEntityIds,
+  dismissCompletedNestBulkFailures,
+  getNestBulkJobsSnapshot,
+  listNestPermanentFailEntityIds,
+  refreshOpenNestBulkJobs,
+  resubmitFailedNestBulkJobs,
+  submitNestBulkManual,
+  trackNestBulkJob,
+} from "@/src/lib/nestBulkJobs";
+import {
+  bulkFailureAlertBody,
+  bulkFailureAlertTitle,
+  classifyBulkFailureSource,
+  nestBulkConfirmedSucceeded,
+  nestBulkRevertPlan,
+  nestBulkSkipAlert,
+  shouldRevertNestBulkEntity,
+} from "@/src/lib/bulkOutboxContract";
 import {
   describeProductTarget,
   extractTargetAsin,
@@ -67,7 +104,6 @@ import {
   parseFilterRangeInput,
   requiresBidChangeConfirm,
   resolveTargetingSortKey,
-  advancedSortOverridesExplicit,
   advancedFiltersForSegment,
   rowMetricsFromEntity,
   type TargetingAdvancedFilters,
@@ -81,19 +117,28 @@ import {
   updateProductTargetManual,
   type PlacementAdjustments,
 } from "@/src/lib/mutations";
-import { alertMutationError, BidBudgetEditor, EntityStateSwitch, MutationTap } from "@/src/components/Mutations";
+import {
+  alertMutationError,
+  assertNotViewingAsOtherUser,
+  BidBudgetEditor,
+  blockIfCannotWriteAmazon,
+  EntityStateSwitch,
+  MutationTap,
+} from "@/src/components/Mutations";
 import {
   formatCooldownRemaining,
+  getCampaignSettingsCooldown,
   getEntityBidCooldown,
   type EntityBidCooldownFields,
 } from "@/src/lib/bidCooldown";
 import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { useApp } from "@/src/contexts/AppContext";
+import { useAuth } from "@/src/contexts/AuthContext";
 import { useTheme, acosTone, dashboard, toneColor, layout, radii, spacing } from "@/src/lib/theme";
-import { formatCurrency, formatPercent, formatInt } from "@/src/lib/format";
+import { formatCurrency, formatPercent, formatInt, formatOptionalPercent } from "@/src/lib/format";
 import { TopBar } from "@/src/components/TopBar";
 import { EmptyState, ToneDot, RetryState, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard } from "@/src/components/Primitives";
-import { IOSSearchBar, SFSymbol } from "@/src/components/ios/Native";
+import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
 import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { enabledSpoken, matchTypeSpoken, targetingSpeech } from "@/src/lib/targetingA11y";
 import { type Href, useRouter } from "expo-router";
@@ -157,16 +202,16 @@ const SEGMENTS: { key: Segment; label: string }[] = [
   { key: "placement", label: "Placement" },
 ];
 
-const PERF_FILTERS: { key: PerfFilter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "wasting", label: "Waste" },
-  { key: "high_acos", label: "ACoS high" },
-  { key: "low_acos", label: "ACoS low" },
-  { key: "no_sales", label: "$0" },
-  { key: "profitable", label: "Profit" },
-  { key: "has_clicks", label: "Clicks" },
-  { key: "has_orders", label: "Orders" },
-  { key: "has_impressions", label: "Impr" },
+const PERF_FILTERS: { key: PerfFilter; label: string; hint: string }[] = [
+  { key: "all", label: "All", hint: "No performance preset" },
+  { key: "wasting", label: "Waste", hint: "Spend with no orders" },
+  { key: "high_acos", label: "ACoS high", hint: "ACoS above ~35%" },
+  { key: "low_acos", label: "ACoS low", hint: "ACoS at or under 20%" },
+  { key: "no_sales", label: "No sales", hint: "Spend, zero sales" },
+  { key: "profitable", label: "Profit", hint: "Sales and ACoS at or under 35%" },
+  { key: "has_clicks", label: "Clicks", hint: "At least 1 click" },
+  { key: "has_orders", label: "Orders", hint: "At least 1 order" },
+  { key: "has_impressions", label: "Impr", hint: "At least 1 impression" },
 ];
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
@@ -297,7 +342,7 @@ function matchesPerf(item: any, filter: PerfFilter) {
   if (filter === "wasting") return spend > 0 && orders === 0;
   if (filter === "high_acos") return sales > 0 && acos > 35;
   if (filter === "low_acos") return sales > 0 && acos > 0 && acos <= 20;
-  if (filter === "no_sales") return sales === 0;
+  if (filter === "no_sales") return spend > 0 && sales === 0;
   if (filter === "profitable") return sales > 0 && acos > 0 && acos <= 35;
   if (filter === "has_clicks") return clicks > 0;
   if (filter === "has_orders") return orders > 0;
@@ -337,12 +382,39 @@ function searchPlaceholder(segment: Segment) {
   return "Search ASINs";
 }
 
-function emptyCopy(segment: Segment) {
-  if (segment === "keywords") return { icon: "search-outline" as const, title: "No keywords found" };
-  if (segment === "auto") return { icon: "options-outline" as const, title: "No auto targets found" };
-  if (segment === "category") return { icon: "pricetags-outline" as const, title: "No category targets found" };
-  if (segment === "placement") return { icon: "layers-outline" as const, title: "No campaigns found" };
-  return { icon: "cube-outline" as const, title: "No ASIN targets found" };
+function emptyCopy(segment: Segment, stateFilter: EntityStateFilter = DEFAULT_TARGETING_STATE_FILTER) {
+  const title =
+    segment === "keywords"
+      ? "No keywords found"
+      : segment === "auto"
+        ? "No auto targets found"
+        : segment === "category"
+          ? "No category targets found"
+          : segment === "placement"
+            ? "No campaigns found"
+            : "No ASIN targets found";
+  const icon =
+    segment === "keywords"
+      ? ("search-outline" as const)
+      : segment === "auto"
+        ? ("options-outline" as const)
+        : segment === "category"
+          ? ("pricetags-outline" as const)
+          : segment === "placement"
+            ? ("layers-outline" as const)
+            : ("cube-outline" as const);
+  if (stateFilter === "enabled") {
+    return {
+      icon,
+      title,
+      // Active = entity + ad group + campaign (fail-closed). Short hint → try All.
+      subtitle: "Try All",
+    };
+  }
+  if (stateFilter === "paused") {
+    return { icon, title, subtitle: "Try All" };
+  }
+  return { icon, title, subtitle: undefined as string | undefined };
 }
 
 function ResponderBox({ children }: { children: React.ReactNode }) {
@@ -353,16 +425,25 @@ function ResponderBox({ children }: { children: React.ReactNode }) {
   );
 }
 
+function TargetingListSeparator() {
+  const t = useTheme();
+  return <View style={{ height: t.layout.listGap }} />;
+}
+
 export default function TargetingScreen() {
   const t = useTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
   const invalidateAds = useInvalidateAds();
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
+  const { user, guestMode } = useAuth();
+  const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
+  const writeGuard = { guestMode, viewAsOtherUser };
   const [segment, setSegment] = useState<Segment>("keywords");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortKey>("acos");
   const [perf, setPerf] = useState<PerfFilter>("all");
+  const [stateFilter, setStateFilter] = useState<EntityStateFilter>(DEFAULT_TARGETING_STATE_FILTER);
   const [bookAsin, setBookAsin] = useState<string | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -423,6 +504,10 @@ export default function TargetingScreen() {
             : null;
       if (nextSegment) setSegment(nextSegment);
       if (filters.perf && PERF_FILTERS.some((s) => s.key === filters.perf)) setPerf(filters.perf as PerfFilter);
+      // Remembered value wins; missing/invalid → keep Active default (do not force on empty {}).
+      if ("stateFilter" in filters) {
+        setStateFilter(resolveTargetingStateFilter(filters.stateFilter));
+      }
       if (typeof filters.bookAsin === "string" && filters.bookAsin) setBookAsin(filters.bookAsin);
       if (filters.sort && SORT_OPTIONS.some((s) => s.key === filters.sort)) setSort(filters.sort as SortKey);
       if (filters.advanced) setAdvanced(normalizeTargetingAdvancedFilters(filters.advanced));
@@ -431,6 +516,10 @@ export default function TargetingScreen() {
     });
     void refreshOutboxCounts();
     void drainBulkOutbox().then(() => refreshOutboxCounts());
+    void (async () => {
+      await refreshOpenNestBulkJobs();
+      await refreshOutboxCounts();
+    })();
   }, []);
 
   useEffect(() => {
@@ -439,18 +528,19 @@ export default function TargetingScreen() {
       perf,
       sort,
       bookAsin: bookAsin ?? undefined,
+      stateFilter,
       advanced,
     });
-  }, [segment, perf, sort, bookAsin, advanced]);
+  }, [segment, perf, sort, bookAsin, stateFilter, advanced]);
 
   useEffect(() => {
     void saveBulkSelectionMemory({ segment, ids: selectedIds, selectMode });
   }, [segment, selectedIds, selectMode]);
 
   async function refreshOutboxCounts() {
-    const snap = await getBulkOutboxSnapshot();
-    setOutboxPending(snap.pending + snap.inFlight);
-    setOutboxFailed(snap.failed);
+    const [local, nest] = await Promise.all([getBulkOutboxSnapshot(), getNestBulkJobsSnapshot()]);
+    setOutboxPending(local.pending + local.inFlight + nest.pending);
+    setOutboxFailed(local.failed + nest.failed);
   }
 
   const listQueryOpts = {
@@ -458,9 +548,12 @@ export default function TargetingScreen() {
     end: dateRange.end,
     limit: TARGETING_LIST_LIMIT,
     filterUserId: adminFilterUserId,
+    // When viewing as another seller, Nest list is pivot-scoped for them — do not
+    // also filter by the admin's user_campaigns (would empty the list).
+    ownerUserId: viewAsOtherUser ? null : user?.id ?? null,
   } as const;
   const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
-  const periodKey = periodQueryKey(dateRange, scopeProfiles);
+  const periodKey = financialPeriodQueryKey(dateRange, scopeProfiles, primaryCurrency);
   const profileScopeKey = scopeProfiles.join("|");
   const targetingListCache = {
     ...LIST_PERIOD_QUERY_CACHE,
@@ -468,7 +561,9 @@ export default function TargetingScreen() {
   } as const;
 
   const keywordsQ = useQuery({
-    queryKey: ["targeting-keywords", adminFilterUserId ?? "self", periodKey],
+    // Include signed-in owner id (like placements) so persisted cache cannot paint
+    // another account's rows before ownership filtering hydrates.
+    queryKey: ["targeting-keywords", adminFilterUserId ?? "self", user?.id ?? "anon", periodKey],
     queryFn: async ({ signal }) => {
       markPerf("targets.keywords.start");
       const rows = await withQueryTimeout(
@@ -484,7 +579,7 @@ export default function TargetingScreen() {
   });
 
   const productsQ = useQuery({
-    queryKey: ["targeting-products", adminFilterUserId ?? "self", periodKey, "skip-kdp"],
+    queryKey: ["targeting-products", adminFilterUserId ?? "self", user?.id ?? "anon", periodKey, "skip-kdp"],
     queryFn: async ({ signal }) => {
       markPerf("targets.products.start");
       const rows = await withQueryTimeout(
@@ -553,10 +648,10 @@ export default function TargetingScreen() {
   }, [bookAsin, booksQ.isFetched, booksQ.isFetching, booksQ.isLoading, selectedBook]);
 
   const placementsQ = useQuery({
-    queryKey: ["targeting-placements-v2", adminFilterUserId ?? "self", periodKey],
+    queryKey: ["targeting-placements-v2", adminFilterUserId ?? "self", user?.id ?? "anon", periodKey],
     queryFn: async ({ signal }) => {
       markPerf("targets.placements.start");
-      const rows = await withQueryTimeout(
+      let rows = await withQueryTimeout(
         fetchTopCampaignsRange({
           profileIds: scopeProfiles,
           start: dateRange.start,
@@ -567,6 +662,12 @@ export default function TargetingScreen() {
         TARGETING_QUERY_TIMEOUT_MS,
         signal,
       );
+      if (!viewAsOtherUser && user?.id) {
+        rows = await restrictRowsToOwnedCampaigns(
+          rows.map((row) => ({ ...row, campaign_id: row.id })),
+          user.id,
+        );
+      }
       markPerf("targets.placements.end");
       return rows;
     },
@@ -599,18 +700,65 @@ export default function TargetingScreen() {
     let rows: any[] = [];
 
     if (segment === "keywords") {
+      // Active = keyword enabled + ad group enabled + campaign enabled (fail-closed).
       rows = (keywordsQ.data ?? [])
-        .filter((k) => shouldShowActiveOrPausedWithData(k as any, k.status))
+        .filter((k) =>
+          matchesLiveTargetingRow({
+            entityState: k.status,
+            campaignState: (k as any).campaign_state,
+            adGroupState: (k as any).ad_group_state,
+            filter: stateFilter,
+          }),
+        )
         .filter((k) => (needle ? (k.keyword_text ?? "").toLowerCase().includes(needle) : true));
     } else if (segment === "placement") {
-      rows = (placementsQ.data ?? [])
+      // Placement rows are campaigns — Active = campaign enabled (no ad-group parent).
+      const campaigns = (placementsQ.data ?? [])
         .map(normalizePlacementCampaignMetrics)
         .map((c) => enrichPlacementRowWithBook(c, campaignBookById))
-        .filter((c) => shouldShowActiveOrPausedWithData(c as any, c.state))
+        .filter((c) =>
+          matchesLiveTargetingRow({
+            entityState: c.state,
+            campaignState: c.state,
+            filter: stateFilter,
+          }),
+        )
         .filter((c) => (needle ? (c.name ?? "").toLowerCase().includes(needle) : true));
+      // One list row per Amazon placement type (not mashed into a single card).
+      rows = campaigns.flatMap((c) =>
+        PLACEMENT_FIELDS.map((field) => {
+          const shareKey =
+            field.key === "top_of_search"
+              ? "placement_top_share"
+              : field.key === "product_pages"
+                ? "placement_product_share"
+                : "placement_rest_share";
+          const rawShare = (c as any)[shareKey];
+          const share =
+            rawShare == null || rawShare === "" || !Number.isFinite(Number(rawShare))
+              ? null
+              : Number(rawShare);
+          return {
+            ...c,
+            id: `${c.id}::${field.key}`,
+            campaign_id: c.id,
+            placement_key: field.key,
+            placement_label: field.title,
+            placement_share: share,
+          };
+        }),
+      );
     } else {
+      // ASINs / Auto / Category: Active = target + ad group + campaign enabled.
       rows = productSegmentBuckets[segment]
-        .filter((p) => shouldShowActiveOrPausedWithData(p as any, p.state))
+        .filter((p) =>
+          matchesLiveTargetingRow({
+            entityState: p.state,
+            campaignState: p.campaign_state,
+            adGroupState: p.ad_group_state,
+            filter: stateFilter,
+          }),
+        )
         .filter((p) => {
           if (!needle) return true;
           const described = p.__targetingDescription;
@@ -639,8 +787,9 @@ export default function TargetingScreen() {
       const needleAsin = bookAsin.toUpperCase();
       rows = rows.filter((row: any) => {
         if (segment === "placement") {
+          const campaignId = String(row.campaign_id || row.id || "");
           // Nest aggregated campaigns often omit book_asin — match via book→campaign map.
-          if (bookCampaignIds.has(String(row.id || ""))) return true;
+          if (bookCampaignIds.has(campaignId)) return true;
           return String(row.book_asin || "").toUpperCase() === needleAsin;
         }
         if (segment === "keywords") {
@@ -681,6 +830,7 @@ export default function TargetingScreen() {
     search,
     sort,
     perf,
+    stateFilter,
     bookAsin,
     bookCampaignIds,
     campaignBookById,
@@ -723,11 +873,25 @@ export default function TargetingScreen() {
     !activeQuery.isPlaceholderData &&
     !isError &&
     (queryStillWaiting(activeQuery) || activeQuery.isFetching);
+  const listUpdating =
+    (activeQuery.isFetching || !!activeQuery.isPlaceholderData) && data.length > 0 && !isError;
   const listTruncated =
     !showBlockingSpinner &&
     !isError &&
     Array.isArray(activeQuery.data) &&
     activeQuery.data.length >= TARGETING_LIST_LIMIT;
+
+  // Placement list is 3 rows per campaign; Amazon writes once per campaign.
+  const visibleWriteCount = useMemo(() => {
+    if (segment !== "placement") return data.length;
+    return new Set(
+      data.map((row) => String((row as { campaign_id?: string }).campaign_id || String(row.id).split("::")[0])),
+    ).size;
+  }, [data, segment]);
+  const selectedWriteCount = useMemo(() => {
+    if (segment !== "placement") return selectedIds.length;
+    return new Set(selectedIds.map((id) => id.split("::")[0])).size;
+  }, [selectedIds, segment]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -736,19 +900,22 @@ export default function TargetingScreen() {
   };
 
   const openPlacementEditor = async (item: any, field: PlacementField) => {
+    const campaignId = String(item.campaign_id || item.id || "");
     try {
-      let adj = placementAdj[item.id];
+      let adj = placementAdj[campaignId];
       if (!adj) {
-        const api = await fetchCampaignApi(item.id);
+        const api = await fetchCampaignApi(campaignId);
         adj = api.placementAdjustments ?? {};
-        setPlacementAdj((prev) => ({ ...prev, [item.id]: adj! }));
+        setPlacementAdj((prev) => ({ ...prev, [campaignId]: adj! }));
       }
       const meta = PLACEMENT_FIELDS.find((entry) => entry.key === field);
+      const rawAdj = adj[field];
+      const knownAdj = rawAdj == null || !Number.isFinite(Number(rawAdj)) ? Number.NaN : Number(rawAdj);
       setPercentEditor({
-        id: item.id,
-        title: meta?.title ?? "Placement",
+        id: campaignId,
+        title: meta?.title ?? item.placement_label ?? "Placement",
         field,
-        value: Number(adj[field] ?? 0),
+        value: knownAdj,
       });
     } catch (error) {
       alertMutationError(error, "Couldn't load placement bids.");
@@ -774,19 +941,88 @@ export default function TargetingScreen() {
     opts?: { deltaUsd?: number; nextBids?: Map<string, number> },
   ) => {
     if (!selectedIds.length) return;
+    if (blockIfCannotWriteAmazon(writeGuard)) return;
     if ((action === "bid_delta" || action === "set_bid") && segment === "placement") {
       Alert.alert("Not available", "Dollar bid bulk edits apply to keywords and targets. Use placement % on each campaign, or Pause / Enable here.");
       return;
     }
     const kind = entityKindForSegment(segment);
     const byId = new Map(data.map((row) => [row.id, row]));
+    const [localDead, nestDead] = await Promise.all([
+      listPermanentFailEntityIds(),
+      listNestPermanentFailEntityIds(),
+    ]);
+    const knownDeadIds = new Set([...localDead, ...nestDead]);
+
+    // Optional harden: Paused/All + large selection — warn so sellers don't
+    // silently enqueue non-Active hierarchy writes.
+    const LARGE_BULK_ACTIVE_WARN = 25;
+    if (
+      stateFilter !== "enabled" &&
+      selectedIds.length >= LARGE_BULK_ACTIVE_WARN &&
+      (kind === "keyword" || kind === "product_target")
+    ) {
+      const proceed = await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          "Not on Active filter",
+          `You're about to queue ${selectedIds.length} changes while viewing ${
+            stateFilter === "paused" ? "Paused" : "All"
+          }. Rows with paused parents may be skipped or fail. Switch to Active for safer bulk writes, or continue anyway.`,
+          [
+            { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+            { text: "Continue", style: "destructive", onPress: () => resolve(true) },
+          ],
+        );
+      });
+      if (!proceed) return;
+    }
+
     const inputs: EnqueueBulkInput[] = [];
     let skippedNoBid = 0;
+    let skippedUnwritable = 0;
+    const skippedNoBidLabels: string[] = [];
+    const skippedUnwritableLabels: string[] = [];
+    const seenCampaignIds = new Set<string>();
     for (const id of selectedIds) {
       const row = byId.get(id);
+      const entityId =
+        segment === "placement"
+          ? String(row?.campaign_id || id.split("::")[0] || id)
+          : id;
+      if (segment === "placement") {
+        if (seenCampaignIds.has(entityId)) continue;
+        seenCampaignIds.add(entityId);
+      }
+      // Stale selection (id not in current filtered rows) must not bypass the gate.
+      if (!row) {
+        skippedUnwritable += 1;
+        if (skippedUnwritableLabels.length < 8) skippedUnwritableLabels.push(entityId);
+        continue;
+      }
+      const writable = isBulkWritableTargetingRow({
+        entityState: segment === "keywords" ? row.status : row.state,
+        campaignState:
+          segment === "placement" ? row.state : (row as any).campaign_state,
+        ...(segment === "placement"
+          ? {}
+          : { adGroupState: (row as any).ad_group_state }),
+        stateFilter,
+        knownPermanentFailIds: knownDeadIds,
+        entityId,
+      });
+      if (!writable) {
+        skippedUnwritable += 1;
+        if (skippedUnwritableLabels.length < 8) {
+          skippedUnwritableLabels.push(rowDisplayName(segment, row));
+        }
+        continue;
+      }
       const baseBid = row ? baseBidForRow(segment, row, defaultBidByAdGroupId) : null;
       if ((action === "bid_delta" || action === "set_bid") && (baseBid == null || !(baseBid > 0))) {
         skippedNoBid += 1;
+        if (row && skippedNoBidLabels.length < 8) {
+          skippedNoBidLabels.push(rowDisplayName(segment, row));
+        }
         continue;
       }
       if (action === "set_bid") {
@@ -797,7 +1033,7 @@ export default function TargetingScreen() {
         }
         inputs.push({
           entityKind: kind,
-          entityId: id,
+          entityId,
           action: "set_bid",
           bid: nextBid,
           baseBid,
@@ -806,18 +1042,25 @@ export default function TargetingScreen() {
       }
       inputs.push({
         entityKind: kind,
-        entityId: id,
+        entityId,
         action,
         deltaUsd: opts?.deltaUsd,
         baseBid,
       });
     }
     if (!inputs.length) {
+      const namePreview = (labels: string[], total: number) => {
+        if (!labels.length) return "";
+        const more = total > labels.length ? `\n• …and ${total - labels.length} more` : "";
+        return `\n\n• ${labels.join("\n• ")}${more}`;
+      };
       Alert.alert(
         "Nothing queued",
-        skippedNoBid > 0
-          ? "Selected rows are missing a current bid, so dollar edits were skipped."
-          : "Select at least one row first.",
+        skippedUnwritable > 0
+          ? `Selected rows aren't writable (paused parents, missing ownership, or already rejected as not found).${namePreview(skippedUnwritableLabels, skippedUnwritable)}`
+          : skippedNoBid > 0
+            ? `Selected rows are missing a current bid, so dollar edits were skipped.${namePreview(skippedNoBidLabels, skippedNoBid)}`
+            : "Select at least one row first.",
       );
       return;
     }
@@ -847,12 +1090,222 @@ export default function TargetingScreen() {
           input.bid = nextBid;
         }
       }
+      const skipNoteParts: string[] = [];
+      if (skippedNoBid > 0) {
+        const sample = skippedNoBidLabels.slice(0, 3).join(", ");
+        skipNoteParts.push(
+          `${skippedNoBid} without a current bid${sample ? ` (${sample}${skippedNoBid > 3 ? ", …" : ""})` : ""}`,
+        );
+      }
+      if (skippedUnwritable > 0) {
+        const sample = skippedUnwritableLabels.slice(0, 3).join(", ");
+        skipNoteParts.push(
+          `${skippedUnwritable} not writable${sample ? ` (${sample}${skippedUnwritable > 3 ? ", …" : ""})` : ""}`,
+        );
+      }
+      const skipNote = skipNoteParts.length ? ` Skipped ${skipNoteParts.join("; ")}.` : "";
+
+      // Keywords + product targets: Nest durable job (survives app kill). Placement stays local.
+      if (kind === "keyword" || kind === "product_target") {
+        const built = buildNestBulkItemsFromInputs(inputs);
+        if (!built) {
+          throw new Error("Couldn't build Nest bulk payload.");
+        }
+        const submitted = await submitNestBulkManual({
+          entityKind: built.entityKind,
+          items: built.items,
+          requireActiveParents: stateFilter === "enabled",
+        });
+        const stamp = new Date().toISOString();
+        await trackNestBulkJob({
+          jobId: submitted.jobId,
+          entityKind: built.entityKind,
+          total: submitted.total,
+          processed: submitted.syncResult ? submitted.total : 0,
+          status: submitted.syncResult ? "completed" : "pending",
+          revertItems: built.revertItems,
+          items: built.items,
+          requireActiveParents: stateFilter === "enabled",
+          createdAt: stamp,
+          updatedAt: stamp,
+          resultFailed: submitted.syncResult?.failed,
+          resultSucceeded: submitted.syncResult?.succeeded,
+          resultSkipped: submitted.syncResult?.skipped,
+          permanentMessages: collectPermanentFailMessages(submitted.syncResult),
+          permanentFailIds: collectPermanentFailIds(submitted.syncResult),
+          failedIds: collectFailedEntityIds(submitted.syncResult),
+          skippedIds: collectSkippedEntityIds(submitted.syncResult),
+          notFoundFailIds: collectNotFoundFailIds(submitted.syncResult),
+        });
+        if (submitted.syncResult) {
+          let restoredAny = false;
+          const revertPlan = nestBulkRevertPlan({
+            failedIds: collectFailedEntityIds(submitted.syncResult),
+            permanentFailIds: collectPermanentFailIds(submitted.syncResult),
+            skippedIds: collectSkippedEntityIds(submitted.syncResult),
+            resultFailed: submitted.syncResult.failed,
+            resultSucceeded: submitted.syncResult.succeeded,
+            resultSkipped: submitted.syncResult.skipped,
+          });
+          for (const revert of built.revertItems) {
+            if (!shouldRevertNestBulkEntity(revert.entityId, revertPlan)) {
+              continue;
+            }
+            if (revert.action === "pause" || revert.action === "enable") {
+              if (revert.previousEnabled != null) {
+                revertOptimisticEntityState(queryClient, kind, revert.entityId, revert.previousEnabled);
+                restoredAny = true;
+              }
+            } else {
+              revertOptimisticEntityBid(queryClient, kind, revert.entityId, revert.previousBid ?? null);
+              restoredAny = true;
+            }
+          }
+          const failCount =
+            collectPermanentFailIds(submitted.syncResult).length || submitted.syncResult.failed || 0;
+          if (failCount > 0) {
+            const detail = collectPermanentFailMessages(submitted.syncResult)[0] || null;
+            const sources = collectPermanentFailMessages(submitted.syncResult).map((m) =>
+              classifyBulkFailureSource(m),
+            );
+            const dominant =
+              sources.length && sources.every((s) => s === "stale_or_unowned")
+                ? "stale_or_unowned"
+                : sources.length && sources.every((s) => s === "amazon")
+                  ? "amazon"
+                  : sources.includes("stale_or_unowned") && !sources.includes("amazon")
+                    ? "stale_or_unowned"
+                    : sources.includes("amazon") && !sources.includes("stale_or_unowned")
+                      ? "amazon"
+                      : "other";
+            Alert.alert(
+              bulkFailureAlertTitle(failCount, dominant),
+              bulkFailureAlertBody({ detail, source: dominant, restoredAny }),
+            );
+          } else if ((submitted.syncResult.skipped ?? 0) > 0) {
+            const skipAlert = nestBulkSkipAlert({
+              succeeded: nestBulkConfirmedSucceeded(submitted.syncResult),
+              skipped: submitted.syncResult.skipped ?? 0,
+              restoredAny,
+            });
+            Alert.alert(skipAlert.title, `${skipAlert.body}${skipNote}`);
+          }
+          void invalidateAds();
+        } else {
+          void (async () => {
+            for (let i = 0; i < 180; i += 1) {
+              const { newlyCompleted } = await refreshOpenNestBulkJobs();
+              await refreshOutboxCounts();
+              for (const done of newlyCompleted) {
+                let restoredAny = false;
+                const revertPlan = nestBulkRevertPlan({
+                  failedIds: done.failedIds,
+                  permanentFailIds: done.permanentFailIds,
+                  skippedIds: done.skippedIds,
+                  resultFailed: done.resultFailed,
+                  resultSucceeded: done.resultSucceeded,
+                  resultSkipped: done.resultSkipped,
+                });
+                for (const revert of done.revertItems) {
+                  if (!shouldRevertNestBulkEntity(revert.entityId, revertPlan)) {
+                    continue;
+                  }
+                  if (revert.action === "pause" || revert.action === "enable") {
+                    if (revert.previousEnabled != null) {
+                      revertOptimisticEntityState(
+                        queryClient,
+                        done.entityKind,
+                        revert.entityId,
+                        revert.previousEnabled,
+                      );
+                      restoredAny = true;
+                    }
+                  } else {
+                    revertOptimisticEntityBid(
+                      queryClient,
+                      done.entityKind,
+                      revert.entityId,
+                      revert.previousBid ?? null,
+                    );
+                    restoredAny = true;
+                  }
+                }
+                const failCount = done.permanentFailIds?.length || done.resultFailed || 0;
+                if (failCount > 0) {
+                  const detail = done.permanentMessages?.[0] || done.lastError || null;
+                  const sources = (done.permanentMessages || [detail]).map((m) =>
+                    classifyBulkFailureSource(m),
+                  );
+                  const dominant =
+                    sources.every((s) => s === "stale_or_unowned")
+                      ? "stale_or_unowned"
+                      : sources.every((s) => s === "amazon")
+                        ? "amazon"
+                        : sources.includes("stale_or_unowned") && !sources.includes("amazon")
+                          ? "stale_or_unowned"
+                          : sources.includes("amazon") && !sources.includes("stale_or_unowned")
+                            ? "amazon"
+                            : "other";
+                  Alert.alert(
+                    bulkFailureAlertTitle(failCount, dominant),
+                    bulkFailureAlertBody({
+                      detail,
+                      source: dominant,
+                      restoredAny,
+                    }),
+                  );
+                } else if ((done.resultSkipped ?? done.skippedIds?.length ?? 0) > 0) {
+                  const skipAlert = nestBulkSkipAlert({
+                    succeeded: nestBulkConfirmedSucceeded({
+                      succeeded: done.resultSucceeded,
+                    }),
+                    skipped: done.resultSkipped ?? done.skippedIds?.length ?? 0,
+                    restoredAny,
+                  });
+                  Alert.alert(skipAlert.title, skipAlert.body);
+                }
+                void invalidateAds();
+              }
+              const snap = await getNestBulkJobsSnapshot();
+              if (snap.pending === 0) break;
+              await new Promise((r) => setTimeout(r, 2000));
+            }
+          })();
+        }
+        setSelectedIds([]);
+        setSelectMode(false);
+        await refreshOutboxCounts();
+        if (submitted.syncResult) {
+          const doneFailed =
+            collectPermanentFailIds(submitted.syncResult).length || submitted.syncResult.failed || 0;
+          const doneSkipped = submitted.syncResult.skipped ?? 0;
+          const doneSucceeded = nestBulkConfirmedSucceeded(submitted.syncResult);
+          if (doneFailed === 0 && doneSkipped === 0) {
+            if (doneSucceeded > 0) {
+              Alert.alert(
+                "Sent to Amazon Ads",
+                `${doneSucceeded} change${doneSucceeded === 1 ? "" : "s"} finished on InteliAds servers.${skipNote}`,
+              );
+            } else {
+              Alert.alert(
+                "Not confirmed on Amazon yet",
+                `InteliAds accepted ${submitted.total} change${submitted.total === 1 ? "" : "s"}. Amazon confirmation is still pending.${skipNote}`,
+              );
+            }
+          }
+        } else {
+          Alert.alert(
+            "Writing to Amazon Ads",
+            `${submitted.total} change${submitted.total === 1 ? "" : "s"} queued on InteliAds servers. Continues if you close the app.${skipNote}`,
+          );
+        }
+        return;
+      }
+
       const { count } = await enqueueBulkAmazonWrites(inputs);
       setSelectedIds([]);
       setSelectMode(false);
       await refreshOutboxCounts();
-      const skipNote =
-        skippedNoBid > 0 ? ` Skipped ${skippedNoBid} without a current bid.` : "";
       Alert.alert(
         "Writing to Amazon Ads",
         `${count} change${count === 1 ? "" : "s"} queued on this iPhone. Not confirmed on Amazon yet — the app keeps retrying until Amazon accepts, or restores the previous value if Amazon rejects.${skipNote}`,
@@ -946,24 +1399,72 @@ export default function TargetingScreen() {
 
   const confirmPauseSelected = () => {
     if (!selectedIds.length) return;
+    const run = () => void enqueueSelected("pause");
+    const cooldown = selectedCooldownSummary(segment, selectedIds, data);
+    if (segment !== "placement" && cooldown.count > 0) {
+      const preview = cooldown.labels.slice(0, 8).join("\n• ");
+      const more =
+        cooldown.labels.length > 8 ? `\n• …and ${cooldown.labels.length - 8} more` : "";
+      Alert.alert(
+        `${cooldown.count} on cooldown`,
+        `These were changed recently (up to ${cooldown.remainingHint} left). Pausing still writes Amazon Ads and resets cooldown:\n\n• ${preview}${more}`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Pause anyway", style: "destructive", onPress: run },
+        ],
+      );
+      return;
+    }
     Alert.alert(
-      `Pause ${selectedIds.length} ${selectedIds.length === 1 ? "item" : "items"}?`,
+      `Pause ${selectedWriteCount} ${
+        segment === "placement"
+          ? selectedWriteCount === 1
+            ? "campaign"
+            : "campaigns"
+          : selectedWriteCount === 1
+            ? "item"
+            : "items"
+      }?`,
       "Writes to Amazon Ads. Continues in the background if you leave Targets.",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Pause", style: "destructive", onPress: () => void enqueueSelected("pause") },
+        { text: "Pause", style: "destructive", onPress: run },
       ],
     );
   };
 
   const confirmEnableSelected = () => {
     if (!selectedIds.length) return;
+    const run = () => void enqueueSelected("enable");
+    const cooldown = selectedCooldownSummary(segment, selectedIds, data);
+    if (segment !== "placement" && cooldown.count > 0) {
+      const preview = cooldown.labels.slice(0, 8).join("\n• ");
+      const more =
+        cooldown.labels.length > 8 ? `\n• …and ${cooldown.labels.length - 8} more` : "";
+      Alert.alert(
+        `${cooldown.count} on cooldown`,
+        `These were changed recently (up to ${cooldown.remainingHint} left). Enabling still writes Amazon Ads and resets cooldown:\n\n• ${preview}${more}`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Enable anyway", style: "destructive", onPress: run },
+        ],
+      );
+      return;
+    }
     Alert.alert(
-      `Enable ${selectedIds.length} ${selectedIds.length === 1 ? "item" : "items"}?`,
+      `Enable ${selectedWriteCount} ${
+        segment === "placement"
+          ? selectedWriteCount === 1
+            ? "campaign"
+            : "campaigns"
+          : selectedWriteCount === 1
+            ? "item"
+            : "items"
+      }?`,
       "Writes to Amazon Ads. Continues in the background if you leave Targets.",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Enable", onPress: () => void enqueueSelected("enable") },
+        { text: "Enable", onPress: run },
       ],
     );
   };
@@ -981,13 +1482,10 @@ export default function TargetingScreen() {
     );
   }
 
-  const empty = emptyCopy(segment);
+  const empty = emptyCopy(segment, stateFilter);
   const perfLabel = PERF_FILTERS.find((entry) => entry.key === perf)?.label ?? "All";
   const sortLabel = SORT_OPTIONS.find((entry) => entry.key === sort)?.label ?? "ACoS";
-  const effectiveSortKey = resolveTargetingSortKey(sort, advanced);
-  const effectiveSortLabel =
-    SORT_OPTIONS.find((entry) => entry.key === effectiveSortKey)?.label ?? "ACoS";
-  const sortOverridden = advancedSortOverridesExplicit(sort, advanced);
+  // Ranges filter only — they never override the seller's sort pick.
   const bookFilterLabel = selectedBook
     ? selectedBook.title.length > 28
       ? `${selectedBook.title.slice(0, 26)}…`
@@ -1003,18 +1501,12 @@ export default function TargetingScreen() {
   const canBulkBid = segment !== "placement";
 
   const filtersActive =
-    perf !== "all" || sort !== "acos" || !!bookAsin || hasActiveAdvancedFilters(advanced);
+    perf !== "all" || sort !== "acos" || !!bookAsin || stateFilter !== "enabled" || hasActiveAdvancedFilters(advanced);
   const filterSummary = [
     bookFilterLabel ? `Book: ${bookFilterLabel}` : null,
     perf !== "all" ? perfLabel : null,
-    sortOverridden
-      ? `Sort: ${effectiveSortLabel} (from range)`
-      : sort !== "acos"
-        ? `Sort: ${sortLabel}`
-        : hasActiveAdvancedFilters(advanced)
-          ? `Sort: ${effectiveSortLabel}`
-          : null,
-    advancedCount > 0 ? `${advancedCount} range` : null,
+    sort !== "acos" ? `Sort: ${sortLabel}` : null,
+    advancedCount > 0 ? `${advancedCount} range${advancedCount === 1 ? "" : "s"}` : null,
   ].filter(Boolean).join(" · ");
 
   return (
@@ -1089,18 +1581,36 @@ export default function TargetingScreen() {
             onPress={() => setFilterOpen(true)}
           />
         </FilterSearchRow>
+        <IOSSegmentedControl
+          testID="targeting-state-filter"
+          value={stateFilter}
+          onChange={(key) => setStateFilter(key)}
+          options={[
+            { key: "enabled", label: "Active", testID: "targeting-state-enabled" },
+            { key: "paused", label: "Paused", testID: "targeting-state-paused" },
+            { key: "all", label: "All", testID: "targeting-state-all" },
+          ]}
+        />
+        {viewAsOtherUser ? (
+          <Text
+            testID="targeting-view-as-write-warning"
+            style={[t.typography.caption2, { color: t.colors.tone_warning, marginTop: 4 }]}
+          >
+            Viewing customer — edits off
+          </Text>
+        ) : null}
         {selectMode || selectedIds.length > 0 ? (
           <ActiveFilterRow>
             <ActiveFilterChip
               testID="targeting-select-all"
-              label={`Select all (${data.length})`}
-              accessibilityLabel={`Select all ${data.length} visible rows`}
+              label={`Select all (${visibleWriteCount})`}
+              accessibilityLabel={`Select all ${visibleWriteCount} visible ${segment === "placement" ? "campaigns" : "rows"}`}
               onPress={selectAllVisible}
             />
             <ActiveFilterChip
               testID="targeting-selected-count"
-              label={`${selectedIds.length} selected`}
-              accessibilityLabel={`${selectedIds.length} selected. Bulk bid actions appear below.`}
+              label={`${selectedWriteCount} selected`}
+              accessibilityLabel={`${selectedWriteCount} selected`}
               onPress={clearSelection}
             />
             {cooldownSelected.count > 0 ? (
@@ -1123,16 +1633,17 @@ export default function TargetingScreen() {
             ) : null}
           </ActiveFilterRow>
         ) : null}
-        {selectMode && selectedIds.length === 0 ? (
+        {!showBlockingSpinner && !isError ? (
           <Text
-            style={[
-              t.typography.caption1,
-              { color: t.colors.text_tertiary, marginHorizontal: 16, marginBottom: 4 },
-            ]}
+            testID="targeting-list-count"
+            style={[t.typography.caption1, { color: t.colors.text_tertiary }]}
           >
-            {canBulkBid
-              ? "Tap rows to select, then use Bid +$ / −$ / +% / −% below."
-              : "Tap campaigns to select, then Pause or Enable. Bid ± is for Keywords / ASINs / Auto / Category."}
+            {visibleWriteCount === 1
+              ? segment === "placement"
+                ? "1 campaign"
+                : "1 row"
+              : `${visibleWriteCount} ${segment === "placement" ? "campaigns" : "rows"}`}
+            {listUpdating ? " · updating" : ""}
           </Text>
         ) : null}
         {filtersActive ? (
@@ -1153,26 +1664,19 @@ export default function TargetingScreen() {
                 onPress={() => setPerf("all")}
               />
             ) : null}
-            {sortOverridden ? (
-              <ActiveFilterChip
-                testID="targeting-filter-chip-sort"
-                label={`Sort: ${effectiveSortLabel} · range`}
-                accessibilityLabel={`Sort is ${effectiveSortLabel} because an advanced range is active. Clear ranges to use manual sort.`}
-                onPress={() => setAdvanced({ ...EMPTY_TARGETING_ADVANCED_FILTERS })}
-              />
-            ) : sort !== "acos" ? (
+            {sort !== "acos" ? (
               <ActiveFilterChip
                 testID="targeting-filter-chip-sort"
                 label={`Sort: ${sortLabel}`}
-                accessibilityLabel={`Clear sort. Currently ${sortLabel}`}
+                accessibilityLabel={`Clear sort. Currently ${sortLabel} high to low`}
                 onPress={() => setSort("acos")}
               />
             ) : null}
             {advancedCount > 0 ? (
               <ActiveFilterChip
                 testID="targeting-filter-chip-advanced"
-                label={`${advancedCount} range · ${effectiveSortKey.toUpperCase()}`}
-                accessibilityLabel={`Clear advanced min max filters. List sorted by ${effectiveSortLabel}.`}
+                label={`${advancedCount} range${advancedCount === 1 ? "" : "s"}`}
+                accessibilityLabel={`Clear ${advancedCount} min max filters. Sort stays ${sortLabel}.`}
                 onPress={() => setAdvanced({ ...EMPTY_TARGETING_ADVANCED_FILTERS })}
               />
             ) : null}
@@ -1185,22 +1689,71 @@ export default function TargetingScreen() {
           >
             <Text style={[t.typography.caption1, { color: t.colors.text_primary, flex: 1 }]}>
               {outboxPending > 0
-                ? `Writing ${outboxPending} Amazon change${outboxPending === 1 ? "" : "s"}… keeps going if you leave.`
-                : `${outboxFailed} change${outboxFailed === 1 ? "" : "s"} need review.`}
+                ? `Writing ${outboxPending}…`
+                : `${outboxFailed} need review`}
             </Text>
-            <TouchableOpacity
-              onPress={() =>
-                void (async () => {
-                  if (outboxFailed > 0) await retryPermanentBulkFailures();
-                  else await drainBulkOutbox();
-                  await refreshOutboxCounts();
-                })()
-              }
-              accessibilityRole="button"
-              accessibilityLabel="Retry Amazon writes"
-            >
-              <Text style={[t.typography.caption1, { color: t.colors.tone_primary, fontWeight: "700" }]}>Retry</Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+              {outboxFailed > 0 && outboxPending === 0 ? (
+                <TouchableOpacity
+                  onPress={() =>
+                    void (async () => {
+                      const removedLocal = await dismissPermanentBulkFailures();
+                      const removedNest = await dismissCompletedNestBulkFailures();
+                      await refreshOutboxCounts();
+                      const removed = removedLocal + removedNest;
+                      if (removed > 0) {
+                        Alert.alert(
+                          "Cleared",
+                          `${removed} rejected change${removed === 1 ? "" : "s"} removed from this list. On-screen bids were already restored where possible.`,
+                        );
+                      }
+                    })()
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear rejected Amazon writes"
+                  testID="targeting-bulk-outbox-clear"
+                >
+                  <Text style={[t.typography.caption1, { color: t.colors.text_secondary, fontWeight: "700" }]}>Clear</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                onPress={() =>
+                  void (async () => {
+                    // Drop permanent not-found so Retry cannot loop forever on dead IDs.
+                    await dismissNotFoundPermanentBulkFailures();
+                    const nestResult = await resubmitFailedNestBulkJobs({
+                      requireActiveParents: stateFilter === "enabled",
+                    });
+                    const nestRetried = nestResult.resubmitted;
+                    const skippedStale = nestResult.skippedNotFound;
+                    if (nestRetried === 0 && skippedStale > 0 && outboxFailed === 0) {
+                      Alert.alert(
+                        "Nothing to retry",
+                        `${skippedStale} change${skippedStale === 1 ? "" : "s"} no longer in this filtered list or were permanently rejected.`,
+                      );
+                    }
+                    if (outboxFailed > 0 || nestRetried > 0) {
+                      const n = await requeuePermanentBulkFailures();
+                      if (n > 0 || nestRetried > 0) {
+                        setOutboxPending((p) => p + n + nestRetried);
+                        setOutboxFailed(0);
+                      }
+                      await refreshOutboxCounts();
+                      await drainBulkOutbox();
+                    } else {
+                      await drainBulkOutbox();
+                    }
+                    await refreshOpenNestBulkJobs();
+                    await refreshOutboxCounts();
+                  })()
+                }
+                accessibilityRole="button"
+                accessibilityLabel="Retry Amazon writes"
+                testID="targeting-bulk-outbox-retry"
+              >
+                <Text style={[t.typography.caption1, { color: t.colors.tone_primary, fontWeight: "700" }]}>Retry</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         ) : null}
       </FilterChrome>
@@ -1226,8 +1779,8 @@ export default function TargetingScreen() {
               : /period metrics/i.test(
                     activeQuery.error instanceof Error ? activeQuery.error.message : "",
                   )
-                ? "Period metrics couldn't be loaded, so nothing is shown instead of fake zeros. Pull to retry."
-                : "Check your connection and try again."
+                ? "Couldn't load metrics"
+                : "Couldn't load"
           }
           onRetry={() => {
             void activeQuery.refetch();
@@ -1249,7 +1802,7 @@ export default function TargetingScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />
           }
-          ItemSeparatorComponent={() => <View style={{ height: t.layout.listGap }} />}
+          ItemSeparatorComponent={TargetingListSeparator}
           ListEmptyComponent={
             <EmptyState
               icon={empty.icon}
@@ -1259,22 +1812,23 @@ export default function TargetingScreen() {
                   ? undefined
                   : filtersActive
                     ? segment === "placement" && (advanced.bidMin != null || advanced.bidMax != null)
-                      ? "Bid min/max apply to keywords and targets, not Placement. Clear bid ranges or switch segment."
-                      : "No rows match these period filters — not missing data. Clear a filter or widen the range."
-                    : undefined
+                      ? "Bid ranges don't apply on Placement"
+                      : "No matches"
+                    : empty.subtitle
               }
             />
           }
           ListFooterComponent={
             listTruncated ? (
-              <Text style={[t.typography.footnote, { color: t.colors.text_secondary, textAlign: "center", marginTop: t.spacing.md }]}>
-                List capped at {TARGETING_LIST_LIMIT} rows for speed (not an Amazon write limit). fair per-profile fetch
-                across {scopeProfiles.length} profile{scopeProfiles.length === 1 ? "" : "s"} for this period. Filter by
-                book / performance or narrow dates to see a different set. Bulk Bid ± still writes every selected row to
-                Amazon via the background outbox.
+              <Text
+                testID="targeting-list-cap-note"
+                style={[t.typography.footnote, { color: t.colors.text_secondary, textAlign: "center", marginTop: t.spacing.md }]}
+              >
+                Showing {TARGETING_LIST_LIMIT} (app limit)
               </Text>
             ) : null
           }
+          // fair per-profile fetch is enforced in queries (list cap is app-only).
           renderItem={({ item }: any) => {
             const selected = selectedIds.includes(item.id);
             const onRowPress = () => {
@@ -1283,8 +1837,10 @@ export default function TargetingScreen() {
                 return;
               }
               if (segment === "keywords") router.push(`/keyword/${item.id}` as Href);
-              else if (segment === "placement") router.push(`/campaign/${item.id}`);
-              else router.push(`/target/${item.id}` as Href);
+              else if (segment === "placement") {
+                const campaignId = String(item.campaign_id || item.id.split("::")[0] || item.id);
+                router.push(`/campaign/${campaignId}`);
+              } else router.push(`/target/${item.id}` as Href);
             };
             const selectProps = {
               selectMode,
@@ -1297,28 +1853,36 @@ export default function TargetingScreen() {
                   item={item}
                   currency={primaryCurrency}
                   t={t}
+                  viewAsOtherUser={viewAsOtherUser}
                   onPress={onRowPress}
-                  onEditBid={() =>
+                  onEditBid={() => {
+                    if (blockIfCannotWriteAmazon(writeGuard)) return;
                     setMoneyEditor({
                       entity: "keyword",
                       id: item.id,
                       title: item.keyword_text ?? "Keyword bid",
                       value: baseBidForRow("keywords", item, defaultBidByAdGroupId) ?? 0.02,
-                    })
-                  }
+                    });
+                  }}
                   {...selectProps}
                 />
               );
             }
             if (segment === "placement") {
+              const campaignId = String(item.campaign_id || item.id.split("::")[0] || item.id);
+              const field = (item.placement_key || "top_of_search") as PlacementField;
               return (
                 <PlacementRow
                   item={item}
                   currency={primaryCurrency}
                   t={t}
-                  adjustments={placementAdj[item.id]}
+                  field={field}
+                  adjustments={placementAdj[campaignId]}
                   onPress={onRowPress}
-                  onEdit={(field) => void openPlacementEditor(item, field)}
+                  onEdit={() => {
+                    if (blockIfCannotWriteAmazon(writeGuard)) return;
+                    void openPlacementEditor(item, field);
+                  }}
                   {...selectProps}
                 />
               );
@@ -1331,15 +1895,17 @@ export default function TargetingScreen() {
                   item.ad_group_id ? defaultBidByAdGroupId[String(item.ad_group_id)] : undefined
                 }
                 t={t}
+                viewAsOtherUser={viewAsOtherUser}
                 onPress={onRowPress}
-                onEditBid={() =>
+                onEditBid={() => {
+                  if (blockIfCannotWriteAmazon(writeGuard)) return;
                   setMoneyEditor({
                     entity: "target",
                     id: item.id,
                     title: item.title || describeProductTarget(item.expression, item.expression_type).label,
                     value: baseBidForRow(segment, item, defaultBidByAdGroupId) ?? 0.02,
-                  })
-                }
+                  });
+                }}
                 {...selectProps}
               />
             );
@@ -1350,6 +1916,7 @@ export default function TargetingScreen() {
       {selectedIds.length > 0 ? (
         <View
           testID="targeting-bulk-bar"
+          // Bulk Bid ± only writes the selected visible / filtered rows.
           style={[
             styles.bulkBar,
             {
@@ -1365,7 +1932,7 @@ export default function TargetingScreen() {
               testID="targeting-bulk-cooldown-hint"
               style={[t.typography.caption2, { color: t.colors.tone_warning, marginBottom: 6, fontWeight: "600" }]}
             >
-              {cooldownSelected.count} selected on cooldown · tap chip above for names
+              {cooldownSelected.count} on cooldown
             </Text>
           ) : null}
           <ScrollView
@@ -1383,7 +1950,6 @@ export default function TargetingScreen() {
                   style={[styles.bulkBtn, { backgroundColor: t.colors.tone_good + "22" }]}
                 >
                   <Text style={[t.typography.caption1, { color: t.colors.tone_good, fontWeight: "800" }]}>Bid +$</Text>
-                  <Text style={[t.typography.caption2, { color: t.colors.tone_good }]}>by amount</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   testID="targeting-bulk-decrease"
@@ -1393,7 +1959,6 @@ export default function TargetingScreen() {
                   style={[styles.bulkBtn, { backgroundColor: t.colors.tone_warning + "22" }]}
                 >
                   <Text style={[t.typography.caption1, { color: t.colors.tone_warning, fontWeight: "800" }]}>Bid −$</Text>
-                  <Text style={[t.typography.caption2, { color: t.colors.tone_warning }]}>by amount</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   testID="targeting-bulk-increase-pct"
@@ -1403,7 +1968,6 @@ export default function TargetingScreen() {
                   style={[styles.bulkBtn, { backgroundColor: t.colors.tone_good + "22" }]}
                 >
                   <Text style={[t.typography.caption1, { color: t.colors.tone_good, fontWeight: "800" }]}>Bid +%</Text>
-                  <Text style={[t.typography.caption2, { color: t.colors.tone_good }]}>by percent</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   testID="targeting-bulk-decrease-pct"
@@ -1413,7 +1977,6 @@ export default function TargetingScreen() {
                   style={[styles.bulkBtn, { backgroundColor: t.colors.tone_warning + "22" }]}
                 >
                   <Text style={[t.typography.caption1, { color: t.colors.tone_warning, fontWeight: "800" }]}>Bid −%</Text>
-                  <Text style={[t.typography.caption2, { color: t.colors.tone_warning }]}>by percent</Text>
                 </TouchableOpacity>
               </>
             ) : null}
@@ -1476,6 +2039,7 @@ export default function TargetingScreen() {
         onClose={() => setMoneyEditor(null)}
         onSave={async (next) => {
           if (!moneyEditor) return;
+          if (blockIfCannotWriteAmazon(writeGuard)) return;
           const entityKind = moneyEditor.entity === "keyword" ? "keyword" : "product_target";
           const previousBid = applyOptimisticEntityBid(queryClient, entityKind, moneyEditor.id, next);
           try {
@@ -1505,6 +2069,7 @@ export default function TargetingScreen() {
         onClose={() => setPercentEditor(null)}
         onSave={async (next) => {
           if (!percentEditor) return;
+          if (blockIfCannotWriteAmazon(writeGuard)) return;
           // Patch only the edited field — never default missing siblings to 0.
           const payload: PlacementAdjustments = { [percentEditor.field]: next };
           await updateCampaign(percentEditor.id, { placementAdjustments: payload });
@@ -1512,6 +2077,21 @@ export default function TargetingScreen() {
             ...prev,
             [percentEditor.id]: { ...(prev[percentEditor.id] ?? {}), ...payload },
           }));
+          // Optimistic cooldown stamp so Placement Cooldown badge updates immediately.
+          queryClient.setQueriesData({ queryKey: ["targeting-placements-v2"] }, (old: unknown) => {
+            if (!Array.isArray(old)) return old;
+            const now = new Date().toISOString();
+            return old.map((row: any) =>
+              String(row.id) === String(percentEditor.id)
+                ? {
+                    ...row,
+                    rule_last_modified_at: now,
+                    placement_adj_last_modified_at: now,
+                    placement_adj_change_source: "manual",
+                  }
+                : row,
+            );
+          });
           await invalidateAds();
         }}
       />
@@ -1529,8 +2109,6 @@ export default function TargetingScreen() {
               t={t}
               perf={perf}
               sort={sort}
-              effectiveSortKey={effectiveSortKey}
-              sortOverridden={sortOverridden}
               bookAsin={bookAsin}
               bookOptions={bookOptions}
               advanced={advanced}
@@ -1552,8 +2130,6 @@ export default function TargetingScreen() {
                 t={t}
                 perf={perf}
                 sort={sort}
-                effectiveSortKey={effectiveSortKey}
-                sortOverridden={sortOverridden}
                 bookAsin={bookAsin}
                 bookOptions={bookOptions}
                 advanced={advanced}
@@ -1576,8 +2152,6 @@ function FilterSheetFields({
   t,
   perf,
   sort,
-  effectiveSortKey = "acos",
-  sortOverridden = false,
   bookAsin,
   bookOptions,
   advanced,
@@ -1591,8 +2165,6 @@ function FilterSheetFields({
   t: any;
   perf: PerfFilter;
   sort: SortKey;
-  effectiveSortKey?: SortKey;
-  sortOverridden?: boolean;
   bookAsin: string | null;
   bookOptions: {
     asin: string;
@@ -1610,12 +2182,22 @@ function FilterSheetFields({
   onDone: () => void;
 }) {
   const [advDrafts, setAdvDrafts] = useState<Partial<Record<keyof TargetingAdvancedFilters, string>>>({});
+  const [bookQuery, setBookQuery] = useState("");
+  const marketplaceIndex = useSponsoredMarketplaceIndex();
   const INT_RANGE_KEYS = new Set<keyof TargetingAdvancedFilters>([
     "clicksMin",
     "clicksMax",
     "impressionsMin",
     "impressionsMax",
   ]);
+
+  const visibleBooks = useMemo(() => {
+    const filtered = filterTargetingBookOptions(bookOptions, bookQuery);
+    if (!bookAsin) return filtered;
+    if (filtered.some((b) => b.asin === bookAsin)) return filtered;
+    const selected = bookOptions.find((b) => b.asin === bookAsin);
+    return selected ? [selected, ...filtered] : filtered;
+  }, [bookOptions, bookQuery, bookAsin]);
 
   const setAdvField = (key: keyof TargetingAdvancedFilters, raw: string) => {
     setAdvDrafts((prev) => ({ ...prev, [key]: raw }));
@@ -1651,44 +2233,61 @@ function FilterSheetFields({
         </TouchableOpacity>
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.filterSheetBody} keyboardShouldPersistTaps="handled">
-        <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginBottom: 4 }]}>
+        <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginBottom: t.spacing.sm }]}>
           Book
         </Text>
-        <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: t.spacing.sm }]}>
-          Sponsored ASINs on enabled campaigns (same as web).
-        </Text>
-        <View style={styles.bookGrid}>
+        {bookOptions.length ? (
+          <View style={{ marginBottom: t.spacing.sm }}>
+            <IOSSearchBar
+              testID="targeting-book-search"
+              placeholder="Search books or ASIN"
+              value={bookQuery}
+              onChangeText={setBookQuery}
+            />
+          </View>
+        ) : null}
+        <View style={styles.bookList}>
           <TouchableOpacity
             testID="targeting-book-all"
             onPress={() => onBookAsin(null)}
             style={[
-              styles.bookCard,
+              styles.bookRow,
               {
-                backgroundColor: !bookAsin ? t.colors.tone_primary + "18" : t.colors.background_tertiary,
+                backgroundColor: !bookAsin ? t.colors.tone_primary + "22" : t.colors.background_tertiary,
                 borderColor: !bookAsin ? t.colors.tone_primary : t.colors.separator,
               },
             ]}
             accessibilityRole="button"
             accessibilityState={{ selected: !bookAsin }}
+            accessibilityLabel="All books"
           >
-            <View style={[styles.bookCardCoverSlot, { backgroundColor: t.colors.background_secondary }]}>
-              <SFSymbol name="books.vertical" size={22} color={!bookAsin ? t.colors.tone_primary : t.colors.text_tertiary} />
+            <View style={[styles.bookRowCoverSlot, { backgroundColor: t.colors.background_secondary }]}>
+              <SFSymbol name="books.vertical" size={20} color={!bookAsin ? t.colors.tone_primary : t.colors.text_tertiary} />
             </View>
-            <Text
-              numberOfLines={2}
-              style={[
-                t.typography.caption1,
-                {
-                  color: !bookAsin ? t.colors.tone_primary : t.colors.text_secondary,
-                  fontWeight: !bookAsin ? "700" : "600",
-                  textAlign: "center",
-                },
-              ]}
-            >
-              All books
-            </Text>
+            <View style={styles.bookRowText}>
+              <Text
+                numberOfLines={2}
+                style={[
+                  t.typography.subhead,
+                  {
+                    color: !bookAsin ? t.colors.tone_primary : t.colors.text_primary,
+                    fontWeight: !bookAsin ? "700" : "600",
+                  },
+                ]}
+              >
+                All books
+              </Text>
+              <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>
+                No book filter
+              </Text>
+            </View>
+            <SFSymbol
+              name={!bookAsin ? "checkmark.circle.fill" : "circle"}
+              size={22}
+              color={!bookAsin ? t.colors.tone_primary : t.colors.text_tertiary}
+            />
           </TouchableOpacity>
-          {bookOptions.map((book) => {
+          {visibleBooks.map((book) => {
             const active = bookAsin === book.asin;
             const camps = book.campaignCount ?? book.campaignIds.length;
             return (
@@ -1697,48 +2296,64 @@ function FilterSheetFields({
                 testID={`targeting-book-${book.asin}`}
                 onPress={() => onBookAsin(active ? null : book.asin)}
                 style={[
-                  styles.bookCard,
+                  styles.bookRow,
                   {
-                    backgroundColor: active ? t.colors.tone_primary + "18" : t.colors.background_tertiary,
+                    backgroundColor: active ? t.colors.tone_primary + "22" : t.colors.background_tertiary,
                     borderColor: active ? t.colors.tone_primary : t.colors.separator,
                   },
                 ]}
                 accessibilityRole="button"
                 accessibilityState={{ selected: active }}
-                accessibilityLabel={`${book.title}, ${camps} campaigns`}
+                accessibilityLabel={`${book.title}, ASIN ${book.asin}, ${camps} campaigns`}
               >
                 <BookCover
                   uri={book.image_url}
                   fallbackUri={null}
-                  asin={null}
+                  asin={book.asin}
                   size="sm"
                   placeholder="book"
                   recyclingKey={`filter-${book.asin}`}
-                  style={styles.bookCardCover}
+                  style={styles.bookRowCover}
                 />
-                <Text
-                  numberOfLines={2}
-                  style={[
-                    t.typography.caption1,
-                    {
-                      color: active ? t.colors.tone_primary : t.colors.text_primary,
-                      fontWeight: active ? "700" : "600",
-                      textAlign: "center",
-                    },
-                  ]}
-                >
-                  {book.title}
-                </Text>
-                <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, textAlign: "center" }]}>
-                  {camps} camp.
-                </Text>
+                <View style={styles.bookRowText}>
+                  <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
+                    <Text
+                      numberOfLines={2}
+                      style={[
+                        t.typography.subhead,
+                        {
+                          color: active ? t.colors.tone_primary : t.colors.text_primary,
+                          fontWeight: active ? "700" : "600",
+                          flex: 1,
+                          minWidth: 0,
+                        },
+                      ]}
+                    >
+                      {book.title}
+                    </Text>
+                    <BookMarketplaceFlags index={marketplaceIndex} book={book} style={t.typography.subhead} />
+                  </View>
+                  <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>
+                    {book.asin}
+                    {camps > 0 ? ` · ${camps} camp.` : ""}
+                  </Text>
+                </View>
+                <SFSymbol
+                  name={active ? "checkmark.circle.fill" : "circle"}
+                  size={22}
+                  color={active ? t.colors.tone_primary : t.colors.text_tertiary}
+                />
               </TouchableOpacity>
             );
           })}
         </View>
         {!bookOptions.length ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: t.spacing.xs }]}>
-            No active sponsored books on these profiles yet.
+            No campaign or KDP books on these profiles yet.
+          </Text>
+        ) : bookQuery.trim() && !visibleBooks.length ? (
+          <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: t.spacing.xs }]}>
+            No books match “{bookQuery.trim()}”.
           </Text>
         ) : null}
         <Text
@@ -1756,6 +2371,9 @@ function FilterSheetFields({
               <TouchableOpacity
                 key={f.key}
                 testID={`targeting-perf-${f.key}`}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={`${f.label}. ${f.hint}`}
                 onPress={() => onPerf(f.key)}
                 style={[
                   styles.filterChip,
@@ -1783,24 +2401,24 @@ function FilterSheetFields({
             { color: t.colors.text_secondary, marginTop: t.spacing.lg, marginBottom: t.spacing.sm },
           ]}
         >
-          {sortOverridden
-            ? `Sorting by ${SORT_OPTIONS.find((s) => s.key === effectiveSortKey)?.label ?? effectiveSortKey} (from active range). Clear ranges to use manual sort.`
-            : "Sort (high → low). Active bid / ACoS / impr / clicks ranges override this."}
+          Sort
         </Text>
         <View style={styles.chipWrap}>
           {SORT_OPTIONS.map((f) => {
-            const active = sortOverridden ? f.key === effectiveSortKey : sort === f.key;
+            const active = sort === f.key;
             return (
               <TouchableOpacity
                 key={f.key}
                 testID={`targeting-sort-${f.key}`}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={`Sort by ${f.label} high to low`}
                 onPress={() => onSort(f.key)}
                 style={[
                   styles.filterChip,
                   {
                     backgroundColor: active ? t.colors.tone_primary + "22" : t.colors.background_tertiary,
                     borderColor: active ? t.colors.tone_primary + "66" : t.colors.separator,
-                    opacity: sortOverridden && f.key !== effectiveSortKey ? 0.55 : 1,
                   },
                 ]}
               >
@@ -1822,8 +2440,7 @@ function FilterSheetFields({
             { color: t.colors.text_secondary, marginTop: t.spacing.lg, marginBottom: t.spacing.sm },
           ]}
         >
-          Ranges (period metrics)
-          {bidRangesIgnoredOnPlacement ? " · Bid min/max ignored on Placement" : ""}
+          Ranges
         </Text>
         <View style={styles.advGrid}>
           {(
@@ -1837,13 +2454,16 @@ function FilterSheetFields({
               ["Impr min", "impressionsMin", "targeting-adv-impr-min"],
               ["Impr max", "impressionsMax", "targeting-adv-impr-max"],
             ] as const
-          ).map(([label, key, testID]) => (
+          ).map(([label, key, testID]) => {
+            const bidDisabled = bidRangesIgnoredOnPlacement && (key === "bidMin" || key === "bidMax");
+            return (
             <View key={key} style={styles.advField}>
               <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: 4 }]}>{label}</Text>
               <TextInput
                 testID={testID}
                 value={fieldValue(key)}
                 onChangeText={(raw) => setAdvField(key, raw)}
+                editable={!bidDisabled}
                 onBlur={() =>
                   setAdvDrafts((prev) => {
                     if (!Object.prototype.hasOwnProperty.call(prev, key)) return prev;
@@ -1855,6 +2475,7 @@ function FilterSheetFields({
                 keyboardType="decimal-pad"
                 placeholder="—"
                 placeholderTextColor={t.colors.text_tertiary}
+                accessibilityLabel={bidDisabled ? `${label}, not used on Placement` : label}
                 style={[
                   t.typography.callout,
                   styles.advInput,
@@ -1862,12 +2483,13 @@ function FilterSheetFields({
                     color: t.colors.text_primary,
                     borderColor: t.colors.separator,
                     backgroundColor: t.colors.background_primary,
-                    opacity: bidRangesIgnoredOnPlacement && (key === "bidMin" || key === "bidMax") ? 0.5 : 1,
+                    opacity: bidDisabled ? 0.45 : 1,
                   },
                 ]}
               />
             </View>
-          ))}
+            );
+          })}
         </View>
         {hasActiveAdvancedFilters(advanced) ? (
           <TouchableOpacity
@@ -1875,7 +2497,7 @@ function FilterSheetFields({
             onPress={() => onAdvanced({ ...EMPTY_TARGETING_ADVANCED_FILTERS })}
             style={{ marginTop: t.spacing.md }}
             accessibilityRole="button"
-            accessibilityLabel="Clear advanced ranges"
+            accessibilityLabel="Clear min max ranges"
           >
             <Text style={[t.typography.caption1, { color: t.colors.tone_danger, fontWeight: "700" }]}>
               Clear ranges
@@ -1902,6 +2524,7 @@ function KeywordRow({
   item,
   currency,
   t,
+  viewAsOtherUser = false,
   onPress,
   onEditBid,
   selectMode = false,
@@ -1911,6 +2534,7 @@ function KeywordRow({
   item: any;
   currency: string;
   t: any;
+  viewAsOtherUser?: boolean;
   onPress: () => void;
   onEditBid: () => void;
   selectMode?: boolean;
@@ -1951,6 +2575,7 @@ function KeywordRow({
                 enabled={item.status === "enabled"}
                 noun="keyword"
                 onChange={async (next) => {
+                  assertNotViewingAsOtherUser(viewAsOtherUser);
                   const previous = applyOptimisticEntityState(queryClient, "keyword", item.id, next);
                   try {
                     await updateKeywordManual(item.id, { status: next ? "enabled" : "paused", forceCooldown: true });
@@ -2023,6 +2648,7 @@ function ProductTargetRow({
   currency,
   inheritedDefaultBid,
   t,
+  viewAsOtherUser = false,
   onPress,
   onEditBid,
   selectMode = false,
@@ -2033,6 +2659,7 @@ function ProductTargetRow({
   currency: string;
   inheritedDefaultBid?: number;
   t: any;
+  viewAsOtherUser?: boolean;
   onPress: () => void;
   onEditBid: () => void;
   selectMode?: boolean;
@@ -2077,6 +2704,7 @@ function ProductTargetRow({
                 enabled={item.state === "enabled"}
                 noun="target"
                 onChange={async (next) => {
+                  assertNotViewingAsOtherUser(viewAsOtherUser);
                   const previous = applyOptimisticEntityState(queryClient, "product_target", item.id, next);
                   try {
                     await updateProductTargetManual(item.id, { state: next ? "enabled" : "paused", forceCooldown: true });
@@ -2166,6 +2794,7 @@ function PlacementRow({
   item,
   currency,
   t,
+  field,
   adjustments,
   onPress,
   onEdit,
@@ -2176,13 +2805,15 @@ function PlacementRow({
   item: any;
   currency: string;
   t: any;
+  field: PlacementField;
   adjustments?: PlacementAdjustments;
   onPress: () => void;
-  onEdit: (field: PlacementField) => void;
+  onEdit: () => void;
   selectMode?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
 }) {
+  const campaignId = String(item.campaign_id || item.id || "");
   const coverAsin = item.book_asin ? String(item.book_asin).toUpperCase() : null;
   const hasBook = Boolean(coverAsin);
   const bookSubtitle = item.book_title
@@ -2190,6 +2821,9 @@ function PlacementRow({
     : hasBook
       ? coverAsin
       : "No linked book";
+  const placementLabel = String(item.placement_label || field);
+  const cooldown = getCampaignSettingsCooldown(item as EntityBidCooldownFields);
+  const fieldMeta = PLACEMENT_FIELDS.find((entry) => entry.key === field);
   return (
     <ListCard testID={`placement-row-${item.id}`} compact>
       <View style={styles.leadRow}>
@@ -2214,8 +2848,9 @@ function PlacementRow({
             accessibilityRole="button"
             accessibilityLabel={targetingSpeech([
               item.name ?? "Campaign",
+              placementLabel,
               hasBook ? bookSubtitle : "No linked book",
-              "Placement bid adjustments",
+              "Placement bid adjustment",
               `Spend ${formatCurrency(Number(item.total_spend ?? item.spend) || 0, currency)}`,
               `Orders ${formatInt(Number(item.total_orders ?? item.orders) || 0)}`,
             ])}
@@ -2223,17 +2858,16 @@ function PlacementRow({
           >
             <View style={styles.cardHeader}>
               <BookCover
-                // Prefer KDP/product image only — Amazon P/{ASIN} often returns a blank gray tile.
                 uri={hasBook ? item.book_image_url : null}
                 fallbackUri={null}
                 asin={null}
                 size="xs"
                 placeholder={hasBook ? "book" : "cube"}
-                recyclingKey={coverAsin || item.id}
+                recyclingKey={coverAsin || campaignId}
               />
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600" }]} numberOfLines={1}>
-                  {item.name ?? "Campaign"}
+                  {placementLabel}
                 </Text>
                 <Text
                   style={[
@@ -2245,25 +2879,41 @@ function PlacementRow({
                   ]}
                   numberOfLines={1}
                 >
-                  {bookSubtitle}
+                  {item.name ?? "Campaign"}
+                  {bookSubtitle ? ` · ${bookSubtitle}` : ""}
                 </Text>
               </View>
+              {cooldown.isInCooldown ? (
+                <Text
+                  testID={`targeting-cooldown-badge-${item.id}`}
+                  style={[t.typography.caption2, { color: t.colors.tone_warning, fontWeight: "700" }]}
+                >
+                  Cooldown
+                </Text>
+              ) : null}
             </View>
-            <DenseMetricLine items={targetingMetricItems(item, currency, t)} />
+            <DenseMetricLine
+              items={[
+                ...targetingMetricItems(item, currency, t),
+                {
+                  label: "Share",
+                  value: formatOptionalPercent(item.placement_share, 0),
+                  color: t.colors.text_secondary,
+                },
+              ]}
+            />
           </TouchableOpacity>
           {!selectMode ? (
             <ResponderBox>
               <View style={styles.placementTaps}>
-                {PLACEMENT_FIELDS.map((field) => (
-                  <MutationTap
-                    key={field.key}
-                    testID={`targeting-placement-${field.key}-${item.id}`}
-                    label={field.label}
-                    compact
-                    value={formatPlacementAdjustmentValue(adjustments, field.key)}
-                    onPress={() => onEdit(field.key)}
-                  />
-                ))}
+                <MutationTap
+                  testID={`targeting-placement-${field}-${campaignId}`}
+                  label={fieldMeta?.label ?? placementLabel}
+                  compact
+                  value={formatPlacementAdjustmentValue(adjustments, field)}
+                  cooldown={cooldown}
+                  onPress={onEdit}
+                />
               </View>
             </ResponderBox>
           ) : null}
@@ -2313,31 +2963,32 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 8,
   },
-  bookGrid: {
+  bookList: {
+    gap: 8,
+  },
+  bookRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-  },
-  bookCard: {
-    width: "30%",
-    minWidth: 96,
-    maxWidth: 120,
-    flexGrow: 1,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: 8,
     alignItems: "center",
-    gap: 6,
+    gap: 10,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth * 2,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
   },
-  bookCardCoverSlot: {
+  bookRowCoverSlot: {
     width: 40,
     height: 58,
     borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
   },
-  bookCardCover: {
+  bookRowCover: {
     marginRight: 0,
+  },
+  bookRowText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
   },
   advGrid: {
     flexDirection: "row",

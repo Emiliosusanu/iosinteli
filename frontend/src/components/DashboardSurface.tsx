@@ -13,7 +13,8 @@ export function dashboardSurfaceStyle(t: Theme, tone: SurfaceTone = "standard"):
   return {
     borderRadius: dashboard.cardRadius,
     borderCurve: "continuous",
-    ...(elevated ? t.shadow.hero : t.shadow.card),
+    // Shadow only on hero — stacking card shadows behind scroll is compositor-heavy.
+    ...(elevated ? t.shadow.hero : null),
   };
 }
 
@@ -33,7 +34,7 @@ export function DashboardSurface({
   return (
     <GlassPanel
       testID={testID}
-      strength={elevated ? "card" : "chrome"}
+      strength="card"
       style={[
         dashboardSurfaceStyle(t, tone),
         {
@@ -42,7 +43,7 @@ export function DashboardSurface({
         style,
       ]}
       contentStyle={{
-        padding: elevated ? dashboard.cardPadding + 2 : dashboard.cardPadding,
+        padding: elevated ? dashboard.cardPadding : dashboard.denseCardPadding + 4,
       }}
     >
       {children}

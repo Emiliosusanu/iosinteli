@@ -20,6 +20,9 @@ public class AppDelegate: ExpoAppDelegate {
     reactNativeDelegate = delegate
     reactNativeFactory = factory
     bindReactNativeFactory(factory)
+    // Must run after ExpoReactNativeFactory init (which locks default flags)
+    // and before startReactNative (which builds Hermes).
+    InteliAdsDisableLegacyHermesDebugger()
 
 #if os(iOS) || os(tvOS)
     window = UIWindow(frame: UIScreen.main.bounds)

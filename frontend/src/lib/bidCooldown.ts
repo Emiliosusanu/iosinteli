@@ -23,6 +23,9 @@ export type EntityBidCooldownFields = {
   bid_last_modified_at?: string | null;
   rule_last_modified_at?: string | null;
   bid_change_source?: string | null;
+  /** Campaign placement % provenance (Nest stamps alongside rule_last_modified_at). */
+  placement_adj_last_modified_at?: string | null;
+  placement_adj_change_source?: string | null;
   metrics_updated_at?: string | null;
 };
 
@@ -54,12 +57,39 @@ function parseMs(raw: string | null | undefined): number | null {
 
 /** Latest verified change timestamp that should start cooldown. */
 export function resolveBidChangeAt(row: EntityBidCooldownFields): string | null {
-  const bidMs = parseMs(row.bid_last_modified_at);
-  const ruleMs = parseMs(row.rule_last_modified_at);
-  if (bidMs == null && ruleMs == null) return null;
-  if (bidMs == null) return row.rule_last_modified_at ?? null;
-  if (ruleMs == null) return row.bid_last_modified_at ?? null;
-  return bidMs >= ruleMs ? row.bid_last_modified_at! : row.rule_last_modified_at!;
+  const candidates: Array<{ at: string; ms: number }> = [];
+  for (const raw of [
+    row.bid_last_modified_at,
+    row.rule_last_modified_at,
+    row.placement_adj_last_modified_at,
+  ]) {
+    const ms = parseMs(raw);
+    if (ms != null && raw) candidates.push({ at: raw, ms });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.ms - a.ms);
+  return candidates[0]!.at;
+}
+
+/**
+ * Campaign settings cooldown (placement % and bidding strategy share Nest's
+ * rule_last_modified_at / placement_adj stamp — same window as entity bids).
+ */
+export function getCampaignSettingsCooldown(
+  row: EntityBidCooldownFields,
+  cooldownHours: number = DEFAULT_ENTITY_COOLDOWN_HOURS,
+  nowMs: number = Date.now(),
+): EntityBidCooldownInfo {
+  const source =
+    (row.placement_adj_change_source || row.bid_change_source || "unknown") as BidChangeSource;
+  return getEntityBidCooldown(
+    {
+      ...row,
+      bid_change_source: source,
+    },
+    cooldownHours,
+    nowMs,
+  );
 }
 
 export function getEntityBidCooldown(

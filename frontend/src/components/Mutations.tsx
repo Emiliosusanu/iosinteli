@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { formatCurrency } from "@/src/lib/format";
 import {
@@ -46,7 +47,107 @@ function confirmLargeBidChange(from: number, to: number): Promise<boolean> {
   });
 }
 
+/** Honest view-as write block — Nest rejects mutations for another user's entities. */
+export const VIEW_AS_WRITE_ALERT_TITLE = "Can't write while viewing as customer";
+export const VIEW_AS_WRITE_ALERT_BODY = "Exit View as to edit";
+
+export class ViewAsWriteBlockedError extends Error {
+  readonly code = "VIEW_AS_WRITE_BLOCKED" as const;
+  constructor() {
+    super(VIEW_AS_WRITE_ALERT_TITLE);
+    this.name = "ViewAsWriteBlockedError";
+  }
+}
+
+export function isViewAsWriteBlockedError(error: unknown): boolean {
+  return (
+    error instanceof ViewAsWriteBlockedError ||
+    (typeof error === "object" &&
+      error != null &&
+      (error as { code?: string }).code === "VIEW_AS_WRITE_BLOCKED")
+  );
+}
+
+export function alertViewAsWriteBlocked() {
+  Alert.alert(VIEW_AS_WRITE_ALERT_TITLE, VIEW_AS_WRITE_ALERT_BODY);
+}
+
+export function isViewingAsOtherUser(
+  adminFilterUserId: string | null | undefined,
+  signedInUserId: string | null | undefined,
+): boolean {
+  return Boolean(adminFilterUserId && adminFilterUserId !== signedInUserId);
+}
+
+export type AmazonWriteGuardInput = {
+  guestMode?: boolean;
+  viewAsOtherUser: boolean;
+};
+
+/** Pure check — no alerts. */
+export function canWriteAmazon(input: AmazonWriteGuardInput): boolean {
+  return !input.guestMode && !input.viewAsOtherUser;
+}
+
+/** @returns true when the write must not proceed (alert already shown). */
+export function blockIfViewingAs(viewAsOtherUser: boolean): boolean {
+  if (!viewAsOtherUser) return false;
+  alertViewAsWriteBlocked();
+  return true;
+}
+
+/**
+ * Guest + view-as gate for sync handlers (bid taps, bulk enqueue, strategy open).
+ * @returns true when the write must not proceed (alert already shown).
+ */
+export function blockIfCannotWriteAmazon(input: AmazonWriteGuardInput): boolean {
+  if (input.guestMode) {
+    Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
+    return true;
+  }
+  return blockIfViewingAs(input.viewAsOtherUser);
+}
+
+/**
+ * For async handlers that already applied optimistic UI (e.g. EntityStateSwitch).
+ * Alerts once, then throws so callers / EntityStateSwitch can roll back without a second alert.
+ */
+export function assertNotViewingAsOtherUser(viewAsOtherUser: boolean): void {
+  if (!viewAsOtherUser) return;
+  alertViewAsWriteBlocked();
+  throw new ViewAsWriteBlockedError();
+}
+
+/**
+ * Shared Amazon write honesty gate. Alerts guest or view-as, then throws so
+ * callers / EntityStateSwitch can roll back without a second alert.
+ */
+export function assertCanWriteAmazon(input: AmazonWriteGuardInput): void {
+  if (input.guestMode) {
+    Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
+    throw new Error(SIGN_IN_TO_MUTATE_MESSAGE);
+  }
+  assertNotViewingAsOtherUser(input.viewAsOtherUser);
+}
+
+/** Hook used by EntityStateSwitch / BidBudgetEditor so every consumer inherits the guard. */
+export function useAmazonWriteAccess(): {
+  guestMode: boolean;
+  viewAsOtherUser: boolean;
+  canWrite: boolean;
+} {
+  const { guestMode, user } = useAuth();
+  const { adminFilterUserId } = useApp();
+  const viewAsOtherUser = isViewingAsOtherUser(adminFilterUserId, user?.id);
+  return {
+    guestMode,
+    viewAsOtherUser,
+    canWrite: canWriteAmazon({ guestMode, viewAsOtherUser }),
+  };
+}
+
 export function alertMutationError(error: unknown, fallback = "Couldn't save that change.") {
+  if (isViewAsWriteBlockedError(error)) return;
   Alert.alert("Couldn't save", userMessageForNestError(error, fallback));
 }
 
@@ -58,6 +159,8 @@ export function EntityStateSwitch({
   noun = "item",
   testID,
   compact = true,
+  /** When false, locks writes (in addition to guest / view-as). */
+  canWrite: canWriteProp,
 }: {
   enabled: boolean;
   onChange: (next: boolean) => void | Promise<void>;
@@ -67,16 +170,18 @@ export function EntityStateSwitch({
   testID?: string;
   /** Smaller switch for dense list rows (default on). */
   compact?: boolean;
+  canWrite?: boolean;
 }) {
   const t = useTheme();
-  const { guestMode } = useAuth();
+  const { guestMode, viewAsOtherUser, canWrite: sessionCanWrite } = useAmazonWriteAccess();
+  const canWrite = (canWriteProp ?? true) && sessionCanWrite;
   const [busy, setBusy] = useState(false);
   // Hold the user's choice until the parent `enabled` prop catches up from
   // optimistic cache / refetch. Without this, a slow invalidateAds snaps the
   // Switch back and feels like "can't re-enable".
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
   const shown = optimistic ?? enabled;
-  const locked = disabled || busy || guestMode;
+  const locked = disabled || busy || !canWrite;
 
   React.useEffect(() => {
     if (optimistic == null) return;
@@ -84,8 +189,12 @@ export function EntityStateSwitch({
   }, [enabled, optimistic]);
 
   const apply = async (next: boolean) => {
-    if (guestMode) {
-      Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
+    if (!canWrite) {
+      if (guestMode) {
+        Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
+      } else if (viewAsOtherUser) {
+        alertViewAsWriteBlocked();
+      }
       return;
     }
     setOptimistic(next);
@@ -107,7 +216,11 @@ export function EntityStateSwitch({
         value={shown}
         disabled={locked}
         accessibilityLabel={`${noun} is ${shown ? "active" : "paused"}${busy ? ". Updating" : ""}`}
-        accessibilityHint="Changing this writes Amazon Ads."
+        accessibilityHint={
+          viewAsOtherUser
+            ? "Amazon writes are blocked while viewing as a customer."
+            : "Changing this writes Amazon Ads."
+        }
         accessibilityState={{ disabled: locked, checked: shown, busy }}
         onValueChange={(next) => {
           if (!next && confirmPause) {
@@ -139,6 +252,8 @@ export function BidBudgetEditor({
   testID,
   /** When false, skip the >30% relative confirm (bulk $/% delta editors). */
   confirmLargeChange = true,
+  /** When false, locks writes (in addition to guest / view-as). */
+  canWrite: canWriteProp,
 }: {
   visible: boolean;
   title: string;
@@ -151,9 +266,11 @@ export function BidBudgetEditor({
   onSave: (next: number) => void | Promise<void>;
   testID?: string;
   confirmLargeChange?: boolean;
+  canWrite?: boolean;
 }) {
   const t = useTheme();
-  const { guestMode } = useAuth();
+  const { guestMode, viewAsOtherUser, canWrite: sessionCanWrite } = useAmazonWriteAccess();
+  const canWrite = (canWriteProp ?? true) && sessionCanWrite;
   const [draft, setDraft] = useState(String(value || ""));
   const [saving, setSaving] = useState(false);
   const usedNativePrompt = React.useRef(false);
@@ -170,8 +287,12 @@ export function BidBudgetEditor({
       setForceSheet(false);
       return;
     }
-    if (guestMode) {
-      Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
+    if (!canWrite) {
+      if (guestMode) {
+        Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
+      } else if (viewAsOtherUser) {
+        alertViewAsWriteBlocked();
+      }
       onClose();
       return;
     }
@@ -196,6 +317,7 @@ export function BidBudgetEditor({
         usedNativePrompt.current = false;
         onClose();
         void (async () => {
+          assertCanWriteAmazon({ guestMode, viewAsOtherUser });
           let resolved = next;
           if (kind === "money") {
             const sanitized = sanitizeBidForAmazon(String(next));
@@ -219,8 +341,12 @@ export function BidBudgetEditor({
   }, [visible]);
 
   const submit = async () => {
-    if (guestMode) {
-      Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
+    if (!canWrite) {
+      if (guestMode) {
+        Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
+      } else if (viewAsOtherUser) {
+        alertViewAsWriteBlocked();
+      }
       return;
     }
     let next: number;
@@ -247,7 +373,10 @@ export function BidBudgetEditor({
     setSaving(false);
     onClose();
     void Promise.resolve()
-      .then(() => onSave(next))
+      .then(() => {
+        assertCanWriteAmazon({ guestMode, viewAsOtherUser });
+        return onSave(next);
+      })
       .catch((error) => alertMutationError(error));
   };
 

@@ -193,5 +193,5 @@ test("mixed currencies hide combined money and More names the real job", () => {
   assert.equal(formatCoverageCount(null), "—");
   assert.match(screen, /This diagnostic does not combine them/);
   assert.match(moreRoot, /label: "Data coverage"/);
-  assert.match(moreRoot, /subtitle: "Amazon Ads and KDP availability"/);
+  assert.doesNotMatch(moreRoot, /subtitle: "Amazon Ads and KDP availability"/);
 });
