@@ -79,9 +79,7 @@ export function PressableScale({
       }
       style={style}
     >
-      <Animated.View style={[{ flex: 1, alignItems: "center", justifyContent: "center" }, animatedStyle]}>
-        {children}
-      </Animated.View>
+      <Animated.View style={animatedStyle}>{children}</Animated.View>
     </Pressable>
   );
 }
