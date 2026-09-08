@@ -323,15 +323,19 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
     () => profiles.filter((p) => isReadyToEnable(p) || profileEnabled(p)).length,
     [profiles],
   );
+  const enabledProfiles = useMemo(
+    () => profiles.filter((p) => profileEnabled(p)),
+    [profiles],
+  );
 
   const selectedLabel =
     selectedProfileIds.length === 0
       ? "No profiles"
-      : selectedProfileIds.length === profiles.length
-      ? `All profiles (${profiles.length})`
+      : enabledProfiles.length > 0 && selectedProfileIds.length === enabledProfiles.length
+      ? `All active (${enabledProfiles.length})`
       : selectedProfileIds.length === 1
       ? profiles.find((p) => p.id === selectedProfileIds[0])?.account_name ?? "1 profile"
-      : `${selectedProfileIds.length} profiles`;
+      : `${selectedProfileIds.length} active`;
 
   function onViewToggle(profileId: string) {
     const profile = profiles.find((p) => p.id === profileId || p.profile_id === profileId);

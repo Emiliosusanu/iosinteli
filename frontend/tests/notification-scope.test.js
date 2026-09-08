@@ -54,13 +54,26 @@ test("mergeBackgroundScope prefers live header selection over a stale Home snaps
 
 test("adsProfileIdsForSelection maps every selected row to its Amazon ads id", () => {
   const profiles = [
-    { id: "uuid-us", profile_id: "ads-us" },
-    { id: "uuid-ca", profile_id: "ads-ca" },
-    { id: "uuid-uk", profile_id: "ads-uk" },
+    { id: "uuid-us", profile_id: "ads-us", is_enabled: true },
+    { id: "uuid-ca", profile_id: "ads-ca", is_enabled: true },
+    { id: "uuid-uk", profile_id: "ads-uk", is_enabled: true },
   ];
   assert.deepEqual(adsProfileIdsForSelection(["uuid-us", "uuid-ca"], profiles), ["ads-us", "ads-ca"]);
   assert.deepEqual(adsProfileIdsForSelection(["ads-uk"], profiles), ["ads-uk"]);
   assert.deepEqual(uniqueProfileIds(["a", "", "a", "b"]), ["a", "b"]);
+});
+
+test("adsProfileIdsForSelection drops disabled profiles from alert totals", () => {
+  const profiles = [
+    { id: "uuid-us", profile_id: "ads-us", is_enabled: true },
+    { id: "uuid-ca", profile_id: "ads-ca", is_enabled: false },
+    { id: "uuid-uk", profile_id: "ads-uk", is_enabled: true },
+  ];
+  assert.deepEqual(
+    adsProfileIdsForSelection(["uuid-us", "uuid-ca", "uuid-uk"], profiles),
+    ["ads-us", "ads-uk"],
+  );
+  assert.deepEqual(adsProfileIdsForSelection(["uuid-ca"], profiles), []);
 });
 
 test("KDP net on selected US+CA still uses US royalties only", () => {
