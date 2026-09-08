@@ -77,8 +77,11 @@ export function PressableScale({
           ? { ...accessibilityState, disabled: disabled || accessibilityState?.disabled }
           : undefined
       }
+      style={style}
     >
-      <Animated.View style={[style, animatedStyle]}>{children}</Animated.View>
+      <Animated.View style={[{ flex: 1, alignItems: "center", justifyContent: "center" }, animatedStyle]}>
+        {children}
+      </Animated.View>
     </Pressable>
   );
 }
