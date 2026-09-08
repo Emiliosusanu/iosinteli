@@ -78,9 +78,10 @@ test("live publisher-net surfaces use the contract helper and label", () => {
   assert.match(detail, /netRoyaltiesVoiceOver/);
   assert.match(assemble, /netRoyaltiesKnown/);
   assert.match(dashboard, /netRoyaltiesKnown/);
-  assert.match(home, /netRoyaltiesKnown/);
+  assert.match(home, /netRoyalties\(\{ kdpRoyalties: royalties, adsSpend/);
   assert.match(home, /"Net"/);
   assert.match(home, /NET_ROYALTIES_LABEL/);
+  assert.doesNotMatch(home, /selection\.royalties \?\? 0/);
   assert.doesNotMatch(books, /`Profit \$\{|label: "Profit"/);
   assert.doesNotMatch(detail, />Profit</);
 });

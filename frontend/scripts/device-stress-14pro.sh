@@ -205,7 +205,7 @@ def peel(s):
   return cur
 sync=peel(man.get('inteliads.kdpHelper.syncState'))
 bulk=peel(man.get('inteliads.bulkOutbox.v1'))
-cache_v5='inteliads.queryCache.v5' in man
+cache_v5='inteliads.queryCache.v6' in man
 cache_v4='inteliads.queryCache.v4' in man
 lines.append(f"\nCACHE v5={cache_v5} v4={cache_v4}")
 lines.append(f"KDP syncState={json.dumps(sync)[:800] if sync else None}")

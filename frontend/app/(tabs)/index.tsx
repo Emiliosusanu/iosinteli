@@ -167,10 +167,9 @@ import {
   NET_ROYALTIES_LABEL,
   kdpRoyaltiesAreKnown,
   netRoyalties,
-  netRoyaltiesKnown,
   netRoyaltiesVoiceOver,
 } from "@/src/lib/netRoyalties";
-import { knownKdpRoyaltyTotal, selectKdpRoyaltyScope } from "@/src/lib/kdpRoyaltyScope";
+import { knownKdpRoyaltyTotal, selectKdpRoyaltyScopeForSelection } from "@/src/lib/kdpRoyaltyScope";
 
 const PAGE_PAD = dashboard.pageInset;
 const OVERVIEW_QUERY_CACHE = {
@@ -340,7 +339,10 @@ export default function OverviewScreen() {
   // ── queries ──
   const sellerReady = !viewingAsAdmin && selectedProfileIds.length > 0;
   const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
-  const royaltyScope = useMemo(() => selectKdpRoyaltyScope(profiles), [profiles]);
+  const royaltyScope = useMemo(
+    () => selectKdpRoyaltyScopeForSelection(profiles, selectedProfileIds),
+    [profiles, selectedProfileIds],
+  );
   const royaltyProfiles = useMemo(() => sortedProfileIds(royaltyScope.profileIds), [royaltyScope]);
   const homeScope = useMemo(
     () => ({
@@ -857,7 +859,7 @@ export default function OverviewScreen() {
     const royalties = knownKdpRoyaltyTotal(royaltyRange);
     const bookOrders = royaltyRange?.hasKdpData ? royaltyRange.totalOrders : acc.orders;
     const organicOrders = royaltyRange?.hasKdpData ? Math.max(0, bookOrders - acc.orders) : 0;
-    const net = kdpReady ? netRoyaltiesKnown(royalties, acc.spend) : null;
+    const net = netRoyalties({ kdpRoyalties: royalties, adsSpend: acc.spend });
     const acos = safeDivide(acc.spend, acc.sales) * 100;
     const ctr = safeDivide(acc.clicks, acc.impressions) * 100;
     const cvr = safeDivide(acc.orders, acc.clicks) * 100;
@@ -885,7 +887,7 @@ export default function OverviewScreen() {
     return {
       ...acc,
       royalties,
-      net: prevKdpReady ? netRoyaltiesKnown(royalties, acc.spend) : null,
+      net: netRoyalties({ kdpRoyalties: royalties, adsSpend: acc.spend }),
       acos: safeDivide(acc.spend, acc.sales) * 100,
       ctr: safeDivide(acc.clicks, acc.impressions) * 100,
       cvr: safeDivide(acc.orders, acc.clicks) * 100,
@@ -909,14 +911,23 @@ export default function OverviewScreen() {
     impressions: pctDelta(totals.impressions, prevTotals.impressions),
   };
 
-  // Net profit sparkline
+  // Net profit sparkline — union Ads + KDP days so royalty-only days still inspect.
   const netSeries = useMemo(() => {
     if (!kdpReady) return [];
-    return daily.flatMap((m) => {
-      const net = publisherNetForPeriod(royaltiesForDate(m.date), m.spend);
-      return net == null ? [] : [{ value: net, label: formatDateShort(m.date), date: m.date, sales: m.sales }];
-    });
-  }, [daily, royaltiesForDate, kdpReady]);
+    const dates = new Set<string>([
+      ...daily.map((m) => m.date),
+      ...kdpDays.map((d) => String((d as { date?: string }).date ?? "")).filter(Boolean),
+    ]);
+    return [...dates]
+      .sort((a, b) => a.localeCompare(b))
+      .flatMap((date) => {
+        const m = daily.find((row) => row.date === date);
+        const spend = m?.spend ?? 0;
+        const sales = m?.sales ?? 0;
+        const net = publisherNetForPeriod(royaltiesForDate(date), spend);
+        return net == null ? [] : [{ value: net, label: formatDateShort(date), date, sales }];
+      });
+  }, [daily, kdpDays, royaltiesForDate, kdpReady]);
 
   const ordersSeries = useMemo(() => daily.slice(-14).map((m) => ({ value: m.orders, label: formatDateShort(m.date) })), [daily]);
 
@@ -932,12 +943,17 @@ export default function OverviewScreen() {
   // Hero overlay lines (royalties + ad spend, shown alongside net profit)
   const btRoyalties = useMemo(
     () => kdpReady
-      ? daily.flatMap((m) => {
-          const value = royaltiesForDate(m.date);
-          return value == null ? [] : [{ value, label: formatDateShort(m.date), date: m.date }];
-        })
+      ? [...new Set([
+          ...daily.map((m) => m.date),
+          ...kdpDays.map((d) => String((d as { date?: string }).date ?? "")).filter(Boolean),
+        ])]
+          .sort((a, b) => a.localeCompare(b))
+          .flatMap((date) => {
+            const value = royaltiesForDate(date);
+            return value == null ? [] : [{ value, label: formatDateShort(date), date }];
+          })
       : [],
-    [daily, royaltiesForDate, kdpReady],
+    [daily, kdpDays, royaltiesForDate, kdpReady],
   );
   const btSpend = useMemo(
     () => kdpReady
@@ -953,7 +969,7 @@ export default function OverviewScreen() {
     date: string;
     label: string;
     net: number;
-    royalties: number;
+    royalties: number | null;
     spend: number;
     sales: number;
   };
@@ -980,7 +996,7 @@ export default function OverviewScreen() {
       date: selection.date ?? "",
       label: selection.label ?? "Selected day",
       net: selection.net,
-      royalties: selection.royalties ?? 0,
+      royalties: selection.royalties ?? null,
       spend: selection.spend,
       sales: selection.sales,
     });

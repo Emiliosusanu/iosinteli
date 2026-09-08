@@ -24,7 +24,7 @@ import {
 } from "@/src/components/Primitives";
 import { useApp } from "@/src/contexts/AppContext";
 import { fetchBookCampaignsRange, fetchTopBooksRange, type BookCampaignRow, type TopBookRow } from "@/src/lib/queries";
-import { selectKdpRoyaltyScope } from "@/src/lib/kdpRoyaltyScope";
+import { selectKdpRoyaltyScopeForSelection } from "@/src/lib/kdpRoyaltyScope";
 import { sortedProfileIds } from "@/src/lib/periodQuery";
 import { biddingStrategyLabel, statusLabel } from "@/src/lib/campaigns";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
@@ -118,8 +118,8 @@ export default function ProductCampaignsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
   const royaltyProfiles = useMemo(
-    () => sortedProfileIds(selectKdpRoyaltyScope(profiles).profileIds),
-    [profiles],
+    () => sortedProfileIds(selectKdpRoyaltyScopeForSelection(profiles, selectedProfileIds).profileIds),
+    [profiles, selectedProfileIds],
   );
   const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", selectedProfileIds, royaltyProfiles, dateRange.start, dateRange.end] as const;
 

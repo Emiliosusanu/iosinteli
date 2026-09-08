@@ -142,6 +142,26 @@ test("entity metric totals paginate and chunk .in() filters", () => {
   assert.match(fn, /\.order\(/);
 });
 
+test("fetchKdpRoyaltiesRange and linked KDP accounts paginate all account-days", () => {
+  const linked = queriesSrc.slice(
+    queriesSrc.indexOf("async function fetchLinkedKdpAccountIds"),
+    queriesSrc.indexOf("async function fetchLogicalBookAsins"),
+  );
+  const royalties = queriesSrc.slice(
+    queriesSrc.indexOf("export async function fetchKdpRoyaltiesRange"),
+    queriesSrc.indexOf("/** Paperback / KU / Kindle mix"),
+  );
+  assert.match(linked, /fetchAllPages/);
+  assert.match(linked, /\.range\(from, to\)/);
+  assert.match(royalties, /fetchAllPages/);
+  assert.match(royalties, /\.order\("account_id"/);
+  assert.match(royalties, /chunkArray\(accountIds/);
+  assert.doesNotMatch(
+    royalties.slice(0, royalties.indexOf("aggregateKdpDailyRows")),
+    /\.from\("kdp_daily_data"\)\s*\n\s*\.select\([^)]+\)\s*\n\s*\.in\("account_id", accountIds\)\s*\n\s*\.gte\("date"/,
+  );
+});
+
 test("Books required reads paginate inside the selected-profile scope", () => {
   const fn = queriesSrc.slice(
     queriesSrc.indexOf("export async function fetchTopBooksRange"),

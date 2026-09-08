@@ -27,7 +27,7 @@ test("dual-source background refresh is wired to notifications and resume", () =
   assert.match(background, /ADS_SYNC_TRIGGER_COOLDOWN_MS = 30 \* 60_000/);
   assert.match(background, /FINANCIAL_QUERY_ROOTS\.mobileOverview/);
   assert.match(background, /FINANCIAL_QUERY_ROOTS\.kdpRoyalties/);
-  assert.equal(FINANCIAL_QUERY_ROOTS.mobileOverview, "mobile-overview-complete-v3");
+  assert.equal(FINANCIAL_QUERY_ROOTS.mobileOverview, "mobile-overview-complete-v4");
   assert.match(notifications, /runDualSourceBackgroundRefresh/);
   assert.match(notifications, /resolveBackgroundScope/);
   assert.match(appContext, /runDualSourceBackgroundRefresh/);

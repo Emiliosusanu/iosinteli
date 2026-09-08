@@ -274,8 +274,8 @@ export function bootstrapToRoyalties(boot: DashboardBootstrapResponse | undefine
   const add = (date: string, royalties: number, orders = 0) => {
     if (!date) return;
     const current = byDate.get(date) ?? { date, royalties: 0, orders: 0 };
-    if (royalties) current.royalties = royalties;
-    if (orders) current.orders += orders;
+    if (Number.isFinite(royalties)) current.royalties = royalties;
+    if (Number.isFinite(orders) && orders) current.orders += orders;
     byDate.set(date, current);
   };
 
