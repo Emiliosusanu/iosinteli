@@ -15,7 +15,11 @@ import {
 import { storage } from "../utils/storage";
 import { supabase } from "./supabase";
 
-const API_BASE = (process.env.EXPO_PUBLIC_RULES_API_URL ?? "").replace(/\/+$/, "");
+/** Production Nest API. Env override for local/staging; never ship empty. */
+const DEFAULT_RULES_API_URL = "https://api.inteliads.io/api";
+const API_BASE = (
+  process.env.EXPO_PUBLIC_RULES_API_URL?.trim() || DEFAULT_RULES_API_URL
+).replace(/\/+$/, "");
 const ACCESS_KEY = "inteliads.rulesApi.accessToken";
 const REFRESH_KEY = "inteliads.rulesApi.refreshToken";
 const SESSION_VALID_KEY = "inteliads.rulesApi.sessionValid";
