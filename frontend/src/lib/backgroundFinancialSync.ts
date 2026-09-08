@@ -107,7 +107,10 @@ export async function refreshDualSourceFinancialCache(
 
     const today = toDateString(new Date());
     try {
-      const royaltyIds = selectKdpRoyaltyScopeForSelection(profiles, scope.profileIds).profileIds;
+      const royaltyIds = selectKdpRoyaltyScopeForSelection(
+        profiles,
+        filterToEnabledProfileSelection(scope.profileIds, profiles),
+      ).profileIds;
       if (royaltyIds.length) {
         await fetchKdpRoyaltiesRange(royaltyIds, today, today);
       }
