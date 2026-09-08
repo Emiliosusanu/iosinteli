@@ -13,7 +13,7 @@ import {
   stampMobileHomeSource,
   type MobileHomeCacheScope,
 } from "./mobileHomeSnapshot";
-import { adsProfileIdsForSelection, mergeBackgroundScope, parseSelectedProfileIds } from "./notificationScope";
+import { adsProfileIdsForSelection, filterToEnabledProfileSelection, mergeBackgroundScope, parseSelectedProfileIds } from "./notificationScope";
 
 export const BACKGROUND_REFRESH_COOLDOWN_MS = 15 * 60_000;
 export const ADS_SYNC_TRIGGER_COOLDOWN_MS = 30 * 60_000;
@@ -94,7 +94,7 @@ export async function refreshDualSourceFinancialCache(
     const { selectKdpRoyaltyScopeForSelection } = await import("./kdpRoyaltyScope");
     const profiles = await fetchAmazonProfiles(scope.userId, scope.viewAs).catch(() => []);
     const adsIds = adsProfileIdsForSelection(scope.profileIds, profiles);
-    const queryIds = adsIds.length ? adsIds : scope.profileIds;
+    const queryIds = adsIds.length ? adsIds : filterToEnabledProfileSelection(scope.profileIds, profiles);
     const snapshot = await fetchMobileOverview({
       profileIds: queryIds,
       filterUserId: scope.viewAs,

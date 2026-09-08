@@ -1,7 +1,7 @@
 /**
  * Which Amazon Ads profiles background refresh and local notifications use.
  * Header selection is the source of truth so today's totals cover every
- * selected profile — not a stale last-Home snapshot.
+ * *enabled* selected profile — never disabled accounts in the active total.
  */
 import type { MobileHomeCacheScope } from "./mobileHomeSnapshot.ts";
 
@@ -60,12 +60,34 @@ export function mergeBackgroundScope(input: {
   };
 }
 
+/**
+ * Drop disabled profiles from a selection before notification / background totals.
+ * Missing `is_enabled` counts as enabled (Nest contract). If profiles cannot be
+ * loaded, keep the selection unchanged (fail-open).
+ */
+export function filterToEnabledProfileSelection(
+  selectedIds: readonly string[],
+  profiles: Array<{ id: string; profile_id?: string | null; is_enabled?: boolean | null }>,
+): string[] {
+  const wanted = uniqueProfileIds(selectedIds);
+  if (!wanted.length) return [];
+  if (!profiles.length) return wanted;
+  const enabled = profiles.filter((profile) => profile.is_enabled !== false);
+  if (!enabled.length) return [];
+  const keys = new Set<string>();
+  for (const profile of enabled) {
+    keys.add(String(profile.id));
+    if (profile.profile_id) keys.add(String(profile.profile_id));
+  }
+  return wanted.filter((id) => keys.has(id));
+}
+
 /** Nest `/dashboard/mobile` wants Amazon ads profile_id for every selected row. */
 export function adsProfileIdsForSelection(
   selectedIds: readonly string[],
-  profiles: Array<{ id: string; profile_id?: string | null }>,
+  profiles: Array<{ id: string; profile_id?: string | null; is_enabled?: boolean | null }>,
 ): string[] {
-  const wanted = uniqueProfileIds(selectedIds);
+  const wanted = filterToEnabledProfileSelection(selectedIds, profiles);
   if (!wanted.length) return [];
   if (!profiles.length) return wanted;
   return uniqueProfileIds(wanted.map((id) => nestAdsId(id, profiles)));

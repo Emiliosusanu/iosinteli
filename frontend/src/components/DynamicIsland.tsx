@@ -39,7 +39,8 @@ export function DynamicIsland() {
 
   const ready = notificationRuntime.permission === "granted";
   const selected = selectedProfileIds.length;
-  const total = profiles.length;
+  const enabledTotal = profiles.filter((p) => p.is_enabled !== false).length;
+  const total = enabledTotal > 0 ? enabledTotal : profiles.length;
   const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] });
   const opacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.8] });
 
@@ -64,7 +65,9 @@ export function DynamicIsland() {
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={[styles.title, { color: t.colors.text_primary }]} numberOfLines={1}>
-                {selected > 0 ? `${selected}/${total || selected} profiles` : "No profile"}
+                {selected > 0
+                  ? `${selected}/${total || selected} active`
+                  : "No profile"}
               </Text>
               <Text style={[styles.subtitle, { color: t.colors.text_secondary }]} numberOfLines={1}>
                 {ready ? "alerts ready" : "alerts pending"}
