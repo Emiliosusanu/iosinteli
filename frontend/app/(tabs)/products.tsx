@@ -40,7 +40,7 @@ import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialRe
 import { LIST_PERIOD_QUERY_CACHE, sameScopeWarmPlaceholder, sortedProfileIds } from "@/src/lib/periodQuery";
 import { booksEmptyCopy } from "@/src/lib/booksListActivity";
 import { isIosHelperEnabled } from "@/src/lib/kdp/source";
-import { knownKdpRoyaltyTotal, selectKdpRoyaltyScope } from "@/src/lib/kdpRoyaltyScope";
+import { knownKdpRoyaltyTotal, selectKdpRoyaltyScopeForSelection } from "@/src/lib/kdpRoyaltyScope";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import { loadBooksFilterMemory, saveBooksFilterMemory } from "@/src/lib/filterMemory";
 import { countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
@@ -135,7 +135,10 @@ export default function ProductsScreen() {
     today.setDate(today.getDate() - 1);
     return toDateString(today);
   }, []);
-  const royaltyScope = useMemo(() => selectKdpRoyaltyScope(profiles), [profiles]);
+  const royaltyScope = useMemo(
+    () => selectKdpRoyaltyScopeForSelection(profiles, selectedProfileIds),
+    [profiles, selectedProfileIds],
+  );
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
