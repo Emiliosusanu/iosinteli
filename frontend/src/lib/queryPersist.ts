@@ -61,7 +61,7 @@ const PERSISTED_QUERY_KEYS = new Set([
   FINANCIAL_QUERY_ROOTS.kdpRoyaltiesYesterday,
   FINANCIAL_QUERY_ROOTS.kdpRoyaltiesDaybefore,
   "top-campaigns-range-v2",
-  "campaigns-list-range-v2",
+  "campaigns-list-range-v3",
   "targeting-placements-v2",
   "targeting-keywords",
   "targeting-products",

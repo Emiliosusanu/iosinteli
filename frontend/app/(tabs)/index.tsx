@@ -564,14 +564,14 @@ export default function OverviewScreen() {
     if (!sellerSecondary || scopeProfiles.length === 0) return;
     if (!topCampaignsQ.isSuccess) return;
     void queryClient.prefetchQuery({
-      queryKey: ["campaigns-list-range-v2", adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
+      queryKey: ["campaigns-list-range-v3", adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
       queryFn: () =>
         withQueryTimeout(
           fetchTopCampaignsRange({
             profileIds: scopeProfiles,
             start: dateRange.start,
             end: dateRange.end,
-            limit: 500,
+            limit: 0,
             filterUserId: adminFilterUserId,
           }),
         ),
@@ -808,15 +808,19 @@ export default function OverviewScreen() {
   const financeComplete = kdpReady && adsReady;
   const metricRows = periodLoading && !viewingAsAdmin ? [] : adminMetrics ?? metricsQ.data ?? [];
   const prevMetricRows = adminPrevMetrics ?? prevMetricsQ.data ?? [];
-  const topCampaigns = adminCampaignsQ.data ?? topCampaignsQ.data ?? [];
-  const topBooksRaw = adminTopBooks ?? topBooksQ.data ?? [];
+  const topCampaigns = periodLoading && !viewingAsAdmin
+    ? []
+    : adminCampaignsQ.data ?? topCampaignsQ.data ?? [];
+  const topBooksRaw = periodLoading && !viewingAsAdmin
+    ? []
+    : adminTopBooks ?? topBooksQ.data ?? [];
   const topBooks = useMemo(() => {
     if (!viewingAsAdmin) return topBooksRaw;
     if (activeBookKeysQ.isPending) return [];
     if (activeBookKeysQ.isError || !activeBookKeysQ.data) return topBooksRaw;
     return filterTopBooksByRecentActivity(topBooksRaw, activeBookKeysQ.data);
   }, [topBooksRaw, viewingAsAdmin, activeBookKeysQ.isPending, activeBookKeysQ.isError, activeBookKeysQ.data]);
-  const bleeders = adminBleeders ?? bleedersQ.data ?? [];
+  const bleeders = periodLoading && !viewingAsAdmin ? [] : adminBleeders ?? bleedersQ.data ?? [];
   const loading = periodLoading;
   const campaignsPhase = periodLoading && !viewingAsAdmin
     ? "loading"
@@ -838,6 +842,9 @@ export default function OverviewScreen() {
     error: viewingAsAdmin ? bootstrapQ.error : topBooksQ.error,
     isEmpty: topBooks.length === 0,
   });
+  // Never paint error+previous-data as live widget rows.
+  const campaignsWidgetPhase = campaignsPhase === "stale" ? "error" : campaignsPhase;
+  const booksWidgetPhase = booksPhase === "stale" ? "error" : booksPhase;
   const daily = aggregateDailyMetrics(metricRows);
   const prevDaily = aggregateDailyMetrics(prevMetricRows);
   const kdpDays = useMemo(() => royaltyRange?.daily ?? [], [royaltyRange]);
@@ -1013,9 +1020,9 @@ export default function OverviewScreen() {
   const budgetSpend = todayBudgetRow?.spend ?? 0;
   const budgetTodaySynced = !!todayBudgetRow;
   const totalDailyBudget = allBudgetsQ.data ?? 0;
-  const placementMix = placementMixQ.data ?? [];
-  const searchTerms = searchTermsPulseQ.data ?? [];
-  const adGroups = adGroupsQ.data ?? [];
+  const placementMix = periodLoading && !viewingAsAdmin ? [] : placementMixQ.data ?? [];
+  const searchTerms = periodLoading && !viewingAsAdmin ? [] : searchTermsPulseQ.data ?? [];
+  const adGroups = periodLoading && !viewingAsAdmin ? [] : adGroupsQ.data ?? [];
 
   const [blurBooks, setBlurBooks] = useState(false);
 
@@ -1592,6 +1599,7 @@ export default function OverviewScreen() {
 
           {(sellerReady || viewingAsAdmin) ? (
             <OverviewSwipeWidget
+              key={`home-ads-engine-${activePeriodKey}-${scopeProfiles.join("|")}`}
               staggerIndex={1}
               testID="home-ads-engine"
               title="Ads Engine"
@@ -1645,6 +1653,7 @@ export default function OverviewScreen() {
 
           {(sellerReady || viewingAsAdmin) ? (
             <OverviewSwipeWidget
+              key={`home-kdp-royalties-format-${activePeriodKey}-${scopeProfiles.join("|")}`}
               staggerIndex={2}
               testID="home-kdp-royalties-format"
               title="KDP Royalties"
@@ -1674,6 +1683,7 @@ export default function OverviewScreen() {
 
           {(sellerReady || viewingAsAdmin) ? (
           <OverviewSwipeWidget
+            key={`home-campaigns-${activePeriodKey}-${scopeProfiles.join("|")}`}
             staggerIndex={3}
             testID="home-campaigns"
             title="Campaigns"
@@ -1686,9 +1696,9 @@ export default function OverviewScreen() {
                 label: "High ACoS",
                 hint: "Highest to lowest",
                 content:
-                  campaignsPhase === "loading" ? (
+                  campaignsWidgetPhase === "loading" ? (
                     <SwipeEmpty message="Loading campaigns…" t={t} />
-                  ) : campaignsPhase === "timeout" || campaignsPhase === "offline" || campaignsPhase === "error" ? (
+                  ) : campaignsWidgetPhase === "timeout" || campaignsWidgetPhase === "offline" || campaignsWidgetPhase === "error" ? (
                     <TouchableOpacity
                       onPress={() => void (viewingAsAdmin ? adminCampaignsQ.refetch() : topCampaignsQ.refetch())}
                       accessibilityRole="button"
@@ -1716,7 +1726,7 @@ export default function OverviewScreen() {
                 key: "low-acos",
                 label: "Low ACoS",
                 hint: "Lowest to highest",
-                hidden: (campaignsPhase !== "success" && campaignsPhase !== "empty") || !showCampaignsLowAcos,
+                hidden: (campaignsWidgetPhase !== "success" && campaignsWidgetPhase !== "empty") || !showCampaignsLowAcos,
                 content:
                   campsLowAcos.length === 0 ? (
                     <SwipeEmpty message="No campaigns in this period." t={t} />
@@ -1739,7 +1749,7 @@ export default function OverviewScreen() {
                 key: "top-spend",
                 label: "Top spend",
                 hint: "Highest to lowest",
-                hidden: campaignsPhase !== "success" && campaignsPhase !== "empty",
+                hidden: campaignsWidgetPhase !== "success" && campaignsWidgetPhase !== "empty",
                 content:
                   campsTopSpend.length === 0 ? (
                     <SwipeEmpty message="No campaign spend in this period." t={t} />
@@ -1841,6 +1851,7 @@ export default function OverviewScreen() {
 
           {(keywordBleeders.length > 0 || keywordHighAcos.length > 0 || termSpendNoOrders.length > 0 || termLowAcos.length > 0) ? (
             <OverviewSwipeWidget
+              key={`w4-${activePeriodKey}-${scopeProfiles.join("|")}`}
               staggerIndex={4}
               title="Keywords & search"
               icon="targeting"
@@ -1933,6 +1944,7 @@ export default function OverviewScreen() {
 
           {placementMix.length > 0 || placementCampaigns.length > 0 ? (
             <OverviewSwipeWidget
+              key={`w5-${activePeriodKey}-${scopeProfiles.join("|")}`}
               staggerIndex={5}
               title="Placement mix"
               icon="targeting"
@@ -1969,6 +1981,7 @@ export default function OverviewScreen() {
           ) : null}
 
           <OverviewSwipeWidget
+            key={`w6-${activePeriodKey}-${scopeProfiles.join("|")}`}
             staggerIndex={6}
             title="Top books"
             icon="books"
@@ -2001,9 +2014,9 @@ export default function OverviewScreen() {
                 label: "Top royalties",
                 hint: "KDP · high to low",
                 content:
-                  booksPhase === "loading" ? (
+                  booksWidgetPhase === "loading" ? (
                     <SwipeEmpty message="Loading books…" t={t} />
-                  ) : booksPhase === "timeout" || booksPhase === "offline" || booksPhase === "error" ? (
+                  ) : booksWidgetPhase === "timeout" || booksWidgetPhase === "offline" || booksWidgetPhase === "error" ? (
                     <TouchableOpacity onPress={() => void topBooksQ.refetch()} accessibilityRole="button">
                       <SwipeEmpty message="Couldn't load books. Tap to retry." t={t} />
                     </TouchableOpacity>
@@ -2038,7 +2051,7 @@ export default function OverviewScreen() {
               {
                 key: "worst-profit",
                 label: "Worst profit",
-                hidden: booksPhase !== "success" && booksPhase !== "empty",
+                hidden: booksWidgetPhase !== "success" && booksWidgetPhase !== "empty",
                 content:
                   booksProfit.length === 0 ? (
                     <SwipeEmpty
@@ -2070,7 +2083,7 @@ export default function OverviewScreen() {
                 key: "high-acos",
                 label: "High ACoS",
                 hint: "Ad-attributed sales only",
-                hidden: booksPhase !== "success" && booksPhase !== "empty",
+                hidden: booksWidgetPhase !== "success" && booksWidgetPhase !== "empty",
                 content:
                   booksHigh.length === 0 ? (
                     <SwipeEmpty message="No ad sales" t={t} />
@@ -2118,7 +2131,7 @@ export default function OverviewScreen() {
                 label: "Low ACoS",
                 hint: "Ad-attributed sales only",
                 hidden:
-                  (booksPhase !== "success" && booksPhase !== "empty") ||
+                  (booksWidgetPhase !== "success" && booksWidgetPhase !== "empty") ||
                   booksLow.length === 0 ||
                   !overviewLowAcosDiffersFromHigh(
                     booksHigh.map((book) => ({ id: book.asin || book.book_key })),
