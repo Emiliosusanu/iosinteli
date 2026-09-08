@@ -31,7 +31,10 @@ test("multi-profile lists use fair per-profile quota so one profile cannot hide 
   assert.match(queries, /fairSlice/);
   // UI copy shortened — fairness still lives in fetch quota above.
   assert.match(targeting, /Showing \{TARGETING_LIST_LIMIT\} \(app limit\)/);
-  assert.match(campaigns, /Showing 500 \(app limit\)/);
+  assert.match(campaigns, /campaigns-list-range-v3/);
+  assert.match(campaigns, /limit: 0/);
+  assert.doesNotMatch(campaigns, /Showing 500 \(app limit\)/);
+  assert.doesNotMatch(campaigns, /overviewWarmKey/);
   assert.match(queries, /Not an Amazon write limit/);
 });
 
@@ -100,7 +103,8 @@ test("filters sort and perf against period row metrics, not lifetime placeholder
   assert.doesNotMatch(searchTerms, /key: "sales"/);
   assert.match(campaigns, /prefetchCampaignPlacementAdjustments/);
   assert.match(targeting, /prefetchCampaignPlacementAdjustments/);
-  assert.match(campaigns, /sameScopeWarmPlaceholder/);
+  assert.match(campaigns, /campaigns-list-range-v3/);
+  assert.doesNotMatch(campaigns, /sameScopeWarmPlaceholder/);
   assert.doesNotMatch(campaigns, /placeholderData:\s*\(previous\)/);
 });
 

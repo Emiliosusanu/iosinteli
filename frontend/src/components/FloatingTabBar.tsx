@@ -1,16 +1,22 @@
 import React, { useMemo } from "react";
 import {
   Platform,
-  Pressable,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { InteliAdsIcon, type InteliAdsIconName } from "@/src/components/InteliAdsIcon";
+import { PressableScale } from "@/src/components/Motion";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { playHaptic } from "@/src/lib/hapticPolicy";
-import { dashboard, density, layout, useTheme } from "@/src/lib/theme";
+import { motion } from "@/src/lib/motion";
+import { dashboard, density, layout, useReduceMotion, useTheme } from "@/src/lib/theme";
 
 const BAR_HEIGHT = dashboard.tabBarHeight;
 const H_PAD = 4;
@@ -53,9 +59,41 @@ type FloatingTabBarProps = {
   };
 };
 
+function TabItemInner({
+  focused,
+  activeWell,
+  children,
+}: {
+  focused: boolean;
+  activeWell: string;
+  children: React.ReactNode;
+}) {
+  const reduceMotion = useReduceMotion();
+  const progress = useSharedValue(focused ? 1 : 0);
+  React.useEffect(() => {
+    progress.set(
+      reduceMotion
+        ? focused
+          ? 1
+          : 0
+        : withTiming(focused ? 1 : 0, { duration: motion.fastState }),
+    );
+  }, [focused, progress, reduceMotion]);
+  const wellStyle = useAnimatedStyle(() => ({
+    opacity: 0.35 + progress.get() * 0.65,
+    transform: [{ scale: 0.96 + progress.get() * 0.04 }],
+    backgroundColor: activeWell,
+  }));
+  return (
+    <Animated.View style={[styles.itemInner, focused ? wellStyle : null]}>
+      {children}
+    </Animated.View>
+  );
+}
+
 /**
- * Light floating dock matched to the white app chrome: frosted bar, equal
- * slots, icon + label always visible, active tint = tone_primary.
+ * Floating dock: denser (less glass) fill, press scale, soft active-well motion.
+ * No live frosted blur under tab routes (chrome stacking cost).
  */
 export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBarProps) {
   const t = useTheme();
@@ -67,10 +105,10 @@ export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBa
   const shell = useMemo(
     () => ({
       bar: t.colors.tabbar_background,
-      stroke: t.scheme === "dark" ? t.colors.glass_stroke : "rgba(0,0,0,0.08)",
+      stroke: t.scheme === "dark" ? t.colors.glass_stroke : "rgba(0,0,0,0.10)",
       inactive: t.colors.text_tertiary,
       active: t.colors.tone_primary,
-      activeWell: t.scheme === "dark" ? "rgba(47,124,255,0.18)" : "rgba(0,122,255,0.12)",
+      activeWell: t.scheme === "dark" ? "rgba(47,124,255,0.22)" : "rgba(0,122,255,0.14)",
     }),
     [t.colors, t.scheme],
   );
@@ -78,7 +116,6 @@ export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBa
   return (
     <View pointerEvents="box-none" style={[styles.wrap, { paddingBottom: bottomPad }]}>
       <View style={styles.shadowLift}>
-        {/* Translucent fill only — avoid stacking a live blur under every tab route. */}
         <View style={[styles.capsule, { borderColor: shell.stroke, backgroundColor: shell.bar }]}>
           <View style={styles.track}>
             {routes.map((route, i) => {
@@ -107,27 +144,17 @@ export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBa
                 }
               };
 
-              const onLongPress = () => {
-                navigation.emit({ type: "tabLongPress", target: route.key });
-              };
-
               return (
-                <Pressable
+                <PressableScale
                   key={route.key}
-                  accessibilityRole="button"
+                  accessibilityRole="tab"
                   accessibilityState={focused ? { selected: true } : {}}
                   accessibilityLabel={a11y}
                   testID={`tab-${route.name}`}
                   onPress={onPress}
-                  onLongPress={onLongPress}
                   style={styles.item}
                 >
-                  <View
-                    style={[
-                      styles.itemInner,
-                      focused ? { backgroundColor: shell.activeWell } : null,
-                    ]}
-                  >
+                  <TabItemInner focused={focused} activeWell={shell.activeWell}>
                     {visual.kind === "product" && visual.product ? (
                       <InteliAdsIcon
                         name={visual.product}
@@ -146,8 +173,8 @@ export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBa
                     <Text numberOfLines={1} style={[styles.label, { color }]}>
                       {visual.label}
                     </Text>
-                  </View>
-                </Pressable>
+                  </TabItemInner>
+                </PressableScale>
               );
             })}
           </View>
@@ -173,8 +200,8 @@ const styles = StyleSheet.create({
     ...Platform.select({
       ios: {
         shadowColor: "#000",
-        shadowOpacity: 0.08,
-        shadowRadius: 10,
+        shadowOpacity: 0.10,
+        shadowRadius: 12,
         shadowOffset: { width: 0, height: 4 },
       },
       android: { elevation: 6 },
@@ -207,16 +234,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: density.chipPadV,
     borderRadius: dashboard.metricChipRadius,
-    borderCurve: "continuous",
     alignItems: "center",
     justifyContent: "center",
-    gap: 3,
+    gap: 2,
   },
   label: {
     fontSize: 10,
     fontWeight: "600",
-    letterSpacing: -0.1,
-    lineHeight: 12,
-    textAlign: "center",
+    letterSpacing: 0.1,
   },
 });

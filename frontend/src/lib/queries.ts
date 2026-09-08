@@ -2970,9 +2970,12 @@ export async function fetchTopCampaignsRange(
 ): Promise<TopCampaignRow[]> {
   const { profileIds, start, end, limit = 5, royaltyRate = 0, filterUserId } = opts;
   if (!profileIds.length) return [];
+  /** `limit <= 0` = complete Campaigns list (no silent Nest/app truncate). */
+  const capped = typeof limit === "number" && Number.isFinite(limit) && limit > 0;
 
   const fairSlice = (rows: TopCampaignRow[]): TopCampaignRow[] => {
-    if (!limit || profileIds.length <= 1) return rows.slice(0, limit);
+    if (!capped) return rows;
+    if (profileIds.length <= 1) return rows.slice(0, limit);
     const per = Math.max(80, Math.ceil(limit / profileIds.length));
     const taken = new Map<string, number>();
     const out: TopCampaignRow[] = [];
@@ -2996,11 +2999,16 @@ export async function fetchTopCampaignsRange(
     return out;
   };
 
+  const sortCampaignRows = (rows: TopCampaignRow[]) =>
+    [...rows].sort((a, b) =>
+      royaltyRate > 0 ? (Number(b.net) || 0) - (Number(a.net) || 0) : b.spend - a.spend,
+    );
+
   try {
     // Prefer Nest period aggregation for every seller (not only admin filterUserId).
     // Multi-profile: fair-share via per-profile fetches — Nest often omits amazon_profile_id.
-    if (profileIds.length > 1 && limit) {
-      const per = Math.max(80, Math.ceil(limit / profileIds.length));
+    if (profileIds.length > 1) {
+      const per = capped ? Math.max(80, Math.ceil(limit / profileIds.length)) : 0;
       const settled = await Promise.allSettled(
         profileIds.map((id) =>
           fetchTopCampaignsRange({ ...opts, profileIds: [id], limit: per }),
@@ -3014,15 +3022,8 @@ export async function fetchTopCampaignsRange(
         for (const row of result.value) byId.set(row.id, row);
       }
       if (nestOk === 0) throw new Error("Nest campaign aggregation failed for all profiles");
-      return enrichTopCampaignsWithSettingsCooldown(
-        [...byId.values()]
-          .sort((a, b) =>
-            royaltyRate > 0
-              ? (Number(b.net) || 0) - (Number(a.net) || 0)
-              : b.spend - a.spend,
-          )
-          .slice(0, limit),
-      );
+      const merged = sortCampaignRows([...byId.values()]);
+      return enrichTopCampaignsWithSettingsData(capped ? merged.slice(0, limit) : merged);
     }
     const rows = await fetchAggregatedCampaigns({
       startDate: start,
@@ -3030,7 +3031,7 @@ export async function fetchTopCampaignsRange(
       profileIds,
       filterUserId,
     });
-    return enrichTopCampaignsWithSettingsCooldown(rows.slice(0, limit));
+    return enrichTopCampaignsWithSettingsData(capped ? rows.slice(0, limit) : rows);
   } catch (error) {
     console.warn("[inteliads] Nest campaign aggregation failed; falling back to Supabase", error);
   }

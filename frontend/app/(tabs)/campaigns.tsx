@@ -59,7 +59,6 @@ import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import { loadCampaignsFilterMemory, saveCampaignsFilterMemory } from "@/src/lib/filterMemory";
 import {
   LIST_PERIOD_QUERY_CACHE,
-  sameScopeWarmPlaceholder,
   sortedProfileIds,
 } from "@/src/lib/periodQuery";
 import { countriesForSponsoredCampaign, marketplaceFlagsA11y } from "@/src/lib/bookMarketplaces";
@@ -179,14 +178,13 @@ export default function CampaignsScreen() {
 
   const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
   const campaignsListKey = [
-    "campaigns-list-range-v2",
+    "campaigns-list-range-v3",
     adminFilterUserId ?? "self",
     scopeProfiles,
     dateRange.start,
     dateRange.end,
     primaryCurrency,
   ] as const;
-  const overviewWarmKey = ["top-campaigns-range-v2", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency] as const;
 
   const {
     data: campaigns = [],
@@ -204,7 +202,7 @@ export default function CampaignsScreen() {
           profileIds: scopeProfiles,
           start: dateRange.start,
           end: dateRange.end,
-          limit: 500,
+          limit: 0,
           filterUserId: adminFilterUserId,
         }),
         undefined,
@@ -212,19 +210,13 @@ export default function CampaignsScreen() {
       ),
     enabled: scopeProfiles.length > 0,
     ...LIST_PERIOD_QUERY_CACHE,
-    // Same period+profiles Overview warm only — never keepPreviousData.
-    placeholderData: () =>
-      sameScopeWarmPlaceholder(
-        queryClient.getQueryData(overviewWarmKey) as TopCampaignRow[] | undefined,
-      ),
+    // Never warm from Overview top-80 — that painted a spend-biased subset as the full list.
+    placeholderData: undefined,
     retry: false,
   });
 
-  const overviewWarm = queryClient.getQueryData(overviewWarmKey) as TopCampaignRow[] | undefined;
-  const showBlockingSpinner =
-    (isPending || !!isPlaceholderData) && campaigns.length === 0 && !overviewWarm;
+  const showBlockingSpinner = (isPending || !!isPlaceholderData) && campaigns.length === 0;
   const listUpdating = (isFetching || !!isPlaceholderData) && campaigns.length > 0 && !isError;
-  const listTruncated = !isError && campaigns.length >= 500;
 
   const filtered = useMemo(() => {
     let arr = campaigns.filter((c) => {
@@ -425,19 +417,8 @@ export default function CampaignsScreen() {
           }
           ItemSeparatorComponent={CampaignsListSeparator}
           ListEmptyComponent={<EmptyState icon="megaphone-outline" title={empty.title} subtitle={empty.subtitle} />}
-          ListFooterComponent={
-            listTruncated ? (
-              <Text
-                style={[
-                  t.typography.footnote,
-                  { color: t.colors.text_secondary, textAlign: "center", marginTop: t.spacing.md },
-                ]}
-              >
-                Showing 500 (app limit)
-              </Text>
-            ) : null
-          }
-          // fair per-profile fetch is enforced in queries (list cap is app-only).
+          ListFooterComponent={null}
+          // Complete period list via fetchTopCampaignsRange(limit: 0) — no silent 500 cap.
           renderItem={({ item }) => {
             const colorKey = bookColorKeyFor(item);
             const campaignColor = colorKey ? fallbackBookColor(colorKey) : t.colors.tone_primary;

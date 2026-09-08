@@ -206,7 +206,8 @@ test("fetchAllPages fails loud instead of returning a silent first-N page", asyn
 test("truncated campaign query keys are not the persisted keys", () => {
   const persistSrc = readFileSync(new URL("../src/lib/queryPersist.ts", import.meta.url), "utf8");
   assert.match(persistSrc, /top-campaigns-range-v2/);
-  assert.match(persistSrc, /campaigns-list-range-v2/);
+  assert.match(persistSrc, /campaigns-list-range-v3/);
   assert.match(persistSrc, /targeting-placements-v2/);
   assert.equal(persistSrc.includes('"top-campaigns-range"'), false);
+  assert.equal(persistSrc.includes('"campaigns-list-range-v2"'), false);
 });
