@@ -4772,20 +4772,13 @@ export async function fetchUserSettings(userId: string): Promise<Record<string, 
 // Returns true if the remote write succeeded.
 export async function saveUserSetting(userId: string, fieldName: string, value: any): Promise<boolean> {
   try {
-    const { data: updated, error: updateErr } = await supabase
+    const { error } = await supabase
       .from("user_settings")
-      .update({ value })
-      .eq("user_id", userId)
-      .eq("field_name", fieldName)
-      .select("field_name")
-      .maybeSingle();
-    if (updateErr) throw updateErr;
-    if (updated) return true;
-
-    const { error: insertErr } = await supabase
-      .from("user_settings")
-      .insert({ user_id: userId, field_name: fieldName, value });
-    if (insertErr) throw insertErr;
+      .upsert(
+        { user_id: userId, field_name: fieldName, value },
+        { onConflict: "user_id,field_name" },
+      );
+    if (error) throw error;
     return true;
   } catch (err: any) {
     // Don't crash the app over a preference sync; surface quietly for debugging.
