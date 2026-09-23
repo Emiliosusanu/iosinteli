@@ -24,6 +24,11 @@ import {
   matchesReadyDefaultFilter,
   multiCountryFlagIcons,
   displayCurrencyOfSelection,
+  currenciesInSelection,
+  mixedMarketplaceMoneyHint,
+  moneyProfileIdsForSelection,
+  countEnabledProfilesMatchingIds,
+  rowCurrencyOfProfile,
   planSelectAllSameCurrency,
   planViewToggle,
   profileEnabled,
@@ -44,7 +49,9 @@ test("enable switch is Enabled/Disabled, not Connected, and is not view selectio
   assert.equal(enabledStatusLabel(false), "Disabled");
   assert.equal(viewStatusLabel(true), "In view");
   assert.equal(viewStatusLabel(false), "—");
-  assert.equal(profileEnabled({ is_enabled: undefined }), true);
+  assert.equal(profileEnabled({ is_enabled: true }), true);
+  assert.equal(profileEnabled({ is_enabled: undefined }), false);
+  assert.equal(profileEnabled({ is_enabled: null }), false);
   assert.equal(profileEnabled({ is_enabled: false }), false);
   assert.equal(profileInView({ id: "a", profile_id: "a" }, ["a"]), true);
   assert.equal(profileInView({ id: "uuid", profile_id: "ads-1" }, ["ads-1"]), true);
@@ -211,7 +218,32 @@ test("CAD joins a USD view and the reporting chip stays USD", () => {
     assert.deepEqual(plan.nextIds, ["us", "ca"]);
   }
   assert.equal(displayCurrencyOfSelection(profiles, ["us", "ca"]), "USD");
+  assert.deepEqual(currenciesInSelection(profiles, ["us", "ca"]), ["USD", "CAD"]);
+  assert.deepEqual(
+    moneyProfileIdsForSelection(profiles, ["us", "ca"]).sort(),
+    ["ca", "ca-ads", "us", "us-ads"].sort(),
+  );
+  assert.equal(
+    mixedMarketplaceMoneyHint(["USD", "CAD"], "USD"),
+    "Totals in USD include CAD converted via market FX (not Amazon).",
+  );
+  assert.equal(
+    mixedMarketplaceMoneyHint(["USD", "CAD"], "USD", {
+      moneyProfileCount: 4,
+      enabledProfileCount: 6,
+    }),
+    "Totals in USD include CAD converted via market FX (not Amazon).",
+  );
+  assert.equal(mixedMarketplaceMoneyHint(["USD"], "USD"), null);
+  assert.equal(
+    countEnabledProfilesMatchingIds(profiles, ["us", "us-ads", "ca"]),
+    2,
+  );
+  assert.equal(rowCurrencyOfProfile(profiles, "ca", "USD"), "CAD");
+  assert.equal(rowCurrencyOfProfile(profiles, "us-ads", "USD"), "USD");
+  assert.equal(rowCurrencyOfProfile(profiles, null, "USD"), "USD");
   assert.match(appContext, /planViewToggle/);
+  assert.match(appContext, /profileEnabled/);
   assert.match(appContext, /displayCurrencyOfSelection/);
   assert.doesNotMatch(appContext, /VIEW_CURRENCY_CONFLICT_TITLE|currency_conflict/);
 });

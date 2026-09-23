@@ -1,8 +1,15 @@
 import type { AmazonProfile } from "./types";
 
-/** Nest missing `is_enabled` is treated as on — same contract as the safety audit. */
-export function profileEnabled(profile: Pick<AmazonProfile, "is_enabled">): boolean {
-  return profile.is_enabled !== false;
+/**
+ * Nest/iOS activation contract (inspected 2026-09-06).
+ * Ship Nest (`hub/robo_ads`) and the notifications worktree both query
+ * `.eq('is_enabled', true)`. OAuth inserts `is_enabled: false`.
+ * Null / omitted / load error is not activation.
+ */
+export const PROFILE_ENABLED_WHEN_NOT_FALSE = false;
+
+export function profileEnabled(profile: { is_enabled?: boolean | null }): boolean {
+  return PROFILE_ENABLED_WHEN_NOT_FALSE ? profile.is_enabled !== false : profile.is_enabled === true;
 }
 
 export function profileInView(
@@ -250,6 +257,18 @@ export function currencyCodeOf(profile: Pick<AmazonProfile, "currency_code"> | n
   return String(profile?.currency_code || "USD").trim().toUpperCase() || "USD";
 }
 
+/** Row money uses that profile's marketplace currency. No FX — CAD stays CAD. */
+export function rowCurrencyOfProfile(
+  profiles: Array<Pick<AmazonProfile, "id" | "profile_id" | "currency_code">>,
+  amazonProfileId: string | null | undefined,
+  fallback: string,
+): string {
+  const id = String(amazonProfileId || "").trim();
+  if (!id) return fallback;
+  const match = profiles.find((p) => p.id === id || p.profile_id === id);
+  return match ? currencyCodeOf(match) : fallback;
+}
+
 export function viewCurrencyOfSelection(
   profiles: AmazonProfile[],
   selectedProfileIds: string[],
@@ -273,6 +292,137 @@ export function displayCurrencyOfSelection(
   }
   if (codes.includes("USD")) return "USD";
   return codes[0] || "USD";
+}
+
+export function currenciesInSelection(
+  profiles: AmazonProfile[],
+  selectedProfileIds: string[],
+): string[] {
+  const seen = new Set<string>();
+  const codes: string[] = [];
+  for (const id of selectedProfileIds) {
+    const match = profiles.find((p) => p.id === id || p.profile_id === id);
+    if (!match) continue;
+    const code = currencyCodeOf(match);
+    if (seen.has(code)) continue;
+    seen.add(code);
+    codes.push(code);
+  }
+  return codes;
+}
+
+/**
+ * Profile IDs that contribute Ads money for the display chip.
+ * USD chip: all selected enabled marketplaces (Nest/client convert foreign
+ * Ads via market FX). Non-USD chip: native currency only.
+ */
+export function moneyProfileIdsForSelection(
+  profiles: AmazonProfile[],
+  selectedProfileIds: string[],
+): string[] {
+  const display = displayCurrencyOfSelection(profiles, selectedProfileIds);
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    const id = String(value || "").trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    ids.push(id);
+  };
+  const includeAllForUsd = display === "USD";
+  for (const id of selectedProfileIds) {
+    const match = profiles.find((p) => p.id === id || p.profile_id === id);
+    if (!match) continue;
+    if (!includeAllForUsd && currencyCodeOf(match) !== display) continue;
+    add(id);
+    add(match.id);
+    add(match.profile_id);
+  }
+  return ids;
+}
+
+/**
+ * Native-currency-only Ads profile ids for the display chip.
+ * Used for KDP royalty scope so royalties are not mixed/converted with Ads FX.
+ */
+export function nativeCurrencyMoneyProfileIdsForSelection(
+  profiles: AmazonProfile[],
+  selectedProfileIds: string[],
+): string[] {
+  const display = displayCurrencyOfSelection(profiles, selectedProfileIds);
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    const id = String(value || "").trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    ids.push(id);
+  };
+  for (const id of selectedProfileIds) {
+    const match = profiles.find((p) => p.id === id || p.profile_id === id);
+    if (!match) continue;
+    if (currencyCodeOf(match) !== display) continue;
+    add(id);
+    add(match.id);
+    add(match.profile_id);
+  }
+  return ids;
+}
+
+/** Count enabled profile rows that appear in `ids` (id or amazon profile_id). */
+export function countEnabledProfilesMatchingIds(
+  profiles: readonly AmazonProfile[],
+  ids: readonly string[],
+): number {
+  const want = new Set(
+    ids.map((id) => String(id || "").trim()).filter(Boolean),
+  );
+  if (!want.size) return 0;
+  let count = 0;
+  for (const profile of profiles) {
+    if (!profileEnabled(profile)) continue;
+    const id = String(profile.id || "").trim();
+    const adsId = String(profile.profile_id || "").trim();
+    if ((id && want.has(id)) || (adsId && want.has(adsId))) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Surfaces when enabled selection spans multiple currencies.
+ * USD multi-market totals use market FX (Frankfurter/ECB) — not Amazon console FX.
+ * Pass full enabled-selection currencies — not money-chip-narrowed ids.
+ */
+export function mixedMarketplaceMoneyHint(
+  currencies: readonly string[],
+  displayCurrency: string,
+  opts?: { moneyProfileCount?: number; enabledProfileCount?: number },
+): string | null {
+  const unique = [
+    ...new Set(
+      currencies.map((c) => String(c || "").trim().toUpperCase()).filter(Boolean),
+    ),
+  ];
+  if (unique.length < 2) return null;
+  const display = String(displayCurrency || "USD").toUpperCase();
+  const others = unique.filter((code) => code !== display);
+  const otherLabel = others.length ? others.join(", ") : "other markets";
+  if (display === "USD") {
+    return `Totals in USD include ${otherLabel} converted via market FX (not Amazon).`;
+  }
+  const moneyN = opts?.moneyProfileCount;
+  const enabledN = opts?.enabledProfileCount;
+  if (
+    typeof moneyN === "number" &&
+    typeof enabledN === "number" &&
+    Number.isFinite(moneyN) &&
+    Number.isFinite(enabledN) &&
+    moneyN > 0 &&
+    enabledN > moneyN
+  ) {
+    return `Totals in ${display} · ${moneyN} of ${enabledN} profiles. ${otherLabel} not converted.`;
+  }
+  return `Totals in ${display}. Other markets not converted.`;
 }
 
 export type ViewTogglePlan =
