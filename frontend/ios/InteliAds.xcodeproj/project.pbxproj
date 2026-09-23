@@ -866,9 +866,9 @@
 		E5E02F7FB503849154189D44 /* Pods-InteliAds.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-InteliAds.debug.xcconfig"; path = "Target Support Files/Pods-InteliAds/Pods-InteliAds.debug.xcconfig"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F11748412D0307B40044C1D9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = InteliAds/AppDelegate.swift; sourceTree = "<group>"; };
+		F11748442D0722820044C1D9 /* InteliAds-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "InteliAds-Bridging-Header.h"; path = "InteliAds/InteliAds-Bridging-Header.h"; sourceTree = "<group>"; };
 		F11748502D0905050044C1D9 /* InteliAdsHermesLaunch.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; name = InteliAdsHermesLaunch.mm; path = InteliAds/InteliAdsHermesLaunch.mm; sourceTree = "<group>"; };
 		F11748512D0905050044C1D9 /* InteliAdsHermesLaunch.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = InteliAdsHermesLaunch.h; path = InteliAds/InteliAdsHermesLaunch.h; sourceTree = "<group>"; };
-		F11748442D0722820044C1D9 /* InteliAds-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "InteliAds-Bridging-Header.h"; path = "InteliAds/InteliAds-Bridging-Header.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -2199,7 +2199,7 @@
 				CODE_SIGN_ENTITLEMENTS = InteliAds/InteliAds.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 56;
+				CURRENT_PROJECT_VERSION = 210;
 				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -2238,7 +2238,7 @@
 				CODE_SIGN_ENTITLEMENTS = InteliAds/InteliAdsRelease.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 56;
+				CURRENT_PROJECT_VERSION = 210;
 				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
 				INFOPLIST_FILE = InteliAds/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
