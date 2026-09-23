@@ -103,7 +103,9 @@ test("global QueryClient does not keep previous query rows as placeholders", () 
 
 test("Campaigns and Books never reuse a previous period's list", () => {
   assert.doesNotMatch(campaigns, /placeholderData:\s*\(previous\)/);
-  assert.match(campaigns, /sameScopeWarmPlaceholder/);
+  assert.match(campaigns, /campaigns-list-range-v3/);
+  assert.match(campaigns, /limit: 0/);
+  assert.doesNotMatch(campaigns, /sameScopeWarmPlaceholder/);
   assert.match(campaigns, /LIST_PERIOD_QUERY_CACHE/);
   assert.match(products, /sameScopeWarmPlaceholder/);
   assert.match(products, /LIST_PERIOD_QUERY_CACHE/);

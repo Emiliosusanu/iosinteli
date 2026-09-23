@@ -71,3 +71,9 @@ test("empty books copy is not misleading when KDP was never imported", () => {
   assert.equal(inRange.title, "No book data in range");
   assert.equal(inRange.subtitle, "");
 });
+
+test("Books FilterChrome stays mounted (no chrome-collapse scroll lock)", () => {
+  assert.match(products, /FilterChrome/);
+  assert.doesNotMatch(products, /listCanScrollRef/);
+  assert.doesNotMatch(products, /setTopChromeVisible\(false\)/);
+});

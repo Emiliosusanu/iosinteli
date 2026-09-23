@@ -105,20 +105,20 @@ test("knownKdpRoyaltyTotal never turns missing coverage into zero", () => {
 });
 
 test("Home, Books, notifications, and background refresh use enabled-country royalty scope", () => {
-  assert.match(home, /selectKdpRoyaltyScope/);
+  assert.match(home, /selectKdpRoyaltyScopeForSelection/);
   assert.match(home, /royaltyProfiles/);
   assert.match(home, /fetchKdpRoyaltiesRange\(royaltyProfiles/);
   assert.match(home, /knownKdpRoyaltyTotal\(royaltyRange\)/);
   assert.match(home, /knownKdpRoyaltyTotal\(prevRoyaltyRange\)/);
   assert.match(home, /sellerReady && royaltyProfiles\.length > 0/);
   assert.match(home, /kdpProfileIds: royaltyProfiles/);
-  assert.match(products, /selectKdpRoyaltyScope/);
+  assert.match(products, /selectKdpRoyaltyScopeForSelection/);
   assert.match(products, /kdpProfileIds: royaltyProfiles/);
   assert.match(products, /fetchKdpRoyaltiesRange\(royaltyProfiles/);
   assert.match(notifications, /selectKdpRoyaltyScopeForSelection/);
   assert.match(notifications, /knownKdpRoyaltyTotal/);
   assert.match(background, /selectKdpRoyaltyScopeForSelection/);
-  assert.match(productDetail, /selectKdpRoyaltyScope/);
+  assert.match(productDetail, /selectKdpRoyaltyScopeForSelection/);
   assert.match(queries, /kdpLinkProfileIds/);
   assert.match(queries, /kdpProfileIds !== undefined \? opts\.kdpProfileIds : profileIds/);
   assert.equal(

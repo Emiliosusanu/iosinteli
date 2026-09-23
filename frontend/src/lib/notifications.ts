@@ -37,7 +37,7 @@ import {
   type DigestTotals,
 } from "./notificationDigest";
 import { netRoyaltiesKnown } from "./netRoyalties";
-import { adsProfileIdsForSelection, uniqueProfileIds } from "./notificationScope";
+import { adsProfileIdsForSelection, filterToEnabledProfileSelection, uniqueProfileIds } from "./notificationScope";
 import { nestApiJson } from "./rulesApi";
 
 export const INTELIADS_BACKGROUND_TASK = "io.inteliads.app.background-refresh";
@@ -182,8 +182,10 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     );
     const profiles = await fetchAmazonProfiles(userId, scope.viewAs).catch(() => []);
     const adsIds = adsProfileIdsForSelection(scope.profileIds, profiles);
-    const queryIds = adsIds.length ? adsIds : scope.profileIds;
-    const royaltyIds = selectKdpRoyaltyScopeForSelection(profiles, scope.profileIds).profileIds;
+    const enabledSelected = filterToEnabledProfileSelection(scope.profileIds, profiles);
+    const queryIds = adsIds.length ? adsIds : enabledSelected;
+    // Prefer enabled selection for KDP royalties too (disabled accounts stay out of totals).
+    const royaltyIds = selectKdpRoyaltyScopeForSelection(profiles, enabledSelected).profileIds;
 
     const snapshot = await fetchMobileOverview({
       profileIds: queryIds,
@@ -294,7 +296,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       const already = alertState.spendAlertDays?.[today];
       if (!already) {
         const { fetchAllCampaignBudgets } = await import("./queries");
-        const budget = await fetchAllCampaignBudgets(uniqueProfileIds([...queryIds, ...scope.profileIds]));
+        const budget = await fetchAllCampaignBudgets(queryIds);
         if (spendExceedsBudget(spend, budget, prefs.spendThreshold)) {
           await scheduleLocalAlert({
             identifier: notificationIdentifier(NOTIFICATION_EVENTS.campaignOverspend, today),
@@ -321,7 +323,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     if (prefs.bookAttention && preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.bookAttention)) {
       const { fetchTopBooksRange } = await import("./queries");
       const books = await fetchTopBooksRange({
-        profileIds: uniqueProfileIds([...queryIds, ...scope.profileIds]),
+        profileIds: queryIds,
         kdpProfileIds: royaltyIds,
         start: today,
         end: today,
@@ -352,7 +354,10 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
 
     if (prefs.kdpDataStale && preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.kdpDataStale)) {
       const { loadScopedKdpFreshness } = await import("./kdpIngestMonitor");
-      const rows = await loadScopedKdpFreshness(scope.profileIds, now);
+      const rows = await loadScopedKdpFreshness(
+        filterToEnabledProfileSelection(scope.profileIds, profiles),
+        now,
+      );
       for (const row of rows) {
         if (!row.stale) {
           alertState = clearKdpStallNotified(alertState, row.accountId);

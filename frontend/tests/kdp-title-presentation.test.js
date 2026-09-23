@@ -174,5 +174,5 @@ test("ACoS and break-even stay separate; labels use calculator BE", () => {
   assert.equal(queriesSource.includes("allTimeRoyalties"), false);
   assert.equal(booksReadSource.includes("pickCalculatorBreakEvenAcos"), true);
   assert.equal(productSource.includes("formatBreakEvenAcos"), true);
-  assert.equal(persistSource.includes("inteliads.queryCache.v5"), true);
+  assert.equal(persistSource.includes("inteliads.queryCache.v6"), true);
 });

@@ -628,11 +628,20 @@ async function fetchLinkedKdpAccountIds(
 ): Promise<string[]> {
   if (!profileIds.length) return [];
 
-  const { data: linkedAccounts, error: linkedErr } = await supabase
-    .from("kdp_account_amazon_profiles")
-    .select("kdp_account_id, amazon_profile_id, is_paused")
-    .in("amazon_profile_id", profileIds);
-  if (linkedErr) throw linkedErr;
+  const linkedAccounts: any[] = [];
+  for (const chunk of chunkArray(profileIds, BOOKS_IN_CHUNK)) {
+    linkedAccounts.push(
+      ...(await fetchAllPages<any>((from, to) =>
+        supabase
+          .from("kdp_account_amazon_profiles")
+          .select("kdp_account_id, amazon_profile_id, is_paused")
+          .in("amazon_profile_id", chunk)
+          .order("kdp_account_id", { ascending: true })
+          .order("amazon_profile_id", { ascending: true })
+          .range(from, to),
+      )),
+    );
+  }
 
   // Dedupes kdp_account_id when the same shelf is linked to US + CA (or more).
   let linkedIds = linkedKdpAccountIdsFromRows(linkedAccounts ?? [], profileIds, {
@@ -650,27 +659,41 @@ async function fetchLinkedKdpAccountIds(
   if (opts?.allowLegacy === false) return linkedIds;
 
   const explicitlyLinkedProfileIds = new Set(
-    (linkedAccounts ?? [])
+    linkedAccounts
       .map((row: any) => row.amazon_profile_id)
       .filter((id: unknown): id is string => typeof id === "string" && id.length > 0),
   );
 
+  const activeLinkedIds = uniqueStrings(
+    linkedAccounts
+      .filter((row: any) => row.is_paused !== true)
+      .map((row: any) => row.kdp_account_id),
+  );
+
   const legacyProfileIds = profileIds.filter((id) => !explicitlyLinkedProfileIds.has(id));
-  if (!legacyProfileIds.length) return linkedIds;
+  if (!legacyProfileIds.length) return activeLinkedIds.length ? activeLinkedIds : linkedIds;
 
   const { ensureFreshSupabaseSession } = await import("./supabase");
   const session = await ensureFreshSupabaseSession();
   const userId = session?.user?.id;
-  if (!userId) return linkedIds;
+  if (!userId) return activeLinkedIds.length ? activeLinkedIds : linkedIds;
 
-  const { data: legacyAccounts, error: legacyErr } = await supabase
-    .from("kdp_accounts")
-    .select("id")
-    .eq("user_id", userId)
-    .in("amazon_profile_id", legacyProfileIds);
-  if (legacyErr) throw legacyErr;
+  const legacyAccounts: any[] = [];
+  for (const chunk of chunkArray(legacyProfileIds, BOOKS_IN_CHUNK)) {
+    legacyAccounts.push(
+      ...(await fetchAllPages<any>((from, to) =>
+        supabase
+          .from("kdp_accounts")
+          .select("id")
+          .eq("user_id", userId)
+          .in("amazon_profile_id", chunk)
+          .order("id", { ascending: true })
+          .range(from, to),
+      )),
+    );
+  }
 
-  return uniqueStrings([...linkedIds, ...(legacyAccounts ?? []).map((row: any) => row.id)]);
+  return uniqueStrings([...activeLinkedIds, ...legacyAccounts.map((row: any) => row.id)]);
 }
 
 /** Keep only kdp_accounts owned by the signed-in user (web certified money contract). */
@@ -830,38 +853,60 @@ export async function fetchKdpRoyaltiesRange(
   let usingDaily = true;
 
   if (cleanAccountIds.length) {
-    const dailyResult = await supabase
-      .from("kdp_daily_data")
-      .select("account_id, date, royalties, orders")
-      .in("account_id", cleanAccountIds)
-      .gte("date", startDate)
-      .lte("date", endDate)
-      .order("date", { ascending: true });
-
-    const entryResult =
-      dailyResult.error || !(dailyResult.data ?? []).length
-        ? await supabase
-            .from("kdp_entries")
-            .select("account_id, date, income, orders")
-            .in("account_id", cleanAccountIds)
-            .gte("date", startDate)
-            .lte("date", endDate)
-            .order("date", { ascending: true })
-        : { data: [], error: null };
-    if (dailyResult.error && entryResult.error && !hitAccountIds.length) throw entryResult.error;
-    if (
-      !dailyResult.error &&
-      (dailyResult.data ?? []).length === 0 &&
-      entryResult.error &&
-      !hitAccountIds.length
-    ) {
-      throw entryResult.error;
+    let dailyRows: any[] = [];
+    let dailyError: any = null;
+    try {
+      for (const chunk of chunkArray(cleanAccountIds, BOOKS_IN_CHUNK)) {
+        dailyRows.push(
+          ...(await fetchAllPages<any>((from, to) =>
+            supabase
+              .from("kdp_daily_data")
+              .select("account_id, date, royalties, orders")
+              .in("account_id", chunk)
+              .gte("date", startDate)
+              .lte("date", endDate)
+              .order("date", { ascending: true })
+              .order("account_id", { ascending: true })
+              .range(from, to),
+          )),
+        );
+      }
+    } catch (error) {
+      dailyError = error;
     }
 
-    usingDaily = (dailyResult.data ?? []).length > 0;
+    let entryRows: any[] = [];
+    let entryError: any = null;
+    if (dailyError || !dailyRows.length) {
+      try {
+        for (const chunk of chunkArray(cleanAccountIds, BOOKS_IN_CHUNK)) {
+          entryRows.push(
+            ...(await fetchAllPages<any>((from, to) =>
+              supabase
+                .from("kdp_entries")
+                .select("account_id, date, income, orders")
+                .in("account_id", chunk)
+                .gte("date", startDate)
+                .lte("date", endDate)
+                .order("date", { ascending: true })
+                .order("account_id", { ascending: true })
+                .range(from, to),
+            )),
+          );
+        }
+      } catch (error) {
+        entryError = error;
+      }
+    }
+    if (dailyError && entryError && !hitAccountIds.length) throw entryError;
+    if (!dailyError && dailyRows.length === 0 && entryError && !hitAccountIds.length) {
+      throw entryError;
+    }
+
+    usingDaily = dailyRows.length > 0;
     rawRows = usingDaily
-      ? (dailyResult.data as any[])
-      : ((entryResult.data ?? []) as any[]).map((row) => ({
+      ? dailyRows
+      : entryRows.map((row) => ({
           account_id: row.account_id,
           date: row.date,
           royalties: row.income,
@@ -1236,57 +1281,64 @@ async function fetchRuleIdsForUser(userId: string, profileIds?: string[]): Promi
 //             (fallback: at least surfaces profiles with active campaigns)
 //
 export async function fetchLinkedAmazonProfileIds(userId: string): Promise<string[]> {
-  const [linksRes, userProfileLinksRes, userCampaignLinksRes] = await Promise.all([
-    // Path A: auth user is linked directly to Amazon profiles.
-    supabase
-      .from("user_amazon_profiles")
-      .select("amazon_profile_id")
-      .eq("user_id", userId),
-    // Path B: auth user -> internal user profile -> Amazon profile.
-    supabase
-      .from("user_user_profiles")
-      .select("user_profile_id")
-      .eq("user_id", userId),
-    // Path C: auth user -> campaigns -> campaign.amazon_profile_id.
-    supabase
-      .from("user_campaigns")
-      .select("campaign_id")
-      .eq("user_id", userId),
+  const [links, userProfileLinks, userCampaignLinks] = await Promise.all([
+    fetchAllPages<any>((from, to) =>
+      supabase
+        .from("user_amazon_profiles")
+        .select("amazon_profile_id")
+        .eq("user_id", userId)
+        .order("amazon_profile_id", { ascending: true })
+        .range(from, to),
+    ),
+    fetchAllPages<any>((from, to) =>
+      supabase
+        .from("user_user_profiles")
+        .select("user_profile_id")
+        .eq("user_id", userId)
+        .order("user_profile_id", { ascending: true })
+        .range(from, to),
+    ),
+    fetchAllPages<any>((from, to) =>
+      supabase
+        .from("user_campaigns")
+        .select("campaign_id")
+        .eq("user_id", userId)
+        .order("campaign_id", { ascending: true })
+        .range(from, to),
+    ),
   ]);
 
-  const { data: links, error: linksErr } = linksRes;
-  if (linksErr) throw linksErr;
+  const directIds = uniqueStrings(links.map((l: any) => l.amazon_profile_id));
+  const userProfileIds = uniqueStrings(userProfileLinks.map((l: any) => l.user_profile_id));
+  const campaignIds = uniqueStrings(userCampaignLinks.map((l: any) => l.campaign_id));
 
-  const directIds = uniqueStrings((links ?? []).map((l: any) => l.amazon_profile_id));
-
-  const { data: userProfileLinks, error: uplErr } = userProfileLinksRes;
-  if (uplErr) throw uplErr;
-  const userProfileIds = uniqueStrings((userProfileLinks ?? []).map((l: any) => l.user_profile_id));
-
-  const { data: userCampaignLinks, error: uclErr } = userCampaignLinksRes;
-  if (uclErr) throw uclErr;
-  const campaignIds = uniqueStrings((userCampaignLinks ?? []).map((l: any) => l.campaign_id));
-
-  const [bridgeRes, campaignRes] = await Promise.all([
-    userProfileIds.length
-      ? supabase
+  const profileBridgeIds: string[] = [];
+  for (const chunk of chunkArray(userProfileIds, BOOKS_IN_CHUNK)) {
+    profileBridgeIds.push(
+      ...(await fetchAllPages<any>((from, to) =>
+        supabase
           .from("user_profiles_amazon_profiles")
           .select("amazon_profile_id")
-          .in("user_profile_id", userProfileIds)
-      : Promise.resolve({ data: [], error: null }),
-    campaignIds.length
-      ? supabase
+          .in("user_profile_id", chunk)
+          .order("amazon_profile_id", { ascending: true })
+          .range(from, to),
+      )).map((r: any) => r.amazon_profile_id),
+    );
+  }
+
+  const campaignProfileIds: string[] = [];
+  for (const chunk of chunkArray(campaignIds, BOOKS_IN_CHUNK)) {
+    campaignProfileIds.push(
+      ...(await fetchAllPages<any>((from, to) =>
+        supabase
           .from("campaigns")
           .select("amazon_profile_id")
-          .in("id", campaignIds)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
-
-  if (bridgeRes.error) throw bridgeRes.error;
-  if (campaignRes.error) throw campaignRes.error;
-
-  const profileBridgeIds = uniqueStrings((bridgeRes.data ?? []).map((r: any) => r.amazon_profile_id));
-  const campaignProfileIds = uniqueStrings((campaignRes.data ?? []).map((c: any) => c.amazon_profile_id));
+          .in("id", chunk)
+          .order("amazon_profile_id", { ascending: true })
+          .range(from, to),
+      )).map((c: any) => c.amazon_profile_id),
+    );
+  }
 
   const resolved = uniqueStrings([...directIds, ...profileBridgeIds, ...campaignProfileIds]);
   debugDataScope("linked-profiles", {
@@ -3686,9 +3738,12 @@ export async function fetchTopCampaignsRange(
   const { profileIds, start, end, limit = 5, royaltyRate = 0, filterUserId, state } = opts;
   if (!profileIds.length) return [];
   const scopedCampaignIds = uniqueStrings((opts.campaignIds ?? []).map(String).filter(Boolean));
+  /** `limit <= 0` = complete Campaigns list (no silent Nest/app truncate). */
+  const capped = typeof limit === "number" && Number.isFinite(limit) && limit > 0;
 
   const fairSlice = (rows: TopCampaignRow[]): TopCampaignRow[] => {
-    if (!limit || profileIds.length <= 1) return rows.slice(0, limit);
+    if (!capped) return rows;
+    if (profileIds.length <= 1) return rows.slice(0, limit);
     const per = Math.max(80, Math.ceil(limit / profileIds.length));
     const taken = new Map<string, number>();
     const out: TopCampaignRow[] = [];
@@ -3712,13 +3767,18 @@ export async function fetchTopCampaignsRange(
     return out;
   };
 
+  const sortCampaignRows = (rows: TopCampaignRow[]) =>
+    [...rows].sort((a, b) =>
+      royaltyRate > 0 ? (Number(b.net) || 0) - (Number(a.net) || 0) : b.spend - a.spend,
+    );
+
   try {
     // Book scope needs exact campaign IDs — Nest top-N by spend can omit quiet books.
     if (!scopedCampaignIds.length) {
       // Prefer Nest period aggregation for every seller (not only admin filterUserId).
       // Multi-profile: fair-share via per-profile fetches — Nest often omits amazon_profile_id.
-      if (profileIds.length > 1 && limit) {
-        const per = Math.max(80, Math.ceil(limit / profileIds.length));
+      if (profileIds.length > 1) {
+        const per = capped ? Math.max(80, Math.ceil(limit / profileIds.length)) : 0;
         const settled = await Promise.allSettled(
           profileIds.map((id) =>
             fetchTopCampaignsRange({ ...opts, profileIds: [id], limit: per }),
@@ -3732,14 +3792,10 @@ export async function fetchTopCampaignsRange(
           for (const row of result.value) byId.set(row.id, row);
         }
         if (nestOk === 0) throw new Error("Nest campaign aggregation failed for all profiles");
-        return enrichTopCampaignsWithSettingsCooldown(
-          [...byId.values()]
-            .sort((a, b) =>
-              royaltyRate > 0
-                ? (Number(b.net) || 0) - (Number(a.net) || 0)
-                : b.spend - a.spend,
-            )
-            .slice(0, limit),
+        const merged = sortCampaignRows([...byId.values()]);
+        const limited = capped ? merged.slice(0, limit) : merged;
+        return enrichTopCampaignsWithSettingsData(
+          await withCampaignPlacementShares(limited, start, end),
         );
       }
       const rows = await fetchAggregatedCampaigns({
@@ -3749,9 +3805,8 @@ export async function fetchTopCampaignsRange(
         filterUserId,
         state,
       });
-      // Metrics only — do not change Nest fair-share / book capping; attach placement slots after.
-      const limited = rows.slice(0, limit);
-      return enrichTopCampaignsWithSettingsCooldown(
+      const limited = capped ? rows.slice(0, limit) : rows;
+      return enrichTopCampaignsWithSettingsData(
         await withCampaignPlacementShares(limited, start, end),
       );
     }

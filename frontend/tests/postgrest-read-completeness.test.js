@@ -142,6 +142,26 @@ test("entity metric totals paginate and chunk .in() filters", () => {
   assert.match(fn, /\.order\(/);
 });
 
+test("fetchKdpRoyaltiesRange and linked KDP accounts paginate all account-days", () => {
+  const linked = queriesSrc.slice(
+    queriesSrc.indexOf("async function fetchLinkedKdpAccountIds"),
+    queriesSrc.indexOf("async function fetchLogicalBookAsins"),
+  );
+  const royalties = queriesSrc.slice(
+    queriesSrc.indexOf("export async function fetchKdpRoyaltiesRange"),
+    queriesSrc.indexOf("/** Paperback / KU / Kindle mix"),
+  );
+  assert.match(linked, /fetchAllPages/);
+  assert.match(linked, /\.range\(from, to\)/);
+  assert.match(royalties, /fetchAllPages/);
+  assert.match(royalties, /\.order\("account_id"/);
+  assert.match(royalties, /chunkArray\(accountIds/);
+  assert.doesNotMatch(
+    royalties.slice(0, royalties.indexOf("aggregateKdpDailyRows")),
+    /\.from\("kdp_daily_data"\)\s*\n\s*\.select\([^)]+\)\s*\n\s*\.in\("account_id", accountIds\)\s*\n\s*\.gte\("date"/,
+  );
+});
+
 test("Books required reads paginate inside the selected-profile scope", () => {
   const fn = queriesSrc.slice(
     queriesSrc.indexOf("export async function fetchTopBooksRange"),
@@ -186,7 +206,8 @@ test("fetchAllPages fails loud instead of returning a silent first-N page", asyn
 test("truncated campaign query keys are not the persisted keys", () => {
   const persistSrc = readFileSync(new URL("../src/lib/queryPersist.ts", import.meta.url), "utf8");
   assert.match(persistSrc, /top-campaigns-range-v2/);
-  assert.match(persistSrc, /campaigns-list-range-v2/);
+  assert.match(persistSrc, /campaigns-list-range-v3/);
   assert.match(persistSrc, /targeting-placements-v2/);
   assert.equal(persistSrc.includes('"top-campaigns-range"'), false);
+  assert.equal(persistSrc.includes('"campaigns-list-range-v2"'), false);
 });

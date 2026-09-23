@@ -72,7 +72,7 @@ audit "targets timeout 60s" "TARGETING_QUERY_TIMEOUT_MS = 60_000" "src/lib/query
 audit "no global keepPreviousData" "placeholderData:\\s*keepPreviousData" "app/_layout.tsx" "forbid"
 audit "campaigns same-scope warm only" "sameScopeWarmPlaceholder" "app/(tabs)/campaigns.tsx"
 audit "campaigns forbid previous placeholder" "placeholderData:\\s*\\(previous\\)" "app/(tabs)/campaigns.tsx" "forbid"
-audit "query cache v5" "inteliads.queryCache.v5" "src/lib/queryPersist.ts"
+audit "query cache v6" "inteliads.queryCache.v6" "src/lib/queryPersist.ts"
 audit "metric totals fast path" "chunkArray\\(ids, 80\\)" "src/lib/queries.ts"
 audit "metric totals no sort" "fetchMetricTotalsByEntity" "src/lib/queries.ts"
 audit "alert check cooldown" "ALERT_CHECK_COOLDOWN_MS" "src/lib/notifications.ts"

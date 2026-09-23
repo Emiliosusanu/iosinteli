@@ -27,11 +27,11 @@ const scope = {
   currency: "USD",
 };
 
-test("financial completeness generation is complete-v3 with a v5 cache", () => {
-  assert.equal(FINANCIAL_READ_VERSION, "complete-v3");
-  assert.equal(QUERY_CACHE_KEY, "inteliads.queryCache.v5");
-  assert.match(books, /inteliads\.queryCache\.v5/);
-  assert.match(persist, /inteliads\.queryCache\.v5/);
+test("financial completeness generation is complete-v4 with a v6 cache", () => {
+  assert.equal(FINANCIAL_READ_VERSION, "complete-v4");
+  assert.equal(QUERY_CACHE_KEY, "inteliads.queryCache.v6");
+  assert.match(books, /inteliads\.queryCache\.v6/);
+  assert.match(persist, /inteliads\.queryCache\.v6/);
 });
 
 test("obsolete first-1000 financial roots cannot persist or hydrate", () => {
@@ -76,14 +76,25 @@ test("incomplete financial success is not written over a good cache", () => {
     }),
     true,
   );
+  assert.equal(
+    canPersistFinancialQuery({
+      queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties],
+      state: {
+        status: "success",
+        data: { coverage: "partial", completeness: "PARTIAL", hasKdpData: true, totalRoyalties: 1 },
+      },
+      meta: { complete: true, financialReadVersion: FINANCIAL_READ_VERSION },
+    }),
+    false,
+  );
 });
 
-test("Home financial and Books reads use complete-v3 keys", () => {
-  assert.equal(FINANCIAL_QUERY_ROOTS.campaignMetrics, "campaign-metrics-complete-v3");
-  assert.equal(FINANCIAL_QUERY_ROOTS.placementMix, "placement-mix-range-complete-v3");
-  assert.equal(FINANCIAL_QUERY_ROOTS.mobileOverview, "mobile-overview-complete-v3");
-  assert.equal(FINANCIAL_QUERY_ROOTS.kdpRoyalties, "kdp-royalties-complete-v3");
-  assert.equal(FINANCIAL_QUERY_ROOTS.products, "products-range-complete-v3");
+test("Home financial and Books reads use complete-v4 keys", () => {
+  assert.equal(FINANCIAL_QUERY_ROOTS.campaignMetrics, "campaign-metrics-complete-v4");
+  assert.equal(FINANCIAL_QUERY_ROOTS.placementMix, "placement-mix-range-complete-v4");
+  assert.equal(FINANCIAL_QUERY_ROOTS.mobileOverview, "mobile-overview-complete-v4");
+  assert.equal(FINANCIAL_QUERY_ROOTS.kdpRoyalties, "kdp-royalties-complete-v4");
+  assert.equal(FINANCIAL_QUERY_ROOTS.products, "products-range-complete-v4");
   assert.match(home, /FINANCIAL_QUERY_ROOTS\.campaignMetrics/);
   assert.match(home, /FINANCIAL_QUERY_ROOTS\.placementMix/);
   assert.match(home, /FINANCIAL_QUERY_ROOTS\.mobileOverview/);

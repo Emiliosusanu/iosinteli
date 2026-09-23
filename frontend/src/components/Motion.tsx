@@ -77,8 +77,9 @@ export function PressableScale({
           ? { ...accessibilityState, disabled: disabled || accessibilityState?.disabled }
           : undefined
       }
+      style={style}
     >
-      <Animated.View style={[style, animatedStyle]}>{children}</Animated.View>
+      <Animated.View style={animatedStyle}>{children}</Animated.View>
     </Pressable>
   );
 }

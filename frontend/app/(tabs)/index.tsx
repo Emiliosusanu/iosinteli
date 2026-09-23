@@ -191,7 +191,6 @@ import {
   NET_ROYALTIES_LABEL,
   kdpRoyaltiesAreKnown,
   netRoyalties,
-  netRoyaltiesKnown,
   netRoyaltiesVoiceOver,
 } from "@/src/lib/netRoyalties";
 import {
@@ -755,14 +754,14 @@ export default function OverviewScreen() {
     if (!sellerSecondary || scopeProfiles.length === 0) return;
     if (!topCampaignsQ.isSuccess) return;
     void queryClient.prefetchQuery({
-      queryKey: ["campaigns-list-range-v2", adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
+      queryKey: ["campaigns-list-range-v3", adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
       queryFn: () =>
         withQueryTimeout(
           fetchTopCampaignsRange({
             profileIds: scopeProfiles,
             start: dateRange.start,
             end: dateRange.end,
-            limit: 500,
+            limit: 0,
             filterUserId: adminFilterUserId,
           }),
         ),
@@ -1021,15 +1020,19 @@ export default function OverviewScreen() {
   // Keep paintable ads rows while royalties are still catching up — never blank both forever.
   const metricRows = metricsWaiting && !viewingAsAdmin ? [] : adminMetrics ?? metricsQ.data ?? [];
   const prevMetricRows = adminPrevMetrics ?? prevMetricsQ.data ?? [];
-  const topCampaigns = adminCampaignsQ.data ?? topCampaignsQ.data ?? [];
-  const topBooksRaw = adminTopBooks ?? topBooksQ.data ?? [];
+  const topCampaigns = periodLoading && !viewingAsAdmin
+    ? []
+    : adminCampaignsQ.data ?? topCampaignsQ.data ?? [];
+  const topBooksRaw = periodLoading && !viewingAsAdmin
+    ? []
+    : adminTopBooks ?? topBooksQ.data ?? [];
   const topBooks = useMemo(() => {
     if (!viewingAsAdmin) return topBooksRaw;
     if (activeBookKeysQ.isPending) return [];
     if (activeBookKeysQ.isError || !activeBookKeysQ.data) return topBooksRaw;
     return filterTopBooksByRecentActivity(topBooksRaw, activeBookKeysQ.data);
   }, [topBooksRaw, viewingAsAdmin, activeBookKeysQ.isPending, activeBookKeysQ.isError, activeBookKeysQ.data]);
-  const bleeders = adminBleeders ?? bleedersQ.data ?? [];
+  const bleeders = periodLoading && !viewingAsAdmin ? [] : adminBleeders ?? bleedersQ.data ?? [];
   const loading = periodLoading;
   const campaignsPhase = metricsWaiting && !viewingAsAdmin
     ? "loading"
@@ -1051,6 +1054,9 @@ export default function OverviewScreen() {
     error: viewingAsAdmin ? bootstrapQ.error : topBooksQ.error,
     isEmpty: topBooks.length === 0,
   });
+  // Never paint error+previous-data as live widget rows.
+  const campaignsWidgetPhase = campaignsPhase === "stale" ? "error" : campaignsPhase;
+  const booksWidgetPhase = booksPhase === "stale" ? "error" : booksPhase;
   const daily = useMemo(
     () =>
       aggregateDailyMetricsForDisplay(metricRows, {
@@ -1090,7 +1096,7 @@ export default function OverviewScreen() {
     const royalties = knownKdpRoyaltyTotal(royaltyRange);
     const bookOrders = royaltyRange?.hasKdpData ? royaltyRange.totalOrders : acc.orders;
     const organicOrders = royaltyRange?.hasKdpData ? Math.max(0, bookOrders - acc.orders) : 0;
-    const net = kdpReady ? netRoyaltiesKnown(royalties, acc.spend) : null;
+    const net = netRoyalties({ kdpRoyalties: royalties, adsSpend: acc.spend });
     const acos = safeDivide(acc.spend, acc.sales) * 100;
     const ctr = safeDivide(acc.clicks, acc.impressions) * 100;
     const cvr = safeDivide(acc.orders, acc.clicks) * 100;
@@ -1118,7 +1124,7 @@ export default function OverviewScreen() {
     return {
       ...acc,
       royalties,
-      net: prevKdpReady ? netRoyaltiesKnown(royalties, acc.spend) : null,
+      net: netRoyalties({ kdpRoyalties: royalties, adsSpend: acc.spend }),
       acos: safeDivide(acc.spend, acc.sales) * 100,
       ctr: safeDivide(acc.clicks, acc.impressions) * 100,
       cvr: safeDivide(acc.orders, acc.clicks) * 100,
@@ -1142,14 +1148,23 @@ export default function OverviewScreen() {
     impressions: pctDelta(totals.impressions, prevTotals.impressions),
   };
 
-  // Net profit sparkline
+  // Net profit sparkline — union Ads + KDP days so royalty-only days still inspect.
   const netSeries = useMemo(() => {
     if (!kdpReady) return [];
-    return daily.flatMap((m) => {
-      const net = publisherNetForPeriod(royaltiesForDate(m.date), m.spend);
-      return net == null ? [] : [{ value: net, label: formatDateShort(m.date), date: m.date, sales: m.sales }];
-    });
-  }, [daily, royaltiesForDate, kdpReady]);
+    const dates = new Set<string>([
+      ...daily.map((m) => m.date),
+      ...kdpDays.map((d) => String((d as { date?: string }).date ?? "")).filter(Boolean),
+    ]);
+    return [...dates]
+      .sort((a, b) => a.localeCompare(b))
+      .flatMap((date) => {
+        const m = daily.find((row) => row.date === date);
+        const spend = m?.spend ?? 0;
+        const sales = m?.sales ?? 0;
+        const net = publisherNetForPeriod(royaltiesForDate(date), spend);
+        return net == null ? [] : [{ value: net, label: formatDateShort(date), date, sales }];
+      });
+  }, [daily, kdpDays, royaltiesForDate, kdpReady]);
 
   const ordersSeries = useMemo(() => daily.slice(-14).map((m) => ({ value: m.orders, label: formatDateShort(m.date) })), [daily]);
 
@@ -1165,12 +1180,17 @@ export default function OverviewScreen() {
   // Hero overlay lines (royalties + ad spend, shown alongside net profit)
   const btRoyalties = useMemo(
     () => kdpReady
-      ? daily.flatMap((m) => {
-          const value = royaltiesForDate(m.date);
-          return value == null ? [] : [{ value, label: formatDateShort(m.date), date: m.date }];
-        })
+      ? [...new Set([
+          ...daily.map((m) => m.date),
+          ...kdpDays.map((d) => String((d as { date?: string }).date ?? "")).filter(Boolean),
+        ])]
+          .sort((a, b) => a.localeCompare(b))
+          .flatMap((date) => {
+            const value = royaltiesForDate(date);
+            return value == null ? [] : [{ value, label: formatDateShort(date), date }];
+          })
       : [],
-    [daily, royaltiesForDate, kdpReady],
+    [daily, kdpDays, royaltiesForDate, kdpReady],
   );
   const btSpend = useMemo(
     () => kdpReady
@@ -1186,7 +1206,7 @@ export default function OverviewScreen() {
     date: string;
     label: string;
     net: number;
-    royalties: number;
+    royalties: number | null;
     spend: number;
     sales: number;
   };
@@ -1289,9 +1309,9 @@ export default function OverviewScreen() {
   const budgetSpend = todayBudgetRow?.spend ?? 0;
   const budgetTodaySynced = !!todayBudgetRow;
   const totalDailyBudget = allBudgetsQ.data ?? 0;
-  const placementMix = placementMixQ.data ?? [];
-  const searchTerms = searchTermsPulseQ.data ?? [];
-  const adGroups = adGroupsQ.data ?? [];
+  const placementMix = periodLoading && !viewingAsAdmin ? [] : placementMixQ.data ?? [];
+  const searchTerms = periodLoading && !viewingAsAdmin ? [] : searchTermsPulseQ.data ?? [];
+  const adGroups = periodLoading && !viewingAsAdmin ? [] : adGroupsQ.data ?? [];
 
   const [blurBooks, setBlurBooks] = useState(false);
 
@@ -2094,6 +2114,7 @@ export default function OverviewScreen() {
 
           {(sellerReady || viewingAsAdmin) ? (
             <OverviewSwipeWidget
+              key={`home-ads-engine-${activePeriodKey}-${scopeProfiles.join("|")}`}
               staggerIndex={1}
               testID="home-ads-engine"
               title="Ads Engine"
@@ -2150,6 +2171,7 @@ export default function OverviewScreen() {
 
           {(sellerReady || viewingAsAdmin || kdpOnlyDashboard) ? (
             <OverviewSwipeWidget
+              key={`home-kdp-royalties-format-${activePeriodKey}-${scopeProfiles.join("|")}`}
               staggerIndex={2}
               testID="home-kdp-royalties-format"
               title="Format mix"
@@ -2178,6 +2200,7 @@ export default function OverviewScreen() {
 
           {(sellerReady || viewingAsAdmin) ? (
           <OverviewSwipeWidget
+            key={`home-campaigns-${activePeriodKey}-${scopeProfiles.join("|")}`}
             staggerIndex={3}
             testID="home-campaigns"
             title="Campaigns"
@@ -2190,9 +2213,9 @@ export default function OverviewScreen() {
                 key: "high-acos",
                 label: "High ACoS",
                 content:
-                  campaignsPhase === "loading" ? (
+                  campaignsWidgetPhase === "loading" ? (
                     <SwipeEmpty message="Loading campaigns…" t={t} />
-                  ) : campaignsPhase === "timeout" || campaignsPhase === "offline" || campaignsPhase === "error" ? (
+                  ) : campaignsWidgetPhase === "timeout" || campaignsWidgetPhase === "offline" || campaignsWidgetPhase === "error" ? (
                     <TouchableOpacity
                       onPress={() => void (viewingAsAdmin ? adminCampaignsQ.refetch() : topCampaignsQ.refetch())}
                       accessibilityRole="button"
@@ -2219,7 +2242,8 @@ export default function OverviewScreen() {
               {
                 key: "low-acos",
                 label: "Low ACoS",
-                hidden: (campaignsPhase !== "success" && campaignsPhase !== "empty") || !showCampaignsLowAcos,
+                hint: "Lowest to highest",
+                hidden: (campaignsWidgetPhase !== "success" && campaignsWidgetPhase !== "empty") || !showCampaignsLowAcos,
                 content:
                   campsLowAcos.length === 0 ? (
                     <SwipeEmpty message="No campaigns in this period." t={t} />
@@ -2241,7 +2265,8 @@ export default function OverviewScreen() {
               {
                 key: "top-spend",
                 label: "Top spend",
-                hidden: campaignsPhase !== "success" && campaignsPhase !== "empty",
+                hint: "Highest to lowest",
+                hidden: campaignsWidgetPhase !== "success" && campaignsWidgetPhase !== "empty",
                 content:
                   campsTopSpend.length === 0 ? (
                     <SwipeEmpty message="No campaign spend in this period." t={t} />
@@ -2343,6 +2368,7 @@ export default function OverviewScreen() {
 
           {(keywordBleeders.length > 0 || keywordHighAcos.length > 0 || termSpendNoOrders.length > 0 || termLowAcos.length > 0) ? (
             <OverviewSwipeWidget
+              key={`w4-${activePeriodKey}-${scopeProfiles.join("|")}`}
               staggerIndex={4}
               title="Keywords & search"
               icon="targeting"
@@ -2432,6 +2458,7 @@ export default function OverviewScreen() {
 
           {placementMix.length > 0 || placementCampaigns.length > 0 ? (
             <OverviewSwipeWidget
+              key={`w5-${activePeriodKey}-${scopeProfiles.join("|")}`}
               staggerIndex={5}
               title="Placement mix"
               icon="targeting"
@@ -2469,6 +2496,7 @@ export default function OverviewScreen() {
           ) : null}
 
           <OverviewSwipeWidget
+            key={`w6-${activePeriodKey}-${scopeProfiles.join("|")}`}
             staggerIndex={6}
             title="Top books"
             icon="books"
@@ -2501,9 +2529,9 @@ export default function OverviewScreen() {
                 key: "top-royalties",
                 label: "",
                 content:
-                  booksPhase === "loading" ? (
+                  booksWidgetPhase === "loading" ? (
                     <SwipeEmpty message="Loading books…" t={t} />
-                  ) : booksPhase === "timeout" || booksPhase === "offline" || booksPhase === "error" ? (
+                  ) : booksWidgetPhase === "timeout" || booksWidgetPhase === "offline" || booksWidgetPhase === "error" ? (
                     <TouchableOpacity onPress={() => void topBooksQ.refetch()} accessibilityRole="button">
                       <SwipeEmpty message="Couldn't load books. Tap to retry." t={t} />
                     </TouchableOpacity>
@@ -2538,7 +2566,7 @@ export default function OverviewScreen() {
               {
                 key: "worst-profit",
                 label: "Worst profit",
-                hidden: booksPhase !== "success" && booksPhase !== "empty",
+                hidden: booksWidgetPhase !== "success" && booksWidgetPhase !== "empty",
                 content:
                   booksProfit.length === 0 ? (
                     <SwipeEmpty
@@ -2570,7 +2598,7 @@ export default function OverviewScreen() {
                 key: "high-acos",
                 label: "High ACoS",
                 hint: "Ad-attributed sales only",
-                hidden: booksPhase !== "success" && booksPhase !== "empty",
+                hidden: booksWidgetPhase !== "success" && booksWidgetPhase !== "empty",
                 content:
                   booksHigh.length === 0 ? (
                     <SwipeEmpty message="No ad sales" t={t} />
@@ -2618,7 +2646,7 @@ export default function OverviewScreen() {
                 label: "Low ACoS",
                 hint: "Ad-attributed sales only",
                 hidden:
-                  (booksPhase !== "success" && booksPhase !== "empty") ||
+                  (booksWidgetPhase !== "success" && booksWidgetPhase !== "empty") ||
                   booksLow.length === 0 ||
                   !overviewLowAcosDiffersFromHigh(
                     booksHigh.map((book) => ({ id: book.asin || book.book_key })),

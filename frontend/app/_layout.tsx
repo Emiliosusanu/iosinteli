@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { AppState, type AppStateStatus } from "react-native";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as Notifications from "expo-notifications";
 import { StatusBar } from "expo-status-bar";
@@ -37,12 +38,40 @@ const queryClient = new QueryClient({
       // Do NOT reuse a prior query's rows under a new period/profile key —
       // that paints Week numbers under Month labels and wrong entities.
       staleTime: 45_000,
-      gcTime: 1000 * 60 * 60 * 24,
+      gcTime: 1000 * 60 * 60 * 6,
       retry: 1,
+      // RN has no window focus; AppState handler below refetches on foreground.
       refetchOnWindowFocus: false,
     },
   },
 });
+
+/** Pull latest financial reality when returning from background — no stale paint. */
+function FinancialForegroundRefetch() {
+  useEffect(() => {
+    let appState: AppStateStatus = AppState.currentState;
+    const sub = AppState.addEventListener("change", (next) => {
+      const wasBackground = appState === "background" || appState === "inactive";
+      appState = next;
+      if (!wasBackground || next !== "active") return;
+      void queryClient.invalidateQueries({
+        predicate: (query) => {
+          const root = query.queryKey?.[0];
+          return typeof root === "string" && (
+            root.startsWith("kdp-royalties")
+            || root.startsWith("campaign-metrics")
+            || root.startsWith("mobile-overview")
+            || root.startsWith("products-range")
+            || root.startsWith("top-books")
+            || root.startsWith("placement-mix")
+          );
+        },
+      });
+    });
+    return () => sub.remove();
+  }, []);
+  return null;
+}
 
 function RouteGuard({ children }: { children: React.ReactNode }) {
   const { state, user } = useAuth();
@@ -192,6 +221,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <QueryClientProvider client={queryClient}>
+          <FinancialForegroundRefetch />
           <AuthProvider>
             <AppProvider>
               <QaBootstrap />
