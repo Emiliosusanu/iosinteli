@@ -10,6 +10,10 @@
  * combined total and must not invent a US number.
  *
  * Missing royalties stay unavailable (null / "—"). This helper never fabricates zeros.
+ *
+ * True KDP-only sessions (zero Ads profile rows) use `user_accounts` so Gross
+ * can load from owned KDP shelves. While any Ads rows exist — even all disabled —
+ * Books/Overview stay on linked_profiles and never widen to every owned account.
  */
 
 export type RoyaltyCountryProfile = {
@@ -27,8 +31,14 @@ export type KdpRoyaltyScope =
       profileIds: string[];
     }
   | {
+      kind: "user_accounts";
+      reason: "no_ads_profiles";
+      country: null;
+      profileIds: [];
+    }
+  | {
       kind: "unavailable";
-      reason: "none_enabled" | "mixed_non_us";
+      reason: "none_enabled" | "mixed_non_us" | "no_enabled_ads_profiles";
       country: null;
       profileIds: [];
     };
@@ -72,45 +82,68 @@ export function enabledRoyaltyCountries(profiles: readonly RoyaltyCountryProfile
   return [...seen].sort();
 }
 
-/**
- * Pick the single marketplace whose KDP totals may be shown.
- * Returns empty profileIds when no honest total exists.
- */
-export function selectKdpRoyaltyScope(profiles: readonly RoyaltyCountryProfile[]): KdpRoyaltyScope {
-  const enabled = profiles.filter(profileIsNestEnabled);
-  if (!enabled.length) {
+function countryScopeFromPool(pool: readonly RoyaltyCountryProfile[]): KdpRoyaltyScope {
+  const countries = new Set<string>();
+  for (const profile of pool) {
+    const country = normalizeRoyaltyCountry(profile.country_code);
+    if (country) countries.add(country);
+  }
+  const sorted = [...countries].sort();
+  if (sorted.length === 0) {
     return { kind: "unavailable", reason: "none_enabled", country: null, profileIds: [] };
   }
-
-  const countries = enabledRoyaltyCountries(enabled);
-  if (countries.length === 0) {
-    return { kind: "unavailable", reason: "none_enabled", country: null, profileIds: [] };
-  }
-
-  if (countries.length === 1) {
-    const country = countries[0]!;
+  if (sorted.length === 1) {
+    const country = sorted[0]!;
     return {
       kind: "country",
       country,
       reason: "single_enabled_country",
       profileIds: collectProfileIds(
-        enabled.filter((profile) => normalizeRoyaltyCountry(profile.country_code) === country),
+        pool.filter((profile) => normalizeRoyaltyCountry(profile.country_code) === country),
       ),
     };
   }
-
-  if (countries.includes("US")) {
+  if (sorted.includes("US")) {
     return {
       kind: "country",
       country: "US",
       reason: "us_covers_all_marketplaces",
       profileIds: collectProfileIds(
-        enabled.filter((profile) => normalizeRoyaltyCountry(profile.country_code) === "US"),
+        pool.filter((profile) => normalizeRoyaltyCountry(profile.country_code) === "US"),
       ),
     };
   }
-
   return { kind: "unavailable", reason: "mixed_non_us", country: null, profileIds: [] };
+}
+
+/**
+ * Pick the single marketplace whose KDP totals may be shown.
+ * Empty pool = true KDP-only session (no Ads rows) → user_accounts.
+ */
+export function selectKdpRoyaltyScope(profiles: readonly RoyaltyCountryProfile[]): KdpRoyaltyScope {
+  if (!profiles.length) {
+    return { kind: "user_accounts", reason: "no_ads_profiles", country: null, profileIds: [] };
+  }
+
+  const enabled = profiles.filter(profileIsNestEnabled);
+  if (!enabled.length) {
+    return { kind: "unavailable", reason: "none_enabled", country: null, profileIds: [] };
+  }
+  return countryScopeFromPool(enabled);
+}
+
+/**
+ * Overview portfolio Gross/Net: include Nest-disabled markets in the country
+ * pool (paused Ads still define which KDP marketplace totals are honest).
+ * Never widens to user_accounts while any Ads profile rows exist.
+ */
+export function selectOverviewPortfolioRoyaltyScope(
+  profiles: readonly RoyaltyCountryProfile[],
+): KdpRoyaltyScope {
+  if (!profiles.length) {
+    return { kind: "user_accounts", reason: "no_ads_profiles", country: null, profileIds: [] };
+  }
+  return countryScopeFromPool(profiles);
 }
 
 export function profilesMatchingSelection(
@@ -138,6 +171,16 @@ export function selectKdpRoyaltyScopeForSelection(
 
 export function kdpRoyaltyProfileIdsForQuery(profiles: readonly RoyaltyCountryProfile[]): string[] {
   return selectKdpRoyaltyScope(profiles).profileIds;
+}
+
+/** True when royalties may be queried for this scope (not empty unavailable). */
+export function kdpRoyaltiesQueryAllowed(scope: KdpRoyaltyScope): boolean {
+  return scope.kind === "user_accounts" || scope.profileIds.length > 0;
+}
+
+/** No Ads profiles in session — Books/Overview may load from owned KDP accounts. */
+export function isKdpOnlySessionScope(scope: KdpRoyaltyScope): boolean {
+  return scope.kind === "user_accounts";
 }
 
 /** Known KDP totals only. hasKdpData false must not become 0. */

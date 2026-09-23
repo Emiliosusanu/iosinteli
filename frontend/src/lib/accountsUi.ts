@@ -341,6 +341,17 @@ export function moneyProfileIdsForSelection(
   return ids;
 }
 
+/** Financial reads use only profiles enabled in Nest and present in the view. */
+export function enabledMoneyProfileIdsForSelection(
+  profiles: AmazonProfile[],
+  selectedProfileIds: string[],
+): string[] {
+  const enabledIds = selectedProfileIds.filter((id) => profiles.some(
+    (profile) => profileEnabled(profile) && (profile.id === id || profile.profile_id === id),
+  ));
+  return moneyProfileIdsForSelection(profiles, enabledIds);
+}
+
 /**
  * Native-currency-only Ads profile ids for the display chip.
  * Used for KDP royalty scope so royalties are not mixed/converted with Ads FX.

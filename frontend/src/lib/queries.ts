@@ -501,15 +501,15 @@ async function fetchCampaignMetricRows(
   campaignIds: string[],
   start: string,
   end: string,
-): Promise<Array<{ campaign_id: string; impressions: unknown; clicks: unknown; orders: unknown; spend: unknown; sales: unknown }>> {
-  const rows: Array<{ campaign_id: string; impressions: unknown; clicks: unknown; orders: unknown; spend: unknown; sales: unknown }> = [];
+): Promise<Array<{ campaign_id: string; date: string; impressions: unknown; clicks: unknown; orders: unknown; spend: unknown; sales: unknown }>> {
+  const rows: Array<{ campaign_id: string; date: string; impressions: unknown; clicks: unknown; orders: unknown; spend: unknown; sales: unknown }> = [];
   if (!campaignIds.length) return rows;
   for (const chunk of chunkArray(campaignIds, 200)) {
     rows.push(
       ...(await fetchAllPages((from, to) =>
         supabase
           .from("campaign_metrics")
-          .select("campaign_id,impressions,clicks,orders,spend,sales")
+          .select("campaign_id,date,impressions,clicks,orders,spend,sales")
           .in("campaign_id", chunk)
           .gte("date", start)
           .lte("date", end)
@@ -3381,7 +3381,7 @@ export async function fetchNegativeProductTargets(profileIds: string[]): Promise
   return attachNegativeParentNames((data ?? []) as NegativeProductTarget[]);
 }
 
-import { buildFxRateMap, addFxCalendarDays, type FxRateRow } from "./fxRates.ts";
+import { buildFxRateMap, addFxCalendarDays, convertAdsAmount, type FxRateRow } from "./fxRates.ts";
 
 // ---------- Daily Campaign Metrics for chart ----------
 export async function fetchFxDailyRates(input: {
@@ -3400,15 +3400,19 @@ export async function fetchFxDailyRates(input: {
   ];
   if (!fromList.length) return new Map();
   const lookbackStart = addFxCalendarDays(input.startDate, -10);
-  const { data, error } = await supabase
-    .from("fx_daily_rates")
-    .select("rate_date, from_currency, to_currency, rate")
-    .eq("to_currency", to)
-    .in("from_currency", fromList)
-    .gte("rate_date", lookbackStart)
-    .lte("rate_date", input.endDate);
-  if (error) throw error;
-  return buildFxRateMap((data ?? []) as FxRateRow[]);
+  const rows = await fetchAllPages<FxRateRow>((from, toRow) =>
+    supabase
+      .from("fx_daily_rates")
+      .select("rate_date, from_currency, to_currency, rate")
+      .eq("to_currency", to)
+      .in("from_currency", fromList)
+      .gte("rate_date", lookbackStart)
+      .lte("rate_date", input.endDate)
+      .order("rate_date", { ascending: true })
+      .order("from_currency", { ascending: true })
+      .range(from, toRow),
+  );
+  return buildFxRateMap(rows);
 }
 
 export async function fetchCampaignMetricsRange(
@@ -3995,7 +3999,7 @@ export interface BookCampaignRow extends TopCampaignRow {
 }
 
 export async function fetchBookCampaignsRange(
-  opts: RangeOpts & { asin: string; title?: string | null },
+  opts: RangeOpts & { asin: string; title?: string | null; displayCurrency: string },
 ): Promise<BookCampaignRow[]> {
   const { profileIds, start, end, asin } = opts;
   const normalizedAsin = String(asin ?? "").trim().toUpperCase();
@@ -4055,6 +4059,31 @@ export async function fetchBookCampaignsRange(
   );
   if (!campaigns.length) return [];
 
+  const { data: currencyRows, error: currencyError } = await supabase
+    .from("amazon_profiles")
+    .select("id, profile_id, currency_code")
+    .in("id", profileIds);
+  if (currencyError) throw new BooksReadError("book_campaign_currency", booksErrorCode(currencyError));
+  const currencyByProfileId = new Map<string, string>();
+  for (const profile of currencyRows ?? []) {
+    const currency = String(profile.currency_code || "").trim().toUpperCase();
+    if (/^[A-Z]{3}$/.test(currency)) {
+      currencyByProfileId.set(String(profile.id), currency);
+      if (profile.profile_id) currencyByProfileId.set(String(profile.profile_id), currency);
+    }
+  }
+  if (profileIds.some((id) => !currencyByProfileId.has(id))) {
+    throw new BooksReadError("book_campaign_currency", "currency_unavailable");
+  }
+  const nativeCurrencies = [...new Set(profileIds.map((id) => currencyByProfileId.get(id)!))];
+  const displayCurrency = String(opts.displayCurrency || "").trim().toUpperCase();
+  if (nativeCurrencies.length > 1 ? displayCurrency !== "USD" : nativeCurrencies[0] !== displayCurrency) {
+    throw new BooksReadError("book_campaign_currency", "currency_scope_mismatch");
+  }
+  const fxRates = nativeCurrencies.length > 1
+    ? await fetchFxDailyRates({ startDate: start, endDate: end, fromCurrencies: nativeCurrencies, toCurrency: "USD" })
+    : new Map<string, number>();
+
   const campaignById = new Map((campaigns as any[]).map((campaign) => [campaign.id, campaign]));
   const placementShares = await fetchCampaignPlacementShares(matchedCampaignIds, start, end);
 
@@ -4085,11 +4114,20 @@ export async function fetchBookCampaignsRange(
   for (const metric of await fetchCampaignMetricRows(matchedCampaignIds, start, end)) {
     const row = totals.get((metric as any).campaign_id);
     if (!row) continue;
+    const nativeCurrency = currencyByProfileId.get(String(row.amazon_profile_id || ""));
+    if (!nativeCurrency) throw new BooksReadError("book_campaign_currency", "currency_unavailable");
+    const moneyForDisplay = (amount: unknown): number => {
+      const native = toNumber(amount);
+      if (!native || nativeCurrencies.length === 1) return native;
+      const converted = convertAdsAmount(native, String((metric as any).date || "").slice(0, 10), nativeCurrency, "USD", fxRates);
+      if (converted == null) throw new BooksReadError("book_campaign_fx", "rate_unavailable");
+      return converted;
+    };
     row.impressions += toNumber((metric as any).impressions);
     row.clicks += toNumber((metric as any).clicks);
     row.orders += toNumber((metric as any).orders);
-    row.spend += toNumber((metric as any).spend);
-    row.sales += toNumber((metric as any).sales);
+    row.spend += moneyForDisplay((metric as any).spend);
+    row.sales += moneyForDisplay((metric as any).sales);
   }
 
   return Array.from(totals.values())
@@ -4786,8 +4824,42 @@ export async function fetchTopBooksRange(
       /** Logical book keys with ≥1 product_ad that has a campaign_id. */
       const booksWithCampaigns = new Set<string>();
 
+      const { data: bookProfileRows, error: bookProfileError } = await supabase
+        .from("amazon_profiles")
+        .select("id, profile_id, currency_code")
+        .in("id", profileIds);
+      if (bookProfileError) throw new BooksReadError("book_profile_currency", booksErrorCode(bookProfileError));
+      const bookCurrencyByProfileId = new Map<string, string>();
+      for (const profile of bookProfileRows ?? []) {
+        const currency = String(profile.currency_code || "").trim().toUpperCase();
+        if (/^[A-Z]{3}$/.test(currency)) {
+          bookCurrencyByProfileId.set(String(profile.id), currency);
+          if (profile.profile_id) bookCurrencyByProfileId.set(String(profile.profile_id), currency);
+        }
+      }
+      const bookCurrencies = [...new Set(bookCurrencyByProfileId.values())];
+      if (!kdpOnlySession && profileIds.some((id) => !bookCurrencyByProfileId.has(id))) {
+        throw new BooksReadError("book_profile_currency", "currency_unavailable");
+      }
+      const bookKdpComparable = kdpOnlySession || (bookCurrencies.length === 1
+        ? bookCurrencies[0] === "USD"
+        : bookCurrencies.includes("USD"));
+      const bookFxRates = bookCurrencies.length > 1
+        ? await fetchFxDailyRates({ startDate: start, endDate: end, fromCurrencies: bookCurrencies, toCurrency: "USD" })
+        : undefined;
+      const bookAdsAmount = (amount: unknown, date: unknown, profileId: unknown): number => {
+        const native = toNumber(amount);
+        if (!native || bookCurrencies.length < 2) return native;
+        const from = bookCurrencyByProfileId.get(String(profileId || ""));
+        const converted = from
+          ? convertAdsAmount(native, String(date || "").slice(0, 10), from, "USD", bookFxRates ?? new Map())
+          : null;
+        if (converted == null) throw new BooksReadError("book_fx", "rate_unavailable");
+        return converted;
+      };
+
       const finalizeBook = (row: ReturnType<typeof assembleLogicalBookRows>[number], adsState: "ready" | "pending"): TopBookRow => {
-        const hasBookKdp = kdpGroupKeys.has(row.book_key) || row.royalties > 0;
+        const hasBookKdp = bookKdpComparable && (kdpGroupKeys.has(row.book_key) || row.royalties > 0);
         const kdpState = hasBookKdp ? rangeKdpState : "missing";
         const royalties = hasBookKdp ? row.royalties : null;
         const hasFormatActivity = (royalties != null && royalties !== 0) || toNumber(row.kdp_orders) > 0;
@@ -4850,6 +4922,11 @@ export async function fetchTopBooksRange(
       }
 
       const adRows = await adsPromise;
+      if ((adRows as any[]).some((ad) =>
+        !bookCurrencyByProfileId.has(String(ad.amazon_profile_id || "")),
+      )) {
+        throw new BooksReadError("book_profile_currency", "currency_unavailable");
+      }
       const adById = new Map(adRows.map((ad: any) => [ad.id, ad]));
       const adIds = uniqueStrings(adRows.map((ad: any) => ad.id));
 
@@ -4896,7 +4973,7 @@ export async function fetchTopBooksRange(
       const metrics = await fetchOptionalInPages<any>("product_ad_metrics", adIds, (chunk, from, to) =>
         supabase
           .from("product_ad_metrics")
-          .select("product_ad_id, impressions, clicks, orders, spend, sales")
+          .select("product_ad_id, date, impressions, clicks, orders, spend, sales")
           .in("product_ad_id", chunk)
           .gte("date", start)
           .lte("date", end)
@@ -4922,8 +4999,8 @@ export async function fetchTopBooksRange(
           toNumber((metric as any).clicks) > 0 ||
           toNumber((metric as any).orders) > 0;
         if (hasMetricValue && ad?.campaign_id) campaignsWithProductAdMetrics.add(String(ad.campaign_id));
-        group.spend += toNumber((metric as any).spend);
-        group.sales += toNumber((metric as any).sales);
+        group.spend += bookAdsAmount((metric as any).spend, (metric as any).date, ad?.amazon_profile_id);
+        group.sales += bookAdsAmount((metric as any).sales, (metric as any).date, ad?.amazon_profile_id);
         group.impressions += toNumber((metric as any).impressions);
         group.clicks += toNumber((metric as any).clicks);
         group.orders += toNumber((metric as any).orders);
@@ -4932,13 +5009,24 @@ export async function fetchTopBooksRange(
       // A verified single-book campaign can safely supply totals when Amazon's
       // product-ad report has no period rows. This never uses campaign names.
       const verifiedCampaignBooks = verifiedCampaignLogicalBooks(adRows, asinToGroup);
+      const campaignProfileById = new Map<string, string>();
+      for (const ad of adRows as any[]) {
+        const campaignId = String(ad.campaign_id || "");
+        const profileId = String(ad.amazon_profile_id || "");
+        if (!campaignId || !profileId) continue;
+        const prior = campaignProfileById.get(campaignId);
+        if (prior && prior !== profileId) {
+          throw new BooksReadError("book_profile_currency", "ambiguous_campaign_profile");
+        }
+        campaignProfileById.set(campaignId, profileId);
+      }
       const fallbackCampaignIds = [...verifiedCampaignBooks.keys()].filter(
         (campaignId) => !campaignsWithProductAdMetrics.has(campaignId),
       );
       const campaignMetrics = await fetchOptionalInPages<any>("verified_book_campaign_metrics", fallbackCampaignIds, (chunk, from, to) =>
         supabase
           .from("campaign_metrics")
-          .select("campaign_id, impressions, clicks, orders, spend, sales")
+          .select("campaign_id, date, impressions, clicks, orders, spend, sales")
           .in("campaign_id", chunk)
           .gte("date", start)
           .lte("date", end)
@@ -4951,8 +5039,8 @@ export async function fetchTopBooksRange(
         const mappedKey = verifiedCampaignBooks.get(campaignId);
         const group = mappedKey ? groups.get(mappedKey) : undefined;
         if (!group) continue;
-        group.spend += toNumber((metric as any).spend);
-        group.sales += toNumber((metric as any).sales);
+        group.spend += bookAdsAmount((metric as any).spend, (metric as any).date, campaignProfileById.get(campaignId));
+        group.sales += bookAdsAmount((metric as any).sales, (metric as any).date, campaignProfileById.get(campaignId));
         group.impressions += toNumber((metric as any).impressions);
         group.clicks += toNumber((metric as any).clicks);
         group.orders += toNumber((metric as any).orders);

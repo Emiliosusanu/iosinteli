@@ -121,6 +121,15 @@ test("matrix: Books Top royalties stays royalty-only; ACoS/Ad spend use cascade"
   assert.ok(booksWorstProfit(books).length >= 3);
 });
 
+test("Worst profit excludes books whose KDP or Ads side is unverified", () => {
+  const books = [
+    { asin: "KNOWN", book_key: "KNOWN", royalties: 20, spend: 5, net: 15, kdp_state: "ready", ads_state: "ready" },
+    { asin: "NO_KDP", book_key: "NO_KDP", royalties: null, spend: 100, net: null, kdp_state: "missing", ads_state: "ready" },
+    { asin: "PARTIAL_ADS", book_key: "PARTIAL_ADS", royalties: 30, spend: 8, net: null, kdp_state: "ready", ads_state: "pending" },
+  ];
+  assert.deepEqual(booksWorstProfit(books).map((row) => row.asin), ["KNOWN"]);
+});
+
 test("matrix: zero-metric pool still fills from last sync up to 7", () => {
   const rows = Array.from({ length: 10 }, (_, i) => ({
     id: `z${i}`,

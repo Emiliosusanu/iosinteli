@@ -224,12 +224,8 @@ export function booksLowAcos(rows: TopBookRow[], limit = OVERVIEW_SWIPE_ROW_LIMI
 
 export function booksWorstProfit(rows: TopBookRow[], limit = OVERVIEW_SWIPE_ROW_LIMIT): TopBookRow[] {
   return [...rows]
-    .filter((row) => row.royalties != null || row.spend > 0)
-    .sort((a, b) => {
-      const netA = resolveBookNet(a) ?? (Number(a.royalties ?? 0) - a.spend);
-      const netB = resolveBookNet(b) ?? (Number(b.royalties ?? 0) - b.spend);
-      return netA - netB;
-    })
+    .filter((row) => resolveBookNet(row) != null)
+    .sort((a, b) => resolveBookNet(a)! - resolveBookNet(b)!)
     .slice(0, limit);
 }
 

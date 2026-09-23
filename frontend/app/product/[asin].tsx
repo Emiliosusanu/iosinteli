@@ -17,6 +17,7 @@ import { SubScreen } from "@/src/components/SubScreen";
 import {
   EmptyState,
   ListCard,
+  PrimaryButton,
   RetryState,
   ScreenSpinner,
   ToneDot,
@@ -24,7 +25,17 @@ import {
 } from "@/src/components/Primitives";
 import { useApp } from "@/src/contexts/AppContext";
 import { fetchBookCampaignsRange, fetchTopBooksRange, type BookCampaignRow, type TopBookRow } from "@/src/lib/queries";
-import { selectKdpRoyaltyScopeForSelection } from "@/src/lib/kdpRoyaltyScope";
+import { isKdpOnlySessionScope } from "@/src/lib/kdpRoyaltyScope";
+import {
+  booksKdpQueryScope,
+  booksMoneyProfileIds,
+  booksRoyaltyScopeForSelection,
+} from "@/src/lib/booksProfileScope";
+import {
+  defaultCreateFormatAsin,
+  formatsFromWorkKey,
+  preferredEnabledProfileId,
+} from "@/src/lib/bookCampaignFormats";
 import { sortedProfileIds } from "@/src/lib/periodQuery";
 import { biddingStrategyLabel, statusLabel } from "@/src/lib/campaigns";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
@@ -117,18 +128,28 @@ export default function ProductCampaignsScreen() {
   const paramImageUrl = paramValue(params.imageUrl);
   const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
-  const royaltyProfiles = useMemo(
-    () => sortedProfileIds(selectKdpRoyaltyScopeForSelection(profiles, selectedProfileIds).profileIds),
+  const moneyProfileIds = useMemo(
+    () => sortedProfileIds(booksMoneyProfileIds(profiles, selectedProfileIds)),
     [profiles, selectedProfileIds],
   );
-  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", selectedProfileIds, royaltyProfiles, dateRange.start, dateRange.end] as const;
+  const royaltyScope = useMemo(
+    () => booksRoyaltyScopeForSelection(profiles, moneyProfileIds),
+    [profiles, moneyProfileIds],
+  );
+  const royaltyProfiles = useMemo(
+    () => sortedProfileIds(royaltyScope.profileIds),
+    [royaltyScope.profileIds],
+  );
+  const kdpQueryScope = booksKdpQueryScope(royaltyScope);
+  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope] as const;
 
   const booksQ = useQuery({
     queryKey: booksKey,
     queryFn: () =>
       fetchTopBooksRange({
-        profileIds: selectedProfileIds,
+        profileIds: moneyProfileIds,
         kdpProfileIds: royaltyProfiles,
+        kdpScope: kdpQueryScope,
         start: dateRange.start,
         end: dateRange.end,
         royaltyRate: 0,
@@ -136,24 +157,25 @@ export default function ProductCampaignsScreen() {
         filterUserId: adminFilterUserId,
         activityDays: 0,
       }),
-    enabled: selectedProfileIds.length > 0,
+    enabled: moneyProfileIds.length > 0 || isKdpOnlySessionScope(royaltyScope),
     staleTime: 5 * 60_000,
     placeholderData: () => queryClient.getQueryData(booksKey),
     meta: financialQueryMeta(),
   });
 
   const campaignsQ = useQuery({
-    queryKey: ["product-campaigns", adminFilterUserId ?? "self", selectedProfileIds, asin, paramTitle, dateRange.start, dateRange.end],
+    queryKey: ["product-campaigns", adminFilterUserId ?? "self", moneyProfileIds, asin, paramTitle, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () =>
       fetchBookCampaignsRange({
-        profileIds: selectedProfileIds,
+        profileIds: moneyProfileIds,
         asin,
         title: paramTitle,
         start: dateRange.start,
         end: dateRange.end,
+        displayCurrency: primaryCurrency,
         filterUserId: adminFilterUserId,
       }),
-    enabled: selectedProfileIds.length > 0 && asin.length > 0,
+    enabled: moneyProfileIds.length > 0 && asin.length > 0,
   });
 
   const book = useMemo(() => matchBook(booksQ.data ?? [], asin), [booksQ.data, asin]);
@@ -165,6 +187,32 @@ export default function ProductCampaignsScreen() {
   const imageUrl = book?.image_url ?? paramImageUrl;
   const amazonCover = fallbackAsinCoverUrl(asin);
   const bookColor = fallbackBookColor(bookColorKeyFor(book ?? { asin, title }));
+
+  const formatOptions = useMemo(
+    () => formatsFromWorkKey(book?.book_key),
+    [book?.book_key],
+  );
+  const createAsin = useMemo(() => {
+    const fromFormats = defaultCreateFormatAsin(formatOptions);
+    return fromFormats || asin;
+  }, [formatOptions, asin]);
+  const createProfileId = useMemo(() => {
+    const countries = countriesForSponsoredBook(marketplaceIndex, book ?? { title, asin });
+    const preferredCountry = countries[0] ?? null;
+    return preferredEnabledProfileId(profiles, preferredCountry);
+  }, [marketplaceIndex, book, title, asin, profiles]);
+
+  const openCreateCampaign = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    router.push({
+      pathname: "/campaign/create",
+      params: {
+        asin: createAsin,
+        workKey: book?.book_key ?? "",
+        profileId: createProfileId ?? "",
+      },
+    });
+  };
 
   const adsTotals = useMemo(() => {
     return campaigns.reduce(
@@ -187,13 +235,13 @@ export default function ProductCampaignsScreen() {
     setRefreshing(false);
   };
 
-  if (selectedProfileIds.length === 0) {
+  if (moneyProfileIds.length === 0) {
     return (
       <SubScreen title="Book" showDateRange>
         <EmptyState
           icon="business-outline"
-          title="No account connected"
-          subtitle="Connect an Amazon account to see this book."
+          title="No enabled Ads profile"
+          subtitle="Enable an Amazon Ads profile to see this book's campaigns."
         />
       </SubScreen>
     );
@@ -237,6 +285,8 @@ export default function ProductCampaignsScreen() {
             onRetryCampaigns={() => void campaignsQ.refetch()}
             currency={primaryCurrency}
             marketplaceIndex={marketplaceIndex}
+            formatOptions={formatOptions}
+            onCreateCampaign={openCreateCampaign}
           />
         }
         ListEmptyComponent={
@@ -281,6 +331,8 @@ function BookHeader({
   onRetryCampaigns,
   currency,
   marketplaceIndex,
+  formatOptions,
+  onCreateCampaign,
 }: {
   asin: string;
   title: string;
@@ -297,6 +349,8 @@ function BookHeader({
   onRetryCampaigns: () => void;
   currency: string;
   marketplaceIndex: SponsoredMarketplaceIndex;
+  formatOptions: ReturnType<typeof formatsFromWorkKey>;
+  onCreateCampaign: () => void;
 }) {
   const t = useTheme();
   const hasBreakEven = !!book && hasAuthoritativeBreakEven(book.breakeven_acos);
@@ -413,6 +467,16 @@ function BookHeader({
             {NET_ROYALTIES_CAPTION}
           </Text>
         ) : null}
+
+        {formatOptions.length > 0 ? (
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 10 }]}>
+            Formats: {formatOptions.map((f) => f.label).join(" · ")}
+          </Text>
+        ) : null}
+
+        <View style={{ marginTop: 14 }}>
+          <PrimaryButton label="Create campaign" onPress={onCreateCampaign} />
+        </View>
 
         {book ? (
           <Text

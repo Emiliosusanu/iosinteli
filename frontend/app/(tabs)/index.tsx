@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import Animated from "react-native-reanimated";
 import { AppScreen } from "@/src/components/ScreenAmbient";
+import { adsFxCoveredForDisplay } from "@/src/lib/dailyMetrics";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { type Href, usePathname, useRouter } from "expo-router";
@@ -433,10 +434,11 @@ export default function OverviewScreen() {
   }, [profiles]);
   const needsAdsFx =
     mixedCurrency && String(primaryCurrency || "").toUpperCase() === "USD";
+  const fxStartDate = previousRange(dateRange.start, dateRange.end).start;
   const fxRatesQ = useQuery({
     queryKey: [
       "fx-daily-rates",
-      dateRange.start,
+      fxStartDate,
       dateRange.end,
       enabledPortfolioCurrencies.join(","),
       primaryCurrency,
@@ -444,13 +446,13 @@ export default function OverviewScreen() {
     queryFn: () =>
       withQueryTimeout(
         fetchFxDailyRates({
-          startDate: dateRange.start,
+          startDate: fxStartDate,
           endDate: dateRange.end,
           fromCurrencies: enabledPortfolioCurrencies,
           toCurrency: "USD",
         }),
       ),
-    enabled: sellerReady && needsAdsFx,
+    enabled: (sellerReady || (viewingAsAdmin && homeVisible && homeReadsReady)) && needsAdsFx,
     staleTime: 60 * 60_000,
     meta: financialQueryMeta(),
   });
@@ -1009,17 +1011,32 @@ export default function OverviewScreen() {
   ]);
 
   // ── derived data ──
-  const royaltyRange = adminRoyalties ?? royaltiesQ.data;
-  const prevRoyaltyRange = adminPrevRoyalties ?? prevRoyaltiesQ.data;
+  // KDP account-day royalties are stored in USD without marketplace amounts.
+  // A CAD-only Ads view can show native Ads money, but cannot label this
+  // portfolio-wide USD KDP total as CAD or subtract it from CAD spend.
+  const kdpCurrencyComparable = String(primaryCurrency || "").toUpperCase() === "USD";
+  const royaltyRange = kdpCurrencyComparable ? adminRoyalties ?? royaltiesQ.data : undefined;
+  const prevRoyaltyRange = kdpCurrencyComparable ? adminPrevRoyalties ?? prevRoyaltiesQ.data : undefined;
   const kdpReady = !!royaltyRange?.hasKdpData;
   const prevKdpReady = !!prevRoyaltyRange?.hasKdpData;
-  const adsReady = viewingAsAdmin
-    ? !(bootstrapQ.isError && !bootstrapQ.data)
-    : sellerReady && !metricsWaiting && Array.isArray(metricsQ.data) && !metricsQ.isError;
-  const financeComplete = kdpReady && adsReady;
-  // Keep paintable ads rows while royalties are still catching up — never blank both forever.
+  // FX must cover every selected money row before any USD finance card can
+  // display a sum. The raw Ads counts can load independently of the rates.
   const metricRows = metricsWaiting && !viewingAsAdmin ? [] : adminMetrics ?? metricsQ.data ?? [];
   const prevMetricRows = adminPrevMetrics ?? prevMetricsQ.data ?? [];
+  const fxMoneyReady = useMemo(
+    () => adsFxCoveredForDisplay(metricRows, {
+      moneyProfileIds,
+      displayCurrency: primaryCurrency,
+      profileCurrencyById,
+      fxRates,
+    }),
+    [metricRows, moneyProfileIds, primaryCurrency, profileCurrencyById, fxRates],
+  );
+  const adsReady = viewingAsAdmin
+    ? !(bootstrapQ.isError && !bootstrapQ.data) && fxMoneyReady
+    : sellerReady && !metricsWaiting && Array.isArray(metricsQ.data) && !metricsQ.isError && fxMoneyReady;
+  const financeComplete = kdpReady && adsReady;
+  // Keep paintable ads rows while royalties are still catching up — never blank both forever.
   const topCampaigns = periodLoading && !viewingAsAdmin
     ? []
     : adminCampaignsQ.data ?? topCampaignsQ.data ?? [];
@@ -1319,10 +1336,16 @@ export default function OverviewScreen() {
   const keywordHighAcos = useMemo(() => keywordsHighAcos(bleeders), [bleeders]);
   const termSpendNoOrders = useMemo(() => searchTermsSpendNoOrders(searchTerms), [searchTerms]);
   const termLowAcos = useMemo(() => searchTermsLowAcos(searchTerms), [searchTerms]);
-  const booksRoyalties = useMemo(() => booksTopRoyalties(topBooks), [topBooks]);
+  const booksRoyalties = useMemo(
+    () => kdpCurrencyComparable ? booksTopRoyalties(topBooks) : [],
+    [topBooks, kdpCurrencyComparable],
+  );
   const booksHigh = useMemo(() => booksHighAcos(topBooks), [topBooks]);
   const booksLow = useMemo(() => booksLowAcos(topBooks), [topBooks]);
-  const booksProfit = useMemo(() => booksWorstProfit(topBooks), [topBooks]);
+  const booksProfit = useMemo(
+    () => kdpCurrencyComparable ? booksWorstProfit(topBooks) : [],
+    [topBooks, kdpCurrencyComparable],
+  );
   const booksAdSpendNoSales = useMemo(() => booksSpendingNoAdSales(topBooks), [topBooks]);
   const campsHighAcos = useMemo(() => campaignsHighAcos(topCampaigns), [topCampaigns]);
   const campsLowAcos = useMemo(() => campaignsLowAcos(topCampaigns), [topCampaigns]);
@@ -1745,6 +1768,8 @@ export default function OverviewScreen() {
     ? null
     : periodRefreshing
       ? "Updating…"
+      : !kdpCurrencyComparable
+        ? "KDP royalties are in USD; book profit is unavailable in this currency."
       : !kdpReady && !adsReady
         ? kdpOnlyDashboard
           ? "Royalties unavailable."
@@ -1985,6 +2010,26 @@ export default function OverviewScreen() {
             >
               {moneyScopeHint}
             </Text>
+          ) : null}
+          {!kdpCurrencyComparable ? (
+            <Text
+              style={[t.typography.caption1, { color: t.colors.text_tertiary, marginBottom: dashboard.compactGap }]}
+              accessibilityRole="text"
+            >
+              Ads are shown in {primaryCurrency}. KDP royalties and net are unavailable in this view because KDP account totals are in USD.
+            </Text>
+          ) : null}
+          {needsAdsFx && !fxMoneyReady && metricRows.length > 0 ? (
+            <TouchableOpacity
+              onPress={() => void fxRatesQ.refetch()}
+              accessibilityRole="button"
+              accessibilityLabel="Currency conversion is updating. Retry rates."
+              style={{ minHeight: t.layout.minTap, justifyContent: "center", marginBottom: dashboard.compactGap }}
+            >
+              <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>
+                Currency conversion updating · Tap to retry
+              </Text>
+            </TouchableOpacity>
           ) : null}
           {royaltySetup.ask ? (
             <KdpRoyaltySetupCard plan={royaltySetup.ask} onAction={royaltySetup.onAction} />
@@ -2536,7 +2581,9 @@ export default function OverviewScreen() {
                       <SwipeEmpty message="Couldn't load books. Tap to retry." t={t} />
                     </TouchableOpacity>
                   ) : booksRoyalties.length === 0 ? (
-                    kdpReady && totals.royalties > 0 ? (
+                    !kdpCurrencyComparable ? (
+                      <SwipeEmpty message="KDP royalties are USD-only in this view." t={t} />
+                    ) : kdpReady && totals.royalties > 0 ? (
                       <SwipeEmpty message="No per-book data" t={t} />
                     ) : (
                       <TouchableOpacity onPress={royaltySetup.openCollection} accessibilityRole="button">
@@ -2571,7 +2618,9 @@ export default function OverviewScreen() {
                   booksProfit.length === 0 ? (
                     <SwipeEmpty
                       message={
-                        kdpReady && totals.royalties > 0
+                        !kdpCurrencyComparable
+                          ? "Book profit is unavailable in this currency view."
+                          : kdpReady && totals.royalties > 0
                           ? "No book-level net"
                           : "No book profit"
                       }

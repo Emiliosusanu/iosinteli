@@ -35,17 +35,28 @@ import { buildBookColorMap, bookColorKeyFor, fallbackBookColor } from "@/src/lib
 import { TopBar } from "@/src/components/TopBar";
 import { EmptyState, RetryState, MetricStrip, FilterChrome, ScreenSpinner, ListCard } from "@/src/components/Primitives";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
-import { isHomeQueryTimeout, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout, queryStillWaiting } from "@/src/lib/queryTimeout";
+import { isHomeQueryTimeout, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialReadVersion";
 import { LIST_PERIOD_QUERY_CACHE, sameScopeWarmPlaceholder, sortedProfileIds } from "@/src/lib/periodQuery";
 import { booksEmptyCopy } from "@/src/lib/booksListActivity";
 import { isIosHelperEnabled } from "@/src/lib/kdp/source";
-import { knownKdpRoyaltyTotal, selectKdpRoyaltyScopeForSelection } from "@/src/lib/kdpRoyaltyScope";
+import {
+  isKdpOnlySessionScope,
+  knownKdpRoyaltyTotal,
+  kdpRoyaltiesQueryAllowed,
+} from "@/src/lib/kdpRoyaltyScope";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import { loadBooksFilterMemory, saveBooksFilterMemory } from "@/src/lib/filterMemory";
 import { countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
+import {
+  booksKdpQueryScope,
+  booksListAwaitingRows,
+  booksMoneyProfileIds,
+  booksRoyaltyScopeForSelection,
+  enabledSelectedProfileIds,
+} from "@/src/lib/booksProfileScope";
 
 if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -135,9 +146,17 @@ export default function ProductsScreen() {
     today.setDate(today.getDate() - 1);
     return toDateString(today);
   }, []);
-  const royaltyScope = useMemo(
-    () => selectKdpRoyaltyScopeForSelection(profiles, selectedProfileIds),
+  const enabledSelectedIds = useMemo(
+    () => enabledSelectedProfileIds(profiles, selectedProfileIds),
     [profiles, selectedProfileIds],
+  );
+  const moneyProfileIds = useMemo(
+    () => sortedProfileIds(booksMoneyProfileIds(profiles, selectedProfileIds)),
+    [profiles, selectedProfileIds],
+  );
+  const royaltyScope = useMemo(
+    () => booksRoyaltyScopeForSelection(profiles, moneyProfileIds),
+    [profiles, moneyProfileIds],
   );
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const queryClient = useQueryClient();
@@ -163,30 +182,33 @@ export default function ProductsScreen() {
     void saveBooksFilterMemory({ sort });
   }, [sort]);
 
-  const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
   const royaltyProfiles = useMemo(
     () => sortedProfileIds(royaltyScope.profileIds),
     [royaltyScope.profileIds],
   );
-  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", scopeProfiles, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency] as const;
+  const kdpQueryScope = booksKdpQueryScope(royaltyScope);
+  const kdpOnlyBooks = !isAdminViewer && !guestMode && isKdpOnlySessionScope(royaltyScope);
+  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope] as const;
   const overviewBooksKey = [
     FINANCIAL_QUERY_ROOTS.topBooks,
     adminFilterUserId ?? "self",
-    scopeProfiles,
+    moneyProfileIds,
     royaltyProfiles,
     dateRange.start,
     dateRange.end,
     primaryCurrency,
+    kdpQueryScope,
   ] as const;
 
-  const { data: books = [], isPending, isError, isRefetching, isFetching, refetch, error } = useQuery({
+  const { data: booksData, isPending, isError, isRefetching, isFetching, refetch, error } = useQuery({
     queryKey: booksKey,
     queryFn: ({ signal }) => {
       markPerf("books.query.start");
       return withQueryTimeout(
         fetchTopBooksRange({
-          profileIds: scopeProfiles,
+          profileIds: moneyProfileIds,
           kdpProfileIds: royaltyProfiles,
+          kdpScope: kdpQueryScope,
           start: dateRange.start,
           end: dateRange.end,
           royaltyRate: 0,
@@ -201,7 +223,7 @@ export default function ProductsScreen() {
         signal,
       );
     },
-    enabled: scopeProfiles.length > 0,
+    enabled: moneyProfileIds.length > 0 || kdpOnlyBooks,
     ...LIST_PERIOD_QUERY_CACHE,
     placeholderData: () =>
       sameScopeWarmPlaceholder(
@@ -211,14 +233,19 @@ export default function ProductsScreen() {
     meta: financialQueryMeta(),
   });
 
+  const books = booksData ?? [];
   const overviewBooksWarm = queryClient.getQueryData(overviewBooksKey) as TopBookRow[] | undefined;
   const showBlockingSpinner =
-    queryStillWaiting({ isPending, isError, data: books }) && books.length === 0 && !overviewBooksWarm;
+    booksListAwaitingRows({ isPending, isError, isFetching, data: booksData }) && !overviewBooksWarm;
 
   const { data: periodRoyalties } = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, royaltyProfiles, dateRange.start, dateRange.end],
-    queryFn: () => fetchKdpRoyaltiesRange(royaltyProfiles, dateRange.start, dateRange.end),
-    enabled: scopeProfiles.length > 0 && royaltyProfiles.length > 0 && !showBlockingSpinner && books.length === 0,
+    queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope],
+    queryFn: () => fetchKdpRoyaltiesRange(royaltyProfiles, dateRange.start, dateRange.end, { kdpScope: kdpQueryScope }),
+    enabled:
+      kdpRoyaltiesQueryAllowed(royaltyScope) &&
+      !showBlockingSpinner &&
+      !booksListAwaitingRows({ isPending, isError, isFetching, data: booksData }) &&
+      books.length === 0,
     ...LIST_PERIOD_QUERY_CACHE,
     meta: financialQueryMeta(),
   });
@@ -332,15 +359,34 @@ export default function ProductsScreen() {
   const showSearchCount = search.trim().length > 0 && !showBlockingSpinner;
 
 
-  if (selectedProfileIds.length === 0) {
+  if (enabledSelectedIds.length === 0 && !kdpOnlyBooks) {
     return (
       <AppScreen>
         <TopBar />
         <EmptyState
           icon="business-outline"
-          title={isAdminViewer ? "No Amazon account" : "No account connected"}
-          subtitle={isAdminViewer ? "Pick a customer in the profile menu." : "Connect an Amazon account to see your books."}
-          action={isAdminViewer ? undefined : { label: "Connect account", onPress: () => router.push("/more/accounts") }}
+          title={
+            selectedProfileIds.length > 0
+              ? "No enabled profiles"
+              : isAdminViewer
+                ? "No Amazon account"
+                : "No account connected"
+          }
+          subtitle={
+            selectedProfileIds.length > 0
+              ? "Turn on an Amazon Ads profile in Accounts to see its books."
+              : isAdminViewer
+                ? "Pick a customer in the profile menu."
+                : "Connect an Amazon account to see your books."
+          }
+          action={
+            isAdminViewer
+              ? undefined
+              : {
+                  label: selectedProfileIds.length > 0 ? "Open Accounts" : "Connect account",
+                  onPress: () => router.push("/more/accounts"),
+                }
+          }
         />
       </AppScreen>
     );
