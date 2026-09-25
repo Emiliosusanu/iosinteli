@@ -65,37 +65,23 @@ type IntradayRow = {
 async function fetchIntradayMessages(profileIds: string[]): Promise<IntradayRow[] | null> {
   if (!profileIds.length) return null;
   try {
-    const primary = await supabase
+    // AMS rows are hourly metrics. Their profile belongs to the linked
+    // campaign; the stream table has no event_time, type, or profile column.
+    const { data, error } = await supabase
       .from("ams_messages")
-      .select("id,event_time,message_type,campaign_id")
-      .in("amazon_profile_id", profileIds)
-      .order("event_time", { ascending: false })
-      .limit(20);
-    if (!primary.error) {
-      return (primary.data ?? []).map((row: Record<string, unknown>) => ({
-        id: String(row.id),
-        at: typeof row.event_time === "string" ? row.event_time : null,
-        kind: typeof row.message_type === "string" ? row.message_type : null,
-      }));
-    }
-
-    const fallback = await supabase
-      .from("ams_messages")
-      .select("id,created_at,type,campaign_id")
-      .in("amazon_profile_id", profileIds)
+      .select("id,created_at,campaign_id,campaigns!inner(amazon_profile_id)")
+      .in("campaigns.amazon_profile_id", profileIds)
       .order("created_at", { ascending: false })
       .limit(20);
-    if (!fallback.error) {
-      return (fallback.data ?? []).map((row: Record<string, unknown>) => ({
-        id: String(row.id),
-        at: typeof row.created_at === "string" ? row.created_at : null,
-        kind: typeof row.type === "string" ? row.type : null,
-      }));
-    }
+    if (error) return null;
+    return (data ?? []).map((row: Record<string, unknown>) => ({
+      id: String(row.id),
+      at: typeof row.created_at === "string" ? row.created_at : null,
+      kind: null,
+    }));
   } catch {
     return null;
   }
-  return null;
 }
 
 export default function SyncScreen() {
