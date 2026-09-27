@@ -648,10 +648,9 @@ export async function filterSuggestionsForBookRelevance<
       }
     }
     try {
-      const enrichedProducts = await enrichProductTargetsForRelevanceFilter(
-        suggestions.productTargets,
-        { countryCode: context.countryCode, budgetMs: 2_000, maxRetail: 16 },
-      );
+      // Skip retail scrape before Groq — Nest titles + themes are enough for
+      // the keep-list; UI fills missing titles via useProductSuggestionAsinMeta.
+      // (Retail enrich was adding tens of seconds for little keep quality.)
       const { filterSuggestionsWithGrok, groqApiKeys } = await import(
         "./suggestionRelevanceGrok.ts"
       );
@@ -662,11 +661,12 @@ export async function filterSuggestionsForBookRelevance<
         String(process.env.EXPO_PUBLIC_SUGGESTION_PREFER_GROQ ?? "")
           .trim()
           .toLowerCase() === "true";
-      // Client Groq keys → skip Nest/xAI relevance hop (Nest alone was multi‑10s).
+      // Prefer client Groq (skip Nest relevance hop). Fall back to Nest→xAI→Groq
+      // only when no Groq keys are baked into the binary.
       const preferGroq = preferGroqEnv || groqApiKeys().length > 0;
       return finishGrokKeep(
         await filterSuggestionsWithGrok(
-          { ...suggestions, productTargets: enrichedProducts },
+          suggestions,
           context,
           preferGroq ? { preferGroq: true } : undefined,
         ),
@@ -1191,8 +1191,9 @@ export function formatKeywordSuggestionCountLabel(
   const amazonRows =
     stats.amazonRowCount > 0 ? stats.amazonRowCount : stats.amazonApiRowCount;
   const parts: string[] = [];
+  // Compact: "Amazon · 186 · 558" (phrases · rows) — no "phrases" word clutter.
   if (phrases > 0 && phrases < amazonRows) {
-    parts.push(`Amazon · ${phrases} phrases · ${amazonRows}`);
+    parts.push(`Amazon · ${phrases} · ${amazonRows}`);
   } else if (amazonRows > 0) {
     parts.push(`Amazon · ${amazonRows}`);
   } else {

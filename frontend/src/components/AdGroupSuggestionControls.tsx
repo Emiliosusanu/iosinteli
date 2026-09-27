@@ -91,16 +91,7 @@ export function AdGroupSuggestionControls({
       </View>
 
       {matchChips.length > 1 ? (
-        <View style={{ gap: 6 }}>
-          <Text
-            style={[
-              t.typography.caption1,
-              { color: t.colors.text_secondary, fontWeight: "600" },
-            ]}
-          >
-            Select by match type
-          </Text>
-          <View style={styles.row}>
+        <View style={styles.row}>
             {matchChips.map((chip) => (
               <Pressable
                 key={chip.key}
@@ -136,20 +127,11 @@ export function AdGroupSuggestionControls({
                 </Text>
               </Pressable>
             ))}
-          </View>
         </View>
       ) : null}
 
       {matchBidRows.length ? (
         <View style={{ gap: 6 }}>
-          <Text
-            style={[
-              t.typography.caption1,
-              { color: t.colors.text_secondary, fontWeight: "600" },
-            ]}
-          >
-            Fast bid by match type
-          </Text>
           {matchBidRows.map((row) => (
             <View key={row.key} style={styles.bidRow}>
               <Text
@@ -157,11 +139,14 @@ export function AdGroupSuggestionControls({
                   t.typography.caption1,
                   {
                     color: t.colors.text_secondary,
-                    width: 72,
+                    minWidth: 56,
+                    maxWidth: 88,
+                    flexShrink: 0,
                     fontWeight: "600",
                     textTransform: "capitalize",
                   },
                 ]}
+                numberOfLines={1}
               >
                 {row.label}
               </Text>

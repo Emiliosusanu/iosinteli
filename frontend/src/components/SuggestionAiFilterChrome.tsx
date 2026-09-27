@@ -6,7 +6,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { radii, spacing, useTheme } from "@/src/lib/theme";
+import { radii, useTheme } from "@/src/lib/theme";
 import {
   formatKeywordSuggestionCountLabel,
   suggestionRelevanceNeedsUserConfirm,
@@ -16,8 +16,7 @@ import {
 export type SuggestionAiFilterTargeting = "keywords" | "products" | "auto";
 
 /**
- * Visible Step 2 chrome for Create Campaign / New Ad Group / Add targets.
- * Shows Amazon vs Kept, Ranking…, and honest failure / empty-restore actions.
+ * Compact Amazon → AI filter status for Create / New Ad Group / Add targets.
  */
 export function SuggestionAiFilterChrome({
   targeting,
@@ -25,7 +24,6 @@ export function SuggestionAiFilterChrome({
   onRetry,
   onAcceptUnfiltered,
   retrying,
-  /** True while Amazon/AI request is in flight before keywordCounts exists. */
   loading,
   testIDPrefix = "suggestion-ai-filter",
 }: {
@@ -42,51 +40,35 @@ export function SuggestionAiFilterChrome({
 
   const pending = Boolean(stats?.grokPending) || Boolean(loading && !stats);
   const needsConfirm = suggestionRelevanceNeedsUserConfirm(stats);
-  const countLabel = stats
-    ? formatKeywordSuggestionCountLabel(stats)
-    : null;
-  const stepsCopy =
-    targeting === "keywords"
-      ? "1) Amazon raw suggestions → 2) AI search-intent filter for this book."
-      : "1) Amazon raw ASIN suggestions → 2) Title/theme relevance filter for this book.";
-
-  let statusTitle = "Step 2 — AI search-intent filter";
-  let statusDetail: string | null = null;
+  const countLabel = stats ? formatKeywordSuggestionCountLabel(stats) : null;
   const amazonEmpty =
     !!stats &&
     !stats.grokPending &&
     stats.amazonRowCount === 0 &&
     stats.amazonApiRowCount === 0;
+
+  let statusTitle = "AI filter";
+  let statusDetail: string | null = null;
   if (pending) {
-    statusTitle = "Step 2 — AI filtering…";
-    statusDetail =
-      targeting === "keywords"
-        ? "Keeping only high search-intent keywords for this book. Selection stays empty until this finishes."
-        : "Applying title/theme relevance. Selection stays empty until this finishes.";
+    statusTitle = "Filtering…";
   } else if (amazonEmpty) {
-    statusTitle = "Step 2 — No Amazon suggestions";
+    statusTitle = "No Amazon suggestions";
     statusDetail =
       targeting === "keywords"
-        ? "Amazon returned no keyword suggestions for this ad group. Paste keywords below, or retry later."
-        : "Amazon returned no product suggestions. Paste ASINs below, or retry later.";
+        ? "Paste keywords below, or retry."
+        : "Paste ASINs below, or retry.";
   } else if (stats?.relevanceOutcome === "failed_unfiltered") {
-    statusTitle = "Step 2 — AI filter failed";
-    statusDetail =
-      stats.relevanceError ||
-      "Couldn't run the search-intent filter. Amazon suggestions are shown unfiltered — confirm before adding all.";
+    statusTitle = "AI unavailable";
+    statusDetail = "Showing Amazon unfiltered — confirm or retry.";
   } else if (stats?.relevanceOutcome === "restored_empty") {
-    statusTitle = "Step 2 — AI returned empty";
-    statusDetail =
-      "The AI keep-list was empty, so the full Amazon list was restored. Confirm before adding all, or retry the filter.";
+    statusTitle = "AI empty · Amazon restored";
+    statusDetail = "Confirm before adding all, or retry.";
   } else if (stats?.relevanceOutcome === "user_accepted_unfiltered") {
-    statusTitle = "Step 2 — Using Amazon unfiltered";
-    statusDetail = "You chose to proceed with the raw Amazon suggestion set.";
+    statusTitle = "Amazon unfiltered";
   } else if (stats?.relevanceOutcome === "filtered" || stats?.grokFiltered) {
-    statusTitle = "Step 2 — AI kept high-intent only";
-    statusDetail = null;
+    statusTitle = "AI filtered";
   } else if (stats && !stats.grokPending) {
-    statusTitle = "Step 2 — AI kept full Amazon set";
-    statusDetail = null;
+    statusTitle = "AI kept all";
   }
 
   return (
@@ -101,28 +83,18 @@ export function SuggestionAiFilterChrome({
               ? t.colors.tone_primary
               : t.colors.separator,
           backgroundColor: needsConfirm
-            ? `${t.colors.tone_warning}14`
+            ? `${t.colors.tone_warning}12`
             : pending
-              ? `${t.colors.tone_primary}12`
+              ? `${t.colors.tone_primary}10`
               : t.colors.background_secondary,
         },
       ]}
     >
-      <Text
-        testID={`${testIDPrefix}-steps`}
-        style={[
-          t.typography.caption1,
-          { color: t.colors.text_secondary, fontWeight: "500" },
-        ]}
-      >
-        {stepsCopy}
-      </Text>
       <View style={styles.statusRow}>
         {pending ? (
           <ActivityIndicator
             size="small"
             color={t.colors.tone_primary}
-            style={{ marginRight: 2 }}
           />
         ) : null}
         <Text
@@ -134,28 +106,36 @@ export function SuggestionAiFilterChrome({
                 ? t.colors.tone_warning
                 : t.colors.text_primary,
               fontWeight: "700",
-              flex: 1,
+              flexShrink: 1,
             },
           ]}
+          numberOfLines={1}
         >
           {statusTitle}
         </Text>
+        {countLabel ? (
+          <Text
+            testID={`${testIDPrefix}-counts`}
+            style={[
+              t.typography.caption1,
+              {
+                color: t.colors.text_secondary,
+                fontWeight: "600",
+                fontVariant: ["tabular-nums"],
+                flexShrink: 1,
+                textAlign: "right",
+              },
+            ]}
+            numberOfLines={1}
+          >
+            {countLabel}
+          </Text>
+        ) : null}
       </View>
-      {countLabel ? (
-        <Text
-          testID={`${testIDPrefix}-counts`}
-          style={[
-            t.typography.caption1,
-            {
-              color: t.colors.text_secondary,
-              fontWeight: "600",
-              fontVariant: ["tabular-nums"],
-            },
-          ]}
-        >
-          {countLabel}
-        </Text>
-      ) : null}
+      {/* Keep testID for harnesses that still poll the old steps slot */}
+      <Text testID={`${testIDPrefix}-steps`} style={styles.srOnly}>
+        AI filter
+      </Text>
       {statusDetail ? (
         <Text
           testID={`${testIDPrefix}-detail`}
@@ -191,7 +171,7 @@ export function SuggestionAiFilterChrome({
                   { color: t.colors.tone_primary, fontWeight: "700" },
                 ]}
               >
-                {retrying ? "Retrying…" : "Retry AI filter"}
+                {retrying ? "Retrying…" : "Retry"}
               </Text>
             </Pressable>
           ) : null}
@@ -216,7 +196,7 @@ export function SuggestionAiFilterChrome({
                   { color: t.colors.tone_warning, fontWeight: "700" },
                 ]}
               >
-                Use Amazon unfiltered
+                Use Amazon
               </Text>
             </Pressable>
           ) : null}
@@ -229,7 +209,7 @@ export function SuggestionAiFilterChrome({
 const styles = StyleSheet.create({
   wrap: {
     gap: 6,
-    marginTop: 10,
+    marginTop: 8,
     marginBottom: 4,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -241,12 +221,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    flexWrap: "wrap",
   },
   actions: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
-    marginTop: 4,
+    marginTop: 2,
   },
   chip: {
     paddingHorizontal: 12,
@@ -256,5 +237,12 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     minHeight: 36,
     justifyContent: "center",
+  },
+  srOnly: {
+    position: "absolute",
+    width: 1,
+    height: 1,
+    opacity: 0,
+    overflow: "hidden",
   },
 });

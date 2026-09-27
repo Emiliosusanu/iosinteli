@@ -2959,17 +2959,7 @@ export default function CreateCampaignScreen() {
                 >
                   Amazon suggestions
                 </Text>
-                {targeting === "auto" ? (
-                  <Text
-                    style={[
-                      t.typography.footnote,
-                      styles.help,
-                      { color: t.colors.text_secondary, fontWeight: "500" },
-                    ]}
-                  >
-                    Amazon suggestions for this book.
-                  </Text>
-                ) : (
+                {targeting === "auto" ? null : (
                   <SuggestionAiFilterChrome
                     testIDPrefix="campaign-create-ai-filter"
                     targeting={targeting}

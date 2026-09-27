@@ -27,6 +27,8 @@ import {
   buildGrokRelevanceMessages,
   buildGrokProductRelevanceMessages,
   collapseKeywordsToUniquePhrasesForGrok,
+  collapseProductsToUniqueAsinsForGrok,
+  expandGrokAsinIndexesToOriginal,
   expandGrokPhraseIndexesToOriginal,
   parseGrokRelevanceJson,
   productPromptNeedsChunking,
@@ -42,6 +44,8 @@ export {
   buildGrokRelevanceMessages,
   buildGrokProductRelevanceMessages,
   collapseKeywordsToUniquePhrasesForGrok,
+  collapseProductsToUniqueAsinsForGrok,
+  expandGrokAsinIndexesToOriginal,
   expandGrokPhraseIndexesToOriginal,
   parseGrokRelevanceJson,
   productPromptNeedsChunking,
@@ -592,15 +596,18 @@ export async function filterSuggestionsWithGrok<
   }
 
   if (suggestions.productTargets.length > 0) {
-    const batched = await runProductChunksBatched(
+    // One LLM row per ASIN (Exact/Expanded companions restored after keep).
+    const { asins, asinToOriginalIndexes } = collapseProductsToUniqueAsinsForGrok(
       suggestions.productTargets,
-      context,
-      {
-        preferGroq: opts?.preferGroq,
-        forceSerial: opts?.forceSerialGroq,
-      },
     );
-    productIndexes = batched.indexes;
+    const batched = await runProductChunksBatched(asins, context, {
+      preferGroq: opts?.preferGroq,
+      forceSerial: opts?.forceSerialGroq,
+    });
+    productIndexes = expandGrokAsinIndexesToOriginal(
+      batched.indexes,
+      asinToOriginalIndexes,
+    );
   }
 
   return applyGrokRelevanceSelection(suggestions, {

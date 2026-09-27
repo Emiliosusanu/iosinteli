@@ -56,8 +56,8 @@ test("suggestion rows expose clear select mark + title hierarchy", () => {
 test("ad group flows keep suggestion controls + enrichment", () => {
   assert.match(adGroupCreate, /AdGroupSuggestionControls/);
   assert.match(addTargets, /AdGroupSuggestionControls/);
-  assert.match(adGroupCreate, /SuggestionAiFilterChrome|Amazon raw/);
-  assert.match(addTargets, /SuggestionAiFilterChrome|Amazon raw|AI search-intent|AI relevance/);
+  assert.match(adGroupCreate, /SuggestionAiFilterChrome/);
+  assert.match(addTargets, /SuggestionAiFilterChrome/);
 });
 
 test("Create Campaign defaults to Amazon suggested bids like ad-group flows", () => {

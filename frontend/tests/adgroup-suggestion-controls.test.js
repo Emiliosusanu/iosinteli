@@ -70,6 +70,8 @@ test("SuggestionAiFilterChrome handles empty Amazon set honestly", () => {
   );
   assert.match(chrome, /No Amazon suggestions/);
   assert.match(chrome, /amazonEmpty/);
+  assert.doesNotMatch(chrome, /1\) Amazon raw/);
+  assert.doesNotMatch(chrome, /Step 2 — AI search-intent/);
 });
 
 test("Add targets wires select-all controls + suggested bids default on", () => {
