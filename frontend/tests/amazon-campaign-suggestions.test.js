@@ -468,7 +468,7 @@ test("buildKeywordSuggestionCountStats + label: New England 156→468 fixture (e
   assert.equal(stats.keptRowCount, 312);
   assert.equal(stats.grokFiltered, true);
   const label = formatKeywordSuggestionCountLabel(stats);
-  assert.match(label, /Amazon · 156 phrases · 468/);
+  assert.match(label, /Amazon · 156 · 468/);
   assert.match(label, /Kept 312/);
   const fullKeep = buildKeywordSuggestionCountStats({
     amazonApiRowCount: 156,
@@ -479,12 +479,12 @@ test("buildKeywordSuggestionCountStats + label: New England 156→468 fixture (e
   assert.equal(fullKeep.grokFiltered, false);
   assert.equal(
     formatKeywordSuggestionCountLabel(fullKeep),
-    "Amazon · 156 phrases · 468 · AI kept all",
+    "Amazon · 156 · 468 · AI kept all",
   );
   const pending = { ...fullKeep, grokPending: true, relevanceOutcome: "pending" };
   assert.match(
     formatKeywordSuggestionCountLabel(pending),
-    /Amazon · 156 phrases · 468 · Ranking/,
+    /Amazon · 156 · 468 · Ranking/,
   );
   assert.doesNotMatch(
     formatKeywordSuggestionCountLabel(pending),
@@ -547,7 +547,7 @@ test("buildKeywordSuggestionCountStats + label: live counts for any list size", 
   assert.equal(stats.grokFiltered, true);
   assert.equal(
     formatKeywordSuggestionCountLabel(stats),
-    "Amazon · 7 phrases · 21 · Kept 12",
+    "Amazon · 7 · 21 · Kept 12",
   );
   assert.equal(
     formatKeywordSuggestionCountLabel({
@@ -557,7 +557,7 @@ test("buildKeywordSuggestionCountStats + label: live counts for any list size", 
       grokFiltered: false,
       relevanceOutcome: "kept_all",
     }),
-    "Amazon · 7 phrases · 21 · AI kept all",
+    "Amazon · 7 · 21 · AI kept all",
   );
 });
 

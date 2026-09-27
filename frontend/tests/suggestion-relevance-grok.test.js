@@ -8,6 +8,8 @@ import {
   buildGrokRelevanceMessages,
   buildGrokProductRelevanceMessages,
   collapseKeywordsToUniquePhrasesForGrok,
+  collapseProductsToUniqueAsinsForGrok,
+  expandGrokAsinIndexesToOriginal,
   expandGrokPhraseIndexesToOriginal,
   parseGrokRelevanceJson,
   relevancePromptNeedsChunking,
@@ -181,6 +183,21 @@ test("collapse keywords to unique phrases then expand restores all companions", 
   const expanded = expandGrokPhraseIndexesToOriginal([0, 1], phraseToOriginalIndexes);
   assert.deepEqual(expanded, [0, 1, 2, 3]);
 });
+
+
+test("collapse products to unique ASINs then expand restores Exact+Expanded", () => {
+  const products = [
+    { asin: "B0AAA", matchType: "exact", title: "A", themes: ["Similar"] },
+    { asin: "B0AAA", matchType: "expanded", title: "A", themes: ["Similar"] },
+    { asin: "B0BBB", matchType: "exact", title: "B", themes: ["Complements"] },
+  ];
+  const { asins, asinToOriginalIndexes } = collapseProductsToUniqueAsinsForGrok(products);
+  assert.equal(asins.length, 2);
+  assert.deepEqual(asinToOriginalIndexes, [[0, 1], [2]]);
+  const kept = expandGrokAsinIndexesToOriginal([0], asinToOriginalIndexes);
+  assert.deepEqual(kept, [0, 1]);
+});
+
 
 test("products-only runs Grok product filter (not heuristic skip)", async () => {
   const suggestions = {

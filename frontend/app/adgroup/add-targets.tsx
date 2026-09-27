@@ -709,39 +709,13 @@ export default function AddAdGroupTargetsScreen() {
             }}
             onAcceptUnfiltered={acceptAmazonUnfiltered}
           />
+          {/* Counts live in SuggestionAiFilterChrome — keep harness id for AX. */}
           {mode === "keywords" && keywordCountLabel ? (
             <Text
               testID="adgroup-amazon-keyword-counts"
-              style={[
-                t.typography.caption1,
-                {
-                  color: t.colors.text_secondary,
-                  marginBottom: spacing.sm,
-                  fontWeight: "600",
-                  fontVariant: ["tabular-nums"],
-                },
-              ]}
+              style={{ position: "absolute", width: 1, height: 1, opacity: 0 }}
             >
               {keywordCountLabel}
-              {selectedFilteredCount
-                ? ` · ${selectedFilteredCount} selected`
-                : ""}
-            </Text>
-          ) : mode === "products" && filteredSuggestionRows.length ? (
-            <Text
-              style={[
-                t.typography.caption1,
-                {
-                  color: t.colors.text_secondary,
-                  marginBottom: spacing.sm,
-                  fontWeight: "600",
-                },
-              ]}
-            >
-              {filteredSuggestionRows.length} shown
-              {selectedFilteredCount
-                ? ` · ${selectedFilteredCount} selected`
-                : ""}
             </Text>
           ) : null}
           {asinResolving && !primaryAsin && !suggestionsQ.data ? (

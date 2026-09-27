@@ -140,6 +140,76 @@ export function expandGrokPhraseIndexesToOriginal(
   return out;
 }
 
+/**
+ * Collapse Exact/Expanded companions to one LLM row per ASIN (like keywords).
+ * Prefer Exact as the representative when both exist.
+ */
+export function collapseProductsToUniqueAsinsForGrok<
+  P extends {
+    asin: string;
+    title?: string | null;
+    subtitle?: string | null;
+    matchType?: string | null;
+    themes?: string[] | null;
+  },
+>(products: P[]): {
+  asins: P[];
+  asinToOriginalIndexes: number[][];
+} {
+  const order: string[] = [];
+  const byAsin = new Map<
+    string,
+    { rep: P; originalIndexes: number[]; exact: boolean }
+  >();
+
+  products.forEach((row, index) => {
+    const key = String(row.asin ?? "")
+      .trim()
+      .toUpperCase();
+    if (!key) return;
+    const mt = String(row.matchType ?? "")
+      .trim()
+      .toLowerCase();
+    const isExact =
+      !mt ||
+      mt === "exact" ||
+      mt === "asinsameas" ||
+      mt.endsWith("exact") ||
+      (!mt.includes("expand") && !mt.includes("phrase") && !mt.includes("broad"));
+    const existing = byAsin.get(key);
+    if (!existing) {
+      order.push(key);
+      byAsin.set(key, { rep: row, originalIndexes: [index], exact: isExact });
+      return;
+    }
+    existing.originalIndexes.push(index);
+    if (isExact && !existing.exact) {
+      existing.rep = row;
+      existing.exact = true;
+    }
+  });
+
+  const asins: P[] = [];
+  const asinToOriginalIndexes: number[][] = [];
+  for (const key of order) {
+    const entry = byAsin.get(key)!;
+    asins.push(entry.rep);
+    asinToOriginalIndexes.push(entry.originalIndexes);
+  }
+  return { asins, asinToOriginalIndexes };
+}
+
+/** Map kept unique-ASIN indexes → original Amazon row indexes (Exact+Expanded). */
+export function expandGrokAsinIndexesToOriginal(
+  keptAsinIndexes: number[],
+  asinToOriginalIndexes: number[][],
+): number[] {
+  return expandGrokPhraseIndexesToOriginal(
+    keptAsinIndexes,
+    asinToOriginalIndexes,
+  );
+}
+
 export function uniqueValidIndexes(raw: unknown, length: number): number[] {
   if (!Array.isArray(raw) || length <= 0) return [];
   const seen = new Set<number>();
