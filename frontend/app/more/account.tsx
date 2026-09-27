@@ -1,13 +1,18 @@
 import React, { useState } from "react";
-import { View, Text, StyleSheet, ScrollView, Alert, Platform } from "react-native";
+import { View, StyleSheet, ScrollView, Alert, Platform } from "react-native";
 import { useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import { SubScreen } from "@/src/components/SubScreen";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useApp } from "@/src/contexts/AppContext";
-import { dashboard, useTheme } from "@/src/lib/theme";
-import { BrandIcon } from "@/src/components/Primitives";
-import { IOSButton, IOSGroupedSection, IOSSettingsRow } from "@/src/components/ios/Native";
+import { useTheme } from "@/src/lib/theme";
+import { IOSButton } from "@/src/components/ios/Native";
+import {
+  SettingsNavigationRow,
+  SettingsNote,
+  SettingsRow,
+  SettingsScreen,
+  SettingsSection,
+} from "@/src/components/settings/SettingsPrimitives";
 import {
   ACCOUNT_BILLING_URL,
   ACCOUNT_GUEST_NOTE,
@@ -88,7 +93,6 @@ export default function AccountScreen() {
     }
   };
 
-  // Prefer last Nest payload while refetching; only show Checking… on first load.
   const subscription = accountSubscriptionPresentation({
     nestPlan: currentPlanQ.nestPlan,
     nestStatus: currentPlanQ.nestStatus,
@@ -107,66 +111,38 @@ export default function AccountScreen() {
   const subscriptionFooter = subscription.footer;
 
   return (
-    <SubScreen title="My Account">
+    <SettingsScreen title="My Account">
       <ScrollView
         contentContainerStyle={styles.scroll}
         contentInsetAdjustmentBehavior="automatic"
       >
         {viewingCustomer && !guestMode ? (
-          <View
-            testID="my-account-viewing-customer"
-            accessible
-            accessibilityRole="text"
-            accessibilityLabel={ACCOUNT_VIEW_AS_NOTE}
-            style={[
-              styles.scopeNote,
-              {
-                backgroundColor: t.colors.tone_warning + "12",
-                borderColor: t.colors.tone_warning + "30",
-              },
-            ]}
-          >
-            <Text style={[t.typography.footnote, { color: t.colors.text_primary, lineHeight: undefined }]}>
-              {ACCOUNT_VIEW_AS_NOTE}
-            </Text>
-          </View>
+          <SettingsNote testID="my-account-viewing-customer">{ACCOUNT_VIEW_AS_NOTE}</SettingsNote>
         ) : null}
 
-        <View
-          testID="my-account-identity"
-          accessible
-          accessibilityRole="header"
-          accessibilityLabel={`${identityTitle}. ${identitySubtitle}`}
-          style={[styles.identityCard, { backgroundColor: t.colors.background_secondary }]}
-        >
-          <View
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-            style={[styles.avatar, { backgroundColor: t.colors.tone_primary + "1F" }]}
-          >
-            <BrandIcon size={38} radius={11} />
-          </View>
-          <View style={styles.identityCopy}>
-            <Text selectable style={[t.typography.headline, { color: t.colors.text_primary, lineHeight: undefined }]}>
-              {identityTitle}
-            </Text>
-            <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 3, lineHeight: undefined }]}>
-              {identitySubtitle}
-            </Text>
-          </View>
-        </View>
+        <SettingsSection title="Account">
+          <SettingsRow
+            testID="my-account-identity"
+            label={identityTitle}
+            subtitle={identitySubtitle}
+            symbol="person.crop.circle.fill"
+            symbolColor={t.colors.tone_primary}
+            last
+            accessibilityLabel={`${identityTitle}. ${identitySubtitle}`}
+          />
+        </SettingsSection>
 
         {guestMode ? (
           <>
-            <IOSGroupedSection title="Account" footer={ACCOUNT_GUEST_NOTE}>
-              <IOSSettingsRow
+            <SettingsSection title="Access" footer={ACCOUNT_GUEST_NOTE}>
+              <SettingsRow
                 testID="my-account-guest-access"
                 label="Access"
                 value="Preview demo"
                 last
               />
-            </IOSGroupedSection>
-            <IOSGroupedSection title="Continue">
+            </SettingsSection>
+            <SettingsSection title="Continue">
               <View style={styles.buttonStack}>
                 <IOSButton
                   testID="my-account-sign-in"
@@ -186,23 +162,23 @@ export default function AccountScreen() {
                   full
                 />
               </View>
-            </IOSGroupedSection>
+            </SettingsSection>
           </>
         ) : (
           <>
-            <IOSGroupedSection title="Subscription" footer={subscriptionFooter}>
-              <IOSSettingsRow
+            <SettingsSection title="Subscription" footer={subscriptionFooter}>
+              <SettingsRow
                 testID="my-account-plan"
                 label="Plan"
                 subtitle={subscription.planSubtitle}
                 value={subscription.planLabel}
               />
-              <IOSSettingsRow
+              <SettingsRow
                 testID="my-account-subscription-status"
                 label="Subscription status"
                 value={subscription.statusLabel}
               />
-              <IOSSettingsRow
+              <SettingsNavigationRow
                 testID="my-account-billing"
                 label={billingBusy ? "Opening billing…" : "Manage subscription on the web"}
                 symbol="arrow.up.right.square"
@@ -211,29 +187,26 @@ export default function AccountScreen() {
                 accessibilityHint="Opens InteliAds billing in the browser."
                 last
               />
-            </IOSGroupedSection>
+            </SettingsSection>
 
-            <IOSGroupedSection
+            <SettingsSection
               title={viewingCustomer ? "Viewed customer data" : "Amazon data"}
               footer={viewingCustomer ? "Customer view" : undefined}
             >
-              <IOSSettingsRow
+              <SettingsNavigationRow
                 testID="my-account-amazon-profiles"
                 label="Amazon profiles"
                 subtitle={viewingCustomer ? "Customer view" : undefined}
                 value={profileSummary}
-                symbol="building.2"
+                symbol="building.2.fill"
                 symbolColor={t.colors.tone_product}
                 onPress={() => router.push("/more/accounts")}
                 accessibilityHint="Opens Amazon Accounts."
                 last
               />
-            </IOSGroupedSection>
+            </SettingsSection>
 
-            <IOSGroupedSection
-              title="Session"
-              footer="Clears this session"
-            >
+            <SettingsSection title="Session" footer="Clears this session">
               <View style={styles.sessionAction}>
                 <IOSButton
                   testID="sign-out-btn"
@@ -248,47 +221,17 @@ export default function AccountScreen() {
                   full
                 />
               </View>
-            </IOSGroupedSection>
+            </SettingsSection>
           </>
         )}
       </ScrollView>
-    </SubScreen>
+    </SettingsScreen>
   );
 }
 
 const styles = StyleSheet.create({
   scroll: {
-    paddingBottom: 120,
-  },
-  scopeNote: {
-    marginHorizontal: 16,
-    marginTop: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: dashboard.cardRadius,
-    borderCurve: "continuous",
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  identityCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 14,
-    borderRadius: dashboard.cardRadius,
-    borderCurve: "continuous",
-    marginHorizontal: 16,
-    marginTop: 12,
-  },
-  identityCopy: {
-    flex: 1,
-    minWidth: 0,
-    marginLeft: 12,
-  },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: "center",
-    justifyContent: "center",
+    paddingBottom: 48,
   },
   buttonStack: {
     gap: 10,

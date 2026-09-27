@@ -1,27 +1,41 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, type StyleProp, type TextProps, type ViewStyle } from "react-native";
 import Animated, {
   Easing,
+  runOnJS,
+  useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import { PRESS_SCALE, motion, shouldCrossfadeMetric } from "@/src/lib/motion";
+import {
+  PRESS_SCALE,
+  motion,
+  shouldCrossfadeMetric,
+  type MetricMotionMode,
+} from "@/src/lib/motion";
 import { useReduceMotion } from "@/src/lib/theme";
 
 const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
 const PRESS_SPRING = { damping: 22, stiffness: 420, mass: 0.35 };
 
 let overviewFirstRevealDone = false;
+/** One-shot stagger for Overview widgets — remounts must not fade from 0 (tab flash). */
+let overviewStaggerDone = false;
 
 export function resetOverviewFirstReveal() {
   overviewFirstRevealDone = false;
 }
 
+export function resetOverviewStagger() {
+  overviewStaggerDone = false;
+}
+
 export function PressableScale({
   children,
   onPress,
+  onLongPress,
   disabled,
   style,
   accessibilityLabel,
@@ -33,6 +47,7 @@ export function PressableScale({
 }: {
   children: React.ReactNode;
   onPress?: () => void;
+  onLongPress?: () => void;
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
   accessibilityLabel?: string;
@@ -54,6 +69,7 @@ export function PressableScale({
       testID={testID}
       disabled={disabled}
       onPress={onPress}
+      onLongPress={onLongPress}
       onPressIn={() => {
         pressed.set(
           reduceMotion
@@ -77,9 +93,9 @@ export function PressableScale({
           ? { ...accessibilityState, disabled: disabled || accessibilityState?.disabled }
           : undefined
       }
-      style={style}
     >
-      <Animated.View style={animatedStyle}>{children}</Animated.View>
+      {/* Layout styles must live on this view — children are not Pressable's direct kids. */}
+      <Animated.View style={[style, animatedStyle]}>{children}</Animated.View>
     </Pressable>
   );
 }
@@ -87,13 +103,17 @@ export function PressableScale({
 /**
  * Crossfade verified strings (and optional color). Slight Y tick on swap so
  * chart-day scrubbing feels alive without inventing a $0 start.
+ *
+ * `mode="scrub"` never dims opacity (that read as a gray flash on white KPIs)
+ * and swaps text immediately with a micro Y tick only.
  */
 export function VerifiedValue({
   value,
   color,
+  mode = "crossfade",
   style,
   ...props
-}: TextProps & { value: string; color?: string }) {
+}: TextProps & { value: string; color?: string; mode?: MetricMotionMode }) {
   const reduceMotion = useReduceMotion();
   const [shown, setShown] = useState(value);
   const [shownColor, setShownColor] = useState(color);
@@ -108,25 +128,145 @@ export function VerifiedValue({
   useEffect(() => {
     if (value === shown && color === shownColor) return;
     const id = ++gen.current;
-    if (reduceMotion || !shouldCrossfadeMetric(shown, value)) {
+    if (reduceMotion || mode === "scrub" || !shouldCrossfadeMetric(shown, value)) {
       setShown(value);
       setShownColor(color);
       opacity.set(1);
-      translateY.set(0);
+      if (mode === "scrub" && !reduceMotion && shouldCrossfadeMetric(shown, value)) {
+        translateY.set(-2);
+        translateY.set(withTiming(0, { duration: motion.scrubTick, easing: EASE_OUT }));
+      } else {
+        translateY.set(0);
+      }
       return;
     }
-    opacity.set(withTiming(0.28, { duration: motion.fastState / 2, easing: EASE_OUT }));
-    translateY.set(withTiming(4, { duration: motion.fastState / 2, easing: EASE_OUT }));
+    // Soft settle only — never drop below ~0.92 (full dim looked like gray “empty”).
+    opacity.set(withTiming(0.92, { duration: motion.fastState / 2, easing: EASE_OUT }));
+    translateY.set(withTiming(3, { duration: motion.fastState / 2, easing: EASE_OUT }));
     const timer = setTimeout(() => {
       if (id !== gen.current) return;
       setShown(value);
       setShownColor(color);
-      translateY.set(-3);
+      translateY.set(-2);
       opacity.set(withTiming(1, { duration: motion.contentChange, easing: EASE_OUT }));
       translateY.set(withTiming(0, { duration: motion.contentChange, easing: EASE_OUT }));
     }, motion.fastState / 2);
     return () => clearTimeout(timer);
-  }, [color, opacity, reduceMotion, shown, shownColor, translateY, value]);
+  }, [color, mode, opacity, reduceMotion, shown, shownColor, translateY, value]);
+
+  return (
+    <Animated.Text
+      {...props}
+      style={[style, animatedStyle, shownColor != null ? { color: shownColor } : null]}
+    >
+      {shown}
+    </Animated.Text>
+  );
+}
+
+/**
+ * Numeric KPI readout: UI-thread amount timing + JS format. Prefer this for
+ * Gross/Net/Spend while scrubbing so digits count instead of fading gray.
+ * Never invents a $0 start from a placeholder.
+ */
+export function VerifiedAmount({
+  amount,
+  format,
+  color,
+  mode = "crossfade",
+  placeholder = "—",
+  style,
+  ...props
+}: Omit<TextProps, "children"> & {
+  amount: number | null;
+  format: (value: number) => string;
+  color?: string;
+  mode?: MetricMotionMode;
+  placeholder?: string;
+}) {
+  const reduceMotion = useReduceMotion();
+  const formatRef = useRef(format);
+  formatRef.current = format;
+  const [shown, setShown] = useState(() =>
+    amount == null || !Number.isFinite(amount) ? placeholder : format(amount),
+  );
+  const [shownColor, setShownColor] = useState(color);
+  const opacity = useSharedValue(1);
+  const translateY = useSharedValue(0);
+  const animatedAmount = useSharedValue(
+    amount != null && Number.isFinite(amount) ? amount : 0,
+  );
+  const hasAmount = useSharedValue(amount != null && Number.isFinite(amount) ? 1 : 0);
+  const prevAmount = useRef<number | null>(
+    amount != null && Number.isFinite(amount) ? amount : null,
+  );
+  const scrubbing = mode === "scrub";
+
+  const publish = useCallback((value: number) => {
+    setShown(formatRef.current(value));
+  }, []);
+
+  useAnimatedReaction(
+    () => ({ value: animatedAmount.get(), ok: hasAmount.get() }),
+    (curr, prev) => {
+      if (curr.ok < 0.5) return;
+      if (prev && Math.abs(curr.value - prev.value) < 1e-9) return;
+      runOnJS(publish)(curr.value);
+    },
+  );
+
+  useEffect(() => {
+    setShownColor(color);
+  }, [color]);
+
+  useEffect(() => {
+    const valid = amount != null && Number.isFinite(amount);
+    if (!valid) {
+      hasAmount.set(0);
+      prevAmount.current = null;
+      setShown(placeholder);
+      opacity.set(1);
+      translateY.set(0);
+      return;
+    }
+
+    const from = prevAmount.current;
+    prevAmount.current = amount;
+    hasAmount.set(1);
+
+    const duration = scrubbing ? motion.scrubTick : motion.contentChange;
+    if (reduceMotion || from == null || !Number.isFinite(from)) {
+      animatedAmount.set(amount);
+      setShown(formatRef.current(amount));
+      opacity.set(1);
+      translateY.set(0);
+      return;
+    }
+
+    // Always keep opacity readable — count the digits on the UI thread.
+    opacity.set(1);
+    if (scrubbing) {
+      translateY.set(-1.5);
+      translateY.set(withTiming(0, { duration, easing: EASE_OUT }));
+    } else {
+      translateY.set(withTiming(0, { duration: motion.fastState / 2, easing: EASE_OUT }));
+    }
+    animatedAmount.set(withTiming(amount, { duration, easing: EASE_OUT }));
+  }, [
+    amount,
+    animatedAmount,
+    hasAmount,
+    opacity,
+    placeholder,
+    reduceMotion,
+    scrubbing,
+    translateY,
+  ]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: opacity.get(),
+    transform: [{ translateY: translateY.get() }],
+  }));
 
   return (
     <Animated.Text
@@ -167,8 +307,8 @@ export function HorizonPane({
       translateY.set(0);
       return;
     }
-    opacity.set(0.88);
-    translateY.set(4);
+    opacity.set(0.96);
+    translateY.set(2);
     opacity.set(withTiming(1, { duration: motion.segmentTransition, easing: EASE_OUT }));
     translateY.set(withTiming(0, { duration: motion.segmentTransition, easing: EASE_OUT }));
   }, [opacity, reduceMotion, translateY, watchKey]);
@@ -311,7 +451,7 @@ export function ChartScrubCursor({
   );
 }
 
-/** Staggered entrance for stacked Overview widgets — opacity + Y only. */
+/** Staggered entrance for stacked Overview widgets — opacity + Y only; one-shot per session. */
 export function StaggerReveal({
   index = 0,
   children,
@@ -322,15 +462,17 @@ export function StaggerReveal({
   style?: StyleProp<ViewStyle>;
 }) {
   const reduceMotion = useReduceMotion();
-  const opacity = useSharedValue(reduceMotion ? 1 : 0);
-  const translateY = useSharedValue(reduceMotion ? 0 : 10);
+  const already = overviewStaggerDone;
+  const opacity = useSharedValue(already || reduceMotion ? 1 : 0);
+  const translateY = useSharedValue(already || reduceMotion ? 0 : 6);
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: opacity.get(),
     transform: [{ translateY: translateY.get() }],
   }));
 
   useEffect(() => {
-    if (reduceMotion) {
+    if (already || reduceMotion) {
+      overviewStaggerDone = true;
       opacity.set(1);
       translateY.set(0);
       return;
@@ -339,9 +481,10 @@ export function StaggerReveal({
     const timer = setTimeout(() => {
       opacity.set(withTiming(1, { duration: motion.glassSettle, easing: EASE_OUT }));
       translateY.set(withTiming(0, { duration: motion.glassSettle, easing: EASE_OUT }));
+      overviewStaggerDone = true;
     }, delay);
     return () => clearTimeout(timer);
-  }, [index, opacity, reduceMotion, translateY]);
+  }, [already, index, opacity, reduceMotion, translateY]);
 
   return (
     <Animated.View style={[style, animatedStyle]} pointerEvents="box-none">

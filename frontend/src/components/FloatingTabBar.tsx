@@ -1,33 +1,70 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo } from "react";
 import {
-  Platform,
-  Pressable,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
+import type { SFSymbol as SFSymbolName } from "expo-symbols";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { InteliAdsIcon, type InteliAdsIconName } from "@/src/components/InteliAdsIcon";
 import { SFSymbol } from "@/src/components/ios/Native";
+import { PressableScale } from "@/src/components/Motion";
 import { playHaptic } from "@/src/lib/hapticPolicy";
-import { dashboard, density, layout, useTheme } from "@/src/lib/theme";
+import { dockScaleForWidth } from "@/src/lib/dockScale";
+import { useReduceMotion, useTheme } from "@/src/lib/theme";
 
-const BAR_HEIGHT = dashboard.tabBarHeight;
-const H_PAD = 4;
+/**
+ * Nest into the home-indicator inset so the dock sits low without covering it.
+ * Keep small enough that paddingBottom never pushes the rail off-screen.
+ */
+const SAFE_AREA_NEST = 18;
+const PILL_SPRING = { damping: 24, stiffness: 380, mass: 0.42 };
 
 type TabVisual = {
   label: string;
-  kind: "product" | "system";
-  product?: InteliAdsIconName;
-  system?: "ellipsis.circle" | "ellipsis.circle.fill";
+  shortLabel: string;
+  symbol: SFSymbolName;
+  /** Filled variant when focused; falls back to outline if SF has no fill. */
+  symbolFill: SFSymbolName;
 };
 
 const TAB_VISUAL: Record<string, TabVisual> = {
-  index: { label: "Overview", kind: "product", product: "overview" },
-  campaigns: { label: "Campaigns", kind: "product", product: "campaigns" },
-  targeting: { label: "Targets", kind: "product", product: "targeting" },
-  products: { label: "Books", kind: "product", product: "books" },
-  more: { label: "More", kind: "system", system: "ellipsis.circle" },
+  index: {
+    label: "Overview",
+    shortLabel: "Home",
+    symbol: "house",
+    symbolFill: "house.fill",
+  },
+  campaigns: {
+    label: "Campaigns",
+    shortLabel: "Ads",
+    symbol: "megaphone",
+    symbolFill: "megaphone.fill",
+  },
+  targeting: {
+    label: "Targets",
+    shortLabel: "Target",
+    // SF `scope` has no fill sibling — same glyph active + idle.
+    symbol: "scope",
+    symbolFill: "scope",
+  },
+  products: {
+    label: "Books",
+    shortLabel: "Books",
+    symbol: "books.vertical",
+    symbolFill: "books.vertical.fill",
+  },
+  more: {
+    label: "More",
+    shortLabel: "More",
+    symbol: "ellipsis.circle",
+    symbolFill: "ellipsis.circle.fill",
+  },
 };
 
 /** Loose props — expo-router nests its own @react-navigation copy. */
@@ -53,101 +90,215 @@ type FloatingTabBarProps = {
   };
 };
 
+type TabChrome = {
+  fill: string;
+  stroke: string;
+  selected: string;
+  selectedFg: string;
+  inactive: string;
+};
+
+type DockScale = ReturnType<typeof dockScaleForWidth>;
+
+function TabSegment({
+  focused,
+  visual,
+  a11y,
+  testID,
+  scale,
+  chrome,
+  onPress,
+  onLongPress,
+}: {
+  focused: boolean;
+  visual: TabVisual;
+  a11y: string;
+  testID: string;
+  scale: DockScale;
+  chrome: TabChrome;
+  onPress: () => void;
+  onLongPress: () => void;
+}) {
+  const reduceMotion = useReduceMotion();
+  const active = useSharedValue(focused ? 1 : 0);
+
+  useEffect(() => {
+    active.set(
+      reduceMotion
+        ? focused
+          ? 1
+          : 0
+        : withSpring(focused ? 1 : 0, PILL_SPRING),
+    );
+  }, [active, focused, reduceMotion]);
+
+  const pillStyle = useAnimatedStyle(() => {
+    const progress = active.get();
+    return {
+      opacity: progress,
+      transform: [{ scale: 0.86 + progress * 0.14 }],
+    };
+  });
+
+  const labelStyle = useAnimatedStyle(() => ({
+    opacity: active.get(),
+    transform: [{ translateY: (1 - active.get()) * 4 }],
+  }));
+
+  const iconColor = focused ? chrome.selectedFg : chrome.inactive;
+  const iconSize = focused ? scale.iconActive : scale.icon;
+  const labelText = scale.useShortLabel ? visual.shortLabel : visual.label;
+  const showLabel = focused && scale.showSelectedLabel;
+  const symbolName = focused ? visual.symbolFill : visual.symbol;
+
+  return (
+    <View style={styles.segmentSlot}>
+      <PressableScale
+        accessibilityRole="tab"
+        accessibilityState={{ selected: focused }}
+        accessibilityLabel={a11y}
+        testID={testID}
+        onPress={onPress}
+        onLongPress={onLongPress}
+        hitSlop={6}
+        style={[
+          styles.segment,
+          { minHeight: scale.segmentMinHeight },
+          focused ? styles.segmentActive : styles.segmentIdle,
+        ]}
+      >
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFillObject,
+            styles.activePill,
+            { backgroundColor: chrome.selected },
+            pillStyle,
+          ]}
+        />
+        <SFSymbol name={symbolName} size={iconSize} color={iconColor} />
+        {showLabel ? (
+          <Animated.View style={labelStyle}>
+            <Text
+              accessible={false}
+              importantForAccessibility="no-hide-descendants"
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.85}
+              ellipsizeMode="clip"
+              style={[
+                styles.label,
+                {
+                  color: chrome.selectedFg,
+                  fontSize: scale.labelSize,
+                },
+              ]}
+            >
+              {labelText}
+            </Text>
+          </Animated.View>
+        ) : null}
+      </PressableScale>
+    </View>
+  );
+}
+
 /**
- * Light floating dock matched to the white app chrome: frosted bar, equal
- * slots, icon + label always visible, active tint = tone_primary.
+ * Floating stadium dock: solid theme-synced pill (white / #141417), soft
+ * floating shadow, SF Symbol tabs. Selected = blue-tinted vertical stadium
+ * (filled icon + short label); idle = outline icon only.
  */
 export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBarProps) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
+  const scale = useMemo(() => dockScaleForWidth(windowWidth), [windowWidth]);
   const routes = state.routes;
-  const index = state.index;
-  const bottomPad = Math.max(insets.bottom, density.chromeGap);
+  // Navigator state is the rendering authority — pathname can lead the scene
+  // by a frame and paint the wrong selected label.
+  const focusedName = routes[state.index]?.name ?? "index";
+  const bottomPad =
+    insets.bottom > 0 ? Math.max(insets.bottom - SAFE_AREA_NEST, 6) : 10;
 
-  const shell = useMemo(
+  const chrome = useMemo(
     () => ({
-      bar: t.colors.tabbar_background,
-      stroke: t.scheme === "dark" ? t.colors.glass_stroke : "rgba(0,0,0,0.08)",
-      inactive: t.colors.text_tertiary,
-      active: t.colors.tone_primary,
-      activeWell: t.scheme === "dark" ? "rgba(47,124,255,0.18)" : "rgba(0,122,255,0.12)",
+      fill: t.colors.tabbar_background,
+      stroke: t.colors.tabbar_stroke,
+      selected: t.colors.tabbar_selected,
+      selectedFg: t.colors.tabbar_selected_fg,
+      inactive: t.colors.tabbar_inactive,
+      elevation: t.shadow.floating,
     }),
-    [t.colors, t.scheme],
+    [t.colors, t.shadow.floating],
   );
 
   return (
-    <View pointerEvents="box-none" style={[styles.wrap, { paddingBottom: bottomPad }]}>
-      <View style={styles.shadowLift}>
-        {/* Translucent fill only — avoid stacking a live blur under every tab route. */}
-        <View style={[styles.capsule, { borderColor: shell.stroke, backgroundColor: shell.bar }]}>
-          <View style={styles.track}>
-            {routes.map((route, i) => {
-              const focused = index === i;
+    <View
+      pointerEvents="box-none"
+      style={[
+        styles.wrap,
+        { paddingBottom: bottomPad, paddingHorizontal: scale.sideInset },
+      ]}
+    >
+      <View
+        style={[
+          styles.shadowLift,
+          { maxWidth: scale.maxWidth, ...chrome.elevation },
+        ]}
+      >
+        <View
+          accessibilityRole="tablist"
+          testID={`tab-rail-${scale.tier}`}
+          style={[
+            styles.rail,
+            {
+              minHeight: scale.railMinHeight,
+              paddingHorizontal: scale.padH,
+              paddingVertical: scale.padV,
+              borderColor: chrome.stroke,
+              backgroundColor: chrome.fill,
+            },
+          ]}
+        >
+          <View style={styles.railRow}>
+            {routes.map((route) => {
+              const focused = route.name === focusedName;
               const { options } = descriptors[route.key];
               const visual = TAB_VISUAL[route.name] ?? {
                 label: options.title ?? route.name,
-                kind: "product" as const,
-                product: "overview" as InteliAdsIconName,
+                shortLabel: options.title ?? route.name,
+                symbol: "house" as SFSymbolName,
+                symbolFill: "house.fill" as SFSymbolName,
               };
-              const color = focused ? shell.active : shell.inactive;
               const a11y =
                 options.tabBarAccessibilityLabel ??
                 options.title ??
                 visual.label;
 
-              const onPress = () => {
-                playHaptic("select");
-                const event = navigation.emit({
-                  type: "tabPress",
-                  target: route.key,
-                  canPreventDefault: true,
-                });
-                if (!focused && !event.defaultPrevented) {
-                  navigation.navigate(route.name, route.params);
-                }
-              };
-
-              const onLongPress = () => {
-                navigation.emit({ type: "tabLongPress", target: route.key });
-              };
-
               return (
-                <Pressable
+                <TabSegment
                   key={route.key}
-                  accessibilityRole="button"
-                  accessibilityState={focused ? { selected: true } : {}}
-                  accessibilityLabel={a11y}
+                  focused={focused}
+                  visual={visual}
+                  a11y={a11y}
                   testID={`tab-${route.name}`}
-                  onPress={onPress}
-                  onLongPress={onLongPress}
-                  style={styles.item}
-                >
-                  <View
-                    style={[
-                      styles.itemInner,
-                      focused ? { backgroundColor: shell.activeWell } : null,
-                    ]}
-                  >
-                    {visual.kind === "product" && visual.product ? (
-                      <InteliAdsIcon
-                        name={visual.product}
-                        size={dashboard.iconMd}
-                        color={color}
-                        selected={focused}
-                        state={focused ? "selected" : "default"}
-                      />
-                    ) : (
-                      <SFSymbol
-                        name={focused ? "ellipsis.circle.fill" : "ellipsis.circle"}
-                        size={dashboard.iconMd}
-                        color={color}
-                      />
-                    )}
-                    <Text numberOfLines={1} style={[styles.label, { color }]}>
-                      {visual.label}
-                    </Text>
-                  </View>
-                </Pressable>
+                  scale={scale}
+                  chrome={chrome}
+                  onPress={() => {
+                    playHaptic("select");
+                    const event = navigation.emit({
+                      type: "tabPress",
+                      target: route.key,
+                      canPreventDefault: true,
+                    });
+                    if (!focused && !event.defaultPrevented) {
+                      navigation.navigate(route.name, route.params);
+                    }
+                  }}
+                  onLongPress={() => {
+                    navigation.emit({ type: "tabLongPress", target: route.key });
+                  }}
+                />
               );
             })}
           </View>
@@ -164,59 +315,64 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     alignItems: "center",
-    paddingHorizontal: dashboard.pageInset,
+    zIndex: 50,
+    elevation: 16,
   },
   shadowLift: {
     width: "100%",
-    maxWidth: 430,
-    borderRadius: dashboard.tabBarRadius,
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOpacity: 0.08,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 4 },
-      },
-      android: { elevation: 6 },
-      default: {},
-    }),
+    borderRadius: 999,
   },
-  capsule: {
-    height: BAR_HEIGHT,
-    borderRadius: dashboard.tabBarRadius,
+  rail: {
+    width: "100%",
+    borderRadius: 999,
     borderCurve: "continuous",
     borderWidth: StyleSheet.hairlineWidth,
     overflow: "hidden",
   },
-  track: {
-    flex: 1,
+  railRow: {
+    position: "relative",
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: H_PAD,
+    width: "100%",
   },
-  item: {
+  /** Equal share — minWidth:0 stops fixed-content pills from blowing the rail. */
+  segmentSlot: {
     flex: 1,
-    height: BAR_HEIGHT,
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: layout.minTap,
+    minWidth: 0,
+    zIndex: 1,
+    alignItems: "stretch",
   },
-  itemInner: {
-    minWidth: 56,
-    maxWidth: 76,
-    paddingHorizontal: 6,
-    paddingVertical: density.chipPadV,
-    borderRadius: dashboard.metricChipRadius,
+  segment: {
+    borderRadius: 999,
     borderCurve: "continuous",
     alignItems: "center",
     justifyContent: "center",
-    gap: 3,
+    overflow: "hidden",
+  },
+  /** Mockup: icon above short label inside the blue-tinted stadium. */
+  segmentActive: {
+    alignSelf: "stretch",
+    marginHorizontal: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    flexDirection: "column",
+    gap: 2,
+  },
+  segmentIdle: {
+    alignSelf: "stretch",
+    width: "100%",
+    paddingHorizontal: 0,
+    flexDirection: "column",
+  },
+  activePill: {
+    borderRadius: 999,
+    borderCurve: "continuous",
   },
   label: {
-    fontSize: 10,
-    fontWeight: "600",
-    letterSpacing: -0.1,
-    lineHeight: 12,
+    flexShrink: 1,
+    fontWeight: "700",
+    letterSpacing: -0.2,
     textAlign: "center",
+    lineHeight: 14,
   },
 });

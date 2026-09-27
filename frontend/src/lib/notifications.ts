@@ -29,14 +29,22 @@ import {
 } from "./notificationContract";
 import { kdpStallAlertCopy } from "./kdpIngestFreshness";
 import {
-  digestMetricsLine,
   digestTitleForHour,
+  formatDigestBody,
+  honestTotalsFromDayPoint,
   isMorningDigestHour,
-  notificationBodyWithTotals,
+  mixedCurrencyDigestNote,
   shouldSendDigestHour,
-  type DigestTotals,
+  type HonestDigestTotals,
 } from "./notificationDigest";
 import { netRoyaltiesKnown } from "./netRoyalties";
+import {
+  activatedAdsProfileIds,
+  activatedProfileIds,
+  countFreshCompletedProfiles,
+  digestCoverageLine,
+  groupActivatedProfilesByCurrency,
+} from "./notificationAuthority";
 import { adsProfileIdsForSelection, filterToEnabledProfileSelection, uniqueProfileIds } from "./notificationScope";
 import { nestApiJson } from "./rulesApi";
 
@@ -162,132 +170,231 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     const { fetchMobileOverview } = await import("./dashboardApi");
     const { resolveBackgroundScope } = await import("./backgroundFinancialSync");
     const scope = await resolveBackgroundScope();
-    if (!scope || scope.profileIds.length === 0) return 0;
+    if (!scope) return 0;
+
+    // View-as / guest: keep existing early return. Profile authority is activated below.
     if (
       !shouldEvaluateAlerts({
         hasSession: true,
-        profileIds: scope.profileIds,
+        // Fail-open placeholder so empty Overview selection does not block activated digests
+        // when view-as is unset; real ads ids are resolved after profiles load.
+        profileIds: scope.profileIds.length ? scope.profileIds : ["_activated"],
         adminFilterUserId: scope.viewAs,
       })
     ) {
       return 0;
     }
 
-    // Commit cooldown only once we know we will evaluate (not on view-as / empty scope).
-    await storage.setItem(ALERT_CHECK_LAST_RUN_KEY, String(now));
-
     const { fetchAmazonProfiles } = await import("./queries");
     const { knownKdpRoyaltyTotal, selectKdpRoyaltyScopeForSelection } = await import(
       "./kdpRoyaltyScope"
     );
     const profiles = await fetchAmazonProfiles(userId, scope.viewAs).catch(() => []);
-    const adsIds = adsProfileIdsForSelection(scope.profileIds, profiles);
-    const enabledSelected = filterToEnabledProfileSelection(scope.profileIds, profiles);
-    const queryIds = adsIds.length ? adsIds : enabledSelected;
-    // Prefer enabled selection for KDP royalties too (disabled accounts stay out of totals).
-    const royaltyIds = selectKdpRoyaltyScopeForSelection(profiles, enabledSelected).profileIds;
 
-    const snapshot = await fetchMobileOverview({
-      profileIds: queryIds,
-      filterUserId: scope.viewAs,
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    });
-    const currency = snapshot.scope.currency ?? "USD";
-    const todayPoint = snapshot.today;
-    const spend = Number(todayPoint.spend) || 0;
-    const orders = Number(todayPoint.orders) || 0;
-    const sales = Number(todayPoint.sales) || 0;
-    const acos = todayPoint.acos ?? (sales > 0 ? (spend / sales) * 100 : null);
+    // Digest/alert authority = activated profiles (is_enabled === true), not Overview alone.
+    let queryIds = activatedAdsProfileIds(profiles);
+    if (!queryIds.length) {
+      // Soft fallback: Overview-enabled selection only — never all profiles (incl. disabled).
+      queryIds = adsProfileIdsForSelection(scope.profileIds, profiles);
+    }
+    if (!queryIds.length) return 0;
 
-    let royalties: number | null = null;
-    let net: number | null = null;
-    if (prefs.includeKdpNet) {
-      try {
-        const { fetchKdpRoyaltiesRange } = await import("./queries");
-        if (royaltyIds.length) {
-          const kdp = await fetchKdpRoyaltiesRange(royaltyIds, today, today);
-          royalties = knownKdpRoyaltyTotal(kdp);
-          if (royalties != null) net = netRoyaltiesKnown(royalties, spend);
+    // Commit cooldown only once we know we will evaluate (not on view-as / empty authority).
+    await storage.setItem(ALERT_CHECK_LAST_RUN_KEY, String(now));
+
+    const includeKdpNet = !!prefs.includeKdpNet;
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const localHour = new Date().getHours();
+    const morningDigest = isMorningDigestHour(localHour);
+
+    type CurrencyGroupFetch = {
+      currency: string;
+      adsIds: string[];
+      selectionIds: string[];
+    };
+
+    const activatedGroups = groupActivatedProfilesByCurrency(profiles);
+    const fetchGroups: CurrencyGroupFetch[] = activatedGroups.length
+      ? activatedGroups.map((group) => ({
+          currency: group.currency,
+          adsIds: uniqueProfileIds(group.profiles.map((p) => p.profile_id || p.id)),
+          selectionIds: uniqueProfileIds(
+            group.profiles.flatMap((p) => [p.id, p.profile_id].filter(Boolean) as string[]),
+          ),
+        }))
+      : [
+          {
+            currency: String(scope.currency || "USD").toUpperCase() || "USD",
+            adsIds: queryIds,
+            selectionIds: uniqueProfileIds([...scope.profileIds, ...queryIds]),
+          },
+        ];
+
+    const todayLines: HonestDigestTotals[] = [];
+    const digestLines: HonestDigestTotals[] = [];
+    const groupToday: {
+      currency: string;
+      adsIds: string[];
+      spend: number | null;
+      orders: number | null;
+      line: HonestDigestTotals;
+    }[] = [];
+
+    for (const group of fetchGroups) {
+      if (!group.adsIds.length) continue;
+      const snapshot = await fetchMobileOverview({
+        profileIds: group.adsIds,
+        filterUserId: scope.viewAs,
+        timeZone,
+      });
+      const currency = String(snapshot.scope.currency || group.currency || "USD").toUpperCase() || "USD";
+
+      let todayHonest = honestTotalsFromDayPoint(snapshot.today, currency);
+      const digestPoint = morningDigest ? snapshot.yesterday : snapshot.today;
+      let digestHonest = honestTotalsFromDayPoint(digestPoint, currency);
+
+      if (includeKdpNet) {
+        try {
+          const { fetchKdpRoyaltiesRange } = await import("./queries");
+          const royaltyIds = selectKdpRoyaltyScopeForSelection(
+            profiles,
+            group.selectionIds,
+          ).profileIds;
+          if (royaltyIds.length) {
+            const todayKdp = await fetchKdpRoyaltiesRange(royaltyIds, today, today);
+            const todayRoyalties = knownKdpRoyaltyTotal(todayKdp);
+            todayHonest = {
+              ...todayHonest,
+              royalties: todayRoyalties,
+              net:
+                todayRoyalties != null && todayHonest.spend != null
+                  ? netRoyaltiesKnown(todayRoyalties, todayHonest.spend)
+                  : null,
+            };
+
+            const digestDate = morningDigest
+              ? String(snapshot.yesterday?.date || "").slice(0, 10)
+              : today;
+            if (digestDate) {
+              const digestKdp =
+                digestDate === today
+                  ? todayKdp
+                  : await fetchKdpRoyaltiesRange(royaltyIds, digestDate, digestDate);
+              const digestRoyalties = knownKdpRoyaltyTotal(digestKdp);
+              digestHonest = {
+                ...digestHonest,
+                royalties: digestRoyalties,
+                net:
+                  digestRoyalties != null && digestHonest.spend != null
+                    ? netRoyaltiesKnown(digestRoyalties, digestHonest.spend)
+                    : null,
+              };
+            }
+          }
+        } catch {
+          /* keep lines without KDP net */
         }
-      } catch {
-        royalties = null;
-        net = null;
       }
+
+      todayLines.push(todayHonest);
+      digestLines.push(digestHonest);
+      groupToday.push({
+        currency,
+        adsIds: group.adsIds,
+        spend: todayHonest.spend,
+        orders: todayHonest.orders,
+        line: todayHonest,
+      });
     }
 
-    const todayTotals: DigestTotals = { spend, orders, acos, royalties, net };
-    const includeKdpNet = !!prefs.includeKdpNet;
+    if (!todayLines.length) return 0;
 
-    const localHour = new Date().getHours();
+    let coverageLine: string | null = null;
+    try {
+      const { fetchProfileSyncLogs } = await import("./queries");
+      const logs = await fetchProfileSyncLogs(queryIds);
+      const updatedCount = countFreshCompletedProfiles(logs, queryIds, now);
+      coverageLine = digestCoverageLine({
+        activatedCount: queryIds.length,
+        updatedCount,
+        currencies: todayLines.map((line) => line.currency),
+        displayCurrency: todayLines[0]?.currency ?? "USD",
+      });
+    } catch {
+      coverageLine = null;
+    }
+
+    const mixedNote = mixedCurrencyDigestNote(todayLines.map((line) => line.currency));
+    const totalsBody = (headline: string, lines: HonestDigestTotals[]) =>
+      `${headline}\n${formatDigestBody({
+        lines,
+        includeKdpNet,
+        coverageLine: null,
+        mixedCurrencyNote: mixedNote,
+      })}`;
+
+    // Book / KDP royalty scope across activated UUID+ads ids (fail-open to Overview).
+    const authoritySelection = activatedProfileIds(profiles);
+    const enabledSelected = filterToEnabledProfileSelection(
+      authoritySelection.length ? authoritySelection : scope.profileIds,
+      profiles,
+    );
+    const royaltyIds = selectKdpRoyaltyScopeForSelection(
+      profiles,
+      enabledSelected.length ? enabledSelected : queryIds,
+    ).profileIds;
+
     if (
       prefs.dailyDigest &&
       preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.periodCompare) &&
       shouldSendDigestHour(localHour, alertState.lastDigestHour, today, alertState.digestDay)
     ) {
-      let digestTotals = todayTotals;
-      let yesterdayRoyalties: number | null = null;
-      let yesterdayNet: number | null = null;
-      if (isMorningDigestHour(localHour)) {
-        const ySpend = Number(snapshot.yesterday?.spend) || 0;
-        const yOrders = Number(snapshot.yesterday?.orders) || 0;
-        const ySales = Number(snapshot.yesterday?.sales) || 0;
-        const yAcos =
-          snapshot.yesterday?.acos ?? (ySales > 0 ? (ySpend / ySales) * 100 : null);
-        if (prefs.includeKdpNet) {
-          try {
-            const { fetchKdpRoyaltiesRange } = await import("./queries");
-            const yDate = String(snapshot.yesterday?.date || "").slice(0, 10);
-            if (yDate && royaltyIds.length) {
-              const kdp = await fetchKdpRoyaltiesRange(royaltyIds, yDate, yDate);
-              yesterdayRoyalties = knownKdpRoyaltyTotal(kdp);
-              if (yesterdayRoyalties != null) {
-                yesterdayNet = netRoyaltiesKnown(yesterdayRoyalties, ySpend);
-              }
-            }
-          } catch {
-            yesterdayRoyalties = null;
-            yesterdayNet = null;
-          }
-        }
-        digestTotals = {
-          spend: ySpend,
-          orders: yOrders,
-          acos: yAcos,
-          royalties: yesterdayRoyalties,
-          net: yesterdayNet,
-        };
-      }
       await scheduleLocalAlert({
         identifier: notificationIdentifier(NOTIFICATION_EVENTS.periodCompare, today, String(localHour)),
         event: NOTIFICATION_EVENTS.periodCompare,
         userId,
         title: digestTitleForHour(localHour),
-        body: digestMetricsLine(digestTotals, currency, includeKdpNet),
+        body: formatDigestBody({
+          lines: digestLines,
+          includeKdpNet,
+          coverageLine,
+          mixedCurrencyNote: mixedNote,
+        }),
       });
       alertState = { ...alertState, digestDay: today, lastDigestHour: localHour };
       sent += 1;
     }
 
+    // Orders are dimensionless — sum known counts across currency groups.
+    let ordersTotal: number | null = null;
+    {
+      let sum = 0;
+      let known = false;
+      for (const group of groupToday) {
+        if (group.orders != null) {
+          sum += group.orders;
+          known = true;
+        }
+      }
+      if (known) ordersTotal = sum;
+    }
+
     if (
       LOCAL_NEW_ORDER_AUTHORITY &&
       prefs.newOrder &&
-      preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.newOrders)
+      preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.newOrders) &&
+      ordersTotal != null
     ) {
-      const delta = newOrderDelta(orders, alertState.ordersNotified ?? 0);
+      const delta = newOrderDelta(ordersTotal, alertState.ordersNotified ?? 0);
       if (delta > 0) {
         await scheduleLocalAlert({
-          identifier: notificationIdentifier(NOTIFICATION_EVENTS.newOrders, today, String(orders)),
+          identifier: notificationIdentifier(NOTIFICATION_EVENTS.newOrders, today, String(ordersTotal)),
           event: NOTIFICATION_EVENTS.newOrders,
           userId,
           title: delta === 1 ? "1 new ad order" : `${delta} new ad orders`,
-          body: notificationBodyWithTotals(
-            `Today so far · ${orders} orders total.`,
-            todayTotals,
-            currency,
-            includeKdpNet,
-          ),
+          body: totalsBody(`Today so far · ${ordersTotal} orders total.`, todayLines),
         });
-        alertState = { ...alertState, ordersNotified: orders };
+        alertState = { ...alertState, ordersNotified: ordersTotal };
         sent += 1;
       }
     }
@@ -296,18 +403,25 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       const already = alertState.spendAlertDays?.[today];
       if (!already) {
         const { fetchAllCampaignBudgets } = await import("./queries");
-        const budget = await fetchAllCampaignBudgets(queryIds);
-        if (spendExceedsBudget(spend, budget, prefs.spendThreshold)) {
+        let overspent = false;
+        for (const group of groupToday) {
+          // Never treat null/missing spend as $0 for overspend.
+          if (group.spend == null) continue;
+          const budget = await fetchAllCampaignBudgets(group.adsIds);
+          if (spendExceedsBudget(group.spend, budget, prefs.spendThreshold)) {
+            overspent = true;
+            break;
+          }
+        }
+        if (overspent) {
           await scheduleLocalAlert({
             identifier: notificationIdentifier(NOTIFICATION_EVENTS.campaignOverspend, today),
             event: NOTIFICATION_EVENTS.campaignOverspend,
             userId,
             title: "Campaign overspending",
-            body: notificationBodyWithTotals(
+            body: totalsBody(
               "Today's ad spend is above your daily budget threshold.",
-              todayTotals,
-              currency,
-              includeKdpNet,
+              todayLines,
             ),
           });
           alertState = {
@@ -340,12 +454,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
           userId,
           asin: book.asin ?? undefined,
           title: "Book needs attention",
-          body: notificationBodyWithTotals(
-            `${book.title || key} ACoS is above break-even.`,
-            todayTotals,
-            currency,
-            includeKdpNet,
-          ),
+          body: totalsBody(`${book.title || key} ACoS is above break-even.`, todayLines),
         });
         alertState = markBookNotified(alertState, key);
         sent += 1;
@@ -354,10 +463,10 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
 
     if (prefs.kdpDataStale && preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.kdpDataStale)) {
       const { loadScopedKdpFreshness } = await import("./kdpIngestMonitor");
-      const rows = await loadScopedKdpFreshness(
-        filterToEnabledProfileSelection(scope.profileIds, profiles),
-        now,
-      );
+      const kdpScopeIds = enabledSelected.length
+        ? enabledSelected
+        : filterToEnabledProfileSelection(scope.profileIds, profiles);
+      const rows = await loadScopedKdpFreshness(kdpScopeIds, now);
       for (const row of rows) {
         if (!row.stale) {
           alertState = clearKdpStallNotified(alertState, row.accountId);
@@ -370,7 +479,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
           event: NOTIFICATION_EVENTS.kdpDataStale,
           userId,
           title: copy.title,
-          body: notificationBodyWithTotals(copy.body, todayTotals, currency, includeKdpNet),
+          body: totalsBody(copy.body, todayLines),
         });
         alertState = markKdpStallNotified(alertState, row.accountId, now);
         sent += 1;

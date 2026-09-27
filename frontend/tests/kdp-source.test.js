@@ -42,8 +42,10 @@ test("settings picker can open the iPhone helper", () => {
   const picker = readFileSync(new URL("../app/more/kdp-source.tsx", import.meta.url), "utf8");
   const helper = readFileSync(new URL("../app/more/kdp-helper.tsx", import.meta.url), "utf8");
   const layout = readFileSync(new URL("../app/_layout.tsx", import.meta.url), "utf8");
+  const contract = readFileSync(new URL("../src/lib/settingsContract.ts", import.meta.url), "utf8");
   assert.match(picker, /more\/kdp-helper/);
-  assert.match(picker, /Set up iPhone helper/);
+  assert.match(picker, /KDP_HELPER_SETUP_ROW/);
+  assert.match(contract, /Set up iPhone helper/);
   assert.match(helper, /runKdpIosHelperTick/);
   assert.match(layout, /more\/kdp-helper/);
   assert.match(layout, /KdpHelperHost/);

@@ -8,6 +8,7 @@ import {
 } from "../src/lib/adsEngineSeries.ts";
 import {
   aggregateKdpFormatRoyalties,
+  bookDailyRoyaltiesTotal,
   formatKdpChartDate,
   formatSharePct,
 } from "../src/lib/kdpFormatRoyalties.ts";
@@ -50,6 +51,29 @@ test("aggregateKdpFormatRoyalties sums paperback / KU / Kindle by day", () => {
   assert.equal(formatKdpChartDate("2026-08-31"), "08-31");
 });
 
+test("bookDailyRoyaltiesTotal prefers format sum so KU is not dropped", () => {
+  // Legacy total undercounts KU that lives only in kenp_royalties.
+  assert.equal(
+    bookDailyRoyaltiesTotal({
+      royalties: 70,
+      ebook_royalties: 50,
+      paperback_royalties: 0,
+      kenp_royalties: 40,
+    }),
+    90,
+  );
+  // Format columns empty → keep royalties total.
+  assert.equal(
+    bookDailyRoyaltiesTotal({
+      royalties: 55,
+      ebook_royalties: 0,
+      paperback_royalties: 0,
+      kenp_royalties: 0,
+    }),
+    55,
+  );
+});
+
 test("aggregateKdpFormatRoyalties marks totals-only rows as no format data", () => {
   const range = aggregateKdpFormatRoyalties([
     { date: "2026-08-01", royalties: 40 },
@@ -89,6 +113,18 @@ test("dailyToAdsEngineSeries totals are the period sum, not a missing day", () =
   assert.equal(adsEnginePeriodLabel(series), "09-01–09-05");
 });
 
+test("dailyToAdsEngineSeries refuses fake 0% ACoS when sales are 0", () => {
+  const series = dailyToAdsEngineSeries([
+    { date: "2026-09-01", impressions: 900, clicks: 30, orders: 0, spend: 55, sales: 0 },
+    { date: "2026-09-02", impressions: 100, clicks: 5, orders: 0, spend: 10, sales: 0 },
+  ]);
+  assert.equal(series.totals.acos, null);
+  assert.equal(series.totals.impressions, 1000);
+  assert.equal(series.acos[0].sales, 0);
+  assert.equal(series.acos[0].value, 0);
+  assert.equal(series.acos[1].sales, 0);
+});
+
 test("Overview wires Ads Engine + KDP Royalties swipe widgets", () => {
   assert.match(overview, /testID="home-ads-engine"/);
   assert.match(overview, /testID="home-kdp-royalties-format"/);
@@ -116,4 +152,48 @@ test("Overview wires Ads Engine + KDP Royalties swipe widgets", () => {
   assert.match(charts, /periodTotals/);
   assert.match(overview, /GROSS_ROYALTIES_LABEL/);
   assert.match(overview, /home-hero-gross/);
+});
+
+test("Gross KDP uses known totals only and widens when all enabled Ads are covered", () => {
+  assert.match(overview, /knownKdpRoyaltyTotal\(royaltyRange\)/);
+  assert.match(overview, /booksRoyaltyScopeForSelection\(profiles, moneyProfileIds\)/);
+  assert.match(overview, /overviewKdpQueryScope\(profiles, enabledPortfolioIds, royaltyScope\)/);
+  assert.match(overview, /allowLegacyProfileLinks: false/);
+  assert.match(overview, /kdpCurrencyComparable/);
+  assert.match(overview, /kdpRoyaltiesAreKnown/);
+  // Format mix shares the same royalty account scope as Gross — never a separate invented total.
+  assert.match(overview, /fetchKdpFormatRoyaltiesRange\(royaltyProfiles/);
+  assert.match(overview, /kdpScope: kdpQueryScope/);
+  assert.match(charts, /selectedAcos == null \? "—"/);
+});
+
+test("Ads Engine + Format Mix charts never call hooks after empty early returns", () => {
+  // Cold launch / pending metrics must not trip Rules of Hooks when data arrives.
+  const adsBlock = charts.slice(charts.indexOf("export function AdsEngineChart"));
+  const adsFn = adsBlock.slice(0, adsBlock.indexOf("export function") > 0 ? adsBlock.indexOf("\nexport function", 1) : undefined);
+  // useEffect must appear before the empty impressions early return in source order.
+  const adsEffect = adsFn.indexOf("React.useEffect");
+  const adsEmpty = adsFn.indexOf("if (!hasImpressions)");
+  assert.ok(adsEffect >= 0 && adsEmpty >= 0 && adsEffect < adsEmpty, "AdsEngineChart useEffect must precede empty return");
+
+  const fmtBlock = charts.slice(charts.indexOf("export function KdpFormatRoyaltiesChart"));
+  const fmtFn = fmtBlock.slice(0, 2500);
+  const fmtEffect = fmtFn.indexOf("React.useEffect");
+  const fmtEmpty = fmtFn.indexOf("if (!hasDays)");
+  assert.ok(fmtEffect >= 0 && fmtEmpty >= 0 && fmtEffect < fmtEmpty, "KdpFormatRoyaltiesChart useEffect must precede empty return");
+});
+
+test("Ads Engine readout keeps Impr / Clicks / Orders / ACoS tags", () => {
+  const adsBlock = charts.slice(charts.indexOf("export function AdsEngineChart"));
+  assert.match(adsBlock, /Impr \$\{formatCompact\(selectedImpr\)\}/);
+  assert.match(adsBlock, /Clicks \$\{formatCompact\(selectedClicks\)\}/);
+  assert.match(adsBlock, /Orders \$\{formatInt\(selectedOrders\)\}/);
+  assert.match(adsBlock, /ACoS \$\{/);
+});
+
+test("Campaign / search-term widget rows keep Spend · Orders · ACoS labels", () => {
+  const rows = readFileSync(new URL("../src/components/OverviewWidgetRows.tsx", import.meta.url), "utf8");
+  assert.match(rows, /spend · \{formatInt\(campaign\.orders\)\} orders/);
+  assert.match(rows, /spend · \{formatInt\(Number\(row\.total_orders\)\)\} orders/);
+  assert.match(rows, />ACoS</);
 });

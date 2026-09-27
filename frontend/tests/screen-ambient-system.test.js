@@ -53,9 +53,12 @@ test("filters and buttons share the Overview glass chip chrome", () => {
   assert.match(native, /dashboard\.metricChipRadius/);
   assert.match(native, /tone_primary \+ "55"/);
   assert.match(topBar, /glass_background/);
-  assert.match(topBar, /multi-country-flags/);
-  assert.match(topBar, /multiCountryFlagIcons/);
+  assert.match(topBar, /MarketPill/);
+  assert.match(topBar, /multiCountryCodes/);
+  assert.match(topBar, /formatMarketPillLabel/);
+  assert.match(topBar, /profile-selector-btn/);
   assert.match(topBar, /countryFlagEmoji/);
+  assert.doesNotMatch(topBar, /multiCountryFlagIcons/);
 });
 
 test("shared cards and grouped lists use the 20pt elevated chrome", () => {

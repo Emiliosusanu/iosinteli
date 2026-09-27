@@ -226,23 +226,23 @@ export function IOSSegmentedControl<T extends string>({
       {options.map((option) => {
         const active = option.key === value;
         return (
-          <TouchableOpacity
+          <Pressable
             key={option.key}
             testID={option.testID}
             accessibilityRole="tab"
             accessibilityLabel={option.label}
             accessibilityState={{ selected: active }}
-            activeOpacity={0.72}
             hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
             onPress={() => {
               if (option.key !== value) onChange(option.key);
             }}
-            style={[
+            style={({ pressed }) => [
               styles.segment,
               active && {
                 backgroundColor: t.colors.background_elevated,
                 borderColor: t.colors.tone_primary + "55",
               },
+              pressed && { opacity: 0.88 },
             ]}
           >
             <Text
@@ -252,21 +252,27 @@ export function IOSSegmentedControl<T extends string>({
             >
               {option.label}
             </Text>
-          </TouchableOpacity>
+          </Pressable>
         );
       })}
     </View>
   );
 
-  if (forceFallback) return fallback;
+  // SwiftUI Host + short overflow wraps historically clipped 3+ labels
+  // (Settings Appearance, Products sort, Create targeting, etc.). Pressable
+  // chips always layout at minHeight 44 with full label visibility.
+  if (forceFallback || options.length > 2) return fallback;
 
   const ui = nativeSwift();
   if (!ui) return fallback;
 
+  // Two-option Swift path: never use dashboard.controlHeight (32) —
+  // overflow:hidden at that height half-clips segment labels.
+  const hostHeight = Math.max(44, dashboard.headerControl);
   return (
     <SwiftSafe fallback={fallback}>
-      <View testID={testID} style={{ height: dashboard.controlHeight, overflow: "hidden" }}>
-        <ui.Host matchContents colorScheme={t.scheme} style={{ height: dashboard.controlHeight, width: "100%" }}>
+      <View testID={testID} style={{ minHeight: hostHeight, justifyContent: "center" }}>
+        <ui.Host matchContents colorScheme={t.scheme} style={{ minHeight: hostHeight, width: "100%" }}>
           <ui.Picker
             options={options.map((option) => option.label)}
             selectedIndex={Math.max(0, options.findIndex((option) => option.key === value))}
@@ -622,6 +628,7 @@ export function IOSUnavailable({
 
 export function IOSSwitchRow({
   label,
+  subtitle,
   value,
   onChange,
   symbol,
@@ -633,6 +640,8 @@ export function IOSSwitchRow({
   accessibilityHint,
 }: {
   label: string;
+  /** Short scope line under the label (when / which profiles). */
+  subtitle?: string;
   value: boolean;
   onChange: (next: boolean) => void;
   symbol?: SFSymbol;
@@ -644,7 +653,9 @@ export function IOSSwitchRow({
   accessibilityHint?: string;
 }) {
   const t = useTheme();
-  const spoken = accessibilityLabel ?? `${label}, ${value ? "on" : "off"}`;
+  const spoken =
+    accessibilityLabel ??
+    [label, subtitle, value ? "on" : "off"].filter(Boolean).join(". ");
   return (
     <View
       accessible
@@ -673,7 +684,14 @@ export function IOSSwitchRow({
           <SFSymbol name={symbol} size={18} color={symbolColor ?? t.colors.tone_primary} />
         </View>
       ) : null}
-      <Text style={[t.typography.body, { color: t.colors.text_primary, flex: 1 }]}>{label}</Text>
+      <View style={styles.settingsCopy}>
+        <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{label}</Text>
+        {subtitle ? (
+          <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}>
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
       <Switch
         testID={testID}
         value={value}
@@ -707,19 +725,22 @@ export function IOSFormRow({
 }
 
 const styles = StyleSheet.create({
+  // Explicit 44pt row — padding alone must not fight a second minHeight 44 on
+  // children (that overflowed ListCard/Host wraps and half-clipped labels).
   segmented: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "stretch",
+    height: 44,
+    minHeight: 44,
     borderRadius: dashboard.chipRadius,
     borderCurve: "continuous",
     borderWidth: StyleSheet.hairlineWidth,
     padding: 2,
     gap: 2,
-    minHeight: 44,
+    overflow: "visible",
   },
   segment: {
     flex: 1,
-    minHeight: 44,
     borderRadius: dashboard.chipRadius - 2,
     borderCurve: "continuous",
     borderWidth: StyleSheet.hairlineWidth,

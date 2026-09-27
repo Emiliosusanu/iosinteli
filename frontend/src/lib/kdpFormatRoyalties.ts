@@ -34,6 +34,18 @@ function money(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * Per-ASIN day total for Books rollups.
+ * Prefer format columns when present so KU (`kenp_royalties`) is never dropped
+ * when the legacy `royalties` total undercounts.
+ */
+export function bookDailyRoyaltiesTotal(row: KdpFormatBookDailyRow): number {
+  const total = money(row.royalties);
+  const formatSum =
+    money(row.ebook_royalties) + money(row.paperback_royalties) + money(row.kenp_royalties);
+  return formatSum > 0 ? Math.max(total, formatSum) : total;
+}
+
 export function emptyKdpFormatRoyaltyRange(): KdpFormatRoyaltyRange {
   return {
     hasKdpData: false,
@@ -103,6 +115,35 @@ export function aggregateKdpFormatRoyalties(
           kindle: 0,
         })),
   };
+}
+
+/**
+ * Read format-column rows; fall back only when the schema lacks format columns.
+ * Timeout/auth/unrelated errors must not become empty data or retry as fallback.
+ */
+export async function readKdpFormatRows<T>(
+  primary: () => Promise<T>,
+  fallback: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await primary();
+  } catch (error) {
+    if (!isMissingFormatColumnError(error)) throw error;
+    return await fallback();
+  }
+}
+
+function isMissingFormatColumnError(error: unknown): boolean {
+  const code = String((error as { code?: string })?.code ?? "");
+  const message = String((error as { message?: string })?.message ?? "").toLowerCase();
+  const isUndefinedColumn = code === "42703" || message.includes("42703");
+  if (!isUndefinedColumn) return false;
+  return (
+    message.includes("ebook_royalties") ||
+    message.includes("paperback_royalties") ||
+    message.includes("kenp_royalties") ||
+    message.includes("does not exist")
+  );
 }
 
 export function formatSharePct(part: number, total: number): number {

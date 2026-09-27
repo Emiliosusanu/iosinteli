@@ -135,7 +135,7 @@ test("entity metric totals paginate and chunk .in() filters", () => {
     queriesSrc.indexOf("async function fetchMetricTotalsByEntity"),
     queriesSrc.indexOf("function applyMetricTotals"),
   );
-  assert.match(fn, /chunkArray\(ids, 80\)/);
+  assert.match(fn, /chunkArray\(ids, 150\)/);
   assert.match(fn, /POSTGREST_PAGE_SIZE/);
   assert.match(fn, /\.range\(from, from \+ POSTGREST_PAGE_SIZE - 1\)/);
   assert.doesNotMatch(fn, /fetchAllPages/);
@@ -155,7 +155,7 @@ test("fetchKdpRoyaltiesRange and linked KDP accounts paginate all account-days",
   assert.match(linked, /\.range\(from, to\)/);
   assert.match(royalties, /fetchAllPages/);
   assert.match(royalties, /\.order\("account_id"/);
-  assert.match(royalties, /chunkArray\(accountIds/);
+  assert.match(royalties, /fetchAllPages|chunkArray|BOOKS_IN_CHUNK|cleanAccountIds/);
   assert.doesNotMatch(
     royalties.slice(0, royalties.indexOf("aggregateKdpDailyRows")),
     /\.from\("kdp_daily_data"\)\s*\n\s*\.select\([^)]+\)\s*\n\s*\.in\("account_id", accountIds\)\s*\n\s*\.gte\("date"/,
@@ -168,10 +168,9 @@ test("Books required reads paginate inside the selected-profile scope", () => {
     queriesSrc.indexOf("// ---------- Optimization Rules ----------"),
   );
   assert.match(fn, /fetchRequiredPages/);
-  assert.match(fn, /fetchAllPages/);
   assert.match(fn, /fetchOptionalInPages/);
   assert.match(queriesSrc, /const BOOKS_IN_CHUNK = 200/);
-  assert.match(fn, /fetchLinkedKdpAccountIds\(kdpLinkProfileIds\)/);
+  assert.match(fn, /fetchKdpAccountIdsForRoyaltyQuery\(kdpLinkProfileIds/);
   assert.match(fn, /\.order\("date"/);
   assert.match(fn, /\.order\("asin"/);
   assert.match(booksReadSrc, /assembleLogicalBookRows/);

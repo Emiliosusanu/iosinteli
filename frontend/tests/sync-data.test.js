@@ -59,6 +59,22 @@ test("query keys separate self from viewed customer", () => {
   assert.match(syncScreen, /syncStatusQueryKey/);
 });
 
+test("Sync AMS intraday uses real ams_messages columns via campaigns", () => {
+  const fnStart = syncScreen.indexOf("async function fetchIntradayMessages");
+  const fnEnd = syncScreen.indexOf("export default function SyncScreen");
+  assert.ok(fnStart >= 0 && fnEnd > fnStart);
+  const fn = syncScreen.slice(fnStart, fnEnd);
+  assert.match(fn, /from\("ams_messages"\)/);
+  assert.match(fn, /select\("id,created_at,dataset_id,campaign_id"\)/);
+  assert.match(fn, /from\("campaigns"\)/);
+  assert.match(fn, /\.in\("amazon_profile_id", profileIds\)/);
+  assert.match(fn, /\.in\("campaign_id", chunk\)/);
+  assert.doesNotMatch(fn, /select\([^)]*event_time/);
+  assert.doesNotMatch(fn, /select\([^)]*message_type/);
+  assert.doesNotMatch(fn, /from\("ams_messages"\)[\s\S]{0,120}\.in\("amazon_profile_id"/);
+  assert.doesNotMatch(fn, /select\("id,created_at,type,campaign_id"\)/);
+});
+
 test("hero never claims KDP or all sources, and acceptance is not completion", () => {
   assert.equal(triggerResponseMeansCompleted(), false);
   assert.equal(claimsKdpOrAllSources(ADS_UP_TO_DATE_LABEL), false);

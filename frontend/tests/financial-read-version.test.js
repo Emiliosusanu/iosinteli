@@ -89,12 +89,18 @@ test("incomplete financial success is not written over a good cache", () => {
   );
 });
 
-test("Home financial and Books reads use complete-v4 keys", () => {
+test("Home financial and Books reads use complete-v4/v5 keys", () => {
   assert.equal(FINANCIAL_QUERY_ROOTS.campaignMetrics, "campaign-metrics-complete-v4");
   assert.equal(FINANCIAL_QUERY_ROOTS.placementMix, "placement-mix-range-complete-v4");
   assert.equal(FINANCIAL_QUERY_ROOTS.mobileOverview, "mobile-overview-complete-v4");
   assert.equal(FINANCIAL_QUERY_ROOTS.kdpRoyalties, "kdp-royalties-complete-v4");
-  assert.equal(FINANCIAL_QUERY_ROOTS.products, "products-range-complete-v4");
+  // Books parent-format + KU rollup bump (catalog must not overwrite DIGITAL/PRINT).
+  // v6: products key includes limit so Overview(300) cannot poison Books(0).
+  assert.equal(FINANCIAL_QUERY_ROOTS.products, "products-range-complete-v6");
+  assert.equal(FINANCIAL_QUERY_ROOTS.topBooks, "top-books-range-complete-v5");
+  assert.equal(isObsoleteFinancialQueryRoot("products-range-complete-v4"), true);
+  assert.equal(isObsoleteFinancialQueryRoot("products-range-complete-v5"), true);
+  assert.equal(isObsoleteFinancialQueryRoot("top-books-range-complete-v4"), true);
   assert.match(home, /FINANCIAL_QUERY_ROOTS\.campaignMetrics/);
   assert.match(home, /FINANCIAL_QUERY_ROOTS\.placementMix/);
   assert.match(home, /FINANCIAL_QUERY_ROOTS\.mobileOverview/);
@@ -104,7 +110,7 @@ test("Home financial and Books reads use complete-v4 keys", () => {
   assert.match(home, /home\.month\.server/);
   assert.match(home, /home\.today\.cache/);
   assert.match(home, /home\.today\.server/);
-  assert.match(home, /noPeriodPlaceholder|HOME_PERIOD_QUERY_CACHE|periodFinancePending/);
+  assert.match(home, /noPeriodPlaceholder|HOME_PERIOD_QUERY_CACHE|periodFinancePending|periodFinancePartialPending/);
   assert.match(home, /Array\.isArray\(metricsQ\.data\)/);
   assert.doesNotMatch(home, /\["campaign-metrics"/);
   assert.doesNotMatch(home, /\["placement-mix-range"/);

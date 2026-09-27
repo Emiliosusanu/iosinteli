@@ -22,8 +22,8 @@ test("motion tokens match the premium duration bands", () => {
   assert.equal(motion.contentChange, 200);
   assert.equal(motion.segmentTransition, 200);
   assert.equal(motion.sheetTransition, 280);
-  assert.equal(motion.glassSettle, 260);
-  assert.equal(motion.staggerStep, 45);
+  assert.equal(motion.glassSettle, 180);
+  assert.equal(motion.staggerStep, 28);
   assert.equal(PRESS_SCALE, 0.972);
 });
 
@@ -66,6 +66,10 @@ test("Home uses the motion system and does not replay entrance or haptic navigat
   assert.doesNotMatch(home, /FadeOnChange|sparkles|confetti/);
   assert.doesNotMatch(home, /home-horizon|home-today-7d/);
   assert.match(tabs, /animation: "none"/);
+  assert.match(tabs, /freezeOnBlur:\s*false/);
+  // Period changes must not remount Overview widgets (StaggerReveal flash / freeze feel).
+  assert.doesNotMatch(home, /key=\{`[^`$]*\$\{activePeriodKey\}/);
+  assert.match(home, /key=\{`home-ads-engine-\$\{scopeProfiles\.join/);
   assert.match(charts, /playHaptic\("select"\)/);
   assert.match(charts, /ChartScrubCursor/);
   assert.match(charts, /VerifiedValue/);
@@ -85,6 +89,8 @@ test("VerifiedValue and scrub cursor stay on opacity/transform tokens", () => {
   assert.match(motionSrc, /translateY/);
   assert.match(motionSrc, /function ChartScrubCursor/);
   assert.match(motionSrc, /function StaggerReveal/);
+  assert.match(motionSrc, /overviewStaggerDone/);
+  assert.match(motionSrc, /resetOverviewStagger/);
   assert.match(motionSrc, /withSpring/);
   assert.match(motionSrc, /motion\.fastState/);
   assert.match(motionSrc, /motion\.contentChange/);

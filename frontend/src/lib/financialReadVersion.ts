@@ -19,9 +19,10 @@ export const FINANCIAL_QUERY_ROOTS = {
   kdpRoyaltiesSevenDay: "kdp-royalties-7d-complete-v4",
   kdpRoyaltiesYesterday: "kdp-royalties-yesterday-complete-v4",
   kdpRoyaltiesDaybefore: "kdp-royalties-daybefore-complete-v4",
-  topBooks: "top-books-range-complete-v4",
-  products: "products-range-complete-v4",
-  topBooksYesterday: "top-books-yesterday-complete-v4",
+  topBooks: "top-books-range-complete-v5",
+  // v6: products queryKey must include `limit` so Overview (300) cannot poison Books (0).
+  products: "products-range-complete-v6",
+  topBooksYesterday: "top-books-yesterday-complete-v5",
 } as const;
 
 export const OBSOLETE_FINANCIAL_QUERY_ROOTS = [
@@ -56,6 +57,10 @@ export const OBSOLETE_FINANCIAL_QUERY_ROOTS = [
   "top-books-range-complete-v3",
   "products-range-complete-v3",
   "top-books-yesterday-complete-v3",
+  "top-books-range-complete-v4",
+  "products-range-complete-v4",
+  "top-books-yesterday-complete-v4",
+  "products-range-complete-v5",
 ] as const;
 
 const COMPLETE_ROOTS = new Set<string>(Object.values(FINANCIAL_QUERY_ROOTS));

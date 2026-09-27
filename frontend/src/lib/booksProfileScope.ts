@@ -3,9 +3,15 @@
  * Disabled Ads profiles (`is_enabled !== true`) must not contribute books.
  */
 
-import { moneyProfileIdsForSelection, nativeCurrencyMoneyProfileIdsForSelection, profileEnabled } from "./accountsUi.ts";
+import {
+  moneyProfileIdsForSelection,
+  nativeCurrencyMoneyProfileIdsForSelection,
+  profileEnabled,
+  profileInView,
+} from "./accountsUi.ts";
 import {
   isKdpOnlySessionScope,
+  kdpRoyaltiesQueryAllowed,
   selectKdpRoyaltyScope,
   selectOverviewPortfolioRoyaltyScope,
   type KdpRoyaltyScope,
@@ -135,16 +141,51 @@ export function booksRoyaltyScope(profiles: readonly AmazonProfile[]): KdpRoyalt
 }
 
 /**
- * Overview + Books must not use `user_accounts` while any Ads profiles exist
- * (enabled or disabled) — that pulled every KDP account and leaked royalties
- * from Disabled/paused markets and unlinked shelves ($4.1K-style overcount).
- * Only true KDP-only sessions (no Ads profiles at all) use `user_accounts`.
+ * Nest `coversAllEnabledProfiles`: every Nest-enabled Ads profile is covered by
+ * the selection (row id or amazon profile_id).
+ */
+export function coversAllEnabledAdsProfiles(
+  profiles: readonly AmazonProfile[],
+  selectedProfileIds: readonly string[],
+): boolean {
+  const enabled = profiles.filter(profileEnabled);
+  if (enabled.length === 0) return false;
+  const selected = selectedProfileIds.map((id) => String(id || "").trim()).filter(Boolean);
+  return enabled.every((profile) => profileInView(profile, selected));
+}
+
+/**
+ * Books / product detail: never widen to every owned shelf while Ads exist.
+ * Only true KDP-only sessions (no Ads rows) use `user_accounts`.
  */
 export function booksKdpQueryScope(
   scope: KdpRoyaltyScope,
 ): "linked_profiles" | "user_accounts" {
   if (isKdpOnlySessionScope(scope)) return "user_accounts";
   return "linked_profiles";
+}
+
+/**
+ * Overview royalties only — mirrors Nest `isAllProfilesOverview` Gross widen:
+ * when every Nest-enabled Ads profile is in the portfolio selection, sum all
+ * owned `kdp_accounts` for the signed-in user (still `user_id`-filtered).
+ * Currency-chip Ads spend stays on `moneyProfileIds`; this does not change spend.
+ * Does not use Disabled/legacy profile links (caller keeps allowLegacy: false).
+ */
+export function overviewKdpQueryScope(
+  profiles: readonly AmazonProfile[],
+  selectedProfileIds: readonly string[],
+  royaltyScope: KdpRoyaltyScope,
+): "linked_profiles" | "user_accounts" {
+  if (isKdpOnlySessionScope(royaltyScope)) return "user_accounts";
+  if (
+    sessionHasAdsProfiles(profiles) &&
+    kdpRoyaltiesQueryAllowed(royaltyScope) &&
+    coversAllEnabledAdsProfiles(profiles, selectedProfileIds)
+  ) {
+    return "user_accounts";
+  }
+  return booksKdpQueryScope(royaltyScope);
 }
 
 /** Drop KDP accounts that are not owned by the signed-in user. */

@@ -65,37 +65,50 @@ type IntradayRow = {
 async function fetchIntradayMessages(profileIds: string[]): Promise<IntradayRow[] | null> {
   if (!profileIds.length) return null;
   try {
-    const primary = await supabase
-      .from("ams_messages")
-      .select("id,event_time,message_type,campaign_id")
-      .in("amazon_profile_id", profileIds)
-      .order("event_time", { ascending: false })
-      .limit(20);
-    if (!primary.error) {
-      return (primary.data ?? []).map((row: Record<string, unknown>) => ({
-        id: String(row.id),
-        at: typeof row.event_time === "string" ? row.event_time : null,
-        kind: typeof row.message_type === "string" ? row.message_type : null,
-      }));
+    // ams_messages has no amazon_profile_id / event_time / message_type / type.
+    // Scope via campaigns.amazon_profile_id → campaign_id (same path as hourly metrics).
+    const campaignIds: string[] = [];
+    const seen = new Set<string>();
+    for (let from = 0; from < 1000; from += 200) {
+      const { data, error } = await supabase
+        .from("campaigns")
+        .select("id")
+        .in("amazon_profile_id", profileIds)
+        .order("id", { ascending: true })
+        .range(from, from + 199);
+      if (error) return null;
+      const page = data ?? [];
+      for (const row of page) {
+        const id = String(row.id || "").trim();
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        campaignIds.push(id);
+      }
+      if (page.length < 200) break;
     }
+    if (!campaignIds.length) return [];
 
-    const fallback = await supabase
-      .from("ams_messages")
-      .select("id,created_at,type,campaign_id")
-      .in("amazon_profile_id", profileIds)
-      .order("created_at", { ascending: false })
-      .limit(20);
-    if (!fallback.error) {
-      return (fallback.data ?? []).map((row: Record<string, unknown>) => ({
-        id: String(row.id),
-        at: typeof row.created_at === "string" ? row.created_at : null,
-        kind: typeof row.type === "string" ? row.type : null,
-      }));
+    const rows: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < campaignIds.length; i += 200) {
+      const chunk = campaignIds.slice(i, i + 200);
+      const { data, error } = await supabase
+        .from("ams_messages")
+        .select("id,created_at,dataset_id,campaign_id")
+        .in("campaign_id", chunk)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (error) return null;
+      rows.push(...((data ?? []) as Array<Record<string, unknown>>));
     }
+    rows.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+    return rows.slice(0, 20).map((row) => ({
+      id: String(row.id),
+      at: typeof row.created_at === "string" ? row.created_at : null,
+      kind: typeof row.dataset_id === "string" ? row.dataset_id : null,
+    }));
   } catch {
     return null;
   }
-  return null;
 }
 
 export default function SyncScreen() {

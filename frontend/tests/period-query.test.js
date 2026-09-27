@@ -9,6 +9,7 @@ import {
   financialPeriodQueryKey,
   noPeriodPlaceholder,
   periodFinancePending,
+  periodFinancePartialPending,
   periodQueryKey,
   periodQueryPending,
   periodQueryRefreshing,
@@ -74,6 +75,15 @@ test("periodFinancePending waits for both metrics and royalties", () => {
   assert.equal(periodFinancePending(ready, waiting), true);
 });
 
+test("periodFinancePartialPending is true only when exactly one side is cold", () => {
+  const ready = { isPending: false, isError: false, data: [] };
+  const waiting = { isPending: true, isError: false, data: null };
+  assert.equal(periodFinancePartialPending(ready, ready), false);
+  assert.equal(periodFinancePartialPending(waiting, waiting), false);
+  assert.equal(periodFinancePartialPending(waiting, ready), true);
+  assert.equal(periodFinancePartialPending(ready, waiting), true);
+});
+
 test("periodQueryRefreshing is true only for settled background refetch", () => {
   assert.equal(
     periodQueryRefreshing({ isFetching: true, isFetched: true, isError: false }),
@@ -114,7 +124,7 @@ test("Campaigns and Books never reuse a previous period's list", () => {
 
 test("Home wires period isolation, motion, and live refetch", () => {
   assert.match(home, /from "@\/src\/lib\/periodQuery"/);
-  assert.match(home, /periodFinancePending/);
+  assert.match(home, /periodFinancePartialPending/);
   assert.match(home, /financialPeriodQueryKey/);
   assert.match(home, /HorizonPane watchKey=\{activePeriodKey\}/);
   assert.match(home, /Updating…/);
@@ -152,8 +162,10 @@ test("list screens tune FlatList virtualization windows", () => {
   assert.match(targeting, /TargetingListSeparator/);
 });
 
-test("chrome keeps one live blur; scroll cards and tab bar do not stack BlurViews", () => {
+test("chrome keeps card blurs off scroll surfaces; tab dock is solid theme-synced", () => {
   assert.match(glass, /strength === "chrome"/);
+  assert.match(tabBar, /tabbar_background/);
+  assert.match(tabBar, /PressableScale/);
   assert.doesNotMatch(tabBar, /BlurView/);
   assert.match(header, /withRepeat/);
   assert.match(header, /cancelAnimation/);

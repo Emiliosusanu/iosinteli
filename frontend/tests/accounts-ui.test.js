@@ -22,7 +22,11 @@ import {
   groupProfilesByAdsAccount,
   isReadyToEnable,
   matchesReadyDefaultFilter,
+  multiCountryCodes,
   multiCountryFlagIcons,
+  formatMarketPillLabel,
+  marketPillCountryLabel,
+  sortMarketCountryCodes,
   displayCurrencyOfSelection,
   currenciesInSelection,
   mixedMarketplaceMoneyHint,
@@ -410,6 +414,46 @@ test("row speech includes name, enabled, and view without raw ids", () => {
     ),
     ["🇺🇸", "🇨🇦"],
   );
+  assert.deepEqual(
+    multiCountryCodes(
+      [
+        { country_code: "CA", is_enabled: true },
+        { country_code: "us", is_enabled: true },
+        { country_code: "DE", is_enabled: true },
+        { country_code: "CA", is_enabled: true },
+      ],
+      { onlyEnabled: true },
+    ),
+    ["US", "CA", "DE"],
+  );
+  assert.deepEqual(sortMarketCountryCodes(["de", "US", "ca", "US"]), ["US", "CA", "DE"]);
+});
+
+test("formatMarketPillLabel builds Overview market pill copy", () => {
+  assert.equal(marketPillCountryLabel("US"), "US");
+  assert.equal(marketPillCountryLabel("CA"), "Canada");
+  assert.equal(marketPillCountryLabel("UK"), "UK");
+  assert.equal(marketPillCountryLabel("GB"), "UK");
+  assert.equal(marketPillCountryLabel("DE"), "Germany");
+  assert.equal(formatMarketPillLabel(["US", "CA"], "USD"), "US + Canada • USD");
+  assert.equal(formatMarketPillLabel(["CA", "US"], "USD"), "US + Canada • USD");
+  assert.equal(formatMarketPillLabel(["GB"], "GBP"), "UK • GBP");
+  assert.equal(formatMarketPillLabel(["UK", "US"], "GBP"), "US + UK • GBP");
+  assert.equal(formatMarketPillLabel(["US", "CA", "DE"], "USD"), "US + Canada + Germany • USD");
+  assert.equal(formatMarketPillLabel([], "USD"), "USD");
+  assert.equal(formatMarketPillLabel(null, "EUR"), "EUR");
+  assert.equal(formatMarketPillLabel(["US"], ""), "US");
+  assert.equal(formatMarketPillLabel([], ""), "");
+});
+
+test("TopBar uses shared MarketPill for multi-country trailing", () => {
+  assert.match(topBar, /from "\.\/MarketPill"/);
+  assert.match(topBar, /<MarketPill/);
+  assert.match(topBar, /multiCountryCodes/);
+  assert.match(topBar, /formatMarketPillLabel/);
+  assert.match(topBar, /hasMarketPill/);
+  assert.match(topBar, /testID="profile-selector-btn"/);
+  assert.doesNotMatch(topBar, /multiCountryFlagIcons/);
 });
 
 test("distinct empty and error copy", () => {

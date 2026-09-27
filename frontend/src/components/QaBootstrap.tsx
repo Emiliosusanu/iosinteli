@@ -65,6 +65,8 @@ export function QaBootstrap() {
         id: cmd.id,
         campaignsState: cmd.campaignsState,
         campaignsSort: cmd.campaignsSort,
+        campaignsSearch: cmd.campaignsSearch,
+        campaignsBookAsins: cmd.campaignsBookAsins,
         targetsSegment: cmd.targetsSegment,
         targetsPerf: cmd.targetsPerf,
         targetsSort: cmd.targetsSort,
@@ -74,7 +76,42 @@ export function QaBootstrap() {
       stashPendingQaFilters(filterSeed);
 
       if (cmd.route) {
-        router.replace(cmd.route as any);
+        if (cmd.route === "/campaign/create") {
+          // Use params object — query-string deep links have crashed to SpringBoard
+          // on this device (see create-kw-bids-198). Pathname + params stays in-app.
+          const params: Record<string, string> = {};
+          if (cmd.createAsin) params.asin = cmd.createAsin;
+          if (cmd.createTargeting) params.targeting = cmd.createTargeting;
+          if (cmd.createProfileId) params.profileId = cmd.createProfileId;
+          if (Object.keys(params).length) {
+            router.replace({ pathname: "/campaign/create", params } as any);
+          } else {
+            router.replace("/campaign/create" as any);
+          }
+        } else if (cmd.route === "/campaign/ad-group-create") {
+          const params: Record<string, string> = {};
+          if (cmd.createCampaignId) params.campaignId = cmd.createCampaignId;
+          if (cmd.createAsin) params.asin = cmd.createAsin;
+          if (cmd.createTargeting) params.targeting = cmd.createTargeting;
+          if (Object.keys(params).length) {
+            router.replace({
+              pathname: "/campaign/ad-group-create",
+              params,
+            } as any);
+          } else {
+            router.replace("/campaign/ad-group-create" as any);
+          }
+        } else if (cmd.route === "/adgroup/add-targets") {
+          const params: Record<string, string> = {};
+          if (cmd.createAdGroupId) params.id = cmd.createAdGroupId;
+          if (cmd.createCampaignId) params.campaignId = cmd.createCampaignId;
+          if (cmd.createTargeting === "products") params.mode = "products";
+          else params.mode = "keywords";
+          if (cmd.createAdGroupName) params.name = cmd.createAdGroupName;
+          router.replace({ pathname: "/adgroup/add-targets", params } as any);
+        } else {
+          router.replace(cmd.route as any);
+        }
       }
 
       console.log(

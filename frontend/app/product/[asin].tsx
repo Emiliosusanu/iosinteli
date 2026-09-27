@@ -19,12 +19,31 @@ import {
   ListCard,
   RetryState,
   ScreenSpinner,
+  SecondaryButton,
   ToneDot,
   MetricStrip,
 } from "@/src/components/Primitives";
 import { useApp } from "@/src/contexts/AppContext";
-import { fetchBookCampaignsRange, fetchTopBooksRange, type BookCampaignRow, type TopBookRow } from "@/src/lib/queries";
-import { selectKdpRoyaltyScopeForSelection } from "@/src/lib/kdpRoyaltyScope";
+import {
+  fetchBookCampaignsRange,
+  fetchOwnedBookIdentity,
+  fetchTopBooksRange,
+  type BookCampaignRow,
+  type TopBookRow,
+} from "@/src/lib/queries";
+import { isKdpOnlySessionScope } from "@/src/lib/kdpRoyaltyScope";
+import {
+  booksMoneyProfileIds,
+  booksRoyaltyScopeForSelection,
+  overviewKdpQueryScope,
+} from "@/src/lib/booksProfileScope";
+import {
+  defaultCreateFormatAsin,
+  FORMAT_KIND_ACCENT,
+  formatsFromWorkKey,
+  preferredEnabledProfileId,
+  type BookFormatOption,
+} from "@/src/lib/bookCampaignFormats";
 import { sortedProfileIds } from "@/src/lib/periodQuery";
 import { biddingStrategyLabel, statusLabel } from "@/src/lib/campaigns";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
@@ -47,9 +66,14 @@ import {
   bookNetIsKnown,
 } from "@/src/lib/netRoyalties";
 import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialReadVersion";
-import { countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
+import {
+  countriesForSponsoredBook,
+  marketplaceFlagsA11y,
+  type SponsoredBookRef,
+  type SponsoredMarketplaceIndex,
+} from "@/src/lib/bookMarketplaces";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
-import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
+import { BookMarketplaceFlags, CampaignMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 
 function paramValue(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] ?? "";
@@ -117,18 +141,29 @@ export default function ProductCampaignsScreen() {
   const paramImageUrl = paramValue(params.imageUrl);
   const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
-  const royaltyProfiles = useMemo(
-    () => sortedProfileIds(selectKdpRoyaltyScopeForSelection(profiles, selectedProfileIds).profileIds),
+  const moneyProfileIds = useMemo(
+    () => sortedProfileIds(booksMoneyProfileIds(profiles, selectedProfileIds)),
     [profiles, selectedProfileIds],
   );
-  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", selectedProfileIds, royaltyProfiles, dateRange.start, dateRange.end] as const;
+  const royaltyScope = useMemo(
+    () => booksRoyaltyScopeForSelection(profiles, moneyProfileIds),
+    [profiles, moneyProfileIds],
+  );
+  const royaltyProfiles = useMemo(
+    () => sortedProfileIds(royaltyScope.profileIds),
+    [royaltyScope.profileIds],
+  );
+  const kdpQueryScope = overviewKdpQueryScope(profiles, selectedProfileIds, royaltyScope);
+  // Keep limit in the key so Overview/Books caches cannot cross-hydrate a truncated list.
+  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, 300] as const;
 
   const booksQ = useQuery({
     queryKey: booksKey,
     queryFn: () =>
       fetchTopBooksRange({
-        profileIds: selectedProfileIds,
+        profileIds: moneyProfileIds,
         kdpProfileIds: royaltyProfiles,
+        kdpScope: kdpQueryScope,
         start: dateRange.start,
         end: dateRange.end,
         royaltyRate: 0,
@@ -136,24 +171,32 @@ export default function ProductCampaignsScreen() {
         filterUserId: adminFilterUserId,
         activityDays: 0,
       }),
-    enabled: selectedProfileIds.length > 0,
+    enabled: moneyProfileIds.length > 0 || isKdpOnlySessionScope(royaltyScope),
     staleTime: 5 * 60_000,
     placeholderData: () => queryClient.getQueryData(booksKey),
     meta: financialQueryMeta(),
   });
 
   const campaignsQ = useQuery({
-    queryKey: ["product-campaigns", adminFilterUserId ?? "self", selectedProfileIds, asin, paramTitle, dateRange.start, dateRange.end],
+    queryKey: ["product-campaigns", adminFilterUserId ?? "self", moneyProfileIds, asin, paramTitle, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () =>
       fetchBookCampaignsRange({
-        profileIds: selectedProfileIds,
+        profileIds: moneyProfileIds,
         asin,
         title: paramTitle,
         start: dateRange.start,
         end: dateRange.end,
+        displayCurrency: primaryCurrency,
         filterUserId: adminFilterUserId,
       }),
-    enabled: selectedProfileIds.length > 0 && asin.length > 0,
+    enabled: moneyProfileIds.length > 0 && asin.length > 0,
+  });
+
+  const identityQ = useQuery({
+    queryKey: ["owned-book-identity", adminFilterUserId ?? "self", asin],
+    queryFn: () => fetchOwnedBookIdentity(asin),
+    enabled: !adminFilterUserId && asin.length > 0,
+    staleTime: 15 * 60_000,
   });
 
   const book = useMemo(() => matchBook(booksQ.data ?? [], asin), [booksQ.data, asin]);
@@ -161,10 +204,42 @@ export default function ProductCampaignsScreen() {
     markPerf("book_detail.mount");
   }, []);
   const campaigns = campaignsQ.data ?? [];
-  const title = book?.title || paramTitle || asin;
-  const imageUrl = book?.image_url ?? paramImageUrl;
+  const identity = identityQ.data ?? null;
+  const title = book?.title || identity?.title || paramTitle || "Book";
+  const imageUrl = book?.image_url ?? identity?.image_url ?? paramImageUrl;
+  const bookIdentity = book ?? {
+    title,
+    asin,
+    book_key: identity?.book_key ?? asin,
+  };
   const amazonCover = fallbackAsinCoverUrl(asin);
   const bookColor = fallbackBookColor(bookColorKeyFor(book ?? { asin, title }));
+
+  const formatOptions = useMemo(
+    () => formatsFromWorkKey(bookIdentity.book_key),
+    [bookIdentity.book_key],
+  );
+  const createAsin = useMemo(() => {
+    const fromFormats = defaultCreateFormatAsin(formatOptions);
+    return fromFormats || asin;
+  }, [formatOptions, asin]);
+  const createProfileId = useMemo(() => {
+    const countries = countriesForSponsoredBook(marketplaceIndex, bookIdentity);
+    const preferredCountry = countries[0] ?? null;
+    return preferredEnabledProfileId(profiles, preferredCountry);
+  }, [marketplaceIndex, bookIdentity, profiles]);
+
+  const openCreateCampaign = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    router.push({
+      pathname: "/campaign/create",
+      params: {
+        asin: createAsin,
+        workKey: bookIdentity.book_key ?? "",
+        profileId: createProfileId ?? "",
+      },
+    });
+  };
 
   const adsTotals = useMemo(() => {
     return campaigns.reduce(
@@ -183,17 +258,17 @@ export default function ProductCampaignsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([campaignsQ.refetch(), booksQ.refetch()]);
+    await Promise.all([campaignsQ.refetch(), booksQ.refetch(), identityQ.refetch()]);
     setRefreshing(false);
   };
 
-  if (selectedProfileIds.length === 0) {
+  if (moneyProfileIds.length === 0) {
     return (
       <SubScreen title="Book" showDateRange>
         <EmptyState
           icon="business-outline"
-          title="No account connected"
-          subtitle="Connect an Amazon account to see this book."
+          title="No enabled Ads profile"
+          subtitle="Enable an Amazon Ads profile to see this book's campaigns."
         />
       </SubScreen>
     );
@@ -228,6 +303,7 @@ export default function ProductCampaignsScreen() {
             fallbackUri={amazonCover}
             bookColor={bookColor}
             book={book}
+            bookIdentity={bookIdentity}
             adsTotals={adsTotals}
             adsAcos={adsAcos}
             campaignsCount={campaigns.length}
@@ -237,6 +313,8 @@ export default function ProductCampaignsScreen() {
             onRetryCampaigns={() => void campaignsQ.refetch()}
             currency={primaryCurrency}
             marketplaceIndex={marketplaceIndex}
+            formatOptions={formatOptions}
+            onCreateCampaign={openCreateCampaign}
           />
         }
         ListEmptyComponent={
@@ -254,6 +332,8 @@ export default function ProductCampaignsScreen() {
           <CampaignRow
             item={item}
             currency={primaryCurrency}
+            marketplaceIndex={marketplaceIndex}
+            profiles={profiles}
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               router.push(`/campaign/${item.id}`);
@@ -272,6 +352,7 @@ function BookHeader({
   fallbackUri,
   bookColor,
   book,
+  bookIdentity,
   adsTotals,
   adsAcos,
   campaignsCount,
@@ -281,6 +362,8 @@ function BookHeader({
   onRetryCampaigns,
   currency,
   marketplaceIndex,
+  formatOptions,
+  onCreateCampaign,
 }: {
   asin: string;
   title: string;
@@ -288,6 +371,7 @@ function BookHeader({
   fallbackUri?: string | null;
   bookColor: string;
   book: TopBookRow | null;
+  bookIdentity: SponsoredBookRef;
   adsTotals: { impressions: number; clicks: number; orders: number; spend: number; sales: number };
   adsAcos: number;
   campaignsCount: number;
@@ -297,33 +381,53 @@ function BookHeader({
   onRetryCampaigns: () => void;
   currency: string;
   marketplaceIndex: SponsoredMarketplaceIndex;
+  formatOptions: ReturnType<typeof formatsFromWorkKey>;
+  onCreateCampaign: () => void;
 }) {
   const t = useTheme();
-  const hasBreakEven = !!book && hasAuthoritativeBreakEven(book.breakeven_acos);
-  const status = book ? bookStatus(book, hasBreakEven) : null;
+  const adsReady = !campaignsLoading && !campaignsFailed;
+  // The campaign list below is the exact-ASIN/product-ad authority for this
+  // book. Drive every Ads figure in the header from that same sum so the hero
+  // can never show 0 impressions while its own linked campaigns show traffic.
+  const displayBook = book && adsReady
+    ? {
+        ...book,
+        impressions: adsTotals.impressions,
+        clicks: adsTotals.clicks,
+        orders: adsTotals.orders,
+        spend: adsTotals.spend,
+        sales: adsTotals.sales,
+        acos: adsAcos,
+        roas: adsTotals.spend > 0 ? adsTotals.sales / adsTotals.spend : 0,
+        net:
+          typeof book.royalties === "number"
+            ? book.royalties - adsTotals.spend
+            : null,
+        ads_state: "ready" as const,
+      }
+    : book;
+  const hasBreakEven = !!displayBook && hasAuthoritativeBreakEven(displayBook.breakeven_acos);
+  const status = displayBook ? bookStatus(displayBook, hasBreakEven) : null;
   const statusColor = status ? toneColor(status.tone, t.colors) : t.colors.text_secondary;
-  const kdpAvailable = !!book && book.kdp_state !== "missing" && book.royalties != null;
-  const netReady = !!book && bookNetIsKnown(book);
-  const resolvedNet = book ? resolveBookNet(book) : null;
+  const kdpAvailable = !!displayBook && displayBook.kdp_state !== "missing" && displayBook.royalties != null;
+  const netReady = !!displayBook && bookNetIsKnown(displayBook);
+  const resolvedNet = displayBook ? resolveBookNet(displayBook) : null;
   const netPos = resolvedNet != null && resolvedNet >= 0;
-  const bookTone = book
+  const bookTone = displayBook
     ? hasBreakEven
-      ? acosTone(book.acos, book.breakeven_acos)
+      ? acosTone(displayBook.acos, displayBook.breakeven_acos)
       : "inactive"
     : acosTone(adsAcos);
-  const acosOver = !!book && isOverBreakEven(book.acos, book.breakeven_acos);
+  const acosOver = !!displayBook && isOverBreakEven(displayBook.acos, displayBook.breakeven_acos);
   const showTraffic = adsTotals.impressions > 0 || adsTotals.clicks > 0;
 
-  const adsReady = !!book && book.ads_state !== "pending" && book.ads_state !== "missing";
-  const economicsItems = book
+  const economicsItems = displayBook
     ? [
-        { label: KDP_ROYALTIES_LABEL, value: kdpAvailable ? formatCurrency(book.royalties!, currency, { compact: true }) : "—", color: kdpAvailable ? t.colors.tone_good : t.colors.text_tertiary },
-        { label: ADS_SPEND_LABEL, value: adsReady ? formatCurrency(book.spend, currency, { compact: true }) : "—" },
-        { label: "Impr", value: adsReady ? formatInt(book.impressions) : "—" },
-        { label: "Clicks", value: adsReady ? formatInt(book.clicks) : "—" },
+        { label: "Royalties", value: kdpAvailable ? formatCurrency(displayBook.royalties!, currency, { compact: true }) : "—", color: kdpAvailable ? t.colors.tone_good : t.colors.text_tertiary },
+        { label: "Ads spend", value: adsReady ? formatCurrency(adsTotals.spend, currency, { compact: true }) : "—" },
         {
           label: "Ads ACoS",
-          value: adsReady && book.sales > 0 ? formatPercent(book.acos) : "—",
+          value: adsReady && adsTotals.sales > 0 ? formatPercent(adsAcos) : "—",
           color: toneColor(bookTone, t.colors),
         },
       ]
@@ -348,14 +452,14 @@ function BookHeader({
           style={{ width: "100%" }}
           accessibilityLabel={[
             title,
-            marketplaceFlagsA11y(countriesForSponsoredBook(marketplaceIndex, book ?? { title, asin })),
+            marketplaceFlagsA11y(countriesForSponsoredBook(marketplaceIndex, bookIdentity)),
             status?.label,
-            book
+            displayBook
               ? `${netRoyaltiesVoiceOver({
-                  kdpRoyalties: kdpAvailable ? formatCurrency(book.royalties!, currency) : "unavailable",
-                  adsSpend: formatCurrency(book.spend, currency),
+                  kdpRoyalties: kdpAvailable ? formatCurrency(displayBook.royalties!, currency) : "unavailable",
+                  adsSpend: formatCurrency(adsTotals.spend, currency),
                   netRoyalties: netReady && resolvedNet != null ? formatCurrency(resolvedNet, currency) : "unavailable",
-                })}. Amazon Ads ACoS ${book.sales > 0 ? formatPercent(book.acos) : "not available"}. ${formatInt(book.impressions)} impressions. ${formatInt(book.clicks)} clicks`
+                })}. Amazon Ads ACoS ${adsTotals.sales > 0 ? formatPercent(adsAcos) : "not available"}. ${formatInt(adsTotals.impressions)} impressions. ${formatInt(adsTotals.clicks)} clicks`
               : undefined,
           ]
             .filter(Boolean)
@@ -366,77 +470,151 @@ function BookHeader({
               uri={imageUrl}
               fallbackUri={fallbackUri}
               asin={asin}
-              size="md"
+              size="lg"
               recyclingKey={asin}
             />
 
             <View style={styles.titleBlock}>
               <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
-                <Text style={[t.typography.headline, { color: t.colors.text_primary, flex: 1, minWidth: 0 }]} numberOfLines={3}>
+                <Text
+                  style={[
+                    t.typography.title3,
+                    {
+                      color: t.colors.text_primary,
+                      flex: 1,
+                      minWidth: 0,
+                      fontWeight: "700",
+                      letterSpacing: -0.3,
+                    },
+                  ]}
+                  numberOfLines={3}
+                >
                   {title}
                 </Text>
                 <BookMarketplaceFlags
                   index={marketplaceIndex}
-                  book={book ?? { title, asin }}
+                  book={bookIdentity}
                   style={t.typography.headline}
                 />
               </View>
               {status ? (
-                <Text style={[t.typography.caption1, { color: statusColor, fontWeight: "600", marginTop: 6 }]}>
-                  {status.label}
-                </Text>
+                <View
+                  style={[
+                    styles.statusPill,
+                    {
+                      backgroundColor: statusColor + "18",
+                      borderColor: statusColor + "44",
+                    },
+                  ]}
+                >
+                  <SFSymbol
+                    name={status.tone === "good" ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"}
+                    size={12}
+                    color={statusColor}
+                  />
+                  <Text style={[t.typography.caption2, { color: statusColor, fontWeight: "700", letterSpacing: 0.1 }]}>
+                    {status.label}
+                  </Text>
+                </View>
               ) : null}
-              <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: 4 }]}>{asin}</Text>
+              <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: 6, fontVariant: ["tabular-nums"] }]}>
+                {asin}
+              </Text>
             </View>
 
             {book ? (
               <View style={styles.profitBlock} accessible={false} importantForAccessibility="no">
                 <Text
-                  style={[t.typography.metric_compact, { color: !netReady ? t.colors.text_tertiary : netPos ? t.colors.tone_good : t.colors.tone_danger }]}
+                  style={[
+                    t.typography.metric,
+                    {
+                      color: !netReady ? t.colors.text_tertiary : netPos ? t.colors.tone_good : t.colors.tone_danger,
+                      textAlign: "right",
+                    },
+                  ]}
                   numberOfLines={1}
                   adjustsFontSizeToFit
+                  minimumFontScale={0.78}
                 >
                   {netReady && resolvedNet != null ? `${netPos ? "+" : ""}${formatCurrency(resolvedNet, currency, { compact: true })}` : "—"}
                 </Text>
-                <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 4 }]}>{NET_ROYALTIES_LABEL}</Text>
+                <Text
+                  style={[
+                    t.typography.caption2,
+                    {
+                      color: t.colors.text_tertiary,
+                      marginTop: 3,
+                      fontWeight: "600",
+                      letterSpacing: 0.4,
+                      textTransform: "uppercase",
+                    },
+                  ]}
+                >
+                  Net
+                </Text>
               </View>
             ) : null}
           </View>
         </View>
 
         <View style={[styles.metricsRow, { borderTopColor: t.colors.separator }]} accessible={false} importantForAccessibility="no">
-          <MetricStrip items={economicsItems} />
+          <MetricStrip items={economicsItems} variant="book" />
         </View>
 
-        {book ? (
-          <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: 10 }]}>
+        {displayBook ? (
+          <Text style={[t.typography.footnote, { color: t.colors.text_tertiary, marginTop: 10, lineHeight: 18 }]}>
             {NET_ROYALTIES_CAPTION}
           </Text>
         ) : null}
 
-        {book ? (
-          <Text
-            style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: 6 }]}
-            accessibilityLabel={`ACoS ${book.sales > 0 ? formatPercent(book.acos, 0) : "not available"} versus break-even ${formatBreakEvenAcos(book.breakeven_acos)}. ${hasBreakEven ? (acosOver ? "Over break-even" : "Safe") : "Break-even unavailable"}`}
-          >
-            ACoS {book.sales > 0 ? formatPercent(book.acos, 0) : "—"} · BE {formatBreakEvenAcos(book.breakeven_acos)}
+        {formatOptions.length > 0 ? (
+          <BookFormatBadges formats={formatOptions} />
+        ) : null}
+
+        {displayBook ? (
+          <View style={styles.efficiencyRow}>
+            <Text
+              style={[t.typography.caption1, { color: t.colors.text_secondary, flex: 1 }]}
+              accessibilityLabel={`ACoS ${adsTotals.sales > 0 ? formatPercent(adsAcos, 0) : "not available"} versus break-even ${formatBreakEvenAcos(displayBook.breakeven_acos)}. ${hasBreakEven ? (acosOver ? "Over break-even" : "Safe") : "Break-even unavailable"}`}
+            >
+              ACoS {adsTotals.sales > 0 ? formatPercent(adsAcos, 0) : "—"}
+              <Text style={{ color: t.colors.text_tertiary }}> · BE {formatBreakEvenAcos(displayBook.breakeven_acos)}</Text>
+            </Text>
             {hasBreakEven ? (
-              <>
-                {"  "}
-                <Text style={{ color: toneColor(bookTone, t.colors), fontWeight: "600" }}>{acosOver ? "OVER" : "SAFE"}</Text>
-              </>
+              <View
+                style={[
+                  styles.efficiencyBadge,
+                  {
+                    backgroundColor: toneColor(bookTone, t.colors) + "1F",
+                    borderColor: toneColor(bookTone, t.colors) + "55",
+                  },
+                ]}
+              >
+                <Text style={[t.typography.caption2, { color: toneColor(bookTone, t.colors), fontWeight: "800", letterSpacing: 0.5 }]}>
+                  {acosOver ? "OVER" : "SAFE"}
+                </Text>
+              </View>
             ) : null}
-          </Text>
+          </View>
         ) : null}
 
         {showTraffic ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: 8 }]}>
-            {formatInt(adsTotals.impressions)} impressions · {formatInt(adsTotals.clicks)} clicks
+            {formatInt(adsTotals.impressions)} impressions · {formatInt(adsTotals.clicks)} clicks · {formatInt(adsTotals.orders)} orders
           </Text>
         ) : null}
+
+        <View style={styles.createCampaignRow}>
+          <SecondaryButton
+            label="Create campaign"
+            icon="add-outline"
+            onPress={onCreateCampaign}
+            testID="book-detail-create-campaign"
+          />
+        </View>
       </ListCard>
 
-      <Text style={[t.typography.subhead, { color: t.colors.text_secondary, fontWeight: "600" }]}>
+      <Text style={[t.typography.sectionTitle, { color: t.colors.text_primary, marginTop: 4 }]}>
         {campaignsLoading ? "Campaigns" : campaignsCount === 1 ? "1 campaign" : `${campaignsCount} campaigns`}
       </Text>
 
@@ -453,13 +631,65 @@ function BookHeader({
   );
 }
 
+function BookFormatBadges({ formats }: { formats: readonly BookFormatOption[] }) {
+  const t = useTheme();
+  // Only formats encoded on the work key (real ASINs) — never decorative placeholders.
+  if (!formats.length) return null;
+
+  return (
+    <View
+      style={styles.formatBadgesRow}
+      accessibilityRole="text"
+      accessibilityLabel={`Formats: ${formats.map((f) => `${f.label} ${f.asin}`).join(", ")}`}
+    >
+      <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginRight: 2 }]}>
+        Formats
+      </Text>
+      {formats.map((fmt) => {
+        const accent = FORMAT_KIND_ACCENT[fmt.kind];
+        return (
+          <View
+            key={`${fmt.kind}-${fmt.asin}`}
+            style={[
+              styles.formatBadge,
+              {
+                backgroundColor: accent + "18",
+                borderColor: accent + "44",
+              },
+            ]}
+            accessibilityLabel={`${fmt.label}, ASIN ${fmt.asin}`}
+          >
+            <View style={[styles.formatBadgeDot, { backgroundColor: accent }]} />
+            <Text
+              style={[
+                t.typography.caption1,
+                {
+                  color: accent,
+                  fontWeight: "700",
+                  letterSpacing: 0.2,
+                },
+              ]}
+            >
+              {fmt.label}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 function CampaignRow({
   item,
   currency,
+  marketplaceIndex,
+  profiles,
   onPress,
 }: {
   item: BookCampaignRow;
   currency: string;
+  marketplaceIndex: SponsoredMarketplaceIndex;
+  profiles: Parameters<typeof CampaignMarketplaceFlags>[0]["profiles"];
   onPress: () => void;
 }) {
   const t = useTheme();
@@ -478,11 +708,19 @@ function CampaignRow({
       style={{ minHeight: t.layout.minTap }}
     >
       <ListCard>
-        <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={2}>
-          {item.name}
-        </Text>
+        <View style={styles.campaignTitleRow}>
+          <Text style={[t.typography.headline, { color: t.colors.text_primary, flex: 1, minWidth: 0, fontWeight: "700", letterSpacing: -0.2 }]} numberOfLines={2}>
+            {item.name}
+          </Text>
+          <CampaignMarketplaceFlags
+            index={marketplaceIndex}
+            profiles={profiles}
+            campaign={item}
+            style={t.typography.headline}
+          />
+        </View>
         <View style={styles.metaRow}>
-          <ToneDot value={item.acos} />
+          <ToneDot value={item.acos ?? 0} />
           <Text style={[t.typography.caption1, { color: toneColor(verdict.tone, t.colors), fontWeight: "600" }]}>
             {verdict.label}
           </Text>
@@ -494,11 +732,12 @@ function CampaignRow({
         <PlacementSharePills item={item} />
         <View style={[styles.metricsRow, { borderTopColor: t.colors.separator }]} accessible={false} importantForAccessibility="no">
           <MetricStrip
+            variant="book"
             items={[
               {
                 label: "ACoS",
-                value: item.sales > 0 ? formatPercent(item.acos) : "—",
-                color: toneColor(acosTone(item.acos), t.colors),
+                value: item.sales > 0 ? formatPercent(item.acos ?? 0) : "—",
+                color: toneColor(acosTone(item.acos ?? 0), t.colors),
               },
               { label: "Spend", value: formatCurrency(item.spend, currency, { compact: true }) },
               { label: "Impr", value: formatInt(item.impressions) },
@@ -542,8 +781,20 @@ const styles = StyleSheet.create({
   profitBlock: {
     alignItems: "flex-end",
     paddingTop: 2,
-    minWidth: 72,
+    minWidth: 76,
     flexShrink: 0,
+  },
+  statusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    alignSelf: "flex-start",
+    marginTop: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
   },
   metaRow: {
     flexDirection: "row",
@@ -558,5 +809,49 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     alignSelf: "stretch",
     width: "100%",
+  },
+  formatBadgesRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 12,
+  },
+  formatBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 9,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  formatBadgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  efficiencyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 10,
+  },
+  efficiencyBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 7,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  createCampaignRow: {
+    marginTop: 14,
+    alignItems: "flex-start",
+  },
+  campaignTitleRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
   },
 });

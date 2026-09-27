@@ -15,10 +15,13 @@ import {
 } from "../src/lib/kdpTitlePresentation.ts";
 import { logicalBookAsinsFromDailyRows } from "../src/lib/kdpBookIdentity.ts";
 
-const SASH = "https://m.media-amazon.com/images/S/sash//sCxYoSS1zm8glOt.svg";
+const SASH = "https://m.media-amazon.com/images/S/sash/sCxYoSS1zm8glOt.svg";
 const ITALY_COVER = "https://images-na.ssl-images-amazon.com/images/P/B0FSSV2PRT._SY120_.jpg";
+const ITALY_COVER_SHARP = "https://images-na.ssl-images-amazon.com/images/P/B0FSSV2PRT._SL500_.jpg";
 const ALASKA_COVER = "https://images-na.ssl-images-amazon.com/images/P/B0GYW7XTXQ._SY120_.jpg";
+const ALASKA_COVER_SHARP = "https://images-na.ssl-images-amazon.com/images/P/B0GYW7XTXQ._SL500_.jpg";
 const ADS_COVER = "https://m.media-amazon.com/images/I/51bF7zdxfdL._SS60_.jpg";
+const ADS_COVER_SHARP = "https://m.media-amazon.com/images/I/51bF7zdxfdL._SL500_.jpg";
 const ALASKA_KINDLE = "B0F1G3QVF5";
 const ALASKA_PAPERBACK = "B0GYW7XTXQ";
 const ITALY = "B0FSSV2PRT";
@@ -34,7 +37,7 @@ const dashboardSource = readFileSync(new URL("../src/lib/dashboardApi.ts", impor
 test("valid same-ASIN cover wins over sash", () => {
   assert.equal(isPlaceholderCoverUrl(SASH), true);
   assert.equal(isPlaceholderCoverUrl(ITALY_COVER), false);
-  assert.equal(pickUsableCoverUrl(SASH, ITALY_COVER), ITALY_COVER);
+  assert.equal(pickUsableCoverUrl(SASH, ITALY_COVER), ITALY_COVER_SHARP);
 });
 
 test("sash plus proven sibling cover stays inside the logical book", () => {
@@ -50,12 +53,12 @@ test("sash plus proven sibling cover stays inside the logical book", () => {
     [ITALY]: ITALY_COVER,
   };
   const scoped = asins.map((asin) => coverByAsin[asin]);
-  assert.equal(pickUsableCoverUrl(...scoped), ALASKA_COVER);
-  assert.notEqual(pickUsableCoverUrl(...scoped), ITALY_COVER);
+  assert.equal(pickUsableCoverUrl(...scoped), ALASKA_COVER_SHARP);
+  assert.notEqual(pickUsableCoverUrl(...scoped), ITALY_COVER_SHARP);
 });
 
 test("sash plus product_ads cover is accepted", () => {
-  assert.equal(pickUsableCoverUrl(SASH, ADS_COVER), ADS_COVER);
+  assert.equal(pickUsableCoverUrl(SASH, ADS_COVER), ADS_COVER_SHARP);
 });
 
 test("no valid cover stays empty instead of inventing one", () => {
@@ -64,8 +67,8 @@ test("no valid cover stays empty instead of inventing one", () => {
 
 test("unrelated book cover does not leak unless the caller passes it", () => {
   const alaskaOnly = pickUsableCoverUrl(SASH, ALASKA_COVER);
-  assert.equal(alaskaOnly, ALASKA_COVER);
-  assert.notEqual(alaskaOnly, ITALY_COVER);
+  assert.equal(alaskaOnly, ALASKA_COVER_SHARP);
+  assert.notEqual(alaskaOnly, ITALY_COVER_SHARP);
 });
 
 test("stored target_break_even_acos is percent units, not a 0-1 ratio", () => {
@@ -159,7 +162,7 @@ test("overall Ads Engine BE is spend-weighted calculator BE, not royalties÷ads 
 });
 
 test("view-as Nest books prefer calculator BE over period royalty÷price", () => {
-  assert.match(dashboardSource, /resolveAuthoritativeBreakEvenAcos\(book\)/);
+  assert.match(dashboardSource, /resolveAuthoritativeBreakEvenAcos\(/);
   assert.match(dashboardSource, /calculatorBreakEvenAcos\?:/);
   assert.doesNotMatch(dashboardSource, /breakeven_acos: n\(book\.breakEvenAcos\)/);
 });

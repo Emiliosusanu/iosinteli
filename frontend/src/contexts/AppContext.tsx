@@ -14,12 +14,18 @@ import { pickEntityCooldownHours } from "../lib/bidCooldown";
 import { DEFAULT_KDP_ROYALTY_SOURCE, normalizeKdpRoyaltySource, type KdpRoyaltySource } from "../lib/kdp/source";
 import { getKdpRoyaltySource, setKdpRoyaltySource as persistKdpRoyaltySource } from "../lib/kdp/sourceStore";
 import {
+  coalesceExactHarvestBid,
+  DEFAULT_EXACT_HARVEST_BID,
+  EXACT_HARVEST_BID_SETTING_KEY,
+} from "../lib/exactHarvestBid";
+import {
   NEST_DISABLED_VIEW_MESSAGE,
   NEST_DISABLED_VIEW_TITLE,
   displayCurrencyOfSelection,
   planSelectAllEnabled,
   planSelectAllSameCurrency,
   planViewToggle,
+  profileEnabled,
 } from "../lib/accountsUi";
 
 const STORAGE_KEYS = {
@@ -29,6 +35,7 @@ const STORAGE_KEYS = {
   notifications: "inteliads.notifications",
   /** One-shot: flip mass-safe all-off installs to the current ON defaults. */
   notificationsEnabledBundle: "inteliads.notifications.enabledBundle.v1",
+  exactHarvestBid: "inteliads.exactHarvestBid",
 };
 
 export interface NotificationPrefs {
@@ -99,6 +106,8 @@ interface AppContextType {
   setDateRange: (range: DateRange) => void;
   royaltyRate: number;
   setRoyaltyRate: (rate: number) => void;
+  defaultExactBid: number;
+  setDefaultExactBid: (bid: number) => void;
   kdpRoyaltySource: KdpRoyaltySource;
   setKdpRoyaltySource: (source: KdpRoyaltySource) => void;
   notifications: NotificationPrefs;
@@ -121,6 +130,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [adminFilterUserId, setAdminFilterUserIdState] = useState<string | null>(null);
   const [dateRange, setDateRangeState] = useState<DateRange>(rangePresets().thisMonth);
   const [royaltyRate, setRoyaltyRateState] = useState<number>(0);
+  const [defaultExactBid, setDefaultExactBidState] = useState<number>(DEFAULT_EXACT_HARVEST_BID);
   const [kdpRoyaltySource, setKdpRoyaltySourceState] = useState<KdpRoyaltySource>(DEFAULT_KDP_ROYALTY_SOURCE);
   const [notifications, setNotificationsState] = useState<NotificationPrefs>(DEFAULT_NOTIFICATIONS);
   const [notificationRuntime, setNotificationRuntime] = useState({
@@ -134,12 +144,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Hydrate persisted values
   useEffect(() => {
     (async () => {
-      const [ids, dr, nf, filterUser, kdpSource] = await Promise.all([
+      const [ids, dr, nf, filterUser, kdpSource, exactBidRaw] = await Promise.all([
         storage.getItem(STORAGE_KEYS.selectedProfiles, ""),
         storage.getItem(STORAGE_KEYS.dateRange, ""),
         storage.getItem(STORAGE_KEYS.notifications, ""),
         storage.getItem(ADMIN_FILTER_KEY, ""),
         getKdpRoyaltySource(),
+        storage.getItem(STORAGE_KEYS.exactHarvestBid, ""),
       ]);
       setKdpRoyaltySourceState(normalizeKdpRoyaltySource(kdpSource));
       if (typeof filterUser === "string" && filterUser.length > 0) {
@@ -178,6 +189,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         } catch {}
       } else {
         void storage.setItem(STORAGE_KEYS.notificationsEnabledBundle, "1");
+      }
+      if (exactBidRaw != null && exactBidRaw !== "") {
+        setDefaultExactBidState(coalesceExactHarvestBid(exactBidRaw));
       }
       setHydrated(true);
     })();
@@ -280,6 +294,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       remoteSettings["target_acos"];
     const rate = Number(rr);
     if (Number.isFinite(rate) && rate > 0 && rate <= 100) setRoyaltyRateState(rate);
+    const exactBid =
+      remoteSettings[EXACT_HARVEST_BID_SETTING_KEY] ??
+      remoteSettings["exact_harvest_bid"] ??
+      remoteSettings["defaultExactBid"];
+    if (exactBid != null && exactBid !== "") {
+      setDefaultExactBidState(coalesceExactHarvestBid(exactBid));
+    }
     const nf = remoteSettings["notifications"];
     if (nf && typeof nf === "object") {
       setNotificationsState((prev) =>
@@ -583,7 +604,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (profiles.length === 0) return;
     const availableIds = new Set(profiles.map((p) => p.id));
     const enabledIds = profiles
-      .filter((p) => p.is_enabled !== false)
+      .filter((p) => profileEnabled(p))
       .map((p) => p.id);
     const selectableIds = enabledIds.length > 0 ? new Set(enabledIds) : availableIds;
     const validSelectedProfiles = profiles.filter(
@@ -678,7 +699,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const next =
       typeof planSelectAllSameCurrency === "function"
         ? planSelectAllEnabled({ profiles, selectedProfileIds })
-        : profiles.filter((profile) => profile.is_enabled !== false).map((profile) => profile.id);
+        : profiles.filter((profile) => profileEnabled(profile)).map((profile) => profile.id);
     setSelectedProfileIds(next);
   }, [profiles, selectedProfileIds, setSelectedProfileIds]);
 
@@ -692,6 +713,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setRoyaltyRateState(rate);
     void storage.setItem(STORAGE_KEYS.royaltyRate, rate);
   }, []);
+
+  const setDefaultExactBid = useCallback((bid: number) => {
+    const next = coalesceExactHarvestBid(bid);
+    setDefaultExactBidState(next);
+    void storage.setItem(STORAGE_KEYS.exactHarvestBid, String(next));
+    if (user?.id) void saveUserSetting(user.id, EXACT_HARVEST_BID_SETTING_KEY, next);
+  }, [user?.id]);
 
   const setKdpRoyaltySource = useCallback((source: KdpRoyaltySource) => {
     const next = normalizeKdpRoyaltySource(source);
@@ -754,6 +782,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setDateRange,
       royaltyRate,
       setRoyaltyRate,
+      defaultExactBid,
+      setDefaultExactBid,
       kdpRoyaltySource,
       setKdpRoyaltySource,
       notifications,
@@ -785,6 +815,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setDateRange,
       royaltyRate,
       setRoyaltyRate,
+      defaultExactBid,
+      setDefaultExactBid,
       kdpRoyaltySource,
       setKdpRoyaltySource,
       notifications,

@@ -107,7 +107,7 @@ export function negativeProductTypeLabel(
     return "Negative product target · Brand";
   }
   if (codes.some((code) => code.includes("expanded"))) {
-    return "Negative product target · Expanded ASIN";
+    return "Negative product target · Expanded";
   }
   return "Negative product target";
 }

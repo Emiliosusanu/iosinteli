@@ -72,7 +72,7 @@ test("Home Ads horizon includes Yesterday and binds spend to that horizon", () =
   assert.doesNotMatch(home, /home-horizon|home-today-7d/);
   assert.match(home, /OverviewHeaderV3/);
   assert.match(home, /prefetchPeriodData/);
-  assert.match(home, /noPeriodPlaceholder|periodQuery\.ts|periodFinancePending/);
+  assert.match(home, /noPeriodPlaceholder|periodQuery\.ts|periodFinancePending|periodFinancePartialPending/);
   assert.match(home, /testID="home-root"/);
   assert.match(home, /"Net"/);
   assert.match(home, /NET_ROYALTIES_LABEL/);
@@ -226,7 +226,7 @@ test("enumerateDates is inclusive and local", () => {
 test("Overview memoizes nest profile ids so Home snapshot scope stays stable", () => {
   assert.match(
     home,
-    /const nestProfileIds = useMemo\(\s*\(\) => nestDashboardProfileIds\(selectedProfileIds, selectedProfiles\),\s*\[selectedProfileIds, selectedProfiles\],\s*\)/,
+    /const nestProfileIds = useMemo\(\s*\(\) => nestDashboardProfileIds\(portfolioProfileIds, profiles\),\s*\[portfolioProfileIds, profiles\],\s*\)/,
   );
 });
 

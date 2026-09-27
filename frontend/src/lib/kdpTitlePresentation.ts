@@ -7,6 +7,23 @@
 const PLACEHOLDER_COVER_RE =
   /images\/S\/sash\/|sCxYoSS1zm8glOt\.svg|placeholder|no[-_]?cover/i;
 
+/** Amazon size tokens already sharp enough for list/detail covers. */
+const AMAZON_SHARP_RE = /\._SL(?:[5-9]\d{2}|\d{4,})_\./i;
+/** Any Amazon media size token before the file extension (SCLZZZZZZZ, SY120, SS60, …). */
+const AMAZON_SIZE_TOKEN_RE = /\._[^./]+_\.(jpe?g|png|webp)/i;
+/** Legacy Amazon P/ thumb without underscore delimiters (…01.MZZZZZZZ.jpg). */
+const AMAZON_LEGACY_P_THUMB_RE = /\.01\.MZZZZZZZ\.(jpe?g|png|webp)/i;
+
+export function preferSharpAmazonCoverUrl(url: string): string {
+  if (!/amazon\.com|ssl-images-amazon/i.test(url)) return url;
+  if (AMAZON_SHARP_RE.test(url)) return url;
+  if (AMAZON_LEGACY_P_THUMB_RE.test(url)) {
+    return url.replace(AMAZON_LEGACY_P_THUMB_RE, ".01._SL500_.$1");
+  }
+  if (!AMAZON_SIZE_TOKEN_RE.test(url)) return url;
+  return url.replace(AMAZON_SIZE_TOKEN_RE, "._SL500_.$1");
+}
+
 export function isPlaceholderCoverUrl(value: unknown): boolean {
   const url = String(value ?? "").trim();
   return url.length > 0 && PLACEHOLDER_COVER_RE.test(url);
@@ -15,7 +32,7 @@ export function isPlaceholderCoverUrl(value: unknown): boolean {
 export function pickUsableCoverUrl(...candidates: Array<string | null | undefined>): string | null {
   for (const candidate of candidates) {
     const url = String(candidate ?? "").trim();
-    if (url && !isPlaceholderCoverUrl(url)) return url;
+    if (url && !isPlaceholderCoverUrl(url)) return preferSharpAmazonCoverUrl(url);
   }
   return null;
 }
@@ -58,8 +75,13 @@ export type OverallBreakEvenBook = {
 
 /** Calculator BE first (web Product Ads), then an authoritative stored value. */
 export function resolveAuthoritativeBreakEvenAcos(book: OverallBreakEvenBook): number | null {
-  if (book.pricingSynced !== false && hasAuthoritativeBreakEven(book.calculatorBreakEvenAcos)) {
+  // Prefer calculator BE whenever present — matches web Product Ads and Nest
+  // `calculatorBreakEvenAcos`. Only fall through when calculator is missing.
+  if (hasAuthoritativeBreakEven(book.calculatorBreakEvenAcos)) {
     return Number(book.calculatorBreakEvenAcos);
+  }
+  if (book.pricingSynced !== false && hasAuthoritativeBreakEven(book.breakEvenAcos)) {
+    return Number(book.breakEvenAcos);
   }
   if (hasAuthoritativeBreakEven(book.breakeven_acos)) return Number(book.breakeven_acos);
   if (hasAuthoritativeBreakEven(book.breakEvenAcos)) return Number(book.breakEvenAcos);

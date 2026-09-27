@@ -440,6 +440,7 @@ export function MutationTap({
   compact = false,
   cooldown,
   cooldownRow,
+  currency,
 }: {
   label: string;
   value: string;
@@ -450,16 +451,17 @@ export function MutationTap({
   cooldown?: EntityBidCooldownInfo | null;
   /** Or pass the entity row and we derive cooldown. */
   cooldownRow?: EntityBidCooldownFields | null;
+  currency?: string | null;
 }) {
   const t = useTheme();
-  const { entityCooldownHours } = useApp();
+  const { entityCooldownHours, primaryCurrency } = useApp();
   const info = cooldown ?? (cooldownRow ? getEntityBidCooldown(cooldownRow, entityCooldownHours) : null);
   const locked = Boolean(info?.isInCooldown);
   const valueColor = locked ? t.colors.tone_warning : compact ? t.colors.text_primary : t.colors.text_secondary;
 
   const openEditor = () => {
     if (locked && info) {
-      Alert.alert("Cooldown", cooldownAlertMessage(info), [
+      Alert.alert("Cooldown", cooldownAlertMessage(info, currency ?? primaryCurrency), [
         { text: "Cancel", style: "cancel" },
         { text: "Edit anyway", style: "destructive", onPress: () => onPress({ forceCooldown: true }) },
       ]);
@@ -485,8 +487,8 @@ export function MutationTap({
         {
           backgroundColor: locked
             ? t.colors.tone_warning + "1A"
-            : t.colors.glass_background ?? t.colors.background_secondary,
-          borderColor: locked ? t.colors.tone_warning + "66" : t.colors.glass_stroke ?? t.colors.separator,
+            : t.colors.glass_background,
+          borderColor: locked ? t.colors.tone_warning + "66" : t.colors.glass_stroke,
         },
       ]}
     >
@@ -496,7 +498,7 @@ export function MutationTap({
       <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
         {compact ? (
           <Text style={[t.typography.caption2, { color: locked ? t.colors.tone_warning : t.colors.text_tertiary }]}>
-            {locked ? "Cooldown" : label}
+            {locked ? `Cooldown · ${info?.sourceTag ?? "Unknown"}` : label}
           </Text>
         ) : null}
         <Text

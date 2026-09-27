@@ -18,13 +18,28 @@ export type TargetingFilterMemory = {
   perf?: string;
   sort?: string;
   bookAsin?: string;
+  bookAsins?: string[];
   stateFilter?: string;
   advanced?: TargetingAdvancedFilters;
 };
 
+export function normalizeBookAsinList(raw: unknown, legacySingle?: unknown): string[] {
+  const out: string[] = [];
+  const push = (value: unknown) => {
+    const asin = String(value || "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{10}$/.test(asin) || out.includes(asin)) return;
+    out.push(asin);
+  };
+  if (Array.isArray(raw)) raw.forEach(push);
+  else if (typeof raw === "string" && raw.trim()) push(raw);
+  if (!out.length && legacySingle != null) push(legacySingle);
+  return out;
+}
+
 export type CampaignsFilterMemory = {
   sortKey?: string;
   stateFilter?: string;
+  bookAsins?: string[];
 };
 
 export type BooksFilterMemory = {
@@ -97,11 +112,12 @@ export async function saveTargetingFilterMemory(next: TargetingFilterMemory): Pr
 }
 
 export async function loadCampaignsFilterMemory(): Promise<CampaignsFilterMemory> {
-  return readJson<CampaignsFilterMemory>(CAMPAIGNS_KEY);
+  const mem = await readJson<CampaignsFilterMemory>(CAMPAIGNS_KEY);
+  return { ...mem, bookAsins: normalizeBookAsinList(mem.bookAsins) };
 }
 
 export async function saveCampaignsFilterMemory(next: CampaignsFilterMemory): Promise<void> {
-  await writeJson(CAMPAIGNS_KEY, next);
+  await writeJson(CAMPAIGNS_KEY, { ...next, bookAsins: normalizeBookAsinList(next.bookAsins) });
 }
 
 export async function loadBooksFilterMemory(): Promise<BooksFilterMemory> {

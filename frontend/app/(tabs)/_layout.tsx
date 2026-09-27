@@ -1,29 +1,29 @@
 import React from "react";
 import { Tabs } from "expo-router";
 import { View } from "react-native";
+import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import { FloatingTabBar } from "@/src/components/FloatingTabBar";
-import { InteliAdsIcon, type InteliAdsIconName } from "@/src/components/InteliAdsIcon";
 import { SFSymbol as TabSymbol } from "@/src/components/ios/Native";
 import { dashboard, useTheme } from "@/src/lib/theme";
 
 /** Kept for contract tests + a11y fallbacks; visual chrome is FloatingTabBar. */
-function ProductTabIcon({
+function SystemTabIcon({
   name,
+  nameFill,
   color,
   focused,
 }: {
-  name: InteliAdsIconName;
+  name: SFSymbolName;
+  nameFill: SFSymbolName;
   color: string;
   focused: boolean;
 }) {
   return (
     <View style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}>
-      <InteliAdsIcon
-        name={name}
+      <TabSymbol
+        name={focused ? nameFill : name}
         size={dashboard.iconLg}
         color={color}
-        selected={focused}
-        state={focused ? "selected" : "default"}
       />
     </View>
   );
@@ -39,7 +39,7 @@ export default function TabsLayout() {
         headerShown: false,
         animation: "none",
         lazy: true,
-        freezeOnBlur: true,
+        freezeOnBlur: false,
         tabBarActiveTintColor: t.colors.tone_primary,
         tabBarInactiveTintColor: t.colors.text_tertiary,
         tabBarStyle: { display: "none" },
@@ -50,7 +50,9 @@ export default function TabsLayout() {
         options={{
           title: "Overview",
           tabBarAccessibilityLabel: "Overview",
-          tabBarIcon: ({ color, focused }) => <ProductTabIcon name="overview" color={color} focused={focused} />,
+          tabBarIcon: ({ color, focused }) => (
+            <SystemTabIcon name="house" nameFill="house.fill" color={color} focused={focused} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -58,7 +60,14 @@ export default function TabsLayout() {
         options={{
           title: "Campaigns",
           tabBarAccessibilityLabel: "Campaigns",
-          tabBarIcon: ({ color, focused }) => <ProductTabIcon name="campaigns" color={color} focused={focused} />,
+          tabBarIcon: ({ color, focused }) => (
+            <SystemTabIcon
+              name="megaphone"
+              nameFill="megaphone.fill"
+              color={color}
+              focused={focused}
+            />
+          ),
         }}
       />
       <Tabs.Screen
@@ -66,7 +75,9 @@ export default function TabsLayout() {
         options={{
           title: "Targets",
           tabBarAccessibilityLabel: "Targets",
-          tabBarIcon: ({ color, focused }) => <ProductTabIcon name="targeting" color={color} focused={focused} />,
+          tabBarIcon: ({ color, focused }) => (
+            <SystemTabIcon name="scope" nameFill="scope" color={color} focused={focused} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -74,7 +85,14 @@ export default function TabsLayout() {
         options={{
           title: "Books",
           tabBarAccessibilityLabel: "Books",
-          tabBarIcon: ({ color, focused }) => <ProductTabIcon name="books" color={color} focused={focused} />,
+          tabBarIcon: ({ color, focused }) => (
+            <SystemTabIcon
+              name="books.vertical"
+              nameFill="books.vertical.fill"
+              color={color}
+              focused={focused}
+            />
+          ),
         }}
       />
       <Tabs.Screen
@@ -83,7 +101,12 @@ export default function TabsLayout() {
           title: "More",
           tabBarAccessibilityLabel: "More",
           tabBarIcon: ({ color, focused }) => (
-            <TabSymbol name={focused ? "ellipsis.circle.fill" : "ellipsis.circle"} size={dashboard.iconLg} color={color} />
+            <SystemTabIcon
+              name="ellipsis.circle"
+              nameFill="ellipsis.circle.fill"
+              color={color}
+              focused={focused}
+            />
           ),
         }}
       />

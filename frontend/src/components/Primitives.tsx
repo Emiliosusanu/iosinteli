@@ -491,7 +491,9 @@ export function ListCard({
         {
           padding: compact ? dashboard.denseCardPadding : dashboard.cardPadding,
           borderRadius: compact ? 14 : dashboard.cardRadius,
-          overflow: "hidden",
+          // visible: overflow:hidden + iOS corner radius half-clipped 44pt
+          // match-type chips (Create campaign Broad/Phrase/Exact).
+          overflow: "visible",
         },
         style,
       ]}
@@ -893,8 +895,11 @@ function metricStripColumns(items: { value: string }[], width: number, fontScale
 
 export function MetricStrip({
   items,
+  variant = "default",
 }: {
   items: { label: string; value: string; color?: string }[];
+  /** `book` quietens labels and strengthens values for Books list/detail hierarchy. */
+  variant?: "default" | "book";
 }) {
   const t = useTheme();
   const fontScale = PixelRatio.getFontScale();
@@ -908,6 +913,7 @@ export function MetricStrip({
   const wraps = columns < items.length;
   const gap = dashboard.metricGap;
   const cellWidth = wraps ? (width - gap * (columns - 1)) / columns : undefined;
+  const bookish = variant === "book";
 
   return (
     <View
@@ -937,18 +943,29 @@ export function MetricStrip({
               marginTop: rowIndex === 0 ? 0 : gap,
             }}
           >
-            <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]} numberOfLines={1}>
+            <Text
+              style={[
+                bookish ? t.typography.caption2 : t.typography.caption1,
+                {
+                  color: t.colors.text_tertiary,
+                  fontWeight: bookish ? "600" : "400",
+                  letterSpacing: bookish ? 0.2 : 0,
+                },
+              ]}
+              numberOfLines={1}
+            >
               {item.label}
             </Text>
             <VerifiedValue
               value={item.value}
               style={[
-                t.typography.headline,
+                bookish ? t.typography.metric_compact : t.typography.headline,
                 {
                   color: item.color ?? t.colors.text_primary,
+                  fontWeight: bookish ? "700" : "600",
                   fontVariant: ["tabular-nums"],
-                  marginTop: 2,
-                  lineHeight: typography.headline.lineHeight,
+                  marginTop: bookish ? 3 : 2,
+                  lineHeight: bookish ? typography.metric_compact.lineHeight : typography.headline.lineHeight,
                 },
               ]}
             />

@@ -104,6 +104,16 @@ export function periodFinancePending(
   return periodQueryPending(metrics) || periodQueryPending(royalties);
 }
 
+/** True when exactly one of metrics/royalties is still cold (partial first paint). */
+export function periodFinancePartialPending(
+  metrics: Parameters<typeof periodQueryPending>[0],
+  royalties: Parameters<typeof periodQueryPending>[0],
+): boolean {
+  const metricsPending = periodQueryPending(metrics);
+  const royaltiesPending = periodQueryPending(royalties);
+  return (metricsPending || royaltiesPending) && !(metricsPending && royaltiesPending);
+}
+
 export function periodQueryRefreshing(query: {
   isFetching: boolean;
   isFetched: boolean;

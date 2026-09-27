@@ -145,10 +145,8 @@ export function clampAmazonBid(value: number): number {
 
 export function isTransientBulkError(error: unknown): boolean {
   if (!(error instanceof Error)) return true;
-  const status =
-    typeof (error as { status?: unknown }).status === "number"
-      ? ((error as { status: number }).status as number)
-      : null;
+  const statusValue = (error as Error & { status?: unknown }).status;
+  const status = typeof statusValue === "number" ? statusValue : null;
   if (status != null) {
     if (status === 401 || status === 403) return true;
     if (status === 429) return true;

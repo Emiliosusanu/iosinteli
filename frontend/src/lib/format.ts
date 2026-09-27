@@ -24,13 +24,16 @@ export function getCurrencySymbol(code?: string | null) {
   return CURRENCY_SYMBOLS[code] ?? `${code} `;
 }
 
+/** Money UI matches web InteliAds (en-US), not the device locale. */
+const MONEY_LOCALE = "en-US";
+
 export function formatCurrency(value: number, currency?: string | null, opts?: { compact?: boolean }) {
   const symbol = getCurrencySymbol(currency);
   if (value == null || isNaN(value)) return `${symbol}—`;
   if (opts?.compact) {
     return `${symbol}${formatCompact(value)}`;
   }
-  return `${symbol}${value.toLocaleString(undefined, {
+  return `${symbol}${value.toLocaleString(MONEY_LOCALE, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -47,7 +50,7 @@ export function formatCompact(value: number) {
 
 export function formatInt(value: number) {
   if (value == null || isNaN(value)) return "—";
-  return Math.round(value).toLocaleString();
+  return Math.round(value).toLocaleString(MONEY_LOCALE);
 }
 
 export function formatPercent(value: number, decimals = 1) {
@@ -64,6 +67,24 @@ export function formatOptionalPercent(value: unknown, decimals = 1) {
 }
 
 /** Parse a user-typed number. A lone comma is treated as the decimal mark (`0,65` → 0.65). */
+/** Selected-day chip for campaign daily charts (impr · clk · spend · ord · ACoS). */
+export function formatCampaignDailySummary(input: {
+  impressions: number;
+  clicks: number;
+  spend: number;
+  orders: number;
+  acos: number;
+  currency?: string | null;
+}): string {
+  const impr = formatCompact(Number(input.impressions) || 0);
+  const clicks = formatInt(Number(input.clicks) || 0);
+  const spend = formatCurrency(Number(input.spend) || 0, input.currency);
+  const orders = formatInt(Number(input.orders) || 0);
+  const acos = formatPercent(Number(input.acos) || 0);
+  return `${impr} impr · ${clicks} clk · ${spend} · ${orders} ord · ${acos}`;
+}
+
+
 export function parseLocaleNumber(raw: string): number {
   const trimmed = String(raw ?? "").trim().replace(/\s/g, "");
   if (!trimmed) return Number.NaN;

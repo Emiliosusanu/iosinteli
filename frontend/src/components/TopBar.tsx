@@ -21,6 +21,7 @@ import { formatDateRangeLabel, rangePresets } from "../lib/format";
 import { DateRange } from "../lib/types";
 import { IOSDateField, SFSymbol, sfFromIonicon } from "./ios/Native";
 import { GlassPanel } from "./GlassPanel";
+import { MarketPill } from "./MarketPill";
 import { PressableScale } from "./Motion";
 import { ProfileCoverStrip } from "./ProfileCoverStrip";
 import {
@@ -33,9 +34,10 @@ import {
   adsAccountGroupHeading,
   countryFlagEmoji,
   filterProfilesBySheetMode,
+  formatMarketPillLabel,
   groupProfilesByAdsAccount,
   isReadyToEnable,
-  multiCountryFlagIcons,
+  multiCountryCodes,
   profileAssociationHint,
   profileDisplayName,
   profileEnabled,
@@ -309,7 +311,6 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
   const viewingUser = adminUsers.find((user) => user.id === adminFilterUserId);
   const [profileOpen, setProfileOpen] = useState(false);
   const [listMode, setListMode] = useState<"ready" | "all">("ready");
-  const enabledCountryFlags = multiCountryFlagIcons(profiles, { onlyEnabled: true });
 
   const visibleProfiles = useMemo(
     () => filterProfilesBySheetMode(profiles, listMode),
@@ -327,6 +328,20 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
     () => profiles.filter((p) => profileEnabled(p)),
     [profiles],
   );
+  const selectedProfiles = useMemo(
+    () =>
+      profiles.filter(
+        (p) => selectedProfileIds.includes(p.id) || selectedProfileIds.includes(p.profile_id),
+      ),
+    [profiles, selectedProfileIds],
+  );
+  const marketCountries = useMemo(() => {
+    if (selectedProfiles.length > 0) {
+      return multiCountryCodes(selectedProfiles, { onlyEnabled: false });
+    }
+    return multiCountryCodes(profiles, { onlyEnabled: true });
+  }, [profiles, selectedProfiles]);
+  const hasMarketPill = marketCountries.length > 0;
 
   const selectedLabel =
     selectedProfileIds.length === 0
@@ -336,6 +351,9 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
       : selectedProfileIds.length === 1
       ? profiles.find((p) => p.id === selectedProfileIds[0])?.account_name ?? "1 profile"
       : `${selectedProfileIds.length} active`;
+  const profileA11yPrefix = viewingUser?.email
+    ? `${viewingUser.email.split("@")[0]} · `
+    : "";
 
   function onViewToggle(profileId: string) {
     const profile = profiles.find((p) => p.id === profileId || p.profile_id === profileId);
@@ -468,14 +486,12 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
   return (
     <>
       <View style={[styles.bar, { borderBottomColor: t.colors.border, paddingTop: Math.max(insets.top - 4, 4) }]}>
-        {(title || rightAction) && (
+        {title ? (
           <View style={styles.headerRow}>
-            {title ? (
-              <Text style={[t.typography.title2, styles.title, { color: t.colors.text_primary }]} numberOfLines={1}>
-                {title}
-              </Text>
-            ) : <View style={{ flex: 1 }} />}
-            {rightAction && (
+            <Text style={[t.typography.title2, styles.title, { color: t.colors.text_primary }]} numberOfLines={1}>
+              {title}
+            </Text>
+            {rightAction ? (
               <TouchableOpacity
                 accessibilityLabel={rightAction.testID ?? "Screen action"}
                 testID={rightAction.testID}
@@ -492,62 +508,59 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
               >
                 <SFSymbol name={sfFromIonicon(rightAction.icon)} size={19} color={t.colors.tone_primary} />
               </TouchableOpacity>
-            )}
+            ) : null}
           </View>
-        )}
-        {(showProfileSelector || showDateRange || (rightAction && !title)) && <View style={[styles.controls, title && { marginTop: 8 }]}> 
-          {showProfileSelector && (
-            <HeaderPill
-              testID="profile-selector-btn"
-              icon="building.2"
-              caption="Profiles"
-              value={`${viewingUser?.email ? viewingUser.email.split("@")[0] + " · " : ""}${selectedLabel}`}
-              onPress={() => setProfileOpen(true)}
-              accessibilityLabel={`Profiles: ${selectedLabel}, currency ${primaryCurrency}`}
-              flex
-              trailing={
-                selectedProfileIds.length > 0 || enabledCountryFlags.length > 0 ? (
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    {enabledCountryFlags.length > 0 ? (
-                      <Text
-                        testID="multi-country-flags"
-                        style={{ fontSize: 14, lineHeight: 18 }}
-                        accessibilityLabel={`Enabled markets: ${enabledCountryFlags.length}`}
-                      >
-                        {enabledCountryFlags.join(" ")}
-                      </Text>
-                    ) : null}
-                    {selectedProfileIds.length > 0 ? (
+        ) : null}
+        {(showProfileSelector || showDateRange || (rightAction && !title)) && (
+          <View style={[styles.controls, title ? { marginTop: 8 } : null]}>
+            {showProfileSelector &&
+              (hasMarketPill ? (
+                <MarketPill
+                  testID="profile-selector-btn"
+                  countries={marketCountries}
+                  currency={primaryCurrency}
+                  onPress={() => setProfileOpen(true)}
+                  accessibilityLabel={`Profiles: ${profileA11yPrefix}${formatMarketPillLabel(marketCountries, primaryCurrency)}`}
+                  flex
+                />
+              ) : (
+                <HeaderPill
+                  testID="profile-selector-btn"
+                  icon="building.2"
+                  caption="Profiles"
+                  value={`${profileA11yPrefix}${selectedLabel}`}
+                  onPress={() => setProfileOpen(true)}
+                  accessibilityLabel={`Profiles: ${selectedLabel}, currency ${primaryCurrency}`}
+                  flex
+                  trailing={
+                    selectedProfileIds.length > 0 ? (
                       <View style={[styles.currencyTag, { backgroundColor: t.colors.tone_primary + "1A" }]}>
                         <Text style={[t.typography.caption2, { color: t.colors.tone_primary, fontWeight: "700" }]}>
                           {primaryCurrency}
                         </Text>
                       </View>
-                    ) : null}
-                  </View>
-                ) : null
-              }
-            />
-          )}
-          {showDateRange && <DateRangeControl />}
-          {rightAction && !title && (
-            <TouchableOpacity
-              testID={rightAction.testID}
-              onPress={rightAction.onPress}
-              style={[
-                styles.iconBtn,
-                {
-                  backgroundColor: t.colors.glass_background,
-                  borderWidth: StyleSheet.hairlineWidth,
-                  borderColor: t.colors.glass_stroke,
-                },
-              ]}
-              activeOpacity={0.7}
-            >
-              <SFSymbol name={sfFromIonicon(rightAction.icon)} size={16} color={t.colors.tone_primary} />
-            </TouchableOpacity>
-          )}
-        </View>}
+                    ) : null
+                  }
+                />
+              ))}
+            {showDateRange && <DateRangeControl />}
+            {rightAction && !title ? (
+              <PressableScale
+                accessibilityLabel={rightAction.testID ?? "Screen action"}
+                testID={rightAction.testID}
+                onPress={rightAction.onPress}
+              >
+                <GlassPanel
+                  strength="chip"
+                  style={[styles.actionGlass, { borderColor: t.colors.glass_highlight }]}
+                  contentStyle={styles.actionInner}
+                >
+                  <SFSymbol name={sfFromIonicon(rightAction.icon)} size={18} color={t.colors.tone_primary} />
+                </GlassPanel>
+              </PressableScale>
+            ) : null}
+          </View>
+        )}
       </View>
 
       {/* Profile Selector Sheet — Switch = current view only (not Nest enable). */}
@@ -769,6 +782,16 @@ const styles = StyleSheet.create({
     height: layout.minTap - 6,
     borderRadius: dashboard.chipRadius,
     borderCurve: "continuous",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  actionGlass: {
+    borderRadius: dashboard.chipRadius,
+    borderCurve: "continuous",
+  },
+  actionInner: {
+    width: layout.minTap,
+    height: layout.minTap,
     alignItems: "center",
     justifyContent: "center",
   },

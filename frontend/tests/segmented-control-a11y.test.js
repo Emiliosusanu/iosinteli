@@ -9,9 +9,11 @@ const header = readFileSync(new URL("../src/components/OverviewHeaderV3.tsx", im
 test("fallback segmented control uses tablist/tab roles and 44pt targets", () => {
   assert.match(native, /accessibilityRole="tablist"/);
   assert.match(native, /accessibilityRole="tab"/);
-  assert.match(native, /TouchableOpacity/);
+  assert.match(native, /Pressable/);
+  assert.match(native, /height: 44/);
   assert.match(native, /minHeight: 44/);
   assert.match(native, /accessibilityState=\{\{ selected: active \}\}/);
+  assert.match(native, /forceFallback \|\| options\.length > 2/);
 });
 
 test("Overview keeps Day/Week/Month/Custom period control without Today/Yesterday/7D horizon", () => {

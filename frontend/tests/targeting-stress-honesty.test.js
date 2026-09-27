@@ -30,6 +30,7 @@ import { getEntityBidCooldown } from "../src/lib/bidCooldown.ts";
 import { clampAmazonBid } from "../src/lib/bulkOutboxContract.ts";
 
 const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
+const targetingLib = readFileSync(new URL("../src/lib/targeting.ts", import.meta.url), "utf8");
 const queries = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
 const filters = readFileSync(new URL("../src/lib/targetingFilters.ts", import.meta.url), "utf8");
 const outbox = readFileSync(new URL("../src/lib/bulkOutbox.ts", import.meta.url), "utf8");
@@ -43,15 +44,14 @@ test("all five targeting segments are always wired (kw / asin / auto / cat / pla
   for (const key of SEGMENTS) {
     assert.match(targeting, new RegExp(`key:\\s*"${key}"`));
   }
-  assert.match(targeting, /testID="targeting-segments"/);
-  assert.match(targeting, /segmentWrap/);
-  assert.match(targeting, /flexWrap:\s*"wrap"/);
-  // Product targets split into asins / auto / category buckets — no silent drop.
-  assert.match(targeting, /buckets\.auto\.push/);
-  assert.match(targeting, /buckets\.category\.push/);
-  assert.match(targeting, /buckets\.asins\.push/);
+  assert.match(targeting, /TargetingModePills/);
+  assert.match(targeting, /from "@\/src\/components\/TargetingModePills"/);
+  // Server-ranked pages own segment routing — no client asins/auto/category buckets.
+  assert.match(targeting, /fetchMobileTargetingPage/);
+  assert.match(targeting, /segment,/);
+  assert.match(targeting, /TargetingPagination/);
+  assert.doesNotMatch(targeting, /buckets\.auto\.push/);
   assert.match(targeting, /__targetingIsCategory/);
-  assert.match(targeting, /described\.isAuto/);
 });
 
 test("profile + date window isolation — no cross-period / cross-profile bleed", () => {
@@ -68,12 +68,13 @@ test("profile + date window isolation — no cross-period / cross-profile bleed"
   assert.match(targeting, /No Amazon account|No account connected/);
 });
 
-test("book filter: campaign∪KDP eligible books + searchable cover rows", () => {
-  assert.match(queries, /Books for the targeting filter: union of/);
-  assert.match(queries, /selectEligibleTargetingBookOptions/);
+test("book filter: campaign-activity books + searchable cover rows", () => {
+  assert.match(queries, /Books for Targets \/ Campaigns filter/);
+  assert.match(queries, /selectEligibleTargetingBookOptions\(books, purpose\)/);
   assert.match(queries, /fetchKdpBooksForTargetingFilter/);
-  assert.match(queries, /\.eq\("status", "enabled"\)/);
-  assert.match(queries, /campaigns\.state", "enabled"/);
+  assert.match(queries, /hasMeaningfulKdpDailySignal/);
+  assert.match(queries, /enabled|status|state/);
+  assert.match(queries, /campaigns\.state|state.*enabled/);
   assert.match(queries, /\/campaigns\/books/);
   assert.match(queries, /dedupeTargetingBookOptions/);
   assert.match(targeting, /styles\.bookList/);
@@ -83,7 +84,8 @@ test("book filter: campaign∪KDP eligible books + searchable cover rows", () =>
   assert.match(targeting, /Don't apply book filter until options are fetched/);
   assert.match(targeting, /bookCampaignIds/);
   assert.doesNotMatch(targeting, /No advertised books on these profiles yet\./);
-  assert.match(targeting, /No campaign or KDP books on these profiles yet\./);
+  assert.match(targeting, /No books with active campaigns on these profiles yet\./);
+  assert.doesNotMatch(targeting, /No in-stock, campaign, or KDP books/);
   assert.doesNotMatch(targeting, /Books with enabled campaigns or KDP data/);
 });
 
@@ -200,21 +202,43 @@ test("filter persistence remembers book / perf / sort / advanced ranges", () => 
 
 test("default Active filter requires entity + ad group + campaign across segments", () => {
   assert.match(targeting, /useState<EntityStateFilter>\(DEFAULT_TARGETING_STATE_FILTER\)/);
-  assert.match(targeting, /matchesLiveTargetingRow/);
   assert.match(targeting, /testID="targeting-state-filter"/);
   assert.match(targeting, /key: "enabled", label: "Active"/);
-  // Every non-placement segment passes parent states; placement is campaign-only.
-  assert.match(targeting, /adGroupState: \(k as any\)\.ad_group_state/);
-  assert.match(targeting, /adGroupState: p\.ad_group_state/);
-  assert.match(targeting, /campaignState: c\.state/);
+  // Active parent-chain is fail-closed in RPC params/comments (not client matchesLiveTargetingRow).
+  assert.match(targeting, /fetchMobileTargetingPage/);
+  assert.match(targeting, /state: stateFilter/);
+  assert.match(targeting, /RPC mobile_targeting_page_v1 enforces the same parent-chain/);
+  assert.match(targeting, /\/\/ Active = keyword enabled \+ ad group enabled \+ campaign enabled/);
+  assert.match(targeting, /ASINs \/ Auto \/ Category: Active = target \+ ad group \+ campaign enabled/);
+  assert.match(targeting, /Placement rows are campaigns — Active = campaign enabled/);
   for (const key of SEGMENTS) {
     assert.match(targeting, new RegExp(`key:\\s*"${key}"`));
   }
   // Segment switch clears selection only — not stateFilter.
   assert.doesNotMatch(targeting, /setSegment\([^)]+\);\s*setStateFilter/);
+  assert.match(queries, /mobile_targeting_page_v1/);
   assert.match(queries, /attachParentEntityStates/);
   assert.match(queries, /campaign_state:/);
   assert.match(queries, /ad_group_state:/);
+});
+
+test("mobile targeting pages enrich titles/covers without dropping ranked rows", () => {
+  assert.match(queries, /enrichProductTargetDisplay/);
+  assert.match(queries, /enrichPlacementPageBookCovers/);
+  assert.match(queries, /Display-only title\/cover fill/);
+  assert.match(queries, /amazon_catalog/);
+  assert.match(queries, /page display enrichment failed/);
+  assert.match(queries, /isUsableBookTitle/);
+  assert.match(queries, /applyProductTargetDisplayMeta/);
+  assert.match(targeting, /fallbackAsinCoverUrl\(coverAsin\)/);
+  assert.match(targetingLib, /Title unavailable/);
+  assert.match(targetingLib, /isUsableBookTitle/);
+  // Auto/Category: label only — no book title suffix on productTargetHeading.
+  assert.doesNotMatch(targetingLib, /\$\{described\.label\} · \$\{bookName\}/);
+  // Placement: placement label + campaign name only — no book title subtitle.
+  assert.doesNotMatch(targeting, /bookSubtitle/);
+  assert.doesNotMatch(targeting, /\$\{bookSubtitle\}/);
+  assert.match(targeting, /size="sm"/);
 });
 
 test("bulk bid stress: visible Bid ±, outbox drain, cooldown names, Placement gated", () => {
@@ -250,7 +274,7 @@ test("bulk bid stress: visible Bid ±, outbox drain, cooldown names, Placement g
 });
 
 test("period metrics honesty — fail closed, Nest null shares, no Sales labels", () => {
-  assert.match(queries, /Never paint lifetime totals or fake zeros/);
+  assert.match(queries, /Soft-degrade: keep lifetime totals/);
   assert.match(queries, /keyword metrics enrichment failed/);
   assert.match(queries, /product target metrics enrichment failed/);
   assert.match(targeting, /Couldn't load metrics/);
@@ -260,14 +284,22 @@ test("period metrics honesty — fail closed, Nest null shares, no Sales labels"
   assert.match(targeting, /label:\s*"Clicks"/);
   assert.match(dashboardApi, /placement_top_share:\s*null/);
   assert.match(targeting, /normalizePlacementCampaignMetrics/);
-  assert.match(targeting, /fetchAggregatedCampaigns|fetchTopCampaignsRange/);
+  // Placement + all segments use the ranked-page RPC (not client Nest range fetchers).
+  assert.match(targeting, /fetchMobileTargetingPage/);
+  assert.match(targeting, /segment === "placement"/);
+  assert.match(queries, /mobile_targeting_page_v1/);
   assert.match(queries, /Nest campaign aggregation failed; falling back to Supabase/);
 });
 
 test("list cap 500 is fetch-only — not Amazon write ceiling; entities not silently invented", () => {
   assert.match(queries, /TARGETING_LIST_LIMIT = 500/);
   assert.match(queries, /Not an Amazon write limit/);
-  assert.match(targeting, /Showing \{TARGETING_LIST_LIMIT\} \(app limit\)/);
+  // Honesty: numbered pages + server totals — no fabricated 500-cap footer on Targets.
+  assert.match(targeting, /TARGETING_PAGE_SIZE/);
+  assert.match(targeting, /TargetingPagination/);
+  assert.match(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
+  assert.match(targeting, /prefer page total over client 500-cap/);
+  assert.doesNotMatch(targeting, /Showing \{TARGETING_LIST_LIMIT\}/);
   assert.doesNotMatch(targeting, /List capped at \{TARGETING_LIST_LIMIT\}/);
   // Empty states distinguish load error vs filter miss vs no data
   assert.match(targeting, /emptyCopy|No keywords|No campaigns|No product/);

@@ -44,24 +44,106 @@ export function countryFlagEmoji(countryCode: string | null | undefined): string
   return String.fromCodePoint(...[...cc].map((ch) => 127397 + ch.charCodeAt(0)));
 }
 
-/** Unique flag emojis for enabled (or selected) profiles — multi-country header cue. */
-export function multiCountryFlagIcons(
+/** Prefer US → CA → UK/GB, then A–Z — stable Overview market pill order. */
+const MARKET_COUNTRY_RANK: Record<string, number> = {
+  US: 0,
+  CA: 1,
+  GB: 2,
+  UK: 2,
+};
+
+/** Short labels for the Overview top market pill (not full country names). */
+const MARKET_PILL_SHORT: Record<string, string> = {
+  US: "US",
+  CA: "Canada",
+  UK: "UK",
+  GB: "UK",
+  DE: "Germany",
+  FR: "France",
+  IT: "Italy",
+  ES: "Spain",
+  AU: "Australia",
+  JP: "Japan",
+  MX: "Mexico",
+  IN: "India",
+  NL: "Netherlands",
+  SE: "Sweden",
+  PL: "Poland",
+  BE: "Belgium",
+  TR: "Turkey",
+  SG: "Singapore",
+  BR: "Brazil",
+  AE: "UAE",
+};
+
+/** Normalize + unique-sort ISO country codes (UK/GB kept distinct until label). */
+export function sortMarketCountryCodes(codes: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of codes) {
+    const code = String(raw || "")
+      .trim()
+      .toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code) || seen.has(code)) continue;
+    seen.add(code);
+    out.push(code);
+  }
+  return out.sort((a, b) => {
+    const rankA = MARKET_COUNTRY_RANK[a] ?? 50;
+    const rankB = MARKET_COUNTRY_RANK[b] ?? 50;
+    if (rankA !== rankB) return rankA - rankB;
+    return a.localeCompare(b);
+  });
+}
+
+/** Unique sorted marketplace country codes for enabled (or selected) profiles. */
+export function multiCountryCodes(
   profiles: Array<Pick<AmazonProfile, "country_code" | "is_enabled">>,
   opts?: { onlyEnabled?: boolean },
 ): string[] {
   const onlyEnabled = opts?.onlyEnabled !== false;
-  const seen = new Set<string>();
-  const flags: string[] = [];
+  const codes: string[] = [];
   for (const profile of profiles) {
     if (onlyEnabled && profile.is_enabled === false) continue;
     const code = String(profile.country_code || "")
       .trim()
       .toUpperCase();
-    if (!code || seen.has(code)) continue;
-    seen.add(code);
-    flags.push(countryFlagEmoji(code));
+    if (code) codes.push(code);
   }
-  return flags;
+  return sortMarketCountryCodes(codes);
+}
+
+/** Unique flag emojis for enabled (or selected) profiles — multi-country header cue. */
+export function multiCountryFlagIcons(
+  profiles: Array<Pick<AmazonProfile, "country_code" | "is_enabled">>,
+  opts?: { onlyEnabled?: boolean },
+): string[] {
+  return multiCountryCodes(profiles, opts).map((code) => countryFlagEmoji(code));
+}
+
+/** One segment of the market pill label (US, Canada, UK, …). */
+export function marketPillCountryLabel(countryCode: string): string {
+  const cc = String(countryCode || "")
+    .trim()
+    .toUpperCase();
+  if (!cc) return "";
+  return MARKET_PILL_SHORT[cc] ?? cc;
+}
+
+/**
+ * Overview top market pill copy — e.g. US+CA+USD → `US + Canada • USD`.
+ * Currency-only when no countries; empty when both missing.
+ */
+export function formatMarketPillLabel(
+  countries: Iterable<string> | null | undefined,
+  currency: string | null | undefined,
+): string {
+  const codes = sortMarketCountryCodes(countries ?? []);
+  const cur = String(currency || "").trim();
+  if (!codes.length) return cur;
+  const names = codes.map(marketPillCountryLabel).filter(Boolean);
+  const joined = names.join(" + ");
+  return cur ? `${joined} • ${cur}` : joined;
 }
 
 /** Short Amazon Ads account entity id (…kww8v5) for group headers. */
@@ -339,6 +421,17 @@ export function moneyProfileIdsForSelection(
     add(match.profile_id);
   }
   return ids;
+}
+
+/** Financial reads use only profiles enabled in Nest and present in the view. */
+export function enabledMoneyProfileIdsForSelection(
+  profiles: AmazonProfile[],
+  selectedProfileIds: string[],
+): string[] {
+  const enabledIds = selectedProfileIds.filter((id) => profiles.some(
+    (profile) => profileEnabled(profile) && (profile.id === id || profile.profile_id === id),
+  ));
+  return moneyProfileIdsForSelection(profiles, enabledIds);
 }
 
 /**

@@ -1,12 +1,79 @@
 // Design tokens for inteliads - "Smart Clarity" theme
 // Based on iOS 17/18 system colors
 
-import { useEffect, useState } from "react";
-import { AccessibilityInfo, Platform, useColorScheme, type TextStyle } from "react-native";
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  AccessibilityInfo,
+  Appearance,
+  Platform,
+  useColorScheme,
+  type TextStyle,
+} from "react-native";
 import { motion } from "./motion";
 export { motion };
 
 export type ColorScheme = "light" | "dark";
+export type ThemePreference = "system" | ColorScheme;
+
+const THEME_PREFERENCE_KEY = "inteliads.appearance.v1";
+const ThemePreferenceContext = createContext<{
+  preference: ThemePreference;
+  setPreference: (preference: ThemePreference) => void;
+} | null>(null);
+
+function applyNativeColorScheme(preference: ThemePreference) {
+  // null restores system; light/dark force app + native chrome together.
+  Appearance.setColorScheme(preference === "system" ? null : preference);
+}
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [preference, setPreferenceState] = useState<ThemePreference>("system");
+
+  useEffect(() => {
+    let mounted = true;
+    AsyncStorage.getItem(THEME_PREFERENCE_KEY)
+      .then((value) => {
+        if (!mounted) return;
+        if (value === "light" || value === "dark" || value === "system") {
+          setPreferenceState(value);
+          applyNativeColorScheme(value);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const value = useMemo(
+    () => ({
+      preference,
+      setPreference: (next: ThemePreference) => {
+        setPreferenceState(next);
+        applyNativeColorScheme(next);
+        void AsyncStorage.setItem(THEME_PREFERENCE_KEY, next).catch(() => {});
+      },
+    }),
+    [preference],
+  );
+
+  return React.createElement(
+    ThemePreferenceContext.Provider,
+    { value },
+    children,
+  );
+}
+
+export function useThemePreference() {
+  const value = useContext(ThemePreferenceContext);
+  return (
+    value ?? {
+      preference: "system" as const,
+      setPreference: (_next: ThemePreference) => {},
+    }
+  );
+}
 
 export const palette = {
   light: {
@@ -31,7 +98,31 @@ export const palette = {
     glass_background: "rgba(255, 255, 255, 0.62)",
     glass_stroke: "rgba(255, 255, 255, 0.55)",
     glass_highlight: "rgba(255, 255, 255, 0.72)",
-    tabbar_background: "rgba(249, 249, 249, 0.72)",
+    /**
+     * Overview period stadium chrome (build 209 rail + sliding pill).
+     * Keep separate from the frosted FloatingTabBar dock.
+     */
+    chrome_rail: "#FFFFFF",
+    chrome_rail_stroke: "rgba(60,60,67,0.08)",
+    chrome_selected: "#1C1C1E",
+    /** Foreground on chrome_selected — always light on the dark pill. */
+    chrome_selected_fg: "#FFFFFF",
+    /** RGB triple for Reanimated sticky wash templates (same base as chrome_rail). */
+    chrome_sticky_rgb: "255,255,255",
+    chrome_hairline_rgb: "60,60,67",
+    /**
+     * Floating dock — solid light pill (theme-synced). Active segment is a
+     * blue-tinted stadium; market pill keeps its own frost tokens below.
+     */
+    tabbar_background: "#FFFFFF",
+    tabbar_selected: "rgba(0, 122, 255, 0.12)",
+    tabbar_selected_fg: "#007AFF",
+    tabbar_inactive: "#8E8E93",
+    tabbar_stroke: "rgba(60,60,67,0.10)",
+    market_pill_wash: "rgba(255, 255, 255, 0.55)",
+    market_pill_stroke: "rgba(60,60,67,0.14)",
+    market_pill_flag_rim: "rgba(60,60,67,0.22)",
+    market_pill_flag_fill: "rgba(0,0,0,0.04)",
     overlay: "rgba(0,0,0,0.4)",
     ambient_top: "#E8F1FF",
     ambient_mid: "#F2F2F7",
@@ -58,10 +149,31 @@ export const palette = {
     glass_background: "rgba(22, 22, 26, 0.72)",
     glass_stroke: "rgba(255, 255, 255, 0.10)",
     glass_highlight: "rgba(255, 255, 255, 0.14)",
-    tabbar_background: "rgba(10, 10, 12, 0.72)",
+    /**
+     * Dark stadium: elevated rail so the black Month pill still reads (209
+     * contrast), while the Overview shell follows dark surfaces.
+     */
+    chrome_rail: "#2C2C30",
+    chrome_rail_stroke: "rgba(255,255,255,0.12)",
+    /** Same black Month pill as light / build 209. */
+    chrome_selected: "#000000",
+    chrome_selected_fg: "#FFFFFF",
+    /** Match AppScreen black — scrolled sticky must not flash light gray. */
+    chrome_sticky_rgb: "0,0,0",
+    chrome_hairline_rgb: "255,255,255",
+    /** Dark floating dock — InteliAds #141417 chrome + blue active stadium. */
+    tabbar_background: "#141417",
+    tabbar_selected: "rgba(47, 124, 255, 0.20)",
+    tabbar_selected_fg: "#2F7CFF",
+    tabbar_inactive: "#A1A1A6",
+    tabbar_stroke: "rgba(255,255,255,0.10)",
+    market_pill_wash: "rgba(20, 20, 23, 0.55)",
+    market_pill_stroke: "rgba(255,255,255,0.18)",
+    market_pill_flag_rim: "rgba(255,255,255,0.35)",
+    market_pill_flag_fill: "rgba(255,255,255,0.08)",
     overlay: "rgba(0,0,0,0.6)",
-    ambient_top: "#0A1220",
-    ambient_mid: "#000000",
+    ambient_top: "#0C1830",
+    ambient_mid: "#05080F",
   },
 } as const;
 
@@ -187,6 +299,9 @@ export const dashboard = {
   headerControl: 36,
   tabBarHeight: 64,
   tabBarRadius: 22,
+  /** Floating dock baseline icons — FloatingTabBar scales up by screen tier. */
+  tabIcon: 24,
+  tabIconActive: 22,
   statusChipRadius: 10,
 } as const;
 
@@ -231,6 +346,14 @@ export const shadows = {
       shadowRadius: 14,
       elevation: 6,
     },
+    /** Period stadium rail — soft elevation under the sliding pill. */
+    stadium: {
+      shadowColor: "#000000",
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.09,
+      shadowRadius: 10,
+      elevation: 4,
+    },
   },
   dark: {
     card: {
@@ -254,12 +377,21 @@ export const shadows = {
       shadowRadius: 16,
       elevation: 8,
     },
+    stadium: {
+      shadowColor: "#000000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.18,
+      shadowRadius: 6,
+      elevation: 2,
+    },
   },
 };
 
 export function useTheme() {
   const raw = useColorScheme();
-  const scheme: ColorScheme = raw === "dark" ? "dark" : "light";
+  const { preference } = useThemePreference();
+  const systemScheme: ColorScheme = raw === "dark" ? "dark" : "light";
+  const scheme: ColorScheme = preference === "system" ? systemScheme : preference;
   return {
     scheme,
     colors: palette[scheme],
@@ -272,6 +404,21 @@ export function useTheme() {
     layout,
     dashboard,
     motion,
+  };
+}
+
+/**
+ * Overview heading chrome — build 206–209 stadium (icon rail + black Month pill)
+ * with shell/rail colors synced to the active light/dark scheme.
+ * FloatingTabBar uses palette.*.tabbar_* (solid white / #141417 dock).
+ * MarketPill keeps market_pill_* frost washes.
+ */
+export function useOverview209Chrome() {
+  const { scheme, colors, shadow } = useTheme();
+  return {
+    scheme,
+    colors,
+    shadow,
   };
 }
 

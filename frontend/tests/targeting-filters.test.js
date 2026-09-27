@@ -210,13 +210,15 @@ test("Targets Active default + parent-chain contract is wired for all segments",
   const campaigns = readFileSync(new URL("../src/lib/campaigns.ts", import.meta.url), "utf8");
   assert.match(campaigns, /DEFAULT_TARGETING_STATE_FILTER:\s*EntityStateFilter\s*=\s*"enabled"/);
   assert.match(targeting, /useState<EntityStateFilter>\(DEFAULT_TARGETING_STATE_FILTER\)/);
-  assert.match(targeting, /matchesLiveTargetingRow/);
+  // Helper still documents fail-closed parent-chain; UI passes state to the ranked-page RPC.
   assert.match(campaigns, /Fail closed when Active/);
   assert.match(campaigns, /"adGroupState" in opts/);
-  // Keywords, product targets (asins/auto/category), placement all filtered.
-  assert.match(targeting, /adGroupState: \(k as any\)\.ad_group_state/);
-  assert.match(targeting, /adGroupState: p\.ad_group_state/);
-  assert.match(targeting, /campaignState: c\.state/);
+  assert.match(targeting, /fetchMobileTargetingPage/);
+  assert.match(targeting, /state: stateFilter/);
+  assert.match(targeting, /RPC mobile_targeting_page_v1 enforces the same parent-chain/);
+  assert.match(targeting, /\/\/ Active = keyword enabled \+ ad group enabled \+ campaign enabled/);
+  assert.match(targeting, /ASINs \/ Auto \/ Category: Active = target \+ ad group \+ campaign enabled/);
+  assert.match(targeting, /Placement rows are campaigns — Active = campaign enabled/);
   assert.doesNotMatch(targeting, /shouldShowActiveOrPausedWithData/);
 });
 
@@ -224,8 +226,9 @@ test("placement cover enrichment maps Nest campaigns without inventing books", (
   const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
   assert.match(targeting, /export function enrichPlacementRowWithBook/);
   assert.match(targeting, /export function buildCampaignBookMap/);
-  assert.match(targeting, /No linked book/);
+  // Unlinked placement keeps null book_* and cube placeholder — no invented title.
   assert.match(targeting, /placeholder=\{hasBook \? "book" : "cube"\}/);
+  assert.doesNotMatch(targeting, /No linked book/);
 
   // Mirror contract of the exported helpers (Nest rows have no book_*).
   function buildCampaignBookMap(list) {

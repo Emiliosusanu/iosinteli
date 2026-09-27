@@ -7,6 +7,7 @@
 export const DEEP_LINK_HREFS = {
   overview: "/(tabs)",
   campaigns: "/(tabs)/campaigns",
+  campaignCreate: "/campaign/create",
   targeting: "/(tabs)/targeting",
   books: "/(tabs)/products",
   more: "/(tabs)/more",
@@ -48,6 +49,10 @@ const ALIAS_TO_HREF: Record<string, string> = {
   "/(tabs)/campaigns": DEEP_LINK_HREFS.campaigns,
   "new-orders": DEEP_LINK_HREFS.campaigns,
   "/new-orders": DEEP_LINK_HREFS.campaigns,
+  "campaign/create": DEEP_LINK_HREFS.campaignCreate,
+  "/campaign/create": DEEP_LINK_HREFS.campaignCreate,
+  "create-campaign": DEEP_LINK_HREFS.campaignCreate,
+  "/create-campaign": DEEP_LINK_HREFS.campaignCreate,
   targeting: DEEP_LINK_HREFS.targeting,
   "/targeting": DEEP_LINK_HREFS.targeting,
   "(tabs)/targeting": DEEP_LINK_HREFS.targeting,
