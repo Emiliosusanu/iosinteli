@@ -162,6 +162,41 @@ test("ads-built snapshot marks absent days missing, never verified $0", () => {
   assert.match(freshnessCaption(built, false), /Ads-only snapshot · as of 2026-08-25/);
 });
 
+test("moneyProfileIds must not wipe untagged money-scoped rows on cold-start widgets", () => {
+  const built = buildMobileHomeSnapshotFromAds({
+    userId: "user-a",
+    profileIds: ["p1"],
+    currency: "USD",
+    timeZone: "UTC",
+    localDate: "2026-08-26",
+    moneyProfileIds: ["p1", "ads-p1"],
+    rows: [
+      { date: "2026-08-26", spend: 12, sales: 40, orders: 2 },
+      { date: "2026-08-20", spend: 8, sales: 20, orders: 1 },
+    ],
+  });
+  assert.equal(built.today.spend, 12);
+  assert.equal(built.sevenDay.spend, 20);
+  assert.equal(built.sevenDay.state, "verified");
+});
+
+test("moneyProfileIds still isolates tagged foreign profiles from the snapshot", () => {
+  const built = buildMobileHomeSnapshotFromAds({
+    userId: "user-a",
+    profileIds: ["us", "ca"],
+    currency: "USD",
+    timeZone: "UTC",
+    localDate: "2026-08-26",
+    moneyProfileIds: ["us"],
+    rows: [
+      { date: "2026-08-26", spend: 10, sales: 20, orders: 1, amazon_profile_id: "us" },
+      { date: "2026-08-26", spend: 99, sales: 200, orders: 9, amazon_profile_id: "ca" },
+    ],
+  });
+  assert.equal(built.today.spend, 10);
+  assert.equal(built.sevenDay.spend, 10);
+});
+
 test("failed refresh keeps cache and does not call request time the data time", () => {
   assert.match(freshnessCaption(snapshot(), true), /Couldn't refresh · Showing data from 12:32/);
   assert.match(freshnessCaption(snapshot(), false), /Ads data as of 2026-08-25/);
@@ -173,7 +208,7 @@ test("Home uses the mobile snapshot and logout clears it", () => {
   assert.match(home, /buildMobileHomeSnapshotFromAds/);
   assert.match(home, /loadMobileHomeSnapshot/);
   assert.match(home, /isAdsFallbackSnapshot/);
-  assert.match(home, /noPeriodPlaceholder|HOME_PERIOD_QUERY_CACHE|periodFinancePending/);
+  assert.match(home, /noPeriodPlaceholder|HOME_PERIOD_QUERY_CACHE|periodFinancePending|periodFinancePartialPending/);
   assert.doesNotMatch(home, /home-today-7d|home-horizon/);
   assert.doesNotMatch(home, /sparkles|robot-head|brain|magic-wand|wand/);
   assert.match(persist, /clearMobileHomeSnapshots/);

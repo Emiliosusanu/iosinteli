@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  bidChangeSourceLabel,
+  bidChangeSourceTag,
   cooldownAlertMessage,
   DEFAULT_ENTITY_COOLDOWN_HOURS,
   formatCooldownRemaining,
@@ -33,9 +35,70 @@ test("cooldown uses latest of bid/rule timestamps within default 48h", () => {
     now,
   );
   assert.equal(info.isInCooldown, true);
+  assert.equal(info.sourceTag, "Rule");
   assert.match(info.sourceLabel, /rule/i);
   assert.match(cooldownAlertMessage(info), /Cooldown ends/);
   assert.equal(formatCooldownRemaining(90), "1m");
+});
+
+test("Countdown source tags match web rule/bot/internal/external", () => {
+  assert.equal(bidChangeSourceTag("rule"), "Rule");
+  assert.equal(bidChangeSourceTag("bid_engine"), "Bot");
+  assert.equal(bidChangeSourceTag("bid_bot"), "Bot");
+  assert.equal(bidChangeSourceTag("manual"), "Internal");
+  assert.equal(bidChangeSourceTag("ios"), "Internal");
+  assert.equal(bidChangeSourceTag("amazon_ads"), "External");
+  assert.match(bidChangeSourceLabel("amazon_ads"), /external/i);
+  assert.match(bidChangeSourceLabel("manual"), /InteliAds/i);
+  const now = Date.parse("2026-09-02T12:00:00.000Z");
+  const recent = new Date(now - 1 * 60 * 60 * 1000).toISOString();
+  // Up and down external Amazon stamps both enter Countdown with External tag.
+  for (const [prev, next] of [
+    [0.8, 0.82],
+    [0.82, 0.8],
+  ]) {
+    const info = getEntityBidCooldown(
+      {
+        bid_last_modified_at: recent,
+        bid_change_source: "amazon_ads",
+        bid_previous_value: prev,
+        bid_amount: next,
+      },
+      48,
+      now,
+    );
+    assert.equal(info.isInCooldown, true);
+    assert.equal(info.sourceTag, "External");
+    assert.equal(info.previousBid, prev);
+    assert.equal(info.currentBid, next);
+  }
+  // Own rule/bot/manual stamps must NOT be reclassified as External.
+  assert.equal(
+    getEntityBidCooldown(
+      {
+        bid_last_modified_at: recent,
+        bid_change_source: "rule",
+        bid_previous_value: 0.8,
+        bid_amount: 0.9,
+      },
+      48,
+      now,
+    ).sourceTag,
+    "Rule",
+  );
+  assert.equal(
+    getEntityBidCooldown(
+      {
+        bid_last_modified_at: recent,
+        bid_change_source: "bid_engine",
+        bid_previous_value: 0.5,
+        bid_amount: 0.55,
+      },
+      48,
+      now,
+    ).sourceTag,
+    "Bot",
+  );
 });
 
 test("cooldown hours come from server settings, not an invented window", () => {
@@ -86,6 +149,7 @@ test("campaign detail Auto Targeting uses editable ProductTargetRow with cooldow
   const campaign = readFileSync(new URL("../app/campaign/[id].tsx", import.meta.url), "utf8");
   assert.match(campaign, /SectionCard title="Auto Targeting"/);
   assert.match(campaign, /ProductTargetRow/);
+  assert.match(campaign, /variant="auto"/);
   assert.match(campaign, /cooldownRow=\{pt\}/);
   assert.match(campaign, /campaign-adgroup-bid-/);
   assert.match(campaign, /kind: "adGroup"/);
@@ -107,17 +171,24 @@ test("MutationTap and EntityBidControl mark cooldown yellow + popup", () => {
   assert.match(entityDetail, /onPress\(\{ forceCooldown: true \}\)/);
 });
 
-test("placement and up/down bidding surfaces reuse campaign settings cooldown", () => {
+test("placement and strategy surfaces use independent cooldown stamps", () => {
   const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
   const campaigns = readFileSync(new URL("../app/(tabs)/campaigns.tsx", import.meta.url), "utf8");
   const campaignDetail = readFileSync(new URL("../app/campaign/[id].tsx", import.meta.url), "utf8");
   const cooldown = readFileSync(new URL("../src/lib/bidCooldown.ts", import.meta.url), "utf8");
   assert.match(cooldown, /placement_adj_last_modified_at/);
-  assert.match(cooldown, /getCampaignSettingsCooldown/);
-  assert.match(targeting, /getCampaignSettingsCooldown/);
-  assert.match(targeting, /cooldown=\{cooldown\}/);
-  assert.match(campaigns, /cooldown=\{settingsCooldown\}/);
-  assert.match(campaignDetail, /cooldown=\{settingsCooldown\}/);
+  assert.match(cooldown, /getCampaignStrategyCooldown/);
+  assert.match(cooldown, /getPlacementAdjCooldown/);
+  assert.match(cooldown, /PlacementAdjSlot/);
+  assert.match(cooldown, /readPlacementAdjSlotStamp/);
+  assert.match(targeting, /getPlacementAdjCooldown/);
+  assert.match(targeting, /Date\.now\(\), field/);
+  assert.match(targeting, /\[percentEditor\.field\]: now/);
+  assert.match(campaigns, /settingsCooldown\.isInCooldown/);
+  assert.match(campaigns, /cooldownHours=\{entityCooldownHours\}/);
+  assert.match(campaigns, /getPlacementAdjCooldown\(item, cooldownHours, Date\.now\(\), field\.key\)/);
+  assert.match(campaignDetail, /settingsCooldown\.isInCooldown/);
+  assert.match(campaignDetail, /getPlacementAdjCooldown\(c as any, entityCooldownHours, Date\.now\(\), editor\.key\)/);
   assert.match(campaignDetail, /changeBiddingStrategy/);
 });
 

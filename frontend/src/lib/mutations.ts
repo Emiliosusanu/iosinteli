@@ -7,8 +7,24 @@ import { normalizeNestUserPlanPayload, type NestUserPlan } from "./accountContra
 import { isTransientEnableProfileError } from "./accountsUi";
 import { amazonManualWrite } from "./bulkOutboxContract";
 import type { AmazonProfile } from "./types";
+import {
+  normalizeCampaignCreationMarketplaces,
+  normalizeCampaignCreationPreview,
+  type CreationMarketplace,
+} from "./campaignCreationStock";
+import {
+  filterSuggestionsForBookRelevance,
+  buildKeywordSuggestionCountStats,
+  buildProductSuggestionCountStats,
+  type KeywordMatchType,
+  type KeywordSuggestionCountStats,
+  type ProductMatchType,
+  type ProductSuggestionLike,
+} from "./amazonCampaignSuggestions";
 
 export { amazonManualWrite } from "./bulkOutboxContract";
+export { resolveCreationProfileId } from "./campaignCreationStock";
+export type { KeywordSuggestionCountStats };
 
 export type EntityState = "enabled" | "paused";
 
@@ -19,6 +35,7 @@ export interface PlacementAdjustments {
 }
 
 export interface UpdateCampaignPayload {
+  name?: string;
   budget?: number;
   biddingStrategy?: string;
   placementAdjustments?: PlacementAdjustments;
@@ -162,6 +179,302 @@ function requestId() {
 
 // ── Campaigns ──────────────────────────────────────────────────────────────
 
+export type CampaignCreationTargeting = "auto" | "keywords" | "products";
+export type CampaignCreationMarketplace = CreationMarketplace;
+
+export type CampaignCreationBook = {
+  asin: string;
+  title: string;
+  format: string | null;
+  marketplaceIds: string[];
+  availabilityEvidence: string | null;
+  stockStatus: string | null;
+  workKey: string | null;
+  coverUrl: string | null;
+  sku: string | null;
+  publishedAt: string | null;
+};
+
+export type CampaignCreationPreview = ReturnType<
+  typeof normalizeCampaignCreationPreview
+> & {
+  /** Present after preview/suggestions fetch applies Grok (honest Amazon vs Kept). */
+  keywordCounts?: KeywordSuggestionCountStats;
+};
+
+export type CampaignCreationBooksResult = {
+  source: string;
+  fetchedAt: string | null;
+  books: CampaignCreationBook[];
+  verification: {
+    kdpAccountCount: number;
+    kdpTitleCount: number;
+    kdpPaperbackCount: number;
+  };
+};
+
+type CampaignKeywordInput = {
+  keyword: string;
+  matchType: KeywordMatchType;
+  bid: number;
+  source: "suggested" | "custom";
+};
+
+type CampaignProductTargetInput = {
+  asin: string;
+  matchType?: ProductMatchType;
+  bid: number;
+  source: "suggested" | "custom";
+};
+
+export type CreateCampaignInput = {
+  profileId: string;
+  advertisedAsin: string;
+  targeting: CampaignCreationTargeting;
+  name: string;
+  adGroupName: string;
+  dailyBudget: number;
+  defaultBid: number;
+  biddingStrategy: string;
+  placements: {
+    topOfSearch: number;
+    productPages: number;
+    restOfSearch: number;
+  };
+  enableAfterCreate: boolean;
+  requestId: string;
+  keywords?: CampaignKeywordInput[];
+  productTargets?: CampaignProductTargetInput[];
+};
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function optionalString(value: unknown): string | null {
+  const normalized = String(value ?? "").trim();
+  return normalized || null;
+}
+
+function creationBookFromApi(value: unknown): CampaignCreationBook | null {
+  const row = objectRecord(value);
+  const asin = String(row.asin ?? "").trim().toUpperCase();
+  if (!asin) return null;
+  const marketplaceIds = Array.isArray(row.marketplaceIds)
+    ? row.marketplaceIds
+    : Array.isArray(row.marketplace_ids)
+      ? row.marketplace_ids
+      : [];
+  return {
+    asin,
+    title: optionalString(row.title) ?? asin,
+    format: optionalString(row.format),
+    marketplaceIds: [
+      ...new Set(
+        marketplaceIds
+          .map((id) => String(id ?? "").trim())
+          .filter(Boolean),
+      ),
+    ],
+    availabilityEvidence: optionalString(
+      row.availabilityEvidence ?? row.availability_evidence,
+    ),
+    stockStatus: optionalString(row.stockStatus ?? row.stock_status),
+    workKey: optionalString(row.workKey ?? row.work_key),
+    coverUrl: optionalString(
+      row.coverUrl ?? row.cover_url ?? row.amazonImageUrl ?? row.amazon_image_url,
+    ),
+    sku: optionalString(row.sku),
+    publishedAt: optionalString(row.publishedAt ?? row.published_at),
+  };
+}
+
+/** Nest-owned KDP/Ads candidate shelf used by Create and Books. */
+export async function fetchCampaignCreationBooks(): Promise<CampaignCreationBooksResult> {
+  // Create picker: Nest aims for Ads-buyable paperbacks. Still drop bare
+  // amazon_catalog "published" rows (no Ads stock signal) — empty catalog.
+  const raw = await nestApiJson<unknown>(
+    "/campaigns/creation/book-candidates",
+    { method: "GET" },
+    "Couldn't load campaign books.",
+  );
+  const root = objectRecord(raw);
+  const nested = objectRecord(root.data);
+  const body = Object.keys(nested).length ? { ...root, ...nested } : root;
+  const books = (Array.isArray(body.books) ? body.books : [])
+    .map(creationBookFromApi)
+    .filter((book): book is CampaignCreationBook => book !== null)
+    .filter((book) => {
+      const evidence = String(book.availabilityEvidence ?? "")
+        .trim()
+        .toLowerCase();
+      // Catalog-only published titles are not creatable and have no Ads signal.
+      return evidence !== "amazon_catalog";
+    });
+  const verification = objectRecord(body.verification);
+  return {
+    source: String(body.source ?? "amazon_ads"),
+    fetchedAt: optionalString(body.fetchedAt ?? body.fetched_at),
+    books,
+    verification: {
+      kdpAccountCount:
+        Number(verification.kdpAccountCount ?? verification.kdp_account_count) ||
+        0,
+      kdpTitleCount:
+        Number(verification.kdpTitleCount ?? verification.kdp_title_count) || 0,
+      kdpPaperbackCount:
+        Number(
+          verification.kdpPaperbackCount ?? verification.kdp_paperback_count,
+        ) || 0,
+    },
+  };
+}
+
+export async function fetchCampaignCreationMarketplaces(
+  asin: string,
+): Promise<ReturnType<typeof normalizeCampaignCreationMarketplaces>> {
+  const normalizedAsin = String(asin ?? "").trim().toUpperCase();
+  const raw = await nestApiJson<unknown>(
+    `/campaigns/creation/marketplaces?asin=${encodeURIComponent(normalizedAsin)}`,
+    { method: "GET" },
+    "Couldn't verify Amazon marketplaces.",
+  );
+  return normalizeCampaignCreationMarketplaces(raw, normalizedAsin);
+}
+
+export async function previewCampaignCreation(input: {
+  profileId: string;
+  advertisedAsin: string;
+  targeting: CampaignCreationTargeting;
+  /**
+   * Fires after Amazon normalize + companions, BEFORE Grok — so UI can show
+   * live Amazon phrase/row totals (from this fetch) immediately.
+   */
+  onAmazonReady?: (partial: CampaignCreationPreview) => void;
+}): Promise<CampaignCreationPreview> {
+  // Mirror ad-group suggestions: Amazon SP is slow / rate-limits; retry
+  // transient failures so CA/US KW+ASIN pickers don’t hard-fail on first 429.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 45_000);
+      let raw: unknown;
+      try {
+        raw = await nestApiJson<unknown>(
+          "/campaigns/creation/preview",
+          {
+            method: "POST",
+            body: JSON.stringify(input),
+            signal: controller.signal,
+          },
+          "Couldn't load Amazon suggestions.",
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+      const preview = normalizeCampaignCreationPreview(raw);
+      const amazonKeywordRows = preview.keywords;
+      const amazonProductRows = preview.productTargets;
+      const productOnly =
+        amazonKeywordRows.length === 0 && amazonProductRows.length > 0;
+      const preGrokCounts = productOnly
+        ? {
+            ...buildProductSuggestionCountStats({
+              amazonProducts: amazonProductRows,
+              keptProducts: amazonProductRows,
+            }),
+            grokPending: true,
+          }
+        : {
+            ...buildKeywordSuggestionCountStats({
+              amazonApiRowCount: preview.amazonKeywordApi.rowCount,
+              amazonApiPhraseCount: preview.amazonKeywordApi.phraseCount,
+              amazonRows: amazonKeywordRows,
+              keptRows: amazonKeywordRows,
+            }),
+            grokPending: true,
+          };
+      input.onAmazonReady?.({
+        ...preview,
+        keywords: amazonKeywordRows,
+        productTargets: amazonProductRows,
+        keywordCounts: preGrokCounts,
+      });
+      const filtered = await filterSuggestionsForBookRelevance(
+        {
+          keywords: amazonKeywordRows,
+          productTargets: amazonProductRows,
+        },
+        {
+          bookTitle: preview.book?.title,
+          bookSubtitle: preview.book?.subtitle,
+          bookAuthor: preview.book?.author,
+          bookTopic: preview.book?.topic,
+          advertisedAsin: preview.book?.asin ?? input.advertisedAsin,
+          countryCode: preview.profile?.countryCode,
+          currencyCode: preview.profile?.currencyCode,
+        },
+      );
+      const keywordCounts = productOnly
+        ? buildProductSuggestionCountStats({
+            amazonProducts: amazonProductRows,
+            keptProducts: filtered.productTargets,
+            relevanceOutcome: filtered.relevanceOutcome,
+            relevanceError: filtered.relevanceError,
+          })
+        : buildKeywordSuggestionCountStats({
+            amazonApiRowCount: preview.amazonKeywordApi.rowCount,
+            amazonApiPhraseCount: preview.amazonKeywordApi.phraseCount,
+            amazonRows: amazonKeywordRows,
+            keptRows: filtered.keywords,
+            relevanceOutcome: filtered.relevanceOutcome,
+            relevanceError: filtered.relevanceError,
+          });
+      return {
+        ...preview,
+        keywords: filtered.keywords,
+        productTargets: filtered.productTargets,
+        keywordCounts,
+      };
+    } catch (error) {
+      lastError = error;
+      const status = error instanceof NestApiError ? error.status : 0;
+      const aborted =
+        error instanceof Error &&
+        (error.name === "AbortError" || /aborted|timed out|timeout/i.test(error.message));
+      const retryable =
+        aborted ||
+        status === 0 ||
+        status === 408 ||
+        status === 429 ||
+        status >= 500;
+      if (!retryable || attempt === 2) break;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(8000, 1200 * 2 ** attempt)),
+      );
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Couldn't load Amazon suggestions.");
+}
+
+export function createCampaign(input: CreateCampaignInput) {
+  return nestApiJson<{
+    campaignId: string;
+    adGroupId?: string;
+    adId?: string;
+    state: EntityState;
+  }>(
+    "/campaigns/creation",
+    { method: "POST", body: JSON.stringify(input) },
+    "Couldn't create campaign.",
+  );
+}
+
 export async function updateCampaignState(campaignId: string, state: EntityState) {
   return nestApiJson<{ id: string; state: EntityState }>(
     `/campaigns/${campaignId}/state`,
@@ -186,6 +499,8 @@ export async function fetchCampaignApi(campaignId: string) {
     budget?: number;
     placementAdjustments?: PlacementAdjustments;
     biddingStrategy?: string;
+    targetingType?: string;
+    primaryAsin?: string;
   }>(`/campaigns/${campaignId}`, { method: "GET" }, "Couldn't load campaign.");
 }
 
@@ -228,6 +543,256 @@ export async function updateCampaign(campaignId: string, payload: UpdateCampaign
 
 // ── Keywords / targets / ad groups ─────────────────────────────────────────
 
+export type AdGroupTargeting = "auto" | "keywords" | "products";
+
+export type AdGroupSuggestionKeyword = {
+  keyword: string;
+  matchType: KeywordMatchType;
+  suggestedBid: number | null;
+  rangeStart: number | null;
+  rangeEnd: number | null;
+};
+
+export type AdGroupSuggestionProduct = ProductSuggestionLike & {
+  matchType: ProductMatchType;
+};
+
+export type AdGroupSuggestionsResult = {
+  source: "amazon_ads";
+  fetchedAt: string;
+  recommendationsAvailable: boolean;
+  keywords: AdGroupSuggestionKeyword[];
+  productTargets: AdGroupSuggestionProduct[];
+  book: CampaignCreationPreview["book"];
+  profile: CampaignCreationPreview["profile"];
+  amazonKeywordApi: { rowCount: number; phraseCount: number };
+  keywordCounts: KeywordSuggestionCountStats;
+};
+
+export async function fetchAdGroupSuggestions(input: {
+  campaignId: string;
+  targeting: "keywords" | "products";
+  asin?: string;
+  /**
+   * Fires after Amazon normalize + companions, BEFORE Grok — so Add keywords
+   * can show live Amazon phrase/row totals (from this fetch) immediately.
+   */
+  onAmazonReady?: (partial: AdGroupSuggestionsResult) => void;
+}): Promise<AdGroupSuggestionsResult> {
+  // Amazon SP recommendations are slow; retry transient timeouts without
+  // surfacing an empty picker after the first laggy attempt.
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const loadRaw = async (body: {
+        campaignId: string;
+        targeting: "keywords" | "products";
+        asin?: string;
+      }) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 45_000);
+        try {
+          return await nestApiJson<unknown>(
+            "/ad-groups/suggestions",
+            {
+              method: "POST",
+              body: JSON.stringify(body),
+              signal: controller.signal,
+            },
+            "Couldn't load Amazon suggestions.",
+          );
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+
+      let requestBody: {
+        campaignId: string;
+        targeting: "keywords" | "products";
+        asin?: string;
+      } = {
+        campaignId: input.campaignId,
+        targeting: input.targeting,
+        ...(input.asin ? { asin: input.asin } : {}),
+      };
+      let raw = await loadRaw(requestBody);
+      let preview = normalizeCampaignCreationPreview(raw);
+
+      // Wrong/stale B0 ASIN override can empty US keyword suggestions (New England
+      // cert: B0HJ3N6PQK → 0 rows; omit asin → Nest resolves ISBN → ~166×3).
+      if (
+        input.targeting === "keywords" &&
+        input.asin &&
+        preview.keywords.length === 0 &&
+        !preview.recommendationsAvailable
+      ) {
+        requestBody = {
+          campaignId: input.campaignId,
+          targeting: input.targeting,
+        };
+        raw = await loadRaw(requestBody);
+        preview = normalizeCampaignCreationPreview(raw);
+      }
+
+      const amazonKeywordRows = preview.keywords;
+      const amazonProductRows = preview.productTargets;
+      const productOnly =
+        amazonKeywordRows.length === 0 && amazonProductRows.length > 0;
+      const preGrokCounts = productOnly
+        ? {
+            ...buildProductSuggestionCountStats({
+              amazonProducts: amazonProductRows,
+              keptProducts: amazonProductRows,
+            }),
+            grokPending: true,
+          }
+        : {
+            ...buildKeywordSuggestionCountStats({
+              amazonApiRowCount: preview.amazonKeywordApi.rowCount,
+              amazonApiPhraseCount: preview.amazonKeywordApi.phraseCount,
+              amazonRows: amazonKeywordRows,
+              keptRows: amazonKeywordRows,
+            }),
+            grokPending: true,
+          };
+      input.onAmazonReady?.({
+        source: preview.source,
+        fetchedAt: preview.fetchedAt,
+        recommendationsAvailable: preview.recommendationsAvailable,
+        keywords: amazonKeywordRows,
+        productTargets: amazonProductRows,
+        book: preview.book,
+        profile: preview.profile,
+        amazonKeywordApi: preview.amazonKeywordApi,
+        keywordCounts: preGrokCounts,
+      });
+      const filtered = await filterSuggestionsForBookRelevance(
+        {
+          keywords: amazonKeywordRows,
+          productTargets: amazonProductRows,
+        },
+        {
+          bookTitle: preview.book?.title,
+          bookSubtitle: preview.book?.subtitle,
+          bookAuthor: preview.book?.author,
+          bookTopic: preview.book?.topic,
+          advertisedAsin: preview.book?.asin ?? input.asin,
+          countryCode: preview.profile?.countryCode,
+          currencyCode: preview.profile?.currencyCode,
+        },
+      );
+      const keywordCounts = productOnly
+        ? buildProductSuggestionCountStats({
+            amazonProducts: amazonProductRows,
+            keptProducts: filtered.productTargets,
+            relevanceOutcome: filtered.relevanceOutcome,
+            relevanceError: filtered.relevanceError,
+          })
+        : buildKeywordSuggestionCountStats({
+            amazonApiRowCount: preview.amazonKeywordApi.rowCount,
+            amazonApiPhraseCount: preview.amazonKeywordApi.phraseCount,
+            amazonRows: amazonKeywordRows,
+            keptRows: filtered.keywords,
+            relevanceOutcome: filtered.relevanceOutcome,
+            relevanceError: filtered.relevanceError,
+          });
+      return {
+        source: preview.source,
+        fetchedAt: preview.fetchedAt,
+        recommendationsAvailable: preview.recommendationsAvailable,
+        keywords: filtered.keywords,
+        productTargets: filtered.productTargets,
+        book: preview.book,
+        profile: preview.profile,
+        amazonKeywordApi: preview.amazonKeywordApi,
+        keywordCounts,
+      };
+    } catch (error) {
+      lastError = error;
+      const status =
+        error instanceof NestApiError ? error.status : 0;
+      const aborted =
+        error instanceof Error &&
+        (error.name === "AbortError" || /aborted|timed out|timeout/i.test(error.message));
+      const retryable =
+        aborted ||
+        status === 0 ||
+        status === 408 ||
+        status === 429 ||
+        status >= 500;
+      if (!retryable || attempt === 2) break;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(8000, 1200 * 2 ** attempt)),
+      );
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Couldn't load Amazon suggestions.");
+}
+
+export function createAdGroup(input: {
+  campaignId: string;
+  name: string;
+  defaultBid: number;
+  state: EntityState;
+  targeting: AdGroupTargeting;
+  advertisedAsin?: string;
+  keywords?: CampaignKeywordInput[];
+  productTargets?: CampaignProductTargetInput[];
+}) {
+  return nestApiJson<{
+    adGroup: {
+      id: string;
+      adGroupId?: string;
+      campaignId: string;
+      name?: string;
+      defaultBid?: number;
+      state?: EntityState;
+      targetingType?: string | null;
+    };
+    keywordCount?: number;
+    productTargetCount?: number;
+    adId?: string;
+  }>(
+    "/ad-groups",
+    { method: "POST", body: JSON.stringify(input) },
+    "Couldn't create ad group.",
+  );
+}
+
+export function addAdGroupKeywords(
+  adGroupId: string,
+  keywords: CampaignKeywordInput[],
+) {
+  return nestApiJson<{
+    created: number;
+    failed?: number;
+    keywordIds?: string[];
+    errors?: unknown[];
+  }>(
+    `/ad-groups/${encodeURIComponent(adGroupId)}/keywords`,
+    { method: "POST", body: JSON.stringify({ keywords }) },
+    "Couldn't add keywords.",
+  );
+}
+
+export function addAdGroupProductTargets(
+  adGroupId: string,
+  productTargets: CampaignProductTargetInput[],
+) {
+  return nestApiJson<{
+    created: number;
+    failed?: number;
+    targetIds?: string[];
+    errors?: unknown[];
+  }>(
+    `/ad-groups/${encodeURIComponent(adGroupId)}/product-targets`,
+    { method: "POST", body: JSON.stringify({ productTargets }) },
+    "Couldn't add product targets.",
+  );
+}
+
 export async function updateKeywordManual(
   keywordId: string,
   payload: { status?: EntityState; bid?: number; forceCooldown?: boolean },
@@ -262,7 +827,7 @@ export async function updateAdGroupState(adGroupId: string, state: EntityState) 
 
 export async function updateAdGroupManual(
   adGroupId: string,
-  payload: { defaultBid?: number; forceCooldown?: boolean },
+  payload: { name?: string; defaultBid?: number; forceCooldown?: boolean },
   fallbackTargetIds: string[] = [],
 ) {
   // Nest has no `/ad-groups/:id/manual`. Default bid is PATCH `/ad-groups/:id`,
@@ -271,7 +836,7 @@ export async function updateAdGroupManual(
   try {
     return await nestApiJson(
       `/ad-groups/${adGroupId}`,
-      { method: "PATCH", body: JSON.stringify({ defaultBid: payload.defaultBid }) },
+      { method: "PATCH", body: JSON.stringify({ name: payload.name, defaultBid: payload.defaultBid }) },
       "Couldn't update ad group bid.",
     );
   } catch (error) {
@@ -382,6 +947,9 @@ type NestAmazonProfile = {
   is_enabled?: boolean;
   campaignsEnabledCount?: number;
   campaignsPausedCount?: number;
+  /** Present on some Nest builds; client still enriches from Supabase link rows. */
+  kdpAccountCount?: number;
+  kdp_account_count?: number;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -454,7 +1022,9 @@ export async function fetchNestAmazonProfiles(filterUserId?: string | null): Pro
       campaigns_enabled_count: enabled,
       campaigns_paused_count: paused,
       campaign_count: enabled + paused,
-      kdp_account_count: 0,
+      // Nest often omits link counts; fetchAmazonProfiles overwrites from bridge rows.
+      kdp_account_count:
+        Number(p.kdpAccountCount ?? p.kdp_account_count) || 0,
       created_at: p.createdAt ?? new Date().toISOString(),
       updated_at: p.updatedAt ?? new Date().toISOString(),
     };
@@ -480,18 +1050,15 @@ export async function fetchAmazonProfileBooks(
   const data = await nestApiJson<{
     books?: Array<{ asin?: string; title?: string | null; coverUrl?: string | null; amazonImageUrl?: string | null }>;
   }>(`/amazon/profiles/${encodeURIComponent(adsId)}/books${q}`, { method: "GET" }, "Couldn't load profile books.");
-  return (data.books ?? [])
-    .map((book) => {
-      const asin = String(book.asin || "").trim();
-      const coverUrl = String(book.coverUrl || book.amazonImageUrl || "").trim() || null;
-      if (!asin || !coverUrl) return null;
-      return {
-        asin,
-        title: book.title ?? null,
-        coverUrl,
-      };
-    })
-    .filter((row): row is AmazonProfileBookPreview => !!row);
+  const books: AmazonProfileBookPreview[] = [];
+  for (const book of data.books ?? []) {
+    const asin = String(book.asin || "").trim();
+    const coverUrl =
+      String(book.coverUrl || book.amazonImageUrl || "").trim() || null;
+    if (!asin || !coverUrl) continue;
+    books.push({ asin, title: book.title ?? null, coverUrl });
+  }
+  return books;
 }
 
 async function persistUserAmazonProfileEnabled(

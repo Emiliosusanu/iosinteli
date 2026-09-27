@@ -57,7 +57,8 @@ test("mutation-sensitive details keep identity grouped and switches independent"
   assert.match(searchTerm, /Writes a keyword on Amazon Ads/);
   assert.match(searchTerm, /Adds a negative on Amazon Ads/);
   assert.match(campaign, /c\.state === "enabled" \? "Enabled" : "Paused"/);
-  assert.match(adGroup, /Default bid \$\{defaultBid\}\. Read only\./);
+  assert.match(adGroup, /Default bid \$\{defaultBid\}\. Edit bid\./);
+  assert.match(adGroup, /BidBudgetEditor/);
   assert.match(adGroup, /groupState === "enabled" \? "Enabled" : "Paused"/);
   assert.doesNotMatch(mutationsApi, /ad-groups\/\$\{adGroupId\}\/manual/);
   assert.match(mutationsApi, /fallbackTargetIds/);

@@ -44,11 +44,9 @@ import { fetchBidEngineStatus } from "@/src/lib/mutations";
 import { KdpRoyaltySetupCard } from "@/src/components/KdpRoyaltySetupCard";
 import { SetupNextStepCard } from "@/src/components/SetupNextStepCard";
 import {
-  countEnabledProfilesMatchingIds,
   currenciesInSelection,
   currencyCodeOf,
-  mixedMarketplaceMoneyHint,
-  multiCountryFlagIcons,
+  multiCountryCodes,
   profileEnabled,
 } from "@/src/lib/accountsUi";
 import { adsDataHasArrived, applySetupDismissals, deriveSetupSnapshot, type SetupProgressMemory } from "@/src/lib/setupState";
@@ -192,6 +190,7 @@ import {
   NET_ROYALTIES_LABEL,
   kdpRoyaltiesAreKnown,
   netRoyalties,
+  netRoyaltiesKnown,
   netRoyaltiesVoiceOver,
 } from "@/src/lib/netRoyalties";
 import {
@@ -200,10 +199,10 @@ import {
   kdpRoyaltiesQueryAllowed,
 } from "@/src/lib/kdpRoyaltyScope";
 import {
-  booksKdpQueryScope,
   booksMoneyProfileIds,
   booksRoyaltyScopeForSelection,
   enabledSelectedProfileIds,
+  overviewKdpQueryScope,
   overviewPortfolioProfileIds,
 } from "@/src/lib/booksProfileScope";
 
@@ -457,15 +456,17 @@ export default function OverviewScreen() {
     meta: financialQueryMeta(),
   });
   const fxRates = needsAdsFx ? fxRatesQ.data : undefined;
-  const moneyScopeHint = useMemo(
+  const adsEngineFxReady = !needsAdsFx || !!fxRates;
+  const adsEngineCurrencyScopeKey = useMemo(
     () =>
-      mixedMarketplaceMoneyHint(enabledPortfolioCurrencies, primaryCurrency, {
-        moneyProfileCount: countEnabledProfilesMatchingIds(profiles, moneyProfileIds),
-        enabledProfileCount: countEnabledProfilesMatchingIds(profiles, enabledPortfolioIds),
-      }),
-    [enabledPortfolioCurrencies, primaryCurrency, profiles, moneyProfileIds, enabledPortfolioIds],
+      [...profileCurrencyById.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([id, currency]) => `${id}:${currency}`)
+        .join("|"),
+    [profileCurrencyById],
   );
-  // Gross: same money-chip Ads ids → owned-active linked KDP. Never user_accounts while Ads exist.
+  // Gross: money-chip country scope for linked reads; Nest all-enabled overview
+  // widens to owned kdp_accounts via overviewKdpQueryScope (not legacy links).
   const royaltyScope = useMemo(
     () => booksRoyaltyScopeForSelection(profiles, moneyProfileIds),
     [profiles, moneyProfileIds],
@@ -651,11 +652,10 @@ export default function OverviewScreen() {
     ...FINANCIAL_QUERY_CACHE,
   });
 
-  // Match Books: never use user_accounts while Ads profiles exist — that path
-  // pulled every session KDP shelf (incl. other-user / Disabled-market leaks).
-  // Bridge-only + active links: portfolio Ads ids must not legacy-match
-  // kdp_accounts.amazon_profile_id on Disabled profiles (Sebi / extra shelves).
-  const kdpQueryScope = booksKdpQueryScope(royaltyScope);
+  // Nest isAllProfilesOverview: when every Nest-enabled Ads profile is in the
+  // portfolio, widen Gross to owned kdp_accounts (user_id-filtered). Ads spend
+  // stays on moneyProfileIds; legacy Disabled-profile links stay off.
+  const kdpQueryScope = overviewKdpQueryScope(profiles, enabledPortfolioIds, royaltyScope);
   const kdpQueryReady = homeVisible && homeReadsReady && !viewingAsAdmin && kdpRoyaltiesQueryAllowed(royaltyScope);
   const royaltiesQ = useQuery({
     queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, "portfolio"],
@@ -694,27 +694,58 @@ export default function OverviewScreen() {
           allowLegacyProfileLinks: false,
         }),
       ),
-    enabled: (kdpQueryReady || (viewingAsAdmin && scopeProfiles.length > 0)) && kdpRoyaltiesQueryAllowed(royaltyScope),
+    enabled:
+      ((kdpQueryReady || (viewingAsAdmin && scopeProfiles.length > 0)) &&
+        kdpRoyaltiesQueryAllowed(royaltyScope) &&
+        String(primaryCurrency || "").toUpperCase() === "USD"),
     ...OVERVIEW_QUERY_CACHE,
   });
   useQuery({
-    queryKey: ["ads-engine-keywords-daily", scopeProfiles, dateRange.start, dateRange.end, "portfolio"],
+    queryKey: [
+      "ads-engine-keywords-daily",
+      scopeProfiles,
+      dateRange.start,
+      dateRange.end,
+      moneyProfileIds,
+      primaryCurrency,
+      adsEngineCurrencyScopeKey,
+      fxRatesQ.dataUpdatedAt,
+    ],
     queryFn: () =>
       withQueryTimeout(
-        fetchKeywordDailyAggregate(scopeProfiles, dateRange.start, dateRange.end),
+        fetchKeywordDailyAggregate(scopeProfiles, dateRange.start, dateRange.end, {
+          moneyProfileIds,
+          displayCurrency: primaryCurrency,
+          profileCurrencyById,
+          fxRates,
+        }),
         ADS_ENGINE_FUNNEL_TIMEOUT_MS,
       ),
-    enabled: sellerReady && scopeProfiles.length > 0,
+    enabled: sellerReady && scopeProfiles.length > 0 && adsEngineFxReady,
     ...OVERVIEW_QUERY_CACHE,
   });
   useQuery({
-    queryKey: ["ads-engine-search-terms-daily", scopeProfiles, dateRange.start, dateRange.end, "portfolio"],
+    queryKey: [
+      "ads-engine-search-terms-daily",
+      scopeProfiles,
+      dateRange.start,
+      dateRange.end,
+      moneyProfileIds,
+      primaryCurrency,
+      adsEngineCurrencyScopeKey,
+      fxRatesQ.dataUpdatedAt,
+    ],
     queryFn: () =>
       withQueryTimeout(
-        fetchSearchTermDailyAggregate(scopeProfiles, dateRange.start, dateRange.end),
+        fetchSearchTermDailyAggregate(scopeProfiles, dateRange.start, dateRange.end, {
+          moneyProfileIds,
+          displayCurrency: primaryCurrency,
+          profileCurrencyById,
+          fxRates,
+        }),
         ADS_ENGINE_FUNNEL_TIMEOUT_MS,
       ),
-    enabled: sellerReady && scopeProfiles.length > 0,
+    enabled: sellerReady && scopeProfiles.length > 0 && adsEngineFxReady,
     ...OVERVIEW_QUERY_CACHE,
   });
 
@@ -802,8 +833,9 @@ export default function OverviewScreen() {
   });
 
   // Same Books / Product Ads catalog the web Ads Engine uses for overall BE.
+  // `limit` belongs in the key — sharing with Books (limit: 0) without it truncates the tab.
   const catalogBooksQ = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope],
+    queryKey: [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, 300],
     queryFn: () =>
       withQueryTimeout(
         fetchTopBooksRange({
@@ -1478,18 +1510,18 @@ export default function OverviewScreen() {
       ? setupSnapshot.next
       : null;
 
-  // Profile chip count/name only — flags sit beside the label (no "profiles" suffix).
+  // Profile chip count/name only — market pill uses country codes beside sync.
   const primaryProfile =
     selectedProfiles.length === 1
       ? selectedProfiles[0]?.nickname ?? selectedProfiles[0]?.account_name ?? selectedProfiles[0]?.profile_id ?? "1"
       : selectedProfiles.length > 1
         ? `${selectedProfiles.length}`
         : "All";
-  const marketFlags = useMemo(() => {
+  const marketCountries = useMemo(() => {
     if (selectedProfiles.length > 0) {
-      return multiCountryFlagIcons(selectedProfiles, { onlyEnabled: false });
+      return multiCountryCodes(selectedProfiles, { onlyEnabled: false });
     }
-    return multiCountryFlagIcons(profiles, { onlyEnabled: true });
+    return multiCountryCodes(profiles, { onlyEnabled: true });
   }, [profiles, selectedProfiles]);
 
   const { scrollY: headerScrollY, onScroll: onHeaderScroll, scrollEventThrottle } =
@@ -1507,7 +1539,14 @@ export default function OverviewScreen() {
     [topCampaigns],
   );
   const highAcosCampaigns = useMemo(
-    () => topCampaigns.filter((c) => c.sales > 0 && breakEvenAcos > 0 && c.acos > breakEvenAcos),
+    () =>
+      topCampaigns.filter(
+        (c) =>
+          c.sales > 0 &&
+          breakEvenAcos > 0 &&
+          c.acos != null &&
+          c.acos > breakEvenAcos,
+      ),
     [topCampaigns, breakEvenAcos],
   );
   const failedRuleRuns = useMemo(
@@ -1646,8 +1685,12 @@ export default function OverviewScreen() {
   function applyCustomRange(range: DateRange) {
     void playHaptic("select", reduceMotion);
     setPeriodMode("custom");
-    prefetchPeriodData(range);
-    setDateRange(range);
+    const labelledRange = {
+      ...range,
+      label: range.label ?? formatDateRangeLabel(range),
+    };
+    prefetchPeriodData(labelledRange);
+    setDateRange(labelledRange);
   }
 
   const canGoNextPeriod = parseDateOnly(dateRange.end) < todayDate;
@@ -1720,11 +1763,14 @@ export default function OverviewScreen() {
       ? t.colors.tone_good
       : t.colors.tone_danger;
   const profitColor = !netKnown ? t.colors.text_tertiary : profitAccentColor;
+  // ACoS needs sales > 0 — never paint 0% from safeDivide(spend, 0).
   const heroAcos = scrubbing
-    ? safeDivide(chartDay.spend, chartDay.sales) * 100
-    : spendKnown
+    ? chartDay.sales > 0
+      ? safeDivide(chartDay.spend, chartDay.sales) * 100
+      : null
+    : spendKnown && (heroSales ?? 0) > 0
       ? safeDivide(heroSpend ?? 0, heroSales ?? 0) * 100
-      : totals.acos;
+      : null;
   const profitMargin = heroNet == null || !royaltiesKnown || !heroRoyalties
     ? null
     : safeDivide(heroNet, heroRoyalties) * 100;
@@ -1748,7 +1794,8 @@ export default function OverviewScreen() {
   const netDisplayAmount = netKnown ? heroNet : null;
   const royaltiesDisplayAmount = royaltiesKnown ? heroRoyalties : null;
   const spendDisplayAmount = spendKnown ? heroSpend : null;
-  const acosDisplayAmount = spendKnown ? heroAcos : null;
+  const acosDisplayAmount =
+    spendKnown && heroAcos != null && Number.isFinite(heroAcos) ? heroAcos : null;
   const marginDisplayAmount =
     netKnown && heroRoyalties && profitMargin != null ? profitMargin : null;
   const netDisplay = !netKnown
@@ -1760,7 +1807,7 @@ export default function OverviewScreen() {
   const spendDisplay = !spendKnown
     ? "—"
     : formatCurrency(heroSpend!, primaryCurrency, { compact: true });
-  const acosDisplay = !spendKnown ? "—" : formatPercent(heroAcos);
+  const acosDisplay = acosDisplayAmount == null ? "—" : formatPercent(acosDisplayAmount);
   const marginDisplay = marginDisplayAmount == null
     ? "—"
     : formatPercent(marginDisplayAmount, 0);
@@ -1780,7 +1827,7 @@ export default function OverviewScreen() {
             ? "Ad spend unavailable."
             : null;
   const acosValueColor =
-    !loading && adsReady && heroSales > 0 && breakEvenAcos > 0
+    !loading && adsReady && (heroSales ?? 0) > 0 && breakEvenAcos > 0 && heroAcos != null
       ? toneColor(acosTone(heroAcos, breakEvenAcos), t.colors)
       : t.colors.text_primary;
   const chartHeight = viewportWidth < 400 ? 138 : Math.max(t.layout.chartHero, 152);
@@ -1979,7 +2026,7 @@ export default function OverviewScreen() {
         <View style={[styles.stickyHeader, { backgroundColor: "transparent" }]}>
           <OverviewHeaderV3
             profileLabel={primaryProfile}
-            marketFlags={marketFlags}
+            marketCountries={marketCountries}
             currency={primaryCurrency}
             onProfilePress={() => router.push("/more/accounts")}
             onCurrencyPress={() => router.push("/more/accounts")}
@@ -1999,18 +2046,6 @@ export default function OverviewScreen() {
         </View>
 
         <View style={{ paddingHorizontal: dashboard.pageInset, paddingTop: dashboard.compactGap }}>
-          {moneyScopeHint ? (
-            <Text
-              testID="home-money-scope-hint"
-              style={[
-                t.typography.caption1,
-                { color: t.colors.text_tertiary, marginBottom: dashboard.compactGap },
-              ]}
-              accessibilityRole="text"
-            >
-              {moneyScopeHint}
-            </Text>
-          ) : null}
           {!kdpCurrencyComparable ? (
             <Text
               style={[t.typography.caption1, { color: t.colors.text_tertiary, marginBottom: dashboard.compactGap }]}
@@ -2041,7 +2076,7 @@ export default function OverviewScreen() {
           <DashboardSurface tone="hero" style={{ marginBottom: dashboard.sectionGap, overflow: "hidden" }} testID="home-net-royalties">
             <PressableScale
               onPress={chartDay ? clearChartSelection : undefined}
-              accessibilityRole={chartDay ? "button" : "text"}
+              accessibilityRole={chartDay ? "button" : undefined}
               accessibilityLabel={chartDay ? `${chartDay.label}. Release to show the period total.` : `${GROSS_ROYALTIES_LABEL} royalties for ${periodLabel}. Swipe a day on the chart to inspect it.`}
             >
               <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
@@ -2159,7 +2194,7 @@ export default function OverviewScreen() {
 
           {(sellerReady || viewingAsAdmin) ? (
             <OverviewSwipeWidget
-              key={`home-ads-engine-${activePeriodKey}-${scopeProfiles.join("|")}`}
+              key={`home-ads-engine-${scopeProfiles.join("|")}`}
               staggerIndex={1}
               testID="home-ads-engine"
               title="Ads Engine"
@@ -2169,7 +2204,7 @@ export default function OverviewScreen() {
                 {
                   key: "ads-campaigns",
                   label: "Campaigns",
-                  hint: breakEvenAcos != null ? formatPercent(breakEvenAcos, 0) : undefined,
+                  meta: breakEvenAcos != null ? formatBreakEvenHint(breakEvenAcos) || undefined : undefined,
                   content: (
                     <AdsEngineCampaignsPage
                       series={adsEngineSeries}
@@ -2181,7 +2216,6 @@ export default function OverviewScreen() {
                 {
                   key: "ads-keywords",
                   label: "Keywords",
-                  hint: "Top keywords by spend",
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineKeywordsPage
@@ -2191,13 +2225,17 @@ export default function OverviewScreen() {
                       breakEvenAcos={breakEvenAcos}
                       width={chartWidgetWidth}
                       moneyProfileIds={moneyProfileIds}
+                      displayCurrency={primaryCurrency}
+                      profileCurrencyById={profileCurrencyById}
+                      fxRates={fxRates}
+                      fxReady={adsEngineFxReady}
+                      fxRatesUpdatedAt={fxRatesQ.dataUpdatedAt}
                     />
                   ),
                 },
                 {
                   key: "ads-search-terms",
                   label: "Search terms",
-                  hint: "Top search terms by spend",
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineSearchTermsPage
@@ -2207,6 +2245,11 @@ export default function OverviewScreen() {
                       breakEvenAcos={breakEvenAcos}
                       width={chartWidgetWidth}
                       moneyProfileIds={moneyProfileIds}
+                      displayCurrency={primaryCurrency}
+                      profileCurrencyById={profileCurrencyById}
+                      fxRates={fxRates}
+                      fxReady={adsEngineFxReady}
+                      fxRatesUpdatedAt={fxRatesQ.dataUpdatedAt}
                     />
                   ),
                 },
@@ -2214,9 +2257,9 @@ export default function OverviewScreen() {
             />
           ) : null}
 
-          {(sellerReady || viewingAsAdmin || kdpOnlyDashboard) ? (
+          {(sellerReady || viewingAsAdmin || kdpOnlyDashboard) && kdpCurrencyComparable ? (
             <OverviewSwipeWidget
-              key={`home-kdp-royalties-format-${activePeriodKey}-${scopeProfiles.join("|")}`}
+              key={`home-kdp-royalties-format-${scopeProfiles.join("|")}`}
               staggerIndex={2}
               testID="home-kdp-royalties-format"
               title="Format mix"
@@ -2245,7 +2288,7 @@ export default function OverviewScreen() {
 
           {(sellerReady || viewingAsAdmin) ? (
           <OverviewSwipeWidget
-            key={`home-campaigns-${activePeriodKey}-${scopeProfiles.join("|")}`}
+            key={`home-campaigns-${scopeProfiles.join("|")}`}
             staggerIndex={3}
             testID="home-campaigns"
             title="Campaigns"
@@ -2287,7 +2330,6 @@ export default function OverviewScreen() {
               {
                 key: "low-acos",
                 label: "Low ACoS",
-                hint: "Lowest to highest",
                 hidden: (campaignsWidgetPhase !== "success" && campaignsWidgetPhase !== "empty") || !showCampaignsLowAcos,
                 content:
                   campsLowAcos.length === 0 ? (
@@ -2310,7 +2352,6 @@ export default function OverviewScreen() {
               {
                 key: "top-spend",
                 label: "Top spend",
-                hint: "Highest to lowest",
                 hidden: campaignsWidgetPhase !== "success" && campaignsWidgetPhase !== "empty",
                 content:
                   campsTopSpend.length === 0 ? (
@@ -2413,7 +2454,7 @@ export default function OverviewScreen() {
 
           {(keywordBleeders.length > 0 || keywordHighAcos.length > 0 || termSpendNoOrders.length > 0 || termLowAcos.length > 0) ? (
             <OverviewSwipeWidget
-              key={`w4-${activePeriodKey}-${scopeProfiles.join("|")}`}
+              key={`w4-${scopeProfiles.join("|")}`}
               staggerIndex={4}
               title="Keywords & search"
               icon="targeting"
@@ -2503,7 +2544,7 @@ export default function OverviewScreen() {
 
           {placementMix.length > 0 || placementCampaigns.length > 0 ? (
             <OverviewSwipeWidget
-              key={`w5-${activePeriodKey}-${scopeProfiles.join("|")}`}
+              key={`w5-${scopeProfiles.join("|")}`}
               staggerIndex={5}
               title="Placement mix"
               icon="targeting"
@@ -2518,7 +2559,6 @@ export default function OverviewScreen() {
                 {
                   key: "campaigns",
                   label: "Campaign placement",
-                  hint: "Top · Product · Rest share",
                   hidden: placementCampaigns.length === 0,
                   content: (
                     <WidgetRowList>
@@ -2541,7 +2581,7 @@ export default function OverviewScreen() {
           ) : null}
 
           <OverviewSwipeWidget
-            key={`w6-${activePeriodKey}-${scopeProfiles.join("|")}`}
+            key={`w6-${scopeProfiles.join("|")}`}
             staggerIndex={6}
             title="Top books"
             icon="books"
@@ -2583,7 +2623,7 @@ export default function OverviewScreen() {
                   ) : booksRoyalties.length === 0 ? (
                     !kdpCurrencyComparable ? (
                       <SwipeEmpty message="KDP royalties are USD-only in this view." t={t} />
-                    ) : kdpReady && totals.royalties > 0 ? (
+                    ) : kdpReady && (totals.royalties ?? 0) > 0 ? (
                       <SwipeEmpty message="No per-book data" t={t} />
                     ) : (
                       <TouchableOpacity onPress={royaltySetup.openCollection} accessibilityRole="button">
@@ -2620,7 +2660,7 @@ export default function OverviewScreen() {
                       message={
                         !kdpCurrencyComparable
                           ? "Book profit is unavailable in this currency view."
-                          : kdpReady && totals.royalties > 0
+                          : kdpReady && (totals.royalties ?? 0) > 0
                           ? "No book-level net"
                           : "No book profit"
                       }
@@ -2646,7 +2686,6 @@ export default function OverviewScreen() {
               {
                 key: "high-acos",
                 label: "High ACoS",
-                hint: "Ad-attributed sales only",
                 hidden: booksWidgetPhase !== "success" && booksWidgetPhase !== "empty",
                 content:
                   booksHigh.length === 0 ? (
@@ -2671,7 +2710,6 @@ export default function OverviewScreen() {
               {
                 key: "ad-spend-no-sales",
                 label: "Ad spend",
-                hint: "Spend without ad sales",
                 hidden: booksAdSpendNoSales.length === 0,
                 content: (
                   <WidgetRowList>
@@ -2693,7 +2731,6 @@ export default function OverviewScreen() {
               {
                 key: "low-acos",
                 label: "Low ACoS",
-                hint: "Ad-attributed sales only",
                 hidden:
                   (booksWidgetPhase !== "success" && booksWidgetPhase !== "empty") ||
                   booksLow.length === 0 ||
@@ -2759,6 +2796,13 @@ function ActionReviewCard({
 }) {
   const active = items.length > 0;
   const visibleItems = items.slice(0, 3);
+  const statusLabel = active
+    ? `${items.length} signal${items.length === 1 ? "" : "s"}`
+    : checks === "complete"
+      ? `${rulesChecked} checked`
+      : checks === "pending"
+        ? "Checking…"
+        : "Incomplete";
 
   return (
     <View style={[styles.actionReviewCard, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.border }]}>
@@ -2766,12 +2810,10 @@ function ActionReviewCard({
         <InteliAdsIcon name={active || checks !== "complete" ? "attention" : "success"} size={dashboard.iconLg} color={active ? t.colors.tone_warning : t.colors.text_secondary} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.actionReviewTitle, { color: t.colors.text_primary }]}>
-            {active ? "Review queue" : checks === "complete" ? "All clear" : checks === "pending" ? "Checking activity…" : "Checks incomplete"}
+            {active ? "Review queue" : checks === "complete" ? "All clear" : checks === "pending" ? "Checking…" : "Checks incomplete"}
           </Text>
           <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 1 }]} numberOfLines={1}>
-            {active
-              ? `${items.length} signal${items.length === 1 ? "" : "s"} need attention`
-              : checks !== "complete" ? "Waiting for verified results" : `${rulesChecked} rule${rulesChecked === 1 ? "" : "s"} checked today`}
+            {statusLabel}
           </Text>
         </View>
         <View style={[styles.actionReviewCount, { backgroundColor: t.colors.background_tertiary }]}>
@@ -2817,14 +2859,7 @@ function ActionReviewCard({
             </TouchableOpacity>
           )}
         </View>
-      ) : (
-        <View style={[styles.actionClearStrip, { backgroundColor: t.colors.background_tertiary }]}>
-          <SFSymbol name={checks === "complete" ? "checkmark.circle.fill" : "clock"} size={15} color={t.colors.text_secondary} />
-          <Text style={[t.typography.caption1, { color: t.colors.text_secondary, flex: 1 }]} numberOfLines={1}>
-            {checks === "complete" ? "No wasted-spend or sync blockers detected." : checks === "pending" ? "Checking rules, spend and sync status…" : "Some checks could not finish. Pull to refresh."}
-          </Text>
-        </View>
-      )}
+      ) : null}
     </View>
   );
 }

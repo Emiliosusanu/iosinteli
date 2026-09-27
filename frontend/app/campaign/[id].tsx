@@ -27,10 +27,12 @@ import {
 } from "@/src/lib/queries";
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
+import { rowCurrencyOfProfile } from "@/src/lib/accountsUi";
 import { useTheme, acosTone, toneColor, layout, radii, spacing } from "@/src/lib/theme";
 import {
   formatCurrency,
   formatPercent,
+  formatOptionalPercent,
   formatInt,
   formatDateShort,
   safeDivide,
@@ -43,12 +45,14 @@ import {
   BIDDING_STRATEGY_OPTIONS,
   biddingStrategyLabel,
   normalizeBiddingStrategyCode,
+  matchesEntityStateFilter,
   shouldShowActiveOrPausedWithData,
   statusLabel,
 } from "@/src/lib/campaigns";
-import { getCampaignSettingsCooldown } from "@/src/lib/bidCooldown";
+import { getCampaignStrategyCooldown, getPlacementAdjCooldown } from "@/src/lib/bidCooldown";
 import {
   fetchCampaignApi,
+  updateAdGroupState,
   updateAdGroupManual,
   updateCampaign,
   updateCampaignState,
@@ -56,11 +60,14 @@ import {
 } from "@/src/lib/mutations";
 import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { enqueueEntityBidWrite } from "@/src/lib/bulkOutbox";
-import { describeProductTarget, fallbackAsinCoverUrl, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
+import { describeProductTarget, fallbackAsinCoverUrl, formatMatchTypeLabel, isExactMatchType, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
-import { countriesForSponsoredCampaign, marketplaceFlagsA11y } from "@/src/lib/bookMarketplaces";
+import { sortSearchTermsAcosThenSpend } from "@/src/lib/searchTermSort";
+import { fastAddSearchTermExact, searchTermLooksTargeted } from "@/src/lib/searchTermHarvest";
+import { countriesForCampaignIdentity, countriesForSponsoredCampaign, identityFlagsA11y } from "@/src/lib/bookMarketplaces";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { CampaignMarketplaceFlags } from "@/src/components/MarketplaceFlags";
+import { fetchNestBookProfitabilityDetail } from "@/src/lib/dashboardApi";
 
 const PLACEMENT_EDITORS: {
   key: keyof PlacementAdjustments;
@@ -86,13 +93,14 @@ function readBudget(api?: { budget?: number } | null, campaign?: { budget?: numb
 function readPlacementAdjustments(
   api?: { placementAdjustments?: PlacementAdjustments } | null,
   campaign?: Record<string, unknown> | null,
-): Required<PlacementAdjustments> {
+): PlacementAdjustments {
   const apiAdj = api?.placementAdjustments;
   const sbAdj = (campaign?.placementAdjustments ?? campaign?.placement_adjustments) as PlacementAdjustments | undefined;
   const pick = (key: keyof PlacementAdjustments, snake: string) => {
     const raw = apiAdj?.[key] ?? sbAdj?.[key] ?? campaign?.[snake] ?? campaign?.[key];
+    if (raw == null || raw === "") return undefined;
     const n = Number(raw);
-    return Number.isFinite(n) ? n : 0;
+    return Number.isFinite(n) ? n : undefined;
   };
   return {
     top_of_search: pick("top_of_search", "placement_top_of_search"),
@@ -133,8 +141,9 @@ export default function CampaignDetail() {
   const t = useTheme();
   const router = useRouter();
   const { width: viewportWidth } = useWindowDimensions();
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const { primaryCurrency, dateRange, selectedProfileIds, profilesLoading, adminFilterUserId, entityCooldownHours } = useApp();
+  const { id, childState } = useLocalSearchParams<{ id: string; childState?: string }>();
+  const activeChildrenOnly = childState !== "all";
+  const { primaryCurrency, dateRange, selectedProfileIds, profilesLoading, adminFilterUserId, entityCooldownHours, profiles, defaultExactBid } = useApp();
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const { user, guestMode } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
@@ -154,6 +163,7 @@ export default function CampaignDetail() {
     forceCooldown?: boolean;
   } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [addingExactId, setAddingExactId] = useState<string | null>(null);
 
   const campaignQ = useQuery({
     queryKey: ["campaign", id, selectedProfileIds, adminFilterUserId ?? "self"],
@@ -167,41 +177,106 @@ export default function CampaignDetail() {
     enabled: !!id,
   });
 
+  const campaignBookAsin = campaignApiQ.data?.primaryAsin ?? null;
+  const bookPricingQ = useQuery({
+    queryKey: ["campaign-book-pricing", campaignBookAsin, dateRange.start, dateRange.end, selectedProfileIds, adminFilterUserId ?? "self"],
+    queryFn: () => fetchNestBookProfitabilityDetail({
+      asin: campaignBookAsin!,
+      startDate: dateRange.start,
+      endDate: dateRange.end,
+      profileIds: selectedProfileIds,
+      filterUserId: adminFilterUserId,
+    }),
+    enabled: Boolean(campaignBookAsin && selectedProfileIds.length),
+    retry: false,
+  });
+
   const c = campaignQ.data;
   // Auto vs manual is determined ONLY by targeting_type. `type` is the ad-product
   // (e.g. "sponsoredProducts") and must NOT be used to infer product-targeting.
   const isAuto = (c?.targeting_type ?? "").toLowerCase() === "auto";
 
   const adGroupsQ = useQuery({
-    queryKey: ["campaign-adgroups", id, c?.amazon_profile_id, dateRange.start, dateRange.end],
-    queryFn: () => fetchAdGroups([c!.amazon_profile_id], id!, { start: dateRange.start, end: dateRange.end }),
+    queryKey: ["campaign-adgroups", id, c?.amazon_profile_id, dateRange.start, dateRange.end, activeChildrenOnly ? "enabled" : "all"],
+    queryFn: () => fetchAdGroups([c!.amazon_profile_id], id!, {
+      start: dateRange.start,
+      end: dateRange.end,
+      state: activeChildrenOnly ? "enabled" : undefined,
+    }),
     enabled: !!c,
   });
+
+  const activeAdGroupIds = useMemo(
+    () => (adGroupsQ.data ?? [])
+      .filter((group) => !activeChildrenOnly || matchesEntityStateFilter(group.state, "enabled"))
+      .map((group) => String(group.id))
+      .sort(),
+    [activeChildrenOnly, adGroupsQ.data],
+  );
+  const activeAdGroupKey = activeAdGroupIds.join("|");
+  // Wait for ad-group list before deciding empty — a disabled child query looks
+  // "not loading" and used to flash permanent "No advertised products" / "No targets".
+  const awaitingChildScope = !!c && !adGroupsQ.isError && !adGroupsQ.isSuccess;
+  // Enabled-only with zero enabled AGs → honest empty (do not fetch).
+  // Otherwise load children: scope to AG ids when present, else campaign-wide.
+  const canLoadActiveChildren =
+    !!c &&
+    adGroupsQ.isSuccess &&
+    (activeAdGroupIds.length > 0 || !activeChildrenOnly);
+  const childAdGroupFilter =
+    activeAdGroupIds.length > 0 ? { adGroupIds: activeAdGroupIds } : {};
 
   // For manual campaigns, fetch BOTH keywords and product targets — show whichever
   // has data (handles keyword, product-targeting, and mixed campaigns correctly).
   const keywordsQ = useQuery({
-    queryKey: ["campaign-keywords", adminFilterUserId ?? "self", id, c?.amazon_profile_id, dateRange.start, dateRange.end],
-    queryFn: () => fetchKeywords([c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean), { campaignId: id!, limit: 500, start: dateRange.start, end: dateRange.end, filterUserId: adminFilterUserId }),
-    enabled: !!c && !isAuto,
+    queryKey: ["campaign-keywords", adminFilterUserId ?? "self", id, c?.amazon_profile_id, activeAdGroupKey, dateRange.start, dateRange.end],
+    queryFn: () => fetchKeywords([c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean), {
+      campaignId: id!,
+      ...childAdGroupFilter,
+      status: activeChildrenOnly ? "enabled" : undefined,
+      limit: 500,
+      start: dateRange.start,
+      end: dateRange.end,
+      filterUserId: adminFilterUserId,
+    }),
+    enabled: canLoadActiveChildren && !isAuto,
   });
 
   const productTargetsQ = useQuery({
-    queryKey: ["campaign-product-targets", adminFilterUserId ?? "self", id, c?.amazon_profile_id, dateRange.start, dateRange.end],
-    queryFn: () => fetchProductTargets([c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean), { campaignId: id!, start: dateRange.start, end: dateRange.end, filterUserId: adminFilterUserId }),
-    enabled: !!c,
+    queryKey: ["campaign-product-targets", adminFilterUserId ?? "self", id, c?.amazon_profile_id, activeAdGroupKey, dateRange.start, dateRange.end],
+    queryFn: () => fetchProductTargets([c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean), {
+      campaignId: id!,
+      ...childAdGroupFilter,
+      state: activeChildrenOnly ? "enabled" : undefined,
+      start: dateRange.start,
+      end: dateRange.end,
+      filterUserId: adminFilterUserId,
+    }),
+    enabled: canLoadActiveChildren,
   });
 
   const searchTermsQ = useQuery({
-    queryKey: ["campaign-search-terms-auto", id, c?.amazon_profile_id],
-    queryFn: () => fetchSearchTerms([c!.amazon_profile_id], { campaignId: id!, limit: 100, start: autoRange.start, end: autoRange.end }),
-    enabled: !!c && isAuto,
+    queryKey: ["campaign-search-terms-auto", id, c?.amazon_profile_id, activeAdGroupKey],
+    queryFn: () => fetchSearchTerms([c!.amazon_profile_id], {
+      campaignId: id!,
+      ...childAdGroupFilter,
+      limit: 100,
+      start: autoRange.start,
+      end: autoRange.end,
+    }),
+    enabled: canLoadActiveChildren && isAuto,
   });
 
   const productAdsQ = useQuery({
-    queryKey: ["campaign-products", id, c?.amazon_profile_id, dateRange.start, dateRange.end],
-    queryFn: () => fetchProductAds([c!.amazon_profile_id], { campaignId: id!, start: dateRange.start, end: dateRange.end }),
-    enabled: !!c,
+    queryKey: ["campaign-products", id, c?.amazon_profile_id, activeAdGroupKey, dateRange.start, dateRange.end],
+    queryFn: () => fetchProductAds([c!.amazon_profile_id], {
+      campaignId: id!,
+      ...childAdGroupFilter,
+      status: activeChildrenOnly ? "enabled" : undefined,
+      start: dateRange.start,
+      end: dateRange.end,
+    }),
+    enabled: canLoadActiveChildren,
   });
 
   const dailyMetricsQ = useQuery({
@@ -241,28 +316,30 @@ export default function CampaignDetail() {
 
   const visibleAdGroups = useMemo(
     () =>
-      [...(adGroupsQ.data ?? []).filter((ag) => shouldShowActiveOrPausedWithData(ag as any, ag.state))].sort(
+      [...(adGroupsQ.data ?? []).filter((ag) => activeChildrenOnly
+        ? matchesEntityStateFilter(ag.state, "enabled")
+        : shouldShowActiveOrPausedWithData(ag as any, ag.state))].sort(
         compareByAcosSpendImpressionsSync,
       ),
-    [adGroupsQ.data],
+    [activeChildrenOnly, adGroupsQ.data],
   );
   const defaultBidByAdGroupId = useMemo(() => {
     const map = new Map<string, number>();
-    for (const ag of adGroupsQ.data ?? []) {
+    for (const ag of visibleAdGroups) {
       const bid = readTargetBid(ag as any);
       if (bid == null) continue;
       map.set(ag.id, bid);
       map.set(String(ag.id), bid);
     }
     return map;
-  }, [adGroupsQ.data]);
+  }, [visibleAdGroups]);
   const campaignFallbackDefaultBid = useMemo(() => {
-    for (const ag of adGroupsQ.data ?? []) {
+    for (const ag of visibleAdGroups) {
       const bid = readTargetBid(ag as any);
       if (bid != null) return bid;
     }
     return undefined;
-  }, [adGroupsQ.data]);
+  }, [visibleAdGroups]);
   const resolveInheritedBid = (adGroupId: string | null | undefined) => {
     if (adGroupId != null && adGroupId !== "") {
       return defaultBidByAdGroupId.get(adGroupId) ?? defaultBidByAdGroupId.get(String(adGroupId)) ?? campaignFallbackDefaultBid;
@@ -271,24 +348,36 @@ export default function CampaignDetail() {
   };
   const visibleProductTargets = useMemo(
     () =>
-      [...(productTargetsQ.data ?? []).filter((pt) => shouldShowActiveOrPausedWithData(pt as any, (pt as any).state))].sort(
+      [...(productTargetsQ.data ?? []).filter((pt) => activeChildrenOnly
+        ? matchesEntityStateFilter((pt as any).state, "enabled")
+        : shouldShowActiveOrPausedWithData(pt as any, (pt as any).state))].sort(
         compareByAcosSpendImpressionsSync,
       ),
-    [productTargetsQ.data],
+    [activeChildrenOnly, productTargetsQ.data],
   );
   const visibleKeywords = useMemo(
     () =>
-      [...(keywordsQ.data ?? []).filter((kw) => shouldShowActiveOrPausedWithData(kw as any, kw.status))].sort(
+      [...(keywordsQ.data ?? []).filter((kw) => activeChildrenOnly
+        ? matchesEntityStateFilter(kw.status, "enabled")
+        : shouldShowActiveOrPausedWithData(kw as any, kw.status))].sort(
         compareByAcosSpendImpressionsSync,
       ),
-    [keywordsQ.data],
+    [activeChildrenOnly, keywordsQ.data],
   );
   const visibleProductAds = useMemo(
     () =>
-      [...(productAdsQ.data ?? []).filter((pa) => shouldShowActiveOrPausedWithData(pa as any, pa.status))].sort(
+      [...(productAdsQ.data ?? []).filter((pa) => activeChildrenOnly
+        ? matchesEntityStateFilter(pa.status, "enabled")
+        : shouldShowActiveOrPausedWithData(pa as any, pa.status))].sort(
         compareByAcosSpendImpressionsSync,
       ),
-    [productAdsQ.data],
+    [activeChildrenOnly, productAdsQ.data],
+  );
+  const sortedSearchTerms = useMemo(
+    () => sortSearchTermsAcosThenSpend((searchTermsQ.data ?? []).filter((term) =>
+      !activeChildrenOnly || activeAdGroupIds.includes(String(term.ad_group_id ?? "")),
+    )),
+    [activeAdGroupIds, activeChildrenOnly, searchTermsQ.data],
   );
 
   // Decide which targeting sections to show by what data actually exists
@@ -341,7 +430,7 @@ export default function CampaignDetail() {
   const heroRoas   = heroSpend > 0 ? heroSales / heroSpend : 0;
   const heroCtr    = dailyAgg.impressions > 0 ? (dailyAgg.clicks / dailyAgg.impressions) * 100 : 0;
   const biddingLabel = biddingStrategyLabel(c.bidding_strategy);
-  const settingsCooldown = getCampaignSettingsCooldown(c as any, entityCooldownHours);
+  const settingsCooldown = getCampaignStrategyCooldown(c as any, entityCooldownHours);
   const displayBudget = readBudget(campaignApiQ.data, c);
   const placementAdjustments = readPlacementAdjustments(campaignApiQ.data, c as unknown as Record<string, unknown>);
   const budgetPeriod = (c.budget_type ?? "daily").toLowerCase() === "lifetime" ? "total" : "day";
@@ -392,8 +481,65 @@ export default function CampaignDetail() {
     setEntityBidEdit({ ...edit, forceCooldown: opts?.forceCooldown === true });
   };
 
+  const addExactFromSearchTerm = async (st: { id: string; search_term?: string | null }) => {
+    if (addingExactId) return;
+    setAddingExactId(st.id);
+    try {
+      const ok = await fastAddSearchTermExact({
+        guestMode,
+        viewAsOtherUser,
+        id: st.id,
+        term: st.search_term ?? "",
+        bid: defaultExactBid,
+        onSuccess: async () => {
+          queryClient.setQueriesData(
+            { queryKey: ["campaign-search-terms-auto"] },
+            (prev: any) => {
+              if (!Array.isArray(prev)) return prev;
+              return prev.map((row: any) =>
+                String(row.id) === String(st.id)
+                  ? { ...row, status: "targeted", has_target: true, is_targeted: true }
+                  : row,
+              );
+            },
+          );
+          await Promise.all([searchTermsQ.refetch(), invalidateAds()]);
+        },
+      });
+      if (!ok) return;
+    } finally {
+      setAddingExactId(null);
+    }
+  };
+
   const persistCampaign = async () => {
     await invalidateAds(["campaign-api", "campaign"]);
+  };
+
+  const renameCampaign = () => {
+    if (blockIfCannotWriteAmazon(writeGuard)) return;
+    Alert.prompt(
+      "Rename campaign",
+      "The new name is written to Amazon Ads.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Save",
+          onPress: (value?: string) => {
+            const name = String(value ?? "").trim();
+            if (!name || name === c?.name) return;
+            void updateCampaign(c!.id, { name })
+              .then(async () => {
+                await persistCampaign();
+                await campaignQ.refetch();
+              })
+              .catch((error) => alertMutationError(error, "Couldn't rename campaign."));
+          },
+        },
+      ],
+      "plain-text",
+      c?.name ?? "",
+    );
   };
 
   const onRefresh = async () => {
@@ -402,6 +548,7 @@ export default function CampaignDetail() {
       await Promise.all([
         campaignQ.refetch(),
         campaignApiQ.refetch(),
+        ...(campaignBookAsin ? [bookPricingQ.refetch()] : []),
         dailyMetricsQ.refetch(),
         placementsQ.refetch(),
         adGroupsQ.refetch(),
@@ -431,14 +578,27 @@ export default function CampaignDetail() {
   const contextLine = [productLabel, targetingCaption, biddingLabel].filter(Boolean).join(" · ");
   const heroCvr = dailyAgg.clicks > 0 ? (dailyAgg.orders / dailyAgg.clicks) * 100 : 0;
   const heroCpc = dailyAgg.clicks > 0 ? heroSpend / dailyAgg.clicks : 0;
+  const campaignCurrency = rowCurrencyOfProfile(profiles, c?.amazon_profile_id, primaryCurrency);
+  const breakEvenAcos =
+    bookPricingQ.data?.summary.pricingSynced && Number(bookPricingQ.data.summary.breakEvenAcos) > 0
+      ? Number(bookPricingQ.data.summary.breakEvenAcos)
+      : null;
   const budgetLabel =
     displayBudget != null
-      ? `${formatCurrency(Number(displayBudget), primaryCurrency)}/${budgetPeriod}`
+      ? `${formatCurrency(Number(displayBudget), campaignCurrency)}/${budgetPeriod}`
       : "—";
   const dash = (value: string) => (heroLoading || heroFailed ? "—" : value);
   const extraPlacements = placementRows.filter((row) => !placementEditorFor(row.placement));
-  const targetingPending = !isAuto && (keywordsQ.isLoading || productTargetsQ.isLoading) && !hasKeywords && !hasProductTargets;
-  const targetingFailed = !isAuto && !hasKeywords && !hasProductTargets && (keywordsQ.isError || productTargetsQ.isError);
+  const targetingPending =
+    !isAuto &&
+    (awaitingChildScope ||
+      ((keywordsQ.isLoading || productTargetsQ.isLoading) && !hasKeywords && !hasProductTargets));
+  const targetingFailed =
+    !isAuto &&
+    !awaitingChildScope &&
+    !hasKeywords &&
+    !hasProductTargets &&
+    (keywordsQ.isError || productTargetsQ.isError);
 
   return (
     <SubScreen title={c.name} showDateRange>
@@ -470,7 +630,15 @@ export default function CampaignDetail() {
               style={{ flex: 1, minWidth: 0 }}
               accessible
               accessibilityRole="header"
-              accessibilityLabel={[c.name, marketplaceFlagsA11y(countriesForSponsoredCampaign(marketplaceIndex, c)), heroLoading ? null : verdict.label, contextLine, c.state === "enabled" ? "Enabled" : "Paused"].filter(Boolean).join(". ")}
+              accessibilityLabel={[
+                c.name,
+                countriesForSponsoredCampaign(marketplaceIndex, c).length >= 2
+                  ? identityFlagsA11y(countriesForCampaignIdentity(profiles, c))
+                  : null,
+                heroLoading ? null : verdict.label,
+                contextLine,
+                c.state === "enabled" ? "Enabled" : "Paused",
+              ].filter(Boolean).join(". ")}
             >
               <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
                 <Text
@@ -479,8 +647,18 @@ export default function CampaignDetail() {
                 >
                   {c.name}
                 </Text>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel="Rename campaign"
+                  onPress={renameCampaign}
+                  hitSlop={8}
+                  style={{ padding: 2 }}
+                >
+                  <SFSymbol name="pencil" size={14} color={t.colors.tone_primary} />
+                </TouchableOpacity>
                 <CampaignMarketplaceFlags
                   index={marketplaceIndex}
+                  profiles={profiles}
                   campaign={c}
                   style={t.typography.headline}
                 />
@@ -536,8 +714,8 @@ export default function CampaignDetail() {
                   testID={editor.testID}
                   label={editor.label}
                   compact
-                  value={formatPercent(placementAdjustments[editor.key], 0)}
-                  cooldown={settingsCooldown}
+                  value={formatOptionalPercent(placementAdjustments[editor.key], 0)}
+                  cooldown={getPlacementAdjCooldown(c as any, entityCooldownHours, Date.now(), editor.key)}
                   onPress={() => {
                     if (blockIfCannotWriteAmazon(writeGuard)) return;
                     setPlacementEdit(editor);
@@ -571,7 +749,7 @@ export default function CampaignDetail() {
                     value: dash(heroSales > 0 ? formatPercent(heroAcos) : "—"),
                     color: toneColor(acosTone(heroAcos), t.colors),
                   },
-                  { label: "Spend", value: dash(formatCurrency(heroSpend, primaryCurrency)) },
+                  { label: "Spend", value: dash(formatCurrency(heroSpend, campaignCurrency)) },
                   { label: "Orders", value: dash(formatInt(heroOrders)) },
                 ]}
               />
@@ -600,9 +778,17 @@ export default function CampaignDetail() {
               <MetricStrip
                 items={[
                   { label: "ROAS", value: dash(heroSpend > 0 ? `${heroRoas.toFixed(2)}x` : "—") },
-                  { label: "CPC", value: dash(dailyAgg.clicks > 0 ? formatCurrency(heroCpc, primaryCurrency) : "—") },
+                  { label: "CPC", value: dash(dailyAgg.clicks > 0 ? formatCurrency(heroCpc, campaignCurrency) : "—") },
+                  {
+                    label: "BE ACoS",
+                    value: breakEvenAcos != null ? formatPercent(breakEvenAcos, 1) : "—",
+                    color: breakEvenAcos != null ? t.colors.text_primary : t.colors.text_tertiary,
+                  },
                 ]}
               />
+              {campaignBookAsin && bookPricingQ.isSuccess && !bookPricingQ.data.summary.pricingSynced ? (
+                <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 8 }]}>KDP pricing sync required for BE ACoS.</Text>
+              ) : null}
             </>
           )}
         </View>
@@ -615,7 +801,7 @@ export default function CampaignDetail() {
                   key={editor.key}
                   name={editor.label}
                   testID={editor.testID}
-                  adj={placementAdjustments[editor.key]}
+                  adj={placementAdjustments[editor.key] ?? null}
                   row={undefined}
                   performanceState="error"
                   primaryCurrency={primaryCurrency}
@@ -640,7 +826,7 @@ export default function CampaignDetail() {
                   key={editor.key}
                   name={editor.label}
                   testID={editor.testID}
-                  adj={placementAdjustments[editor.key]}
+                  adj={placementAdjustments[editor.key] ?? null}
                   row={undefined}
                   performanceState="loading"
                   primaryCurrency={primaryCurrency}
@@ -662,7 +848,7 @@ export default function CampaignDetail() {
                     key={editor.key}
                     name={editor.label}
                     testID={editor.testID}
-                    adj={placementAdjustments[editor.key]}
+                    adj={placementAdjustments[editor.key] ?? null}
                     row={row}
                     performanceState={row ? "ready" : "empty"}
                     primaryCurrency={primaryCurrency}
@@ -755,7 +941,19 @@ export default function CampaignDetail() {
           </SectionCard>
         ) : null}
 
-        <SectionCard title={`Ad Groups (${visibleAdGroups.length})`}>
+        <SectionCard
+          title={`Ad Groups (${visibleAdGroups.length})`}
+          action={{
+            label: "New ad group",
+            onPress: () => {
+              if (blockIfCannotWriteAmazon(writeGuard)) return;
+              router.push({
+                pathname: "/campaign/ad-group-create",
+                params: { campaignId: c.id, asin: campaignBookAsin ?? "" },
+              } as any);
+            },
+          }}
+        >
           {adGroupsQ.isError && visibleAdGroups.length === 0 ? (
             <RetryState
               title="Couldn't load ad groups"
@@ -776,6 +974,26 @@ export default function CampaignDetail() {
                   key={ag.id}
                   style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: idx === visibleAdGroups.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
                 >
+                  <View onStartShouldSetResponder={() => true} onTouchEnd={(event) => event.stopPropagation()} style={{ marginRight: 8 }}>
+                    <EntityStateSwitch
+                      testID={`campaign-adgroup-state-${ag.id}`}
+                      enabled={matchesEntityStateFilter(ag.state, "enabled")}
+                      noun="ad group"
+                      confirmPause
+                      onChange={async (next) => {
+                        assertNotViewingAsOtherUser(viewAsOtherUser);
+                        const previous = applyOptimisticEntityState(queryClient, "ad_group", ag.id, next);
+                        try {
+                          await updateAdGroupState(ag.id, next ? "enabled" : "paused");
+                          void invalidateEntityStateQueries(queryClient, "ad_group");
+                          void adGroupsQ.refetch();
+                        } catch (error) {
+                          revertOptimisticEntityState(queryClient, "ad_group", ag.id, previous);
+                          throw error;
+                        }
+                      }}
+                    />
+                  </View>
                   <TouchableOpacity
                     activeOpacity={0.72}
                     accessibilityRole="button"
@@ -805,7 +1023,7 @@ export default function CampaignDetail() {
                           {ag.name || "Ad Group"}
                         </Text>
                       </View>
-                      <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginLeft: 16, marginTop: 3 }]}>
+                      <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginLeft: 16, marginTop: 3 }]} numberOfLines={1}>
                         {statusLabel(ag.state)} · {formatCurrency(Number(ag.total_spend), primaryCurrency)} spend · {formatInt(Number(ag.total_impressions))} impr · {formatInt(Number(ag.total_clicks))} clicks · {formatInt(Number(ag.total_orders))} orders
                       </Text>
                     </View>
@@ -823,6 +1041,7 @@ export default function CampaignDetail() {
                       label="Bid"
                       compact
                       value={bidChipValue != null ? formatCurrency(bidChipValue, primaryCurrency) : "Set"}
+                      currency={primaryCurrency}
                       cooldownRow={ag as any}
                       onPress={(opts) =>
                         openEntityBidEdit(
@@ -865,19 +1084,31 @@ export default function CampaignDetail() {
                 <TouchableOpacity
                   activeOpacity={0.75}
                   accessibilityRole="button"
-                  accessibilityLabel={`${kw.keyword_text || "Keyword"}${kw.match_type ? `, ${kw.match_type}` : ""}`}
+                  accessibilityLabel={`${kw.keyword_text || "Keyword"}${kw.match_type ? `, ${formatMatchTypeLabel(kw.match_type)}` : ""}, ${formatInt(kw.total_clicks)} clicks, ${formatInt(kw.total_orders)} orders`}
                   onPress={() => router.push(`/keyword/${kw.id}` as any)}
                   style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center" }}
                 >
                   <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>{kw.keyword_text}</Text>
-                    <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                      {[kw.match_type, `${formatInt(kw.total_clicks)} clicks`, `${formatInt(kw.total_orders)} orders`].filter(Boolean).join(" · ")}
+                    <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={1}>{kw.keyword_text}</Text>
+                    <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]} numberOfLines={1}>
+                      <Text
+                        style={{
+                          color: t.colors.text_secondary,
+                          fontWeight: isExactMatchType(kw.match_type) ? "700" : "500",
+                        }}
+                      >
+                        {formatMatchTypeLabel(kw.match_type)}
+                      </Text>
+                      {kw.match_type ? " · " : ""}
+                      {formatInt(kw.total_clicks)} clicks · {formatInt(kw.total_orders)} orders
                     </Text>
                   </View>
-                  <Text style={[t.typography.caption1, { color: toneColor(acosTone(Number(kw.total_acos)), t.colors), marginLeft: spacing.sm }]}>
-                    {kw.total_sales > 0 ? formatPercent(Number(kw.total_acos)) : "—"} ACoS
-                  </Text>
+                  <View style={{ alignItems: "flex-end", marginLeft: spacing.sm }}>
+                    <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>ACoS</Text>
+                    <Text style={[t.typography.callout, { color: toneColor(acosTone(Number(kw.total_acos)), t.colors), fontVariant: ["tabular-nums"] }]}>
+                      {kw.total_sales > 0 ? formatPercent(Number(kw.total_acos)) : "—"}
+                    </Text>
+                  </View>
                   <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
                 </TouchableOpacity>
                 <View onStartShouldSetResponder={() => true} onTouchEnd={(e) => e.stopPropagation()} style={{ marginLeft: 8 }}>
@@ -889,6 +1120,7 @@ export default function CampaignDetail() {
                       const bid = readTargetBid(kw as any, resolveInheritedBid(kw.ad_group_id));
                       return bid != null ? formatCurrency(bid, primaryCurrency) : "Set";
                     })()}
+                    currency={primaryCurrency}
                     cooldownRow={kw as any}
                     onPress={(opts) =>
                       openEntityBidEdit(
@@ -925,7 +1157,7 @@ export default function CampaignDetail() {
                     {
                       kind: "target",
                       id: pt.id,
-                      title: productTargetHeading(pt),
+                      title: describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression).label,
                       value: bid ?? 0.02,
                     },
                     opts,
@@ -968,6 +1200,7 @@ export default function CampaignDetail() {
               <ProductTargetRow
                 key={pt.id}
                 pt={pt}
+                variant="auto"
                 isLast={idx === visibleProductTargets.length - 1}
                 primaryCurrency={primaryCurrency}
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
@@ -993,7 +1226,7 @@ export default function CampaignDetail() {
         {isAuto ? (
           <SectionCard title="Search terms">
             <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginBottom: spacing.md }]}>
-              Last 65 days.
+              Last 65 days · sorted by ACoS, then spend.
             </Text>
             {searchTermsQ.isError && (searchTermsQ.data ?? []).length === 0 ? (
               <RetryState
@@ -1004,31 +1237,51 @@ export default function CampaignDetail() {
               />
             ) : searchTermsQ.isLoading && (searchTermsQ.data ?? []).length === 0 ? (
               <ScreenSpinner />
-            ) : (searchTermsQ.data ?? []).length > 0 ? (
-              searchTermsQ.data!.map((st: any, idx) => {
-                const isWinner = st.total_orders > 0;
+            ) : sortedSearchTerms.length > 0 ? (
+              sortedSearchTerms.map((st: any, idx) => {
+                const isWinner = Number(st.total_orders) > 0;
+                const already = searchTermLooksTargeted(st);
                 return (
-                  <TouchableOpacity
+                  <View
                     key={st.id}
-                    activeOpacity={0.75}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${st.search_term}, ${isWinner ? "converting" : "no orders"}`}
-                    onPress={() =>
-                      router.push({
+                    style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: idx === sortedSearchTerms.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
+                  >
+                    <TouchableOpacity
+                      activeOpacity={0.75}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${st.search_term}, ${isWinner ? "converting" : "no orders"}`}
+                      onPress={() => router.push({
                         pathname: "/search-term/[id]",
                         params: { id: st.id, term: st.search_term ?? "", campaign: c.name ?? "" },
-                      } as any)
-                    }
-                    style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: idx === Math.min(9, searchTermsQ.data!.length - 1) ? 0 : StyleSheet.hairlineWidth }]}
-                  >
-                    <View style={{ flex: 1, minWidth: 0 }}>
+                      } as any)}
+                      style={{ flex: 1, minWidth: 0 }}
+                    >
                       <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>{st.search_term}</Text>
                       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                        {isWinner ? "Converting" : "No orders"} · {formatCurrency(st.total_spend, primaryCurrency)} spend · {formatInt(st.total_orders)} orders
+                        {isWinner ? "Converting" : "No orders"} · {formatCurrency(st.total_spend, primaryCurrency)} · {formatInt(st.total_orders)}
                       </Text>
-                    </View>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      testID={`campaign-search-term-add-exact-${st.id}`}
+                      accessibilityRole="button"
+                      accessibilityLabel={already ? `Already a keyword for ${st.search_term}` : `Add ${st.search_term} as Exact`}
+                      disabled={already || addingExactId === st.id}
+                      onPress={() => void addExactFromSearchTerm(st)}
+                      style={{
+                        marginLeft: 8,
+                        paddingHorizontal: 10,
+                        paddingVertical: 8,
+                        borderRadius: radii.sm,
+                        backgroundColor: already ? t.colors.background_tertiary : `${t.colors.tone_primary}18`,
+                        opacity: addingExactId === st.id ? 0.6 : 1,
+                      }}
+                    >
+                      <Text style={[t.typography.caption1, { color: already ? t.colors.text_tertiary : t.colors.tone_primary, fontWeight: "700" }]}>
+                        {already ? "Added" : addingExactId === st.id ? "…" : "Exact"}
+                      </Text>
+                    </TouchableOpacity>
                     <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
-                  </TouchableOpacity>
+                  </View>
                 );
               })
             ) : (
@@ -1042,15 +1295,15 @@ export default function CampaignDetail() {
         ) : null}
 
         <SectionCard title={`Advertised Products (${visibleProductAds.length})`}>
-          {productAdsQ.isError && visibleProductAds.length === 0 ? (
+          {awaitingChildScope || (productAdsQ.isLoading && visibleProductAds.length === 0) ? (
+            <ScreenSpinner />
+          ) : productAdsQ.isError && visibleProductAds.length === 0 ? (
             <RetryState
               title="Couldn't load advertised products"
               subtitle="The rest of this campaign is still available."
               onRetry={() => void productAdsQ.refetch()}
               retrying={productAdsQ.isRefetching}
             />
-          ) : productAdsQ.isLoading && visibleProductAds.length === 0 ? (
-            <ScreenSpinner />
           ) : visibleProductAds.length > 0 ? (
             visibleProductAds.map((pa, idx) => (
               <AdvertisedProductRow
@@ -1071,7 +1324,11 @@ export default function CampaignDetail() {
             <EmptyState
               icon="cube-outline"
               title="No advertised products"
-              subtitle="No product ads in this campaign."
+              subtitle={
+                activeChildrenOnly && activeAdGroupIds.length === 0
+                  ? "No enabled ad groups with product ads in this campaign."
+                  : "No product ads in this campaign."
+              }
             />
           )}
         </SectionCard>
@@ -1093,7 +1350,7 @@ export default function CampaignDetail() {
       <BidBudgetEditor
         visible={placementEdit != null}
         title={`${placementEdit?.label ?? "Placement"} %`}
-        value={placementEdit ? placementAdjustments[placementEdit.key] : 0}
+        value={placementEdit ? placementAdjustments[placementEdit.key] ?? 0 : 0}
         kind="percent"
         min={0}
         max={900}
@@ -1298,6 +1555,7 @@ function ProductTargetRow({
   t,
   onOpenTarget,
   onEditBid,
+  variant = "product",
 }: {
   pt: any;
   isLast: boolean;
@@ -1306,19 +1564,24 @@ function ProductTargetRow({
   t: any;
   onOpenTarget: (targetId: string) => void;
   onEditBid: (opts?: { forceCooldown?: boolean }) => void;
+  variant?: "auto" | "product";
 }) {
   const target = describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression);
   const fallbackCover = fallbackAsinCoverUrl(target.asin);
-  const title = productTargetHeading(pt);
-  const acos = safeDivide(Number(pt.total_spend ?? 0), Number(pt.total_sales ?? 0)) * 100;
+  const title = variant === "auto" ? target.label : productTargetHeading(pt);
+  const spend = Number(pt.total_spend ?? 0);
+  const sales = Number(pt.total_sales ?? 0);
+  const orders = Number(pt.total_orders ?? 0);
+  const acos = safeDivide(spend, sales) * 100;
   const bid = readTargetBid(pt, inheritedDefaultBid);
+  const stateText = statusLabel(pt.state);
 
   return (
     <View style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth }]}>
       <TouchableOpacity
         activeOpacity={0.82}
         accessibilityRole="button"
-        accessibilityLabel={`${title}, ${target.label}, ${statusLabel(pt.state)}`}
+        accessibilityLabel={`${title}, ${target.label}, ${stateText}`}
         style={{ flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center" }}
         onPress={() => onOpenTarget(pt.id)}
       >
@@ -1331,11 +1594,24 @@ function ProductTargetRow({
           recyclingKey={target.asin || pt.id}
         />
         <View style={{ flex: 1, marginLeft: 10, minWidth: 0 }}>
-          <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>
+          <Text style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={1}>
             {title}
           </Text>
           <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 3 }]} numberOfLines={2}>
-            {[target.label, statusLabel(pt.state), target.asin, `${formatCurrency(Number(pt.total_spend ?? 0), primaryCurrency)} spend`, `${formatInt(Number(pt.total_orders ?? 0))} orders`, Number(pt.total_sales ?? 0) > 0 ? `${formatPercent(acos)} ACoS` : null].filter(Boolean).join(" · ")}
+            {variant === "auto" ? null : (
+              <Text
+                style={{
+                  color: t.colors.text_secondary,
+                  fontWeight: isExactMatchType(target.label) ? "700" : "500",
+                }}
+              >
+                {formatMatchTypeLabel(target.label) || target.label}
+              </Text>
+            )}
+            {variant === "auto" ? null : " · "}
+            {[stateText, target.asin, formatCurrency(spend, primaryCurrency), formatInt(orders), sales > 0 ? formatPercent(acos) : null]
+              .filter(Boolean)
+              .join(" · ")}
           </Text>
         </View>
         <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
@@ -1346,6 +1622,7 @@ function ProductTargetRow({
           label="Bid"
           compact
           value={bid != null ? formatCurrency(bid, primaryCurrency) : "Set"}
+          currency={primaryCurrency}
           cooldownRow={pt}
           onPress={onEditBid}
         />

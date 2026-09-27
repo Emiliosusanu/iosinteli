@@ -32,6 +32,8 @@ export type KdpHelperStatus = {
   lastError: string | null;
   lastMessage: string | null;
   running: boolean;
+  pricingAuthRequired: boolean;
+  pricingAuthBookId: string | null;
 };
 
 type StatusListener = (status: KdpHelperStatus) => void;
@@ -54,6 +56,8 @@ let status: KdpHelperStatus = {
   lastError: null,
   lastMessage: null,
   running: false,
+  pricingAuthRequired: false,
+  pricingAuthBookId: null,
 };
 
 export function getKdpHelperStatus(): KdpHelperStatus {
@@ -89,6 +93,22 @@ export function setKdpHelperRunning(running: boolean, message?: string | null) {
 
 export function setKdpHelperError(error: string | null) {
   status = { ...status, lastError: error };
+  emit();
+}
+
+export function isKdpWebViewAttached(): boolean {
+  return injectFn !== null;
+}
+
+export function setKdpHelperPricingAuth(input: {
+  required: boolean;
+  bookId: string | null;
+}) {
+  status = {
+    ...status,
+    pricingAuthRequired: input.required,
+    pricingAuthBookId: input.required ? input.bookId : null,
+  };
   emit();
 }
 
@@ -358,6 +378,8 @@ export function resetKdpRuntime() {
     lastError: null,
     lastMessage: null,
     running: false,
+    pricingAuthRequired: false,
+    pricingAuthBookId: null,
   };
   emit();
 }

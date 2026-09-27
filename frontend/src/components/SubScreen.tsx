@@ -19,13 +19,21 @@ interface SubScreenProps {
     accessibilityHint?: string;
   };
   showDateRange?: boolean;
+  /** When false, hide Back/title chrome (scroll-away pattern). Default true. */
+  chromeVisible?: boolean;
 }
 
 /**
  * Edge-to-edge sub-screen: paint under the Dynamic Island, overlay back control
  * in the former black header band, and keep the date chip in that same band.
  */
-export function SubScreen({ title, children, rightAction, showDateRange = false }: SubScreenProps) {
+export function SubScreen({
+  title,
+  children,
+  rightAction,
+  showDateRange = false,
+  chromeVisible = true,
+}: SubScreenProps) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -42,7 +50,9 @@ export function SubScreen({ title, children, rightAction, showDateRange = false 
         }}
       />
 
+      {chromeVisible ? (
       <View
+        testID="sub-screen-top-chrome"
         style={[
           styles.topChrome,
           {
@@ -106,6 +116,9 @@ export function SubScreen({ title, children, rightAction, showDateRange = false 
           </View>
         ) : null}
       </View>
+      ) : (
+        <View style={{ height: topPad }} pointerEvents="none" />
+      )}
 
       <View style={{ flex: 1 }}>{children}</View>
     </View>

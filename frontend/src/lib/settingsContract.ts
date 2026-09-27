@@ -1,7 +1,39 @@
 export type NotificationPermissionState = "granted" | "denied" | "undetermined";
 
 export const APPEARANCE_LABEL = "Appearance";
-export const APPEARANCE_VALUE = "Follows system";
+/** @deprecated Prefer appearancePreferenceLabel(preference) for the live value. */
+export const APPEARANCE_VALUE = "System";
+export const APPEARANCE_PICKER_TITLE = "Appearance";
+export const APPEARANCE_PICKER_FOOTER =
+  "Light uses a white floating dock; Dark uses the black dock.";
+
+export const THEME_PREFERENCE_OPTIONS = ["system", "light", "dark"] as const;
+
+export function appearancePreferenceLabel(
+  preference: "system" | "light" | "dark",
+): string {
+  switch (preference) {
+    case "light":
+      return "Light";
+    case "dark":
+      return "Dark";
+    default:
+      return "System";
+  }
+}
+
+export function appearancePreferenceSubtitle(
+  preference: "system" | "light" | "dark",
+): string {
+  switch (preference) {
+    case "light":
+      return "White dock and light chrome";
+    case "dark":
+      return "Black dock and dark chrome";
+    default:
+      return "Match the iPhone appearance setting";
+  }
+}
 
 export const KDP_PROFIT_LABEL = "Royalty source";
 export const KDP_PROFIT_VALUE = "KDP royalties";
@@ -16,17 +48,32 @@ export const KDP_ACCOUNTS_ROW_LABEL = "KDP accounts";
 export const KDP_ACCOUNTS_ROW_SUBTITLE = "";
 export const KDP_HELPER_ROW_LABEL = "iPhone KDP helper";
 export const KDP_HELPER_ROW_SUBTITLE = "";
+/** Used by More → KDP and Ads books (non-Settings chrome); keep for main WIP. */
+export const KDP_LINK_PREVIEW_TITLE = "KDP and Ads books";
+export const KDP_LINK_PREVIEW_FOOTER =
+  "Shared ASINs confirm which helper KDP books match the selected Ads profiles.";
 
 export const ACCOUNT_SECTION_TITLE = "Account";
 export const SUBSCRIPTION_ROW_LABEL = "Subscription";
 export const PLAN_ROW_LABEL = "Plan";
 export const MANAGE_BILLING_ROW_LABEL = "Manage billing on the web";
+export const MY_ACCOUNT_ROW_LABEL = "My account";
 
 /** Rows already name Bid bot — no section footer. */
 export const ADS_SECTION_FOOTER = "";
+export const ADS_SECTION_TITLE = "Amazon Ads";
+export const AMAZON_ACCOUNTS_ROW_LABEL = "Amazon accounts";
 
 export const BID_BOT_ROW_LABEL = "Bid bot";
 export const BID_BOT_ROW_SUBTITLE = "";
+
+export const KDP_SECTION_TITLE = "KDP";
+export const DATA_SECTION_TITLE = "Data & Sync";
+export const SYNC_ROW_LABEL = "Sync";
+export const DATA_COVERAGE_ROW_LABEL = "Data coverage";
+export const APP_SECTION_TITLE = "App";
+export const ABOUT_SECTION_TITLE = "About";
+export const VERSION_ROW_LABEL = "Version";
 
 export const TEST_NOTIFICATION_LABEL = "Send a test on this iPhone";
 export const TEST_NOTIFICATION_SENDING = "Sending…";
@@ -82,10 +129,15 @@ export const DAILY_DIGEST_FOOTER = "Daytime digests";
 export const NOTIFICATIONS_ROW_LABEL = "Notifications";
 export const KDP_STALE_LABEL = "KDP data stalled";
 export const KDP_STALE_FOOTER =
-  "Alert when a linked KDP account has not received royalty data for more than an hour — Chrome extension or iPhone helper.";
-export const KDP_INGEST_SECTION_TITLE = "KDP ingest";
-export const KDP_INGEST_EMPTY = "No KDP account is linked to the selected Amazon profiles.";
-export const KDP_INGEST_UNAVAILABLE = "Couldn't load KDP ingest status.";
+  "Alert when linked royalties stop updating for over an hour. Chrome extension or iPhone helper.";
+export const KDP_INGEST_SECTION_TITLE = "KDP status";
+export const KDP_INGEST_EMPTY = "No KDP account linked to the selected profiles.";
+export const KDP_INGEST_UNAVAILABLE = "Couldn't load KDP status.";
+export const KDP_HELPER_FOOTER_ENABLED =
+  "Sign in below once. This iPhone imports today and yesterday about every 15 minutes. If Chrome has not imported the last 90 days, the helper finishes that backfill in the background — even if you close the app — and resumes on the next wake.";
+export const KDP_HELPER_FOOTER_DISABLED =
+  "Turn on Royalty source → Chrome + iPhone first.";
+export const KDP_HELPER_SETUP_ROW = "Set up iPhone helper";
 
 export function notificationFooter(input: {
   guestMode: boolean;

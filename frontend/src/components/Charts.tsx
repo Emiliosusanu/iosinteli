@@ -11,6 +11,7 @@ import { formatCompact, formatInt, formatPercent, safeDivide, formatCurrency } f
 import { hasAuthoritativeBreakEven } from "../lib/kdpTitlePresentation";
 import { dayBarStep, dayXLayout } from "../lib/chartLayout";
 import { useOverviewPeriodSwipeGesture } from "./OverviewPeriodSwipe";
+import { useOverviewWidgetPageSwipeGesture } from "./OverviewWidgetPageSwipe";
 
 function innerChartWidth(width: number, padding = 40) {
   return Math.max(240, width - padding);
@@ -168,6 +169,7 @@ function useChartSelection(
   }, [setIndex]);
 
   const periodSwipe = useOverviewPeriodSwipeGesture();
+  const widgetPageSwipe = useOverviewWidgetPageSwipeGesture();
   const gesture = React.useMemo(() => {
     const pan = Gesture.Pan().failOffsetY([-10, 10]);
     if (holdToInspect) {
@@ -175,13 +177,15 @@ function useChartSelection(
     } else {
       pan.activeOffsetX([-6, 6]);
     }
+    // Day scrub wins over period chrome + widget page pans.
     if (periodSwipe) pan.blocksExternalGesture(periodSwipe);
+    if (widgetPageSwipe) pan.blocksExternalGesture(widgetPageSwipe);
     pan.onStart((e) => runOnJS(selectByX)(e.x)).onUpdate((e) => runOnJS(selectByX)(e.x));
     if (!persistSelection) {
       pan.onFinalize(() => runOnJS(clearSelection)());
     }
     return pan;
-  }, [selectByX, clearSelection, persistSelection, holdToInspect, periodSwipe]);
+  }, [selectByX, clearSelection, persistSelection, holdToInspect, periodSwipe, widgetPageSwipe]);
 
   return { selectedIndex, gesture, clearSelection };
 }
@@ -354,7 +358,8 @@ export function Sparkline({ data, color, height = 50 }: SparklineProps) {
   const { min, max } = rangeFor([data], true);
   const points = pointsFor(data, svgWidth, height, min, max, 6);
   const baselineY = clamp(pointsFor([{ value: 0 }], svgWidth, height, min, max, 6)[0]?.y ?? height - 6, 6, height - 6);
-  const selected = points[selectedIndex] ?? points[points.length - 1];
+  const activeIndex = selectedIndex ?? points.length - 1;
+  const selected = points[activeIndex] ?? points[points.length - 1];
   const tooltipLabel = selected
     ? selected.label
       ? `${selected.label}  ${formatCompact(selected.value)}`
@@ -430,10 +435,11 @@ export function PerformanceChart({ spendData, salesData, width = 320, currency, 
 
   const spendPoints = scalePoints(spendData, spendMax);
   const salesPoints = scalePoints(salesData, salesMax);
+  const activeIndex = selectedIndex ?? spendData.length - 1;
 
-  const selectedLabel = spendData[selectedIndex]?.label ?? "—";
-  const selectedA = spendData[selectedIndex]?.value ?? 0;
-  const selectedB = salesData[selectedIndex]?.value ?? 0;
+  const selectedLabel = spendData[activeIndex]?.label ?? "—";
+  const selectedA = spendData[activeIndex]?.value ?? 0;
+  const selectedB = salesData[activeIndex]?.value ?? 0;
   const fmtA = formatA ?? ((v: number) => formatCurrency(v, currency, { compact: true }));
   const fmtB = formatB ?? ((v: number) => formatCurrency(v, currency, { compact: true }));
 
@@ -463,17 +469,17 @@ export function PerformanceChart({ spendData, salesData, width = 320, currency, 
         <Path d={makeSmoothPath(salesPoints)} stroke={t.colors.tone_good} strokeWidth={2.5} fill="none" strokeLinecap="round" />
 
         {/* Selection crosshair + dots */}
-        {spendPoints[selectedIndex] && salesPoints[selectedIndex] && (
+        {spendPoints[activeIndex] && salesPoints[activeIndex] && (
           <>
             <Line
-              x1={spendPoints[selectedIndex].x} y1={inset}
-              x2={spendPoints[selectedIndex].x} y2={chartHeight - inset}
+              x1={spendPoints[activeIndex].x} y1={inset}
+              x2={spendPoints[activeIndex].x} y2={chartHeight - inset}
               stroke={t.colors.text_tertiary} strokeWidth={1} opacity={0.3}
             />
-            <Circle cx={spendPoints[selectedIndex].x} cy={spendPoints[selectedIndex].y} r={4.5} fill={t.colors.background_secondary} />
-            <Circle cx={spendPoints[selectedIndex].x} cy={spendPoints[selectedIndex].y} r={3} fill={t.colors.tone_primary} />
-            <Circle cx={salesPoints[selectedIndex].x} cy={salesPoints[selectedIndex].y} r={4.5} fill={t.colors.background_secondary} />
-            <Circle cx={salesPoints[selectedIndex].x} cy={salesPoints[selectedIndex].y} r={3} fill={t.colors.tone_good} />
+            <Circle cx={spendPoints[activeIndex].x} cy={spendPoints[activeIndex].y} r={4.5} fill={t.colors.background_secondary} />
+            <Circle cx={spendPoints[activeIndex].x} cy={spendPoints[activeIndex].y} r={3} fill={t.colors.tone_primary} />
+            <Circle cx={salesPoints[activeIndex].x} cy={salesPoints[activeIndex].y} r={4.5} fill={t.colors.background_secondary} />
+            <Circle cx={salesPoints[activeIndex].x} cy={salesPoints[activeIndex].y} r={3} fill={t.colors.tone_good} />
           </>
         )}
 
@@ -1084,15 +1090,28 @@ export function AcosGauge({ acos, breakeven, size = 180 }: AcosGaugeProps) {
 
 // Ads Engine chart — impressions as purple bars + clicks / orders / ACoS lines.
 // Each line is normalized to its own max (mobile-friendly; no crowded multi Y-axes).
+export type AdsEngineInspectPayload = {
+  inspecting: boolean;
+  label: string;
+  impressions: number;
+  clicks: number;
+  orders: number;
+  /** null when sales are 0 — never fake 0% ACoS */
+  acos: number | null;
+};
+
 interface AdsEngineChartProps {
   impressionsData: ChartPoint[];
   clicksData: ChartPoint[];
   ordersData: ChartPoint[];
   acosData: ChartPoint[];
-  totals?: { impressions: number; clicks: number; orders: number; acos: number };
+  totals?: { impressions: number; clicks: number; orders: number; acos: number | null };
   periodLabel?: string;
   breakEvenAcos?: number;
   width?: number;
+  /** When false, hide the date/metrics tooltip row (parent header shows metrics). Default true. */
+  showReadout?: boolean;
+  onInspectChange?: (payload: AdsEngineInspectPayload | null) => void;
 }
 
 export function AdsEngineChart({
@@ -1104,6 +1123,8 @@ export function AdsEngineChart({
   periodLabel,
   breakEvenAcos = 0,
   width = 320,
+  showReadout = true,
+  onInspectChange,
 }: AdsEngineChartProps) {
   const t = useTheme();
   const chartWidth = innerChartWidth(width, 0);
@@ -1118,7 +1139,61 @@ export function AdsEngineChart({
     undefined,
     false,
   );
-  if (!impressionsData.length) return <View style={{ height: 200 }} />;
+  const hasImpressions = impressionsData.length > 0;
+  const inspecting = hasImpressions && selectedIndex != null;
+  const periodTotals = totals ?? {
+    impressions: impressionsData.reduce((sum, point) => sum + (Number(point.value) || 0), 0),
+    clicks: clicksData.reduce((sum, point) => sum + (Number(point.value) || 0), 0),
+    orders: ordersData.reduce((sum, point) => sum + (Number(point.value) || 0), 0),
+    acos: null as number | null,
+  };
+  const selectedLabel = inspecting
+    ? impressionsData[selectedIndex!]?.label ?? "—"
+    : periodLabel || "Period";
+  const selectedImpr = inspecting ? impressionsData[selectedIndex!]?.value ?? 0 : periodTotals.impressions;
+  const selectedClicks = inspecting ? clicksData[selectedIndex!]?.value ?? 0 : periodTotals.clicks;
+  const selectedOrders = inspecting ? ordersData[selectedIndex!]?.value ?? 0 : periodTotals.orders;
+  // Day ACoS only when that day had ad sales; period ACoS from honest totals.
+  const selectedAcos = inspecting
+    ? (() => {
+        const point = acosData[selectedIndex!];
+        if (!point) return null;
+        if (point.sales != null) {
+          return point.sales > 0 && Number.isFinite(point.value) ? point.value : null;
+        }
+        return Number.isFinite(point.value) ? point.value : null;
+      })()
+    : periodTotals.acos != null && Number.isFinite(periodTotals.acos)
+      ? periodTotals.acos
+      : null;
+
+  // Hooks must run before any empty-data return (cold launch / metrics pending).
+  React.useEffect(() => {
+    if (!onInspectChange) return;
+    if (!hasImpressions) {
+      onInspectChange(null);
+      return;
+    }
+    onInspectChange({
+      inspecting,
+      label: selectedLabel,
+      impressions: selectedImpr,
+      clicks: selectedClicks,
+      orders: selectedOrders,
+      acos: selectedAcos,
+    });
+  }, [
+    hasImpressions,
+    inspecting,
+    onInspectChange,
+    selectedAcos,
+    selectedClicks,
+    selectedImpr,
+    selectedLabel,
+    selectedOrders,
+  ]);
+
+  if (!hasImpressions) return <View style={{ height: 200 }} />;
 
   const imprColor = t.colors.tone_product;
   const clickColor = t.colors.tone_primary;
@@ -1147,20 +1222,6 @@ export function AdsEngineChart({
   const orderPoints = scalePoints(ordersData, maxOrders);
   const acosPoints = scalePoints(acosData, maxAcos);
   const imprPoints = scalePoints(impressionsData, maxImpr);
-  const inspecting = selectedIndex != null;
-  const periodTotals = totals ?? {
-    impressions: impressionsData.reduce((sum, point) => sum + (Number(point.value) || 0), 0),
-    clicks: clicksData.reduce((sum, point) => sum + (Number(point.value) || 0), 0),
-    orders: ordersData.reduce((sum, point) => sum + (Number(point.value) || 0), 0),
-    acos: 0,
-  };
-  const selectedLabel = inspecting
-    ? impressionsData[selectedIndex]?.label ?? "—"
-    : periodLabel || "Period";
-  const selectedImpr = inspecting ? impressionsData[selectedIndex]?.value ?? 0 : periodTotals.impressions;
-  const selectedClicks = inspecting ? clicksData[selectedIndex]?.value ?? 0 : periodTotals.clicks;
-  const selectedOrders = inspecting ? ordersData[selectedIndex]?.value ?? 0 : periodTotals.orders;
-  const selectedAcos = inspecting ? acosData[selectedIndex]?.value ?? 0 : periodTotals.acos;
   const baseY = chartHeight - inset;
   const plotW = Math.max(1, chartWidth - inset * 2);
   const barStep = dayBarStep(impressionsData.length, plotW);
@@ -1171,12 +1232,32 @@ export function AdsEngineChart({
   return (
     <GestureDetector gesture={gesture}>
       <View style={{ width: chartWidth, overflow: "hidden" }} accessibilityLabel="Ads Engine chart. Swipe a day to inspect it. Release to show the period total.">
-        <View style={chartStyles.tooltipRow}>
-          <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{selectedLabel}</Text>
-          <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={1}>
-            {formatCompact(selectedImpr)} impr · {formatInt(selectedClicks)} clicks · {formatInt(selectedOrders)} orders · {formatPercent(selectedAcos)}
-          </Text>
-        </View>
+        {showReadout ? (
+          <View style={chartStyles.tooltipRowCompact}>
+            <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, flexShrink: 0 }]} numberOfLines={1}>
+              {selectedLabel}
+            </Text>
+            <Text
+              style={[
+                t.typography.caption2,
+                {
+                  color: t.colors.text_primary,
+                  fontWeight: "700",
+                  flex: 1,
+                  textAlign: "right",
+                  fontVariant: ["tabular-nums"],
+                },
+              ]}
+              numberOfLines={1}
+              accessibilityLabel={`Impr ${formatCompact(selectedImpr)}, Clicks ${formatInt(selectedClicks)}, Orders ${formatInt(selectedOrders)}, ACoS ${selectedAcos == null ? "none" : formatPercent(selectedAcos)}`}
+            >
+              {/* Compact clicks so Impr/Clicks/Orders/ACoS tags all fit one line above the dock. */}
+              {`Impr ${formatCompact(selectedImpr)} · Clicks ${formatCompact(selectedClicks)} · Orders ${formatInt(selectedOrders)} · ACoS ${
+                selectedAcos == null ? "—" : formatPercent(selectedAcos)
+              }`}
+            </Text>
+          </View>
+        ) : null}
         <Svg width={chartWidth} height={chartHeight + 30}>
           <Line
             x1={inset}
@@ -1286,15 +1367,34 @@ interface KdpFormatRoyaltiesChartProps {
   days: KdpFormatStackDay[];
   width?: number;
   currency?: string;
+  onDaySelect?: (day: KdpFormatStackDay | null) => void;
 }
 
-export function KdpFormatRoyaltiesChart({ days, width = 320, currency }: KdpFormatRoyaltiesChartProps) {
+export function KdpFormatRoyaltiesChart({
+  days,
+  width = 320,
+  currency,
+  onDaySelect,
+}: KdpFormatRoyaltiesChartProps) {
   const t = useTheme();
   const chartWidth = innerChartWidth(width, 0);
   const chartHeight = 168;
   const inset = 14;
-  const { selectedIndex, gesture } = useChartSelection(days.length, chartWidth, inset, true);
-  if (!days.length) return <View style={{ height: 200 }} />;
+  const { selectedIndex, gesture } = useChartSelection(days.length, chartWidth, inset, false);
+  const hasDays = days.length > 0;
+  const inspecting = hasDays && selectedIndex != null;
+  const selected = inspecting ? days[selectedIndex!] : null;
+  const onDaySelectRef = React.useRef(onDaySelect);
+  onDaySelectRef.current = onDaySelect;
+
+  // Hooks must run before any empty-data return (Format Mix cold / pending).
+  React.useEffect(() => {
+    onDaySelectRef.current?.(
+      hasDays && selectedIndex != null ? days[selectedIndex] ?? null : null,
+    );
+  }, [hasDays, selectedIndex, selected?.date, selected?.total, days]);
+
+  if (!hasDays) return <View style={{ height: 200 }} />;
 
   const maxTotal = Math.max(...days.map((d) => d.total), 1);
   const plotW = Math.max(1, chartWidth - inset * 2);
@@ -1303,8 +1403,6 @@ export function KdpFormatRoyaltiesChart({ days, width = 320, currency }: KdpForm
   const barStep = dayBarStep(days.length, plotW);
   const barW = clamp(barStep * 0.62, 3, 16);
   const baseY = chartHeight - inset;
-  const i = selectedIndex ?? days.length - 1;
-  const selected = days[i];
   const colors = KDP_FORMAT_CHART_COLORS;
 
   const points = days.map((day, index) => {
@@ -1323,17 +1421,13 @@ export function KdpFormatRoyaltiesChart({ days, width = 320, currency }: KdpForm
   return (
     <GestureDetector gesture={gesture}>
       <View style={{ width: chartWidth, overflow: "hidden" }} accessibilityLabel="KDP royalties by format. Drag to inspect a day.">
-        <View style={chartStyles.tooltipRow}>
-          <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{selected?.label ?? "—"}</Text>
-          <Text style={[t.typography.caption1, { color: t.colors.tone_good, fontWeight: "700" }]} numberOfLines={1}>
-            {formatCurrency(selected?.total ?? 0, currency, { compact: true })} total
-          </Text>
-        </View>
         {selected ? (
-          <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: 4 }]} numberOfLines={1}>
-            PB {formatCurrency(selected.paperback, currency, { compact: true })} · KU {formatCurrency(selected.ku, currency, { compact: true })} · Kindle{" "}
-            {formatCurrency(selected.kindle, currency, { compact: true })}
-          </Text>
+          <View style={chartStyles.tooltipRowCompact}>
+            <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>{selected.label}</Text>
+            <Text style={[t.typography.caption1, { color: t.colors.tone_good, fontWeight: "700" }]} numberOfLines={1}>
+              {formatCurrency(selected.total, currency, { compact: true })}
+            </Text>
+          </View>
         ) : null}
         <Svg width={chartWidth} height={chartHeight + 30}>
           {[0.25, 0.5, 0.75].map((frac) => {
@@ -1353,7 +1447,7 @@ export function KdpFormatRoyaltiesChart({ days, width = 320, currency }: KdpForm
             );
           })}
           {points.map((p, idx) => (
-            <G key={idx} opacity={idx === i ? 1 : 0.82}>
+            <G key={idx} opacity={!inspecting || idx === selectedIndex ? 1 : 0.55}>
               {p.kindleH > 0.5 ? (
                 <Rect x={p.x - barW / 2} y={p.kindleY} width={barW} height={Math.max(1, p.kindleH)} fill={colors.kindle} />
               ) : null}
@@ -1361,7 +1455,14 @@ export function KdpFormatRoyaltiesChart({ days, width = 320, currency }: KdpForm
                 <Rect x={p.x - barW / 2} y={p.kuY} width={barW} height={Math.max(1, p.kuH)} fill={colors.ku} />
               ) : null}
               {p.pbH > 0.5 ? (
-                <Rect x={p.x - barW / 2} y={p.pbY} width={barW} height={Math.max(1, p.pbH)} rx={idx === i ? 2 : 1} fill={colors.paperback} />
+                <Rect
+                  x={p.x - barW / 2}
+                  y={p.pbY}
+                  width={barW}
+                  height={Math.max(1, p.pbH)}
+                  rx={inspecting && idx === selectedIndex ? 2 : 1}
+                  fill={colors.paperback}
+                />
               ) : null}
             </G>
           ))}
@@ -1423,7 +1524,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
   const spendPts  = scale(spendData, maxSpend);
   const orderPts  = scale(ordersData, maxOrders);
   const acosPts   = scale(acosData, maxAcos);
-  const i = selectedIndex;
+  const i = selectedIndex ?? impressionsData.length - 1;
   const plotW = Math.max(1, chartWidth - inset * 2);
   const barStep = dayBarStep(impressionsData.length, plotW);
   const barW = clamp(barStep * 0.55, 2, 14);
@@ -1513,11 +1614,12 @@ export function BusinessTrendChart({ royaltiesData, spendData, netData, organicO
     pointsFor([{ value: 0 }], chartWidth, chartHeight, min, max, inset)[0]?.y ?? chartHeight - inset,
     inset, chartHeight - inset,
   );
-  const selectedLabel = royaltiesData[selectedIndex]?.label ?? "—";
-  const selectedNet   = netData[selectedIndex]?.value ?? 0;
-  const selectedRoy   = royaltiesData[selectedIndex]?.value ?? 0;
-  const selectedSpend = spendData[selectedIndex]?.value ?? 0;
-  const selectedOrganicOrders = organicOrdersData[selectedIndex]?.value ?? 0;
+  const activeIndex = selectedIndex ?? royaltiesData.length - 1;
+  const selectedLabel = royaltiesData[activeIndex]?.label ?? "—";
+  const selectedNet   = netData[activeIndex]?.value ?? 0;
+  const selectedRoy   = royaltiesData[activeIndex]?.value ?? 0;
+  const selectedSpend = spendData[activeIndex]?.value ?? 0;
+  const selectedOrganicOrders = organicOrdersData[activeIndex]?.value ?? 0;
   const netIsPositive = selectedNet >= 0;
 
   // Split net curve into positive (above zero) and negative (below zero) segments
@@ -1563,7 +1665,7 @@ export function BusinessTrendChart({ royaltiesData, spendData, netData, organicO
             height={Math.max(1, bar.height)}
             rx={2}
             fill={t.colors.text_tertiary}
-            opacity={index === selectedIndex ? 0.38 : 0.18}
+            opacity={index === activeIndex ? 0.38 : 0.18}
           />
         ))}
 
@@ -1578,16 +1680,16 @@ export function BusinessTrendChart({ royaltiesData, spendData, netData, organicO
         <Path d={makeSmoothPath(netPoints)} stroke={netLineColor} strokeWidth={3} fill="none" strokeLinecap="round" />
 
         {/* Selection */}
-        {netPoints[selectedIndex] && (
+        {netPoints[activeIndex] && (
           <>
-            <Line x1={netPoints[selectedIndex].x} y1={inset} x2={netPoints[selectedIndex].x} y2={chartHeight - inset} stroke={t.colors.text_tertiary} strokeWidth={1} opacity={0.3} />
+            <Line x1={netPoints[activeIndex].x} y1={inset} x2={netPoints[activeIndex].x} y2={chartHeight - inset} stroke={t.colors.text_tertiary} strokeWidth={1} opacity={0.3} />
             {/* Secondary dots */}
-            <Circle cx={royaltiesPoints[selectedIndex].x} cy={royaltiesPoints[selectedIndex].y} r={3.5} fill={t.colors.tone_primary} opacity={0.7} />
-            <Circle cx={spendPoints[selectedIndex].x}     cy={spendPoints[selectedIndex].y}     r={3.5} fill={t.colors.tone_warning} opacity={0.7} />
+            <Circle cx={royaltiesPoints[activeIndex].x} cy={royaltiesPoints[activeIndex].y} r={3.5} fill={t.colors.tone_primary} opacity={0.7} />
+            <Circle cx={spendPoints[activeIndex].x}     cy={spendPoints[activeIndex].y}     r={3.5} fill={t.colors.tone_warning} opacity={0.7} />
             {/* Hero dot — larger ring */}
-            <Circle cx={netPoints[selectedIndex].x} cy={netPoints[selectedIndex].y} r={7} fill={netLineColor} opacity={0.18} />
-            <Circle cx={netPoints[selectedIndex].x} cy={netPoints[selectedIndex].y} r={5} fill={t.colors.background_secondary} />
-            <Circle cx={netPoints[selectedIndex].x} cy={netPoints[selectedIndex].y} r={3} fill={netLineColor} />
+            <Circle cx={netPoints[activeIndex].x} cy={netPoints[activeIndex].y} r={7} fill={netLineColor} opacity={0.18} />
+            <Circle cx={netPoints[activeIndex].x} cy={netPoints[activeIndex].y} r={5} fill={t.colors.background_secondary} />
+            <Circle cx={netPoints[activeIndex].x} cy={netPoints[activeIndex].y} r={3} fill={netLineColor} />
           </>
         )}
 
@@ -1672,6 +1774,29 @@ const chartStyles = StyleSheet.create({
     gap: 10,
     marginBottom: 6,
     overflow: "hidden",
+  },
+  tooltipRowCompact: {
+    minHeight: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 4,
+    overflow: "hidden",
+  },
+  // Ads Engine: date on its own line so Impr/Clicks/Orders/ACoS never ellipsis.
+  tooltipStackAds: {
+    gap: 2,
+    marginBottom: 4,
+  },
+  // Ads Engine: keep Impr/Clicks/Orders/ACoS tags visible (wrap instead of ellipsis).
+  tooltipRowCompactAds: {
+    minHeight: 18,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 4,
   },
   netHeader: {
     minHeight: 28,

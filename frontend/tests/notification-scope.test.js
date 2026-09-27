@@ -94,6 +94,8 @@ test("KDP net on selected US+CA still uses US royalties only", () => {
 
 test("alerts and background refresh expand selected profiles before Nest totals", () => {
   assert.match(notifications, /adsProfileIdsForSelection/);
+  assert.match(notifications, /activatedAdsProfileIds/);
+  assert.match(notifications, /groupActivatedProfilesByCurrency/);
   assert.match(notifications, /selectKdpRoyaltyScopeForSelection/);
   assert.match(notifications, /fetchMobileOverview/);
   assert.match(background, /parseSelectedProfileIds/);

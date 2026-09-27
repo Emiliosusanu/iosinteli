@@ -41,15 +41,20 @@ import {
   logicalBookKeyForAdvertisedAsin,
   logicalBookAsinsFromDailyRows,
   primaryAsinFromGroupKey,
+  mergeCatalogIntoDailyAsinGroups,
   verifiedAsinGroupsFromDailyRows,
   verifiedCampaignLogicalBooks,
   verifiedKdpBookCatalog,
 } from "./kdpBookIdentity";
 import { assembleLogicalBookRows, emptyLogicalBook, type LogicalBookAccumulator } from "./kdpBooksRead";
-import { linkedKdpAccountIdsFromRows } from "./kdpAccountLinks";
+import {
+  kdpAccountCountsByAmazonProfileId,
+  linkedKdpAccountIdsFromRows,
+} from "./kdpAccountLinks";
 import { aggregateKdpDailyRows, kdpTrace } from "./kdpRoyaltiesTrace";
 import {
   aggregateKdpFormatRoyalties,
+  bookDailyRoyaltiesTotal,
   readKdpFormatRows,
   emptyKdpFormatRoyaltyRange,
   type KdpFormatRoyaltyRange,
@@ -61,13 +66,17 @@ import {
 import {
   dedupeTargetingBookOptions,
   filterTargetingBookOptions,
+  hasMeaningfulKdpDailySignal,
   selectEligibleTargetingBookOptions,
+  type TargetingBookEligibilityContext,
 } from "./targetingBookFilter";
 import {
   BOOKS_LIST_ACTIVITY_DAYS,
   annotateBooksListVisibility,
+  bookHasKdpOrAdsEvidence,
   bookHasSignalInRange,
   booksListActivityRange,
+  collapseTopBooksByFormatGroup,
   filterBooksListVisibility,
   filterTopBooksByRecentActivity,
   identityAsinsForBookRow,
@@ -76,15 +85,19 @@ import {
 } from "./booksListActivity";
 
 export {
+  collapseTargetingBookOptionsByParent,
   dedupeTargetingBookOptions,
   filterTargetingBookOptions,
+  hasMeaningfulKdpDailySignal,
   isEligibleTargetingBookOption,
   mergeTargetingBookOptionSources,
+  selectEligibleCreateBookOptions,
   selectEligibleTargetingBookOptions,
 } from "./targetingBookFilter";
+export type { TargetingBookEligibilityContext } from "./targetingBookFilter";
 import { aggregateDailyMetrics, aggregateDailyMetricsForDisplay } from "./dailyMetrics";
 import { netRoyaltiesKnown } from "./netRoyalties";
-import { describeProductTarget, extractTargetAsin, isCategoryTarget } from "./targeting";
+import { describeProductTarget, extractTargetAsin, isCategoryTarget, isUsableBookTitle } from "./targeting";
 
 export const ADMIN_FILTER_KEY = "inteliads.adminFilterUserId";
 import {
@@ -236,10 +249,34 @@ export async function fetchMobileTargetingPage(input: {
   // The deployed exact-period RPC predates this optional coverage marker.
   // Missing means unknown, never a failed catalog response and never invented
   // metric coverage.
-  return {
+  const page: MobileTargetingPage = {
     ...(result as Omit<MobileTargetingPage, "metricsCoveredThrough">),
     metricsCoveredThrough: result.metricsCoveredThrough ?? null,
   };
+
+  // Display-only title/cover fill — never drop, re-sort, or invent catalog rows.
+  // RPC pages omit Nest/KDP enrichment; without this ASINs show bare codes and
+  // Auto/Category/Placement show cube placeholders instead of book covers.
+  try {
+    if (input.segment === "asins" || input.segment === "auto" || input.segment === "category") {
+      page.rows = await enrichProductTargetDisplay(
+        page.rows as ProductTarget[],
+        input.profiles,
+        { skipKdp: false },
+      );
+    } else if (input.segment === "placement") {
+      page.rows = await enrichPlacementPageBookCovers(
+        page.rows as Record<string, unknown>[],
+        input.profiles,
+      );
+    }
+  } catch (error) {
+    // Soft-degrade: keep ranked page rows even if title/cover lookup flakes.
+    // eslint-disable-next-line no-console
+    console.warn("[inteliads:targeting] page display enrichment failed", error);
+  }
+
+  return page;
 }
 /** Targets tab: first-window size so multi-profile keyword reads stay responsive. Not an Amazon write limit — Load more grows past this until the filtered catalog is exhausted. */
 export const TARGETING_LIST_LIMIT = 500;
@@ -522,6 +559,10 @@ async function fetchCampaignMetricRows(
   return rows;
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 async function fetchMetricTotalsByEntity(
   table: string,
   entityColumn: string,
@@ -553,11 +594,14 @@ async function fetchMetricTotalsByEntity(
         if (error) throw error;
         const pageRows = data ?? [];
         for (const row of pageRows) {
-          const id = row[entityColumn];
+          const candidate: unknown = row;
+          if (!isUnknownRecord(candidate)) continue;
+          const record = candidate;
+          const id = record[entityColumn];
           if (!id) continue;
           const key = String(id);
           const current = totals.get(key) ?? emptyTotals();
-          addMetricRow(current, row);
+          addMetricRow(current, record);
           totals.set(key, current);
         }
         if (pageRows.length < POSTGREST_PAGE_SIZE) break;
@@ -622,7 +666,25 @@ export interface KdpRoyaltyRange {
   rawRowCount?: number;
 }
 
+const linkedKdpAccountReads = new Map<string, Promise<string[]>>();
+
 async function fetchLinkedKdpAccountIds(
+  profileIds: string[],
+  opts?: { includePaused?: boolean; allowLegacy?: boolean },
+): Promise<string[]> {
+  const key = `${uniqueStrings(profileIds).sort().join(",")}|${opts?.includePaused === true}|${opts?.allowLegacy !== false}`;
+  const existing = linkedKdpAccountReads.get(key);
+  if (existing) return existing;
+  const pending = fetchLinkedKdpAccountIdsUncached(profileIds, opts);
+  linkedKdpAccountReads.set(key, pending);
+  void pending.then(
+    () => linkedKdpAccountReads.delete(key),
+    () => linkedKdpAccountReads.delete(key),
+  );
+  return pending;
+}
+
+async function fetchLinkedKdpAccountIdsUncached(
   profileIds: string[],
   opts?: { includePaused?: boolean; allowLegacy?: boolean },
 ): Promise<string[]> {
@@ -642,6 +704,7 @@ async function fetchLinkedKdpAccountIds(
       )),
     );
   }
+  kdpTrace("KD_LINK_ROWS", { count: linkedAccounts.length });
 
   // Dedupes kdp_account_id when the same shelf is linked to US + CA (or more).
   let linkedIds = linkedKdpAccountIdsFromRows(linkedAccounts ?? [], profileIds, {
@@ -652,6 +715,7 @@ async function fetchLinkedKdpAccountIds(
   // Shared Ads profiles can bridge other users' KDP accounts — without this
   // filter those leak into Overview Gross (~$4.2K vs web ~$3.8K).
   linkedIds = await filterOwnedKdpAccountIds(linkedIds);
+  kdpTrace("KD_OWNED_LINK_ROWS", { count: linkedIds.length });
 
   // Legacy amazon_profile_id on kdp_accounts: only when explicitly allowed.
   // Overview portfolio used to pass every Ads profile (incl. Disabled); legacy
@@ -730,6 +794,80 @@ async function fetchSessionKdpAccountIds(): Promise<string[]> {
   const { data, error } = await supabase.from("kdp_accounts").select("id").eq("user_id", userId);
   if (error) throw error;
   return uniqueStrings((data ?? []).map((row: any) => row.id));
+}
+
+export interface OwnedBookIdentity {
+  asin: string;
+  title: string | null;
+  image_url: string | null;
+  book_key: string;
+}
+
+/**
+ * Resolve stable, owned KDP catalog metadata independently of the current
+ * date/profile filter. Book detail routes can be opened from notifications or
+ * old links, so their title must not degrade to a raw ASIN merely because the
+ * book is outside the current financial result set.
+ */
+export async function fetchOwnedBookIdentity(openedAsin: string): Promise<OwnedBookIdentity | null> {
+  const opened = String(openedAsin ?? "").trim().toUpperCase();
+  if (!opened) return null;
+
+  const accountIds = await fetchSessionKdpAccountIds();
+  if (!accountIds.length) return null;
+
+  const { data: openedRows, error: openedError } = await supabase
+    .from("kdp_book_daily_data")
+    .select("asin, group_key")
+    .in("account_id", accountIds)
+    .eq("asin", opened);
+  if (openedError) throw openedError;
+
+  const groupKeys = uniqueStrings(
+    (openedRows ?? []).map((row: any) => String(row.group_key ?? "").trim()).filter(Boolean),
+  );
+  let dailyRows = (openedRows ?? []) as any[];
+  if (groupKeys.length) {
+    const { data: siblingRows, error: siblingError } = await supabase
+      .from("kdp_book_daily_data")
+      .select("asin, group_key")
+      .in("account_id", accountIds)
+      .in("group_key", groupKeys);
+    if (siblingError) throw siblingError;
+    dailyRows = siblingRows ?? dailyRows;
+  }
+
+  const siblingAsins = logicalBookAsinsFromDailyRows(opened, dailyRows);
+  const candidateAsins = uniqueStrings([opened, ...siblingAsins]);
+  const { data: titleRows, error: titleError } = await supabase
+    .from("kdp_titles")
+    .select("asin, title, cover_url, amazon_image_url")
+    .in("account_id", accountIds)
+    .in("asin", candidateAsins);
+  if (titleError) throw titleError;
+
+  const exactTitle = (titleRows ?? []).find(
+    (row: any) => String(row.asin ?? "").trim().toUpperCase() === opened && String(row.title ?? "").trim(),
+  );
+  const titled = exactTitle ?? (titleRows ?? []).find((row: any) => String(row.title ?? "").trim()) ?? null;
+  const covered = exactTitle ?? (titleRows ?? []).find(
+    (row: any) => String(row.cover_url ?? "").trim() || String(row.amazon_image_url ?? "").trim(),
+  ) ?? null;
+  const bookKey = String(
+    (openedRows ?? []).find((row: any) => String(row.group_key ?? "").trim())?.group_key
+      ?? dailyRows.find((row: any) => String(row.group_key ?? "").trim())?.group_key
+      ?? opened,
+  ).trim().toUpperCase();
+
+  if (!titled && !covered && !dailyRows.length) return null;
+  return {
+    asin: opened,
+    title: titled ? String((titled as any).title ?? "").trim() || null : null,
+    image_url: covered
+      ? pickUsableCoverUrl((covered as any).cover_url, (covered as any).amazon_image_url) ?? null
+      : null,
+    book_key: bookKey || opened,
+  };
 }
 
 async function fetchKdpAccountIdsForRoyaltyQuery(
@@ -1166,6 +1304,9 @@ async function fetchEntityDailyAggregateForProfiles(
     metricsTable: "keyword_metrics" | "search_term_metrics";
     entityColumn: "keyword_id" | "search_term_id";
     moneyProfileIds?: readonly string[];
+    displayCurrency?: string;
+    profileCurrencyById?: ReadonlyMap<string, string> | Record<string, string>;
+    fxRates?: Map<string, number>;
   },
 ): Promise<AdsEngineFunnelRange> {
   if (!profileIds.length || !start || !end) return { daily: [], entityCount: 0 };
@@ -1209,23 +1350,35 @@ async function fetchEntityDailyAggregateForProfiles(
     }
   }
   return {
-    daily: aggregateDailyMetricsForDisplay(rows, { moneyProfileIds: opts.moneyProfileIds }),
+    daily: aggregateDailyMetricsForDisplay(rows, {
+      moneyProfileIds: opts.moneyProfileIds,
+      displayCurrency: opts.displayCurrency,
+      profileCurrencyById: opts.profileCurrencyById,
+      fxRates: opts.fxRates,
+    }),
     entityCount: ids.length,
   };
 }
+
+export type AdsEngineMoneyContext = {
+  moneyProfileIds?: readonly string[];
+  displayCurrency?: string;
+  profileCurrencyById?: ReadonlyMap<string, string> | Record<string, string>;
+  fxRates?: Map<string, number>;
+};
 
 /** Top keywords by spend — daily funnel for Ads Engine Keywords page. */
 export async function fetchKeywordDailyAggregate(
   profileIds: string[],
   start: string,
   end: string,
-  moneyProfileIds?: readonly string[],
+  money?: AdsEngineMoneyContext,
 ): Promise<AdsEngineFunnelRange> {
   return fetchEntityDailyAggregateForProfiles(profileIds, start, end, {
     entityTable: "keywords",
     metricsTable: "keyword_metrics",
     entityColumn: "keyword_id",
-    moneyProfileIds,
+    ...money,
   });
 }
 
@@ -1234,13 +1387,13 @@ export async function fetchSearchTermDailyAggregate(
   profileIds: string[],
   start: string,
   end: string,
-  moneyProfileIds?: readonly string[],
+  money?: AdsEngineMoneyContext,
 ): Promise<AdsEngineFunnelRange> {
   return fetchEntityDailyAggregateForProfiles(profileIds, start, end, {
     entityTable: "search_terms",
     metricsTable: "search_term_metrics",
     entityColumn: "search_term_id",
-    moneyProfileIds,
+    ...money,
   });
 }
 
@@ -1362,7 +1515,8 @@ export async function fetchAmazonProfiles(
   // Keep the customer scope explicit for admin viewing; a failed read must
   // surface as a failed read rather than presenting an empty account list.
   const profiles = await fetchNestAmazonProfiles(filterUserId);
-  return profiles.sort((a, b) => {
+  const withKdpCounts = await attachKdpAccountCountsFromBridge(profiles);
+  return withKdpCounts.sort((a, b) => {
     const enabledDelta = Number(b.is_enabled === true) - Number(a.is_enabled === true);
     if (enabledDelta !== 0) return enabledDelta;
     const campaignDelta = (b.campaign_count ?? 0) - (a.campaign_count ?? 0);
@@ -1370,6 +1524,49 @@ export async function fetchAmazonProfiles(
     return (a.nickname ?? a.account_name ?? a.profile_id).localeCompare(
       b.nickname ?? b.account_name ?? b.profile_id,
     );
+  });
+}
+
+/** Fill `kdp_account_count` from Supabase bridge rows (Nest often hardcodes 0). */
+async function attachKdpAccountCountsFromBridge(
+  profiles: AmazonProfile[],
+): Promise<AmazonProfile[]> {
+  if (!profiles.length) return profiles;
+  const profileIds = uniqueStrings(
+    profiles.map((p) => String(p.profile_id || p.id || "").trim()),
+  );
+  if (!profileIds.length) return profiles;
+
+  const links: Array<{
+    kdp_account_id?: string | null;
+    amazon_profile_id?: string | null;
+    is_paused?: boolean | null;
+  }> = [];
+  try {
+    for (const chunk of chunkArray(profileIds, BOOKS_IN_CHUNK)) {
+      links.push(
+        ...(await fetchAllPages((from, to) =>
+          supabase
+            .from("kdp_account_amazon_profiles")
+            .select("kdp_account_id, amazon_profile_id, is_paused")
+            .in("amazon_profile_id", chunk)
+            .order("kdp_account_id", { ascending: true })
+            .order("amazon_profile_id", { ascending: true })
+            .range(from, to),
+        )),
+      );
+    }
+  } catch {
+    // Keep Nest values if bridge read fails (Auth/RLS); do not blank the list.
+    return profiles;
+  }
+
+  const counts = kdpAccountCountsByAmazonProfileId(links);
+  return profiles.map((p) => {
+    const id = String(p.profile_id || p.id || "").trim();
+    const fromBridge = counts[id] ?? 0;
+    if (fromBridge === (p.kdp_account_count ?? 0)) return p;
+    return { ...p, kdp_account_count: fromBridge };
   });
 }
 
@@ -1401,6 +1598,96 @@ export async function setUserAmazonProfileEnabled(
 }
 
 // ---------- Campaigns ----------
+
+export type CreationExistingCampaignRow = {
+  id: string;
+  name: string;
+  state: string;
+  kind: "auto" | "keywords" | "products" | "unknown";
+  label: string;
+};
+
+/**
+ * Active (enabled) campaigns advertising `asin` on ONE Ads profile.
+ * Scoped via product_ads → campaigns so a wrong marketplace/country cannot leak in.
+ */
+export async function fetchActiveCampaignsForBookProfile(opts: {
+  profileId: string;
+  asin: string;
+}): Promise<CreationExistingCampaignRow[]> {
+  const profileId = String(opts.profileId || "").trim();
+  const asin = String(opts.asin || "")
+    .trim()
+    .toUpperCase();
+  if (!profileId || !/^[A-Z0-9]{10}$/.test(asin)) return [];
+
+  const asinVariants = [...new Set([asin, asin.toLowerCase()])];
+  const { data: ads, error: adsError } = await supabase
+    .from("product_ads")
+    .select("campaign_id, asin, status")
+    .eq("amazon_profile_id", profileId)
+    .in("asin", asinVariants)
+    .in("status", ["enabled"]);
+  if (adsError) throw adsError;
+
+  const campaignIds = [
+    ...new Set(
+      (ads ?? [])
+        .map((row) => String((row as { campaign_id?: string }).campaign_id || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (!campaignIds.length) return [];
+
+  const { data: campaigns, error: campaignsError } = await supabase
+    .from("campaigns")
+    .select("id, name, state, targeting_type, amazon_profile_id")
+    .in("id", campaignIds)
+    .eq("amazon_profile_id", profileId)
+    .eq("state", "enabled")
+    .order("name", { ascending: true });
+  if (campaignsError) throw campaignsError;
+  if (!campaigns?.length) return [];
+
+  const liveIds = campaigns.map((row) => String((row as { id: string }).id));
+  const { data: adGroups, error: adGroupsError } = await supabase
+    .from("ad_groups")
+    .select("campaign_id, targeting_type, state")
+    .in("campaign_id", liveIds)
+    .eq("amazon_profile_id", profileId);
+  if (adGroupsError) throw adGroupsError;
+
+  const groupsByCampaign = new Map<string, string[]>();
+  for (const row of adGroups ?? []) {
+    const campaignId = String((row as { campaign_id?: string }).campaign_id || "").trim();
+    if (!campaignId) continue;
+    const state = String((row as { state?: string }).state || "").toLowerCase();
+    if (state && state !== "enabled") continue;
+    const list = groupsByCampaign.get(campaignId) ?? [];
+    list.push(String((row as { targeting_type?: string }).targeting_type ?? ""));
+    groupsByCampaign.set(campaignId, list);
+  }
+
+  const { classifyCreationCampaignTargeting } = await import(
+    "./campaignCreationStock.ts"
+  );
+
+  return campaigns.map((row) => {
+    const id = String((row as { id: string }).id);
+    const classified = classifyCreationCampaignTargeting({
+      campaignTargetingType: (row as { targeting_type?: string | null }).targeting_type,
+      adGroupTargetingTypes: groupsByCampaign.get(id) ?? [],
+    });
+    return {
+      id,
+      name: String((row as { name?: string }).name || "Campaign"),
+      state: String((row as { state?: string }).state || "enabled"),
+      kind: classified.kind,
+      label: classified.label,
+    };
+  });
+}
+
 export async function fetchCampaigns(
   profileIds: string[],
   opts: { search?: string; state?: string; type?: string; limit?: number } = {},
@@ -2032,8 +2319,8 @@ export async function attachParentEntityStates<
 export type CampaignSettingsCooldownRow = {
   id: string;
   rule_last_modified_at: string | null;
-  placement_adj_last_modified_at: string | null;
-  placement_adj_change_source: string | null;
+  placement_adj_last_modified_at: string | Record<string, string> | null;
+  placement_adj_change_source: string | Record<string, string> | null;
   bidding_strategy: string | null;
 };
 
@@ -2053,14 +2340,16 @@ export async function fetchCampaignSettingsCooldownRows(
     if (error) throw error;
     for (const row of data ?? []) {
       const id = String((row as any).id);
+      const stamp = (row as any).placement_adj_last_modified_at;
+      const source = (row as any).placement_adj_change_source;
       out.set(id, {
         id,
         bidding_strategy: ((row as any).bidding_strategy as string | null) ?? null,
         rule_last_modified_at: ((row as any).rule_last_modified_at as string | null) ?? null,
         placement_adj_last_modified_at:
-          ((row as any).placement_adj_last_modified_at as string | null) ?? null,
+          typeof stamp === "string" || (stamp && typeof stamp === "object") ? stamp : null,
         placement_adj_change_source:
-          ((row as any).placement_adj_change_source as string | null) ?? null,
+          typeof source === "string" || (source && typeof source === "object") ? source : null,
       });
     }
   }
@@ -2220,33 +2509,51 @@ export async function fetchEntityDailyMetrics(
   end: string,
 ): Promise<EntityDailyPoint[]> {
   if (!entityId || !start || !end) return [];
-  try {
-    const { data, error } = await supabase
-      .from(table)
-      .select("date,impressions,clicks,orders,spend,sales")
-      .eq(entityColumn, entityId)
-      .gte("date", start)
-      .lte("date", end)
-      .order("date", { ascending: true });
-    if (error) throw error;
-    return aggregateDailyMetrics((data ?? []).map((row: any) => ({
-      id: `${entityId}-${row.date}`,
-      campaign_id: entityId,
-      date: String(row.date).slice(0, 10),
-      impressions: Number(row.impressions) || 0,
-      clicks: Number(row.clicks) || 0,
-      orders: Number(row.orders) || 0,
-      spend: Number(row.spend) || 0,
-      sales: Number(row.sales) || 0,
-      ctr: null,
-      acos: null,
-      roas: null,
-      cpc: null,
-      conversion_rate: null,
-    })));
-  } catch (error) {
-    throw error instanceof Error ? error : new Error("Couldn't load daily metrics.");
+  const routes: Record<typeof table, { column: typeof entityColumn; path: string }> = {
+    keyword_metrics: { column: "keyword_id", path: "keywords" },
+    product_target_metrics: { column: "product_target_id", path: "product-targets" },
+    search_term_metrics: { column: "search_term_id", path: "search-terms" },
+  };
+  const route = routes[table];
+  if (route.column !== entityColumn) throw new Error("Invalid metric entity type.");
+  const rows: Record<string, unknown>[] = [];
+  // Nest verifies ownership and reads metric evidence with its service role.
+  // The raw tables are deliberately unavailable to the mobile RLS role.
+  for (let page = 1; page <= 50; page += 1) {
+    const params = new URLSearchParams({
+      startDate: start,
+      endDate: end,
+      sortBy: "date",
+      sortOrder: "asc",
+      per_page: "1000",
+      page: String(page),
+    });
+    const result = await nestApiJson<{ data?: Record<string, unknown>[] }>(
+      `/${route.path}/${encodeURIComponent(entityId)}/metrics?${params.toString()}`,
+      { method: "GET" },
+      "Couldn't load daily metrics.",
+    );
+    const batch = result.data ?? [];
+    rows.push(...batch);
+    if (batch.length < 1000) {
+      return aggregateDailyMetrics(rows.map((row) => ({
+        id: `${entityId}-${row.date}`,
+        campaign_id: entityId,
+        date: String(row.date).slice(0, 10),
+        impressions: Number(row.impressions) || 0,
+        clicks: Number(row.clicks) || 0,
+        orders: Number(row.orders) || 0,
+        spend: Number(row.spend) || 0,
+        sales: Number(row.sales) || 0,
+        ctr: null,
+        acos: null,
+        roas: null,
+        cpc: null,
+        conversion_rate: null,
+      })));
+    }
   }
+  throw new Error("Daily metrics exceed the supported page limit.");
 }
 
 // ---------- Product Targets ----------
@@ -2406,7 +2713,6 @@ export async function fetchProductTargets(
           adGroupId: opts.adGroupId,
           state: opts.state,
           limit: opts.limit,
-          targetKind: opts.targetKind,
         }),
         NEST_TARGETING_LIST_BUDGET_MS,
       );
@@ -2510,15 +2816,31 @@ function productTargetDisplayAsin(row: ProductTarget): string {
   );
 }
 
+function productTargetNeedsDisplayMeta(row: ProductTarget): boolean {
+  return !row.image_url || !isUsableBookTitle(row.title);
+}
+
+function applyProductTargetDisplayMeta(
+  row: ProductTarget,
+  match: { title?: string | null; image_url?: string | null } | null | undefined,
+): void {
+  if (!match) return;
+  if (!row.image_url && match.image_url) (row as any).image_url = pickUsableCoverUrl(match.image_url);
+  // Overwrite blank / ASIN-as-title placeholders so heading can use the real name.
+  if (!isUsableBookTitle(row.title) && isUsableBookTitle(match.title)) {
+    (row as any).title = String(match.title).trim();
+  }
+}
+
 /** Fill missing book title/cover for ASINs; for Auto/Category use the campaign's advertised product. */
-async function enrichProductTargetDisplay(
+export async function enrichProductTargetDisplay(
   enriched: ProductTarget[],
   profileIds: string[],
   opts: { skipKdp?: boolean } = {},
 ): Promise<ProductTarget[]> {
   if (!enriched.length || !profileIds.length) return enriched;
 
-  const rowsNeedingAsinData = enriched.filter((row) => !row.image_url || !row.title);
+  const rowsNeedingAsinData = enriched.filter((row) => productTargetNeedsDisplayMeta(row));
   if (rowsNeedingAsinData.length) {
     const extractedAsins = uniqueStrings(
       rowsNeedingAsinData.map((row) => productTargetDisplayAsin(row)).filter(Boolean),
@@ -2538,19 +2860,19 @@ async function enrichProductTargetDisplay(
         );
         for (const row of enriched) {
           const asin = productTargetDisplayAsin(row);
-          const match = asin ? imageByAsin.get(asin.toUpperCase()) : null;
-          if (!match) continue;
-          if (!row.image_url && match.image_url) (row as any).image_url = match.image_url;
-          if (!row.title && match.title) (row as any).title = match.title;
+          applyProductTargetDisplayMeta(row, asin ? imageByAsin.get(asin.toUpperCase()) : null);
         }
       }
 
       const stillMissing = enriched.filter((row) => {
         const asin = productTargetDisplayAsin(row);
-        return asin && (!row.image_url || !row.title);
+        return asin && productTargetNeedsDisplayMeta(row);
       });
-      // KDP lookup is the slow path for Category/Auto lists — skip on targeting list fetches.
-      if (stillMissing.length && !opts.skipKdp) {
+      // skipKdp was meant for Category/Auto campaign-cover lookups. ASIN rows
+      // still need kdp_titles — otherwise Targets → ASINs shows bare ASIN codes.
+      const asinStillMissing = stillMissing.filter((row) => Boolean(productTargetDisplayAsin(row)));
+      const shouldLookupKdp = asinStillMissing.length > 0 || (stillMissing.length > 0 && !opts.skipKdp);
+      if (shouldLookupKdp) {
         const kdpAccountIds = await fetchLinkedKdpAccountIds(profileIds);
         if (kdpAccountIds.length) {
           const { data: kdpTitles } = await supabase
@@ -2571,12 +2893,110 @@ async function enrichProductTargetDisplay(
             }
             for (const row of enriched) {
               const asin = productTargetDisplayAsin(row);
-              const match = asin ? titleByAsin.get(asin.toUpperCase()) : null;
-              if (!match) continue;
-              if (!row.image_url && match.image_url) (row as any).image_url = match.image_url;
-              if (!row.title && match.title) (row as any).title = match.title;
+              // When skipKdp, only fill rows that are product ASINs (not auto/category).
+              if (opts.skipKdp && !asin) continue;
+              applyProductTargetDisplayMeta(row, asin ? titleByAsin.get(asin.toUpperCase()) : null);
             }
           }
+        }
+      }
+
+      // Competitor / non-owned ASINs: amazon_catalog (never invent titles).
+      const catalogNeed = uniqueStrings(
+        enriched
+          .filter((row) => {
+            const asin = productTargetDisplayAsin(row);
+            return asin && productTargetNeedsDisplayMeta(row);
+          })
+          .map((row) => productTargetDisplayAsin(row)),
+      );
+      if (catalogNeed.length) {
+        const { data: catalogRows } = await supabase
+          .from("amazon_catalog")
+          .select("asin, title, image_url")
+          .in("asin", catalogNeed)
+          .not("title", "is", null)
+          .neq("title", "")
+          .limit(Math.min(catalogNeed.length * 3, 800));
+        if (catalogRows?.length) {
+          const byAsin = new Map<string, { title: string | null; image_url: string | null }>();
+          for (const row of catalogRows as any[]) {
+            const asin = String(row.asin ?? "").toUpperCase();
+            if (!asin) continue;
+            const existing = byAsin.get(asin);
+            // Prefer a usable bibliographic title over ASIN-as-title catalog noise.
+            const nextTitle = isUsableBookTitle(row.title)
+              ? String(row.title).trim()
+              : existing?.title ?? null;
+            byAsin.set(asin, {
+              title: isUsableBookTitle(existing?.title) ? existing!.title : nextTitle,
+              image_url: pickUsableCoverUrl(existing?.image_url, row.image_url),
+            });
+          }
+          for (const row of enriched) {
+            const asin = productTargetDisplayAsin(row);
+            applyProductTargetDisplayMeta(row, asin ? byAsin.get(asin.toUpperCase()) : null);
+          }
+        }
+      }
+
+      // product_ads / amazon_catalog are often RLS-blocked on the client; kdp_titles
+      // only covers owned ASINs. Gap-fill remaining Exact/Expanded titles the same
+      // way Create does (Open Library + optional retail) so covers aren't alone.
+      const gapAsins = uniqueStrings(
+        enriched
+          .filter((row) => {
+            const asin = productTargetDisplayAsin(row);
+            return asin && !isUsableBookTitle(row.title);
+          })
+          .map((row) => productTargetDisplayAsin(row)),
+      );
+      if (gapAsins.length) {
+        try {
+          const { fetchAsinDisplayMeta } = await import("./amazonCampaignSuggestions");
+          const applyMeta = (
+            meta: Map<string, { title?: string | null; coverUrl?: string | null }>,
+          ) => {
+            for (const row of enriched) {
+              const asin = productTargetDisplayAsin(row);
+              if (!asin || isUsableBookTitle(row.title)) continue;
+              const key = asin.toUpperCase();
+              const hit = meta.get(key) ?? meta.get(asin);
+              if (!hit) continue;
+              applyProductTargetDisplayMeta(row, {
+                title: hit.title,
+                image_url: hit.coverUrl,
+              });
+            }
+          };
+          // Open Library covers ISBN-10 print ASINs; skip retail on huge pages.
+          applyMeta(
+            await fetchAsinDisplayMeta({
+              asins: gapAsins,
+              profileIds,
+              skipRetail: true,
+            }),
+          );
+          const stillGap = uniqueStrings(
+            enriched
+              .filter((row) => {
+                const asin = productTargetDisplayAsin(row);
+                return asin && !isUsableBookTitle(row.title);
+              })
+              .map((row) => productTargetDisplayAsin(row)),
+          );
+          // Small visible pages: Amazon retail HTML for competitor B0 ASINs.
+          if (stillGap.length > 0 && stillGap.length <= 40) {
+            applyMeta(
+              await fetchAsinDisplayMeta({
+                asins: stillGap,
+                profileIds,
+                skipRetail: false,
+              }),
+            );
+          }
+        } catch {
+          // Soft-degrade: keep CDN covers; titles may stay "Title unavailable".
         }
       }
     }
@@ -2584,8 +3004,9 @@ async function enrichProductTargetDisplay(
 
   // Auto / Category only (no product ASIN): cover + title from the campaign's advertised product.
   // Never paint a product-ASIN row with the sponsored book — resolve that ASIN or leave bare.
+  // Title is display-only for covers; Auto/Category headings use the targeting label only.
   const stillNeedCampaignCover = enriched.filter((row) => {
-    if (row.image_url && row.title) return false;
+    if (row.image_url && isUsableBookTitle(row.title)) return false;
     return !productTargetDisplayAsin(row);
   });
   if (stillNeedCampaignCover.length) {
@@ -2609,8 +3030,8 @@ async function enrichProductTargetDisplay(
           const current = byCampaign.get(campaignId);
           const next = {
             asin: ad.asin ? String(ad.asin).toUpperCase() : null,
-            image_url: (ad.image_url as string | null) ?? null,
-            title: (ad.title as string | null) ?? null,
+            image_url: pickUsableCoverUrl(ad.image_url as string | null) ?? null,
+            title: isUsableBookTitle(ad.title) ? String(ad.title).trim() : null,
           };
           if (!current) {
             byCampaign.set(campaignId, next);
@@ -2618,13 +3039,13 @@ async function enrichProductTargetDisplay(
           }
           // Prefer the first ad that actually has a cover or title.
           if (!current.image_url && next.image_url) current.image_url = next.image_url;
-          if (!current.title && next.title) current.title = next.title;
+          if (!isUsableBookTitle(current.title) && next.title) current.title = next.title;
           if (!current.asin && next.asin) current.asin = next.asin;
         }
 
         const missingCoverAsins = uniqueStrings(
           Array.from(byCampaign.values())
-            .filter((v) => v.asin && !v.image_url)
+            .filter((v) => v.asin && (!v.image_url || !isUsableBookTitle(v.title)))
             .map((v) => v.asin as string),
         );
         if (missingCoverAsins.length) {
@@ -2642,7 +3063,9 @@ async function enrichProductTargetDisplay(
                 if (!meta.image_url) {
                   meta.image_url = pickUsableCoverUrl((title as any).cover_url, (title as any).amazon_image_url);
                 }
-                if (!meta.title && (title as any).title) meta.title = (title as any).title;
+                if (!isUsableBookTitle(meta.title) && isUsableBookTitle((title as any).title)) {
+                  meta.title = String((title as any).title).trim();
+                }
               }
             }
           }
@@ -2650,11 +3073,10 @@ async function enrichProductTargetDisplay(
 
         for (const row of enriched) {
           if (productTargetDisplayAsin(row)) continue;
-          if (row.image_url && row.title) continue;
+          if (row.image_url && isUsableBookTitle(row.title)) continue;
           const meta = row.campaign_id ? byCampaign.get(row.campaign_id) : null;
           if (!meta) continue;
-          if (!row.image_url && meta.image_url) (row as any).image_url = meta.image_url;
-          if (!row.title && meta.title) (row as any).title = meta.title;
+          applyProductTargetDisplayMeta(row, meta);
           if (!(row as any).cover_asin && meta.asin) {
             (row as any).cover_asin = meta.asin;
           }
@@ -2666,47 +3088,163 @@ async function enrichProductTargetDisplay(
   return enriched;
 }
 
+/**
+ * Placement RPC rows often omit book_* — fill from product_ads without inventing
+ * ASINs or titles. Covers use real product_ads / KDP URLs only.
+ */
+export async function enrichPlacementPageBookCovers(
+  rows: Array<Record<string, unknown>>,
+  profileIds: string[],
+): Promise<Array<Record<string, unknown>>> {
+  if (!rows.length || !profileIds.length) return rows;
+
+  const need = rows.filter((row) => {
+    const asin = String(row.book_asin ?? "").trim();
+    const image = String(row.book_image_url ?? "").trim();
+    const title = String(row.book_title ?? "").trim();
+    return !asin || !image || !title;
+  });
+  if (!need.length) return rows;
+
+  const campaignIds = uniqueStrings(
+    need.map((row) => {
+      const id = String(row.campaign_id || row.id || "");
+      return id.includes("::") ? id.split("::")[0] : id;
+    }),
+  );
+  if (!campaignIds.length) return rows;
+
+  const { data: campaignAds } = await supabase
+    .from("product_ads")
+    .select("campaign_id, asin, image_url, title")
+    .in("amazon_profile_id", profileIds)
+    .in("campaign_id", campaignIds);
+  if (!campaignAds?.length) return rows;
+
+  const byCampaign = new Map<
+    string,
+    { asin: string | null; image_url: string | null; title: string | null }
+  >();
+  for (const ad of campaignAds as any[]) {
+    const campaignId = String(ad.campaign_id ?? "");
+    if (!campaignId) continue;
+    const current = byCampaign.get(campaignId);
+    const next = {
+      asin: ad.asin ? String(ad.asin).toUpperCase() : null,
+      image_url: pickUsableCoverUrl(ad.image_url as string | null) ?? null,
+      title: (ad.title as string | null) ?? null,
+    };
+    if (!current) {
+      byCampaign.set(campaignId, next);
+      continue;
+    }
+    if (!current.image_url && next.image_url) current.image_url = next.image_url;
+    if (!current.title && next.title) current.title = next.title;
+    if (!current.asin && next.asin) current.asin = next.asin;
+  }
+
+  const missingAsins = uniqueStrings(
+    [...byCampaign.values()].filter((v) => v.asin && (!v.image_url || !v.title)).map((v) => v.asin as string),
+  );
+  if (missingAsins.length) {
+    const kdpAccountIds = await fetchLinkedKdpAccountIds(profileIds);
+    if (kdpAccountIds.length) {
+      const { data: kdpTitles } = await supabase
+        .from("kdp_titles")
+        .select("asin, title, cover_url, amazon_image_url")
+        .in("account_id", kdpAccountIds)
+        .in("asin", missingAsins);
+      for (const title of kdpTitles ?? []) {
+        const asin = String((title as any).asin ?? "").toUpperCase();
+        for (const meta of byCampaign.values()) {
+          if (meta.asin !== asin) continue;
+          if (!meta.image_url) {
+            meta.image_url = pickUsableCoverUrl((title as any).cover_url, (title as any).amazon_image_url);
+          }
+          if (!meta.title && (title as any).title) meta.title = (title as any).title;
+        }
+      }
+    }
+  }
+
+  return rows.map((row) => {
+    const rawId = String(row.campaign_id || row.id || "");
+    const campaignId = rawId.includes("::") ? rawId.split("::")[0] : rawId;
+    const meta = campaignId ? byCampaign.get(campaignId) : null;
+    if (!meta) return row;
+    return {
+      ...row,
+      book_asin: String(row.book_asin || meta.asin || "")
+        .trim()
+        .toUpperCase() || null,
+      book_title: String(row.book_title || meta.title || "").trim() || null,
+      book_image_url: String(row.book_image_url || meta.image_url || "").trim() || null,
+    };
+  });
+}
+
 export type TargetingBookOption = {
   asin: string;
   title: string;
   image_url: string | null;
   campaignIds: string[];
   campaignCount?: number;
+  /** Real KDP royalty/daily evidence — not catalog-title-only. */
   hasKdpData?: boolean;
+  /** Nest Create / purchased in-stock shelf. */
+  inStock?: boolean;
+  formatAsins?: string[];
+  groupKey?: string | null;
 };
 
 /**
- * Books for the targeting filter: sponsored ASINs on **enabled**
- * campaigns/ads (paused + archived excluded). KDP catalog/royalty rows enrich
- * titles/covers but ASINs with zero enabled campaigns are dropped —
- * picker is live-campaign books only.
- * Nest `GET /campaigns/books` is profile-scoped and supplies the exact enabled
- * campaign IDs. This also covers mobile sessions whose direct product_ads read
- * is empty under RLS.
+ * Books for Targets / Campaigns filter sheets (default) or create-style pickers.
+ *
+ * Targets (`purpose: "targets"`, default):
+ *   Books with **enabled campaign activity** only. KDP daily rows enrich
+ *   titles/covers + format siblings for parent rollup, then eligibility drops
+ *   anything without campaign IDs — empty published / stock-only stay out.
+ *
+ * Create (`purpose: "create"`):
+ *   Nest in-stock shelf **and** (meaningful KDP signal **or** Ads campaign
+ *   activity). Stock-only empties and KDP/Ads-only without stock stay out.
+ *
+ * Nest `GET /campaigns/books` is profile-scoped for campaign IDs. Always union
+ * Nest + local enabled campaigns + KDP — never return Nest alone.
  */
 export async function fetchTargetingBookOptions(
   profileIds: string[],
-  limitOrOpts: number | { limit?: number; filterUserId?: string | null } = 0,
+  limitOrOpts:
+    | number
+    | {
+        limit?: number;
+        filterUserId?: string | null;
+        purpose?: TargetingBookEligibilityContext;
+      } = 0,
 ): Promise<TargetingBookOption[]> {
   if (!profileIds.length) return [];
   const opts =
     typeof limitOrOpts === "number"
-      ? { limit: limitOrOpts }
-      : { limit: limitOrOpts.limit ?? 0, filterUserId: limitOrOpts.filterUserId };
+      ? { limit: limitOrOpts, purpose: "targets" as const }
+      : {
+          limit: limitOrOpts.limit ?? 0,
+          filterUserId: limitOrOpts.filterUserId,
+          purpose: limitOrOpts.purpose ?? "targets",
+        };
   const limit = opts.limit ?? 0;
+  const purpose: TargetingBookEligibilityContext = opts.purpose ?? "targets";
 
   const finish = (books: TargetingBookOption[]) => {
-    const eligible = selectEligibleTargetingBookOptions(books).sort((a, b) =>
+    const eligible = selectEligibleTargetingBookOptions(books, purpose).sort((a, b) =>
       a.title.localeCompare(b.title),
     );
     return limit > 0 ? eligible.slice(0, limit) : eligible;
   };
 
-  // The authenticated endpoint accepts either a matching Nest JWT or the live
-  // Supabase bearer. Always attempt it: hasNestToken() is intentionally
-  // Nest-only and would exclude valid Amazon/Supabase mobile sessions. This
-  // ownership-checked RPC path is authoritative and avoids repeating the same
-  // product-ad/campaign/KDP fan-out from every client.
+  // Nest `/campaigns/books` is authoritative for campaign IDs when it works, but
+  // it is often incomplete. Always union Nest + local enabled campaigns + KDP
+  // — never return Nest alone (including successful empty payloads).
+  let nestBooks: TargetingBookOption[] = [];
   try {
     const search = new URLSearchParams();
     if (opts.filterUserId) search.set("filterUserId", String(opts.filterUserId));
@@ -2721,7 +3259,7 @@ export async function fetchTargetingBookOptions(
       campaignIds?: string[];
       campaign_ids?: string[];
     }> }>(`/campaigns/books${q}`, { method: "GET" }, "Couldn't load books for filter.");
-    const nestBooks = dedupeTargetingBookOptions(
+    nestBooks = dedupeTargetingBookOptions(
       (payload.books ?? [])
         .map((row) => {
           const asin = String(row.asin || "")
@@ -2744,89 +3282,226 @@ export async function fetchTargetingBookOptions(
         })
         .filter(Boolean) as TargetingBookOption[],
     );
-
-    return finish(nestBooks);
   } catch {
-    // Offline/server fallback: preserve the direct RLS path, but do not pay for
-    // both data paths when the authoritative endpoint succeeds (including []).
+    // Nest optional — local product_ads + KDP paths still fill the filter.
   }
 
   const [campaignBooks, kdpBooks] = await Promise.all([
     fetchEnabledSponsoredBooksForProfiles(profileIds),
     fetchKdpBooksForTargetingFilter(profileIds),
   ]);
-  return finish(dedupeTargetingBookOptions([...campaignBooks, ...kdpBooks]));
+
+  // Create pickers may include purchased in-stock shelf. Targets must not —
+  // stock-only published titles are useless for filtering campaigns.
+  let stockBooks: TargetingBookOption[] = [];
+  if (purpose === "create") {
+    try {
+      const shelf = await nestShelfCatalogRows();
+      stockBooks = shelf
+        .filter((row) => row.in_stock)
+        .map((row) => {
+          const asin = String(row.asin || "")
+            .trim()
+            .toUpperCase();
+          const formatAsins = identityAsinsForBookRow(row);
+          return {
+            asin,
+            title: String(row.title || "").trim() || asin,
+            image_url: row.image_url ?? null,
+            campaignIds: [] as string[],
+            campaignCount: 0,
+            hasKdpData: false,
+            inStock: true,
+            formatAsins,
+            groupKey: row.book_key || null,
+          } satisfies TargetingBookOption;
+        })
+        .filter((book) => /^[A-Z0-9]{10}$/.test(book.asin));
+    } catch {
+      // Nest Create shelf optional — KDP signal path still fills create filters.
+    }
+  }
+
+  return finish(
+    dedupeTargetingBookOptions([
+      ...nestBooks,
+      ...campaignBooks,
+      ...kdpBooks,
+      ...stockBooks,
+    ]),
+  );
 }
 
-/** KDP catalog + royalty ASINs for linked accounts (targeting filter union source). */
+/**
+ * KDP ASINs with **meaningful** daily evidence for filter enrichment / create.
+ * Catalog titles alone must NOT enter (empty old published books).
+ * Zeroed daily stubs (no royalties, orders, KENP, format cents) stay out.
+ * Format siblings ride along via group_key / kdp_book_formats for parent rollup.
+ */
 async function fetchKdpBooksForTargetingFilter(
   profileIds: string[],
 ): Promise<TargetingBookOption[]> {
   const kdpAccountIds = await fetchLinkedKdpAccountIds(profileIds);
   if (!kdpAccountIds.length) return [];
 
-  const byAsin = new Map<
-    string,
-    { title: string; image_url: string | null }
-  >();
+  type Acc = {
+    title: string;
+    image_url: string | null;
+    groupKey: string | null;
+    formatAsins: Set<string>;
+  };
+  const byAsin = new Map<string, Acc>();
 
+  let dailyRows: Array<{
+    asin?: string | null;
+    group_key?: string | null;
+    royalties?: unknown;
+    orders?: unknown;
+    ebook_royalties?: unknown;
+    paperback_royalties?: unknown;
+    kenp_royalties?: unknown;
+  }> = [];
   try {
-    const titles = await fetchOptionalInPages<any>(
-      "targeting_filter_kdp_titles",
-      kdpAccountIds,
-      (chunk, from, to) =>
-        supabase
-          .from("kdp_titles")
-          .select("asin, title, cover_url, amazon_image_url")
-          .in("account_id", chunk)
-          .order("asin", { ascending: true })
-          .range(from, to),
-    );
-    for (const row of titles) {
-      const asin = String((row as any).asin || "")
-        .trim()
-        .toUpperCase();
-      if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
-      const title = String((row as any).title || "").trim() || asin;
-      const image_url = pickUsableCoverUrl(
-        (row as any).cover_url,
-        (row as any).amazon_image_url,
-      );
-      const cur = byAsin.get(asin);
-      if (!cur) {
-        byAsin.set(asin, { title, image_url });
-        continue;
-      }
-      if ((!cur.title || cur.title === asin) && title !== asin) cur.title = title;
-      cur.image_url = pickUsableCoverUrl(cur.image_url, image_url);
-    }
-  } catch {
-    // Titles optional; daily royalty ASINs below still count as KDP data.
-  }
-
-  try {
-    const daily = await fetchOptionalInPages<any>(
+    dailyRows = await fetchOptionalInPages<any>(
       "targeting_filter_kdp_daily",
       kdpAccountIds,
       (chunk, from, to) =>
         supabase
           .from("kdp_book_daily_data")
-          .select("asin")
+          .select(
+            "asin, group_key, royalties, orders, ebook_royalties, paperback_royalties, kenp_royalties",
+          )
           .in("account_id", chunk)
           .order("asin", { ascending: true })
           .range(from, to),
     );
-    for (const row of daily) {
-      const asin = String((row as any).asin || "")
-        .trim()
-        .toUpperCase();
-      if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
-      if (!byAsin.has(asin)) {
-        byAsin.set(asin, { title: asin, image_url: null });
+  } catch {
+    // Older schemas may lack format columns — fall back to royalties/orders.
+    try {
+      dailyRows = await fetchOptionalInPages<any>(
+        "targeting_filter_kdp_daily_legacy",
+        kdpAccountIds,
+        (chunk, from, to) =>
+          supabase
+            .from("kdp_book_daily_data")
+            .select("asin, group_key, royalties, orders")
+            .in("account_id", chunk)
+            .order("asin", { ascending: true })
+            .range(from, to),
+      );
+    } catch {
+      // Daily table may be unavailable under some RLS shapes.
+    }
+  }
+
+  // Only seed ASINs that have at least one meaningful daily row.
+  const signalAsins = new Set<string>();
+  for (const row of dailyRows) {
+    const asin = String((row as any).asin || "")
+      .trim()
+      .toUpperCase();
+    if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
+    if (hasMeaningfulKdpDailySignal(row)) signalAsins.add(asin);
+  }
+
+  const signalDailyRows = dailyRows.filter((row) => {
+    const asin = String((row as any).asin || "")
+      .trim()
+      .toUpperCase();
+    return signalAsins.has(asin);
+  });
+  const dailyAsinToGroup = verifiedAsinGroupsFromDailyRows(signalDailyRows);
+  for (const row of signalDailyRows) {
+    const asin = String((row as any).asin || "")
+      .trim()
+      .toUpperCase();
+    if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
+    const groupKey =
+      dailyAsinToGroup.get(asin) ||
+      String((row as any).group_key || "").trim() ||
+      null;
+    const cur = byAsin.get(asin) ?? {
+      title: asin,
+      image_url: null as string | null,
+      groupKey,
+      formatAsins: new Set<string>([asin]),
+    };
+    if (groupKey) cur.groupKey = groupKey;
+    cur.formatAsins.add(asin);
+    byAsin.set(asin, cur);
+  }
+
+  // Expand siblings from format catalog without inventing orphan catalog-only books.
+  try {
+    const catalogRows = await fetchOptionalInPages<any>(
+      "targeting_filter_kdp_formats",
+      kdpAccountIds,
+      (chunk, from, to) =>
+        supabase
+          .from("kdp_book_formats")
+          .select("account_id, book_id, asin")
+          .in("account_id", chunk)
+          .order("account_id", { ascending: true })
+          .order("book_id", { ascending: true })
+          .order("asin", { ascending: true })
+          .range(from, to),
+    );
+    const catalogIdentity = verifiedKdpBookCatalog(catalogRows);
+    const asinToGroup = mergeCatalogIntoDailyAsinGroups(dailyAsinToGroup, catalogIdentity);
+    for (const [asin, groupKey] of asinToGroup) {
+      if (!byAsin.has(asin) && !dailyAsinToGroup.has(asin)) {
+        // Sibling of a proven daily ASIN — attach for parent collapse only when
+        // at least one daily sibling already opened the group.
+        const siblings = [...asinToGroup.entries()]
+          .filter(([, key]) => key === groupKey)
+          .map(([sib]) => sib);
+        if (!siblings.some((sib) => byAsin.has(sib))) continue;
       }
+      const cur = byAsin.get(asin) ?? {
+        title: asin,
+        image_url: null as string | null,
+        groupKey,
+        formatAsins: new Set<string>([asin]),
+      };
+      cur.groupKey = groupKey;
+      for (const [sib, key] of asinToGroup) {
+        if (key === groupKey) cur.formatAsins.add(sib);
+      }
+      byAsin.set(asin, cur);
     }
   } catch {
-    // Daily table may be unavailable under some RLS shapes.
+    // Formats optional — daily ASINs alone still qualify.
+  }
+
+  const asins = [...byAsin.keys()];
+  if (asins.length) {
+    try {
+      for (let i = 0; i < asins.length; i += 200) {
+        const chunk = asins.slice(i, i + 200);
+        const { data: kdpTitles } = await supabase
+          .from("kdp_titles")
+          .select("asin, title, cover_url, amazon_image_url")
+          .in("account_id", kdpAccountIds)
+          .in("asin", chunk);
+        for (const title of kdpTitles ?? []) {
+          const asin = String((title as any).asin ?? "").toUpperCase();
+          const cur = byAsin.get(asin);
+          if (!cur) continue;
+          if ((title as any).title) {
+            cur.title =
+              preferEditionTitle(cur.title, String((title as any).title).trim()) ||
+              cur.title;
+          }
+          cur.image_url = pickUsableCoverUrl(
+            cur.image_url,
+            (title as any).cover_url,
+            (title as any).amazon_image_url,
+          );
+        }
+      }
+    } catch {
+      // Titles enrich only.
+    }
   }
 
   return [...byAsin.entries()].map(([asin, v]) => ({
@@ -2835,7 +3510,12 @@ async function fetchKdpBooksForTargetingFilter(
     image_url: v.image_url,
     campaignIds: [] as string[],
     campaignCount: 0,
+    // Only ASINs seeded from meaningful daily signal (or their format siblings)
+    // enter this map — siblings inherit hasKdpData for parent rollup / create.
     hasKdpData: true,
+    inStock: false,
+    formatAsins: [...v.formatAsins],
+    groupKey: v.groupKey,
   }));
 }
 
@@ -3004,6 +3684,78 @@ function extractAsinFromExpression(expression: any): string | null {
 }
 
 // ---------- Product Ads ----------
+const VALID_ASIN_RE = /^[A-Z0-9]{10}$/;
+
+function pickAsinFromProductAdRows(
+  rows: readonly { asin?: string | null; sku?: string | null; status?: string | null }[],
+): string | null {
+  const enabled = rows.find(
+    (row) =>
+      String(row.status || "")
+        .trim()
+        .toLowerCase() === "enabled" &&
+      String(row.asin || row.sku || "").trim(),
+  );
+  const pick = enabled ?? rows.find((row) => String(row.asin || row.sku || "").trim());
+  const asin = String(pick?.asin || pick?.sku || "")
+    .trim()
+    .toUpperCase();
+  return asin || null;
+}
+
+/**
+ * ASIN this campaign advertises — Nest `primaryAsin` is often empty for older
+ * campaigns; fall back to product_ads then campaign_asin_links (Nest
+ * `resolveCampaignAsin`) so Add keywords/products can suggest.
+ */
+export async function fetchCampaignAdvertisedAsin(
+  campaignId: string,
+  profileIds: string[],
+): Promise<string | null> {
+  const id = String(campaignId || "").trim();
+  if (!id) return null;
+  const profiles = uniqueStrings((profileIds ?? []).map(String).filter(Boolean));
+
+  // 1) product_ads filtered by profile (when profiles provided)
+  if (profiles.length) {
+    const rows = await fetchProductAds(profiles, { campaignId: id, limit: 40 });
+    const fromProfiles = pickAsinFromProductAdRows(rows);
+    if (fromProfiles) return fromProfiles;
+  }
+
+  // 2) Retry product_ads by campaign_id alone (no profile filter) — covers
+  // null amazon_profile_id rows and profile-selection mismatches.
+  {
+    const { data, error } = await supabase
+      .from("product_ads")
+      .select("asin,sku,status")
+      .eq("campaign_id", id)
+      .order("total_spend", { ascending: false })
+      .limit(40);
+    if (error) throw error;
+    const fromCampaign = pickAsinFromProductAdRows(data ?? []);
+    if (fromCampaign) return fromCampaign;
+  }
+
+  // 3) campaign_asin_links (explicit link; Nest resolveCampaignAsin fallback)
+  {
+    const { data, error } = await supabase
+      .from("campaign_asin_links")
+      .select("asin")
+      .eq("campaign_id", id)
+      .limit(5);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      const asin = String((row as { asin?: string | null }).asin || "")
+        .trim()
+        .toUpperCase();
+      if (VALID_ASIN_RE.test(asin)) return asin;
+    }
+  }
+
+  return null;
+}
+
 export async function fetchProductAds(
   profileIds: string[],
   opts: { campaignId?: string; adGroupIds?: string[]; status?: string; limit?: number; search?: string; start?: string; end?: string } = {},
@@ -3256,9 +4008,14 @@ export async function fetchSearchTerms(
     );
   });
 
-  return enriched
+  const { enrichSearchTermsCrossCampaignTargeted } = await import("./searchTermHarvest.ts");
+  const withTargeted = await enrichSearchTermsCrossCampaignTargeted(enriched, {
+    campaignId: opts.campaignId,
+  });
+
+  return withTargeted
     .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0))
-    .slice(0, opts.limit ?? enriched.length);
+    .slice(0, opts.limit ?? withTargeted.length);
 }
 
 // ---------- Campaign Placement Metrics (per campaign) ----------
@@ -3608,8 +4365,8 @@ export interface TopCampaignRow {
   bidding_strategy: string | null;
   amazon_profile_id?: string | null;
   rule_last_modified_at?: string | null;
-  placement_adj_last_modified_at?: string | null;
-  placement_adj_change_source?: string | null;
+  placement_adj_last_modified_at?: string | Record<string, string> | null;
+  placement_adj_change_source?: string | Record<string, string> | null;
   placement_top_share: number | null;
   placement_product_share: number | null;
   placement_rest_share: number | null;
@@ -3783,22 +4540,31 @@ export async function fetchTopCampaignsRange(
       // Multi-profile: fair-share via per-profile fetches — Nest often omits amazon_profile_id.
       if (profileIds.length > 1) {
         const per = capped ? Math.max(80, Math.ceil(limit / profileIds.length)) : 0;
-        const settled = await Promise.allSettled(
-          profileIds.map((id) =>
-            fetchTopCampaignsRange({ ...opts, profileIds: [id], limit: per }),
-          ),
-        );
         const byId = new Map<string, TopCampaignRow>();
-        let nestOk = 0;
-        for (const result of settled) {
-          if (result.status !== "fulfilled") continue;
-          nestOk += 1;
-          for (const row of result.value) byId.set(row.id, row);
+        // A failed profile must invalidate the whole list. Bounded reads also
+        // avoid six simultaneous heavy Nest aggregations on the same account.
+        for (let i = 0; i < profileIds.length; i += 2) {
+          const profileBatch = profileIds.slice(i, i + 2);
+          const batches = await Promise.all(
+            profileBatch.map(async (id) => {
+              const rows = await fetchTopCampaignsRange({ ...opts, profileIds: [id], limit: per });
+              // The Nest aggregation response does not currently echo the
+              // profile id. This request is scoped to exactly one profile, so
+              // attaching that id is authoritative and lets currency/flag UI
+              // resolve the campaign marketplace without guessing from names.
+              return rows.map((row) => ({
+                ...row,
+                amazon_profile_id: row.amazon_profile_id || id,
+              }));
+            }),
+          );
+          for (const rows of batches) {
+            for (const row of rows) byId.set(row.id, row);
+          }
         }
-        if (nestOk === 0) throw new Error("Nest campaign aggregation failed for all profiles");
         const merged = sortCampaignRows([...byId.values()]);
         const limited = capped ? merged.slice(0, limit) : merged;
-        return enrichTopCampaignsWithSettingsData(
+        return enrichTopCampaignsWithSettingsCooldown(
           await withCampaignPlacementShares(limited, start, end),
         );
       }
@@ -3810,7 +4576,7 @@ export async function fetchTopCampaignsRange(
         state,
       });
       const limited = capped ? rows.slice(0, limit) : rows;
-      return enrichTopCampaignsWithSettingsData(
+      return enrichTopCampaignsWithSettingsCooldown(
         await withCampaignPlacementShares(limited, start, end),
       );
     }
@@ -3946,9 +4712,15 @@ export async function fetchTopCampaignsRange(
       amazon_profile_id: c.amazon_profile_id ?? null,
       rule_last_modified_at: typeof c.rule_last_modified_at === "string" ? c.rule_last_modified_at : null,
       placement_adj_last_modified_at:
-        typeof c.placement_adj_last_modified_at === "string" ? c.placement_adj_last_modified_at : null,
+        typeof c.placement_adj_last_modified_at === "string" ||
+        (c.placement_adj_last_modified_at && typeof c.placement_adj_last_modified_at === "object")
+          ? (c.placement_adj_last_modified_at as string | Record<string, string>)
+          : null,
       placement_adj_change_source:
-        typeof c.placement_adj_change_source === "string" ? c.placement_adj_change_source : null,
+        typeof c.placement_adj_change_source === "string" ||
+        (c.placement_adj_change_source && typeof c.placement_adj_change_source === "object")
+          ? (c.placement_adj_change_source as string | Record<string, string>)
+          : null,
       updated_at: typeof c.updated_at === "string" ? c.updated_at : null,
       metrics_updated_at: typeof c.metrics_updated_at === "string" ? c.metrics_updated_at : null,
       ...(campaignBookById.get(c.id) ?? {
@@ -4245,6 +5017,8 @@ export interface TopBookRow {
   book_key: string;
   asin: string;
   sku: string | null;
+  /** Sibling format ASINs (Kindle/paperback/hardcover/audiobook) for this logical book. */
+  format_asins?: string[];
   title: string | null;
   image_url: string | null;
   impressions: number;
@@ -4364,15 +5138,22 @@ async function finalizeTopBooksList(
   limit: number,
   activityDays = BOOKS_LIST_ACTIVITY_DAYS,
 ): Promise<TopBookRow[]> {
-  const titled = rows.filter((row) => String(row.title ?? "").trim().length > 0);
-  // activityDays <= 0 = Books / products catalog mode. Caller should already
-  // apply shouldShowBook / filterBooksListVisibility. Do NOT apply the
-  // 6-month stale-dead suggestion filter — that belongs only on Create.
+  // Keep KDP/Ads evidence even when catalog title is blank — UI shows
+  // "Title unavailable". Still drop blank-title zero-signal noise here;
+  // filterBooksListVisibility then hides remaining stock-only / empty shelves.
+  const listed = rows.filter(
+    (row) =>
+      String(row.title ?? "").trim().length > 0 || bookHasKdpOrAdsEvidence(row),
+  );
+  // activityDays <= 0 = Books / products catalog mode. Always apply KDP|Ads
+  // visibility here so Nest early-return paths cannot leak stock-only / zero-
+  // signal rows. Do NOT apply the 6-month stale-dead Create suggestion filter.
   if (activityDays <= 0) {
+    const visible = filterBooksListVisibility(collapseTopBooksByFormatGroup(listed));
     // limit <= 0 → full catalog (Book Detail must resolve outside a top-N window).
-    return limit > 0 ? titled.slice(0, limit) : titled;
+    return limit > 0 ? visible.slice(0, limit) : visible;
   }
-  const withSignal = titled.filter(bookHasSignalInRange);
+  const withSignal = listed.filter(bookHasSignalInRange);
   const { start, end } = booksListActivityRange();
   const activeKeys = await fetchActiveBookKeysInRange(profileIds, start, end, kdpAccountIds);
   if (activeKeys.size === 0 && withSignal.length > 0) {
@@ -4657,7 +5438,9 @@ async function finalizeCatalogBooksList(
     inStockAsins,
     campaignAsins,
   });
-  const visible = filterBooksListVisibility(annotated);
+  // Collapse format siblings first so KDP/Ads evidence on any edition keeps the group.
+  const grouped = collapseTopBooksByFormatGroup(annotated);
+  const visible = filterBooksListVisibility(grouped);
   return finalizeTopBooksList(visible, profileIds, kdpAccountIds, limit, 0);
 }
 
@@ -4685,14 +5468,14 @@ export async function fetchTopBooksRange(
   const kdpOnlySession = kdpScope === "user_accounts";
   if (!profileIds.length && !kdpOnlySession) return [];
 
-  // Catalog mode: start Nest Create shelf in parallel with KDP assembly so
-  // book-candidates (66-profile ASIN scope) is not starved by the outer timeout.
-  const nestShelfPromise: Promise<TopBookRow[]> =
-    activityDays <= 0 ? nestShelfCatalogRows() : Promise.resolve([]);
+  // Only start the expensive Create-candidate shelf if the web/Nest books read
+  // cannot answer this request. Running both paths for the same six-profile
+  // portfolio made Books exceed its 60-second guard on a physical device.
+  let nestShelfPromise: Promise<TopBookRow[]> | null = null;
+  /** Nest break-even rows kept for Books catalog union (not used as sole source). */
+  let nestBooksCatalogSeed: TopBookRow[] = [];
 
   let kdpAccountIds: string[] = [];
-  /** Nest break-even rows — activity-ranked, not full catalog. Kept as fallback. */
-  let nestCatalogFallback: TopBookRow[] | null = null;
   try {
     kdpAccountIds = await fetchKdpAccountIdsForRoyaltyQuery(kdpLinkProfileIds, kdpScope, {
       includePausedLinks: opts.includePausedLinks,
@@ -4726,19 +5509,25 @@ export async function fetchTopBooksRange(
       if (filterUserId) {
         return finalizeTopBooksList(nestRows, profileIds, kdpAccountIds, limit, activityDays);
       }
-      // activityDays > 0: Nest break-even ranking is the authoritative short list.
-      // activityDays <= 0 (Books tab): Nest is activity-only — fall through to the
-      // local KDP catalog merge so zero-royalty / zero-ads titles still appear.
-      if (activityDays > 0 && nestRows.length) {
+      // Ranked/activity lists (Overview widgets): Nest book-profitability is the
+      // web-owned read — prefer it and skip the heavier Create/KDP catalog path.
+      // Books tab catalog (activityDays <= 0): Nest alone omits titles still on
+      // the KDP/Create shelf — fall through and union in finalizeCatalogBooksList.
+      if (nestRows.length && activityDays > 0) {
         return finalizeTopBooksList(nestRows, profileIds, kdpAccountIds, limit, activityDays);
       }
-      if (activityDays <= 0 && nestRows.length) {
-        nestCatalogFallback = nestRows;
+      if (nestRows.length && activityDays <= 0) {
+        nestBooksCatalogSeed = nestRows;
       }
     } catch (error) {
       if (filterUserId) throw error;
       logBooksStage("nest_top_books", error);
     }
+  }
+
+  if (activityDays <= 0) {
+    // Start the fallback shelf in parallel with local KDP/Ads assembly.
+    nestShelfPromise = nestShelfCatalogRows();
   }
 
   if (kdpAccountIds.length) {
@@ -4759,7 +5548,9 @@ export async function fetchTopBooksRange(
     const kdpRowsRaw = await fetchRequiredPages<any>("kdp_book_daily_data", (from, to) =>
       supabase
         .from("kdp_book_daily_data")
-        .select("account_id, asin, group_key, royalties, orders")
+        .select(
+          "account_id, asin, group_key, royalties, orders, ebook_royalties, paperback_royalties, kenp_royalties",
+        )
         .in("account_id", kdpAccountIds)
         .gte("date", start)
         .lte("date", end)
@@ -4782,21 +5573,25 @@ export async function fetchTopBooksRange(
         .range(from, to),
     );
     const catalogIdentity = verifiedKdpBookCatalog(catalogRows);
-    const asinToGroup = verifiedAsinGroupsFromDailyRows(kdpRows);
-    for (const [asin, groupKey] of catalogIdentity.asinToGroup) {
-      asinToGroup.set(asin, groupKey);
-    }
+    // Keep DIGITAL=/PRINT= daily keys; catalog only expands siblings / fills gaps.
+    const asinToGroup = mergeCatalogIntoDailyAsinGroups(
+      verifiedAsinGroupsFromDailyRows(kdpRows),
+      catalogIdentity,
+    );
 
     if (kdpRows.length || asinToGroup.size) {
       const groups = new Map<string, LogicalBookAccumulator>();
-      const kdpGroupKeys = new Set<string>(catalogIdentity.asinsByGroup.keys());
+      const kdpGroupKeys = new Set<string>();
 
-      for (const [groupKey, catalogAsins] of catalogIdentity.asinsByGroup) {
-        const primary = primaryAsinFromGroupKey(groupKey, catalogAsins) || catalogAsins[0];
+      for (const [catalogKey, catalogAsins] of catalogIdentity.asinsByGroup) {
+        const remappedKey =
+          catalogAsins.map((asin) => asinToGroup.get(asin)).find((key) => !!key) || catalogKey;
+        const primary = primaryAsinFromGroupKey(remappedKey, catalogAsins) || catalogAsins[0];
         if (!primary) continue;
-        const group = emptyLogicalBook(primary);
+        const group = groups.get(remappedKey) ?? emptyLogicalBook(primary);
         for (const catalogAsin of catalogAsins) group.asins.add(catalogAsin);
-        groups.set(groupKey, group);
+        groups.set(remappedKey, group);
+        kdpGroupKeys.add(remappedKey);
       }
 
       for (const row of kdpRows) {
@@ -4806,7 +5601,7 @@ export async function fetchTopBooksRange(
         kdpGroupKeys.add(groupKey);
         const current = groups.get(groupKey) ?? emptyLogicalBook(asin);
         current.asins.add(asin);
-        current.royalties += toNumber((row as any).royalties);
+        current.royalties += bookDailyRoyaltiesTotal(row as any);
         current.kdp_orders += toNumber((row as any).orders);
         groups.set(groupKey, current);
       }
@@ -4984,26 +5779,56 @@ export async function fetchTopBooksRange(
 
       const campaignsWithProductAdMetrics = new Set<string>();
 
+      /** Ads ASINs without a KDP bridge still get a list row when period metrics exist. */
+      const ensureAdsMetricGroup = (asin: string): LogicalBookAccumulator | null => {
+        const normalized = String(asin || "")
+          .trim()
+          .toUpperCase();
+        if (!normalized) return null;
+        let mappedKey = logicalBookKeyForAdvertisedAsin(normalized, asinToGroup);
+        if (!mappedKey) {
+          mappedKey = normalized;
+          if (!asinToGroup.has(normalized)) asinToGroup.set(normalized, mappedKey);
+        }
+        let group = groups.get(mappedKey);
+        if (!group) {
+          group = emptyLogicalBook(normalized);
+          groups.set(mappedKey, group);
+        }
+        return group;
+      };
+
       for (const metric of metrics) {
         const ad = adById.get((metric as any).product_ad_id) as any;
         const asin = String(ad?.asin || ad?.sku || "").trim().toUpperCase();
         if (!asin) continue;
-        const mappedKey = logicalBookKeyForAdvertisedAsin(asin, asinToGroup);
-        if (!mappedKey) continue;
-        const group = groups.get(mappedKey);
-        if (!group) continue;
         const hasMetricValue =
           toNumber((metric as any).spend) > 0 ||
           toNumber((metric as any).sales) > 0 ||
           toNumber((metric as any).impressions) > 0 ||
           toNumber((metric as any).clicks) > 0 ||
           toNumber((metric as any).orders) > 0;
+        // Only open an ads-only group when the period actually has a number.
+        const group = hasMetricValue
+          ? ensureAdsMetricGroup(asin)
+          : (() => {
+              const mappedKey = logicalBookKeyForAdvertisedAsin(asin, asinToGroup);
+              return mappedKey ? groups.get(mappedKey) ?? null : null;
+            })();
+        if (!group) continue;
         if (hasMetricValue && ad?.campaign_id) campaignsWithProductAdMetrics.add(String(ad.campaign_id));
         group.spend += bookAdsAmount((metric as any).spend, (metric as any).date, ad?.amazon_profile_id);
         group.sales += bookAdsAmount((metric as any).sales, (metric as any).date, ad?.amazon_profile_id);
         group.impressions += toNumber((metric as any).impressions);
         group.clicks += toNumber((metric as any).clicks);
         group.orders += toNumber((metric as any).orders);
+        if (hasMetricValue) {
+          group.title = preferEditionTitle(
+            group.title,
+            typeof ad?.title === "string" ? ad.title : null,
+          );
+          group.image_url = pickUsableCoverUrl(group.image_url, ad?.image_url);
+        }
       }
 
       // A verified single-book campaign can safely supply totals when Amazon's
@@ -5059,11 +5884,13 @@ export async function fetchTopBooksRange(
         });
       if (activityDays <= 0) {
         return finalizeCatalogBooksList(
-          assembled,
+          nestBooksCatalogSeed.length
+            ? mergeTopBookCatalogRows(assembled, nestBooksCatalogSeed)
+            : assembled,
           profileIds,
           kdpAccountIds,
           limit,
-          await nestShelfPromise,
+          await (nestShelfPromise ?? Promise.resolve([])),
         );
       }
       return finalizeTopBooksList(assembled, profileIds, kdpAccountIds, limit, activityDays);
@@ -5074,26 +5901,17 @@ export async function fetchTopBooksRange(
   // to Nest activity-ranked rows (and never applies stale-dead suggestion filters).
   if (activityDays <= 0) {
     return finalizeCatalogBooksList(
-      nestCatalogFallback ?? [],
+      nestBooksCatalogSeed,
       profileIds,
       kdpAccountIds,
       limit,
-      await nestShelfPromise,
+      await (nestShelfPromise ?? Promise.resolve([])),
     );
   }
 
-  if (nestCatalogFallback?.length) {
-    return finalizeTopBooksList(
-      nestCatalogFallback,
-      profileIds,
-      kdpAccountIds,
-      limit,
-      activityDays,
-    );
-  }
-
-  // Books requires a KDP identifier bridge. Ads-only products remain visible
-  // in Product Ads, but cannot become logical KDP books.
+  // Catalog mode with no KDP daily rows: Nest break-even + Create shelf still
+  // union in finalizeCatalogBooksList. Ads-only ASINs with period metrics are
+  // opened via ensureAdsMetricGroup when KDP groups exist above.
   return [];
 }
 

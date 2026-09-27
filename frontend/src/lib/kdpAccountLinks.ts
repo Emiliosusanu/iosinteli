@@ -42,3 +42,32 @@ export function activeLinkedKdpAccountIdsFromRows(
 ): string[] {
   return linkedKdpAccountIdsFromRows(links, profileIds, { includePaused: false });
 }
+
+/**
+ * Distinct active KDP account count per Ads profile id.
+ * Used so UI `hasLinkedKdp` / profile filters reflect bridge rows (Nest omits this).
+ */
+export function kdpAccountCountsByAmazonProfileId(
+  links: readonly KdpAccountAmazonProfileLink[],
+  opts?: { includePaused?: boolean },
+): Record<string, number> {
+  const includePaused = opts?.includePaused === true;
+  const byProfile = new Map<string, Set<string>>();
+  for (const row of links) {
+    if (!includePaused && row.is_paused === true) continue;
+    const profileId = String(row.amazon_profile_id || "").trim();
+    const accountId = String(row.kdp_account_id || "").trim();
+    if (!profileId || !accountId) continue;
+    let set = byProfile.get(profileId);
+    if (!set) {
+      set = new Set();
+      byProfile.set(profileId, set);
+    }
+    set.add(accountId);
+  }
+  const out: Record<string, number> = {};
+  for (const [profileId, set] of byProfile) {
+    out[profileId] = set.size;
+  }
+  return out;
+}

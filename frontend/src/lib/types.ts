@@ -52,8 +52,8 @@ export interface Campaign extends MetricsTotals {
   updated_at: string;
   metrics_updated_at: string | null;
   rule_last_modified_at?: string | null;
-  placement_adj_last_modified_at?: string | null;
-  placement_adj_change_source?: string | null;
+  placement_adj_last_modified_at?: string | Record<string, string> | null;
+  placement_adj_change_source?: string | Record<string, string> | null;
 }
 
 export interface AdGroup extends MetricsTotals {
@@ -125,6 +125,8 @@ export interface ProductAd extends MetricsTotals {
 export interface CampaignMetric {
   id: string;
   campaign_id: string;
+  /** Attached by scoped reads for display-currency conversion. */
+  amazon_profile_id?: string | null;
   date: string;
   impressions: number;
   clicks: number;

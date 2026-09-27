@@ -48,3 +48,22 @@ export async function writeKdpCatalog(opts: {
     await upsert("kdp_titles", opts.titleRows, "account_id,asin");
   }
 }
+
+/** Persist calculator pricing captured from KDP print setup. */
+export async function writeKdpPricing(opts: {
+  accountId: string;
+  titleRows: AnyRow[];
+  marketplaceRows: AnyRow[];
+}): Promise<void> {
+  const stamp = (row: AnyRow) => ({ ...row, account_id: opts.accountId });
+  await upsert(
+    "kdp_titles",
+    opts.titleRows.map(stamp),
+    "account_id,asin",
+  );
+  await upsert(
+    "kdp_title_marketplace_pricing",
+    opts.marketplaceRows.map(stamp),
+    "account_id,asin,marketplace",
+  );
+}

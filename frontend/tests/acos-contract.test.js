@@ -73,7 +73,8 @@ test("campaign_metrics range reads every page instead of the first 1000 rows", (
 
 test("local alerts evaluate on device and include digest totals", () => {
   assert.match(alertsSrc, /runAlertCheck/);
-  assert.match(alertsSrc, /digestMetricsLine/);
-  assert.match(alertsSrc, /notificationBodyWithTotals/);
+  // Multi-currency honest digests use formatDigestBody (Spend n/a when missing).
+  assert.match(alertsSrc, /formatDigestBody|digestMetricsLine/);
+  assert.match(alertsSrc, /notificationBodyWithTotals|formatDigestBody/);
   assert.doesNotMatch(alertsSrc, /iOS is not the business-alert authority/);
 });

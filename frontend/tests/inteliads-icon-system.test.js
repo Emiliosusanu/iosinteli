@@ -48,13 +48,14 @@ test("InteliAds icon family covers the product vocabulary", () => {
   assert.doesNotMatch(iconSrc, /sparkle|wand|brain|robot|starburst|orb|neural/i);
 });
 
-test("product tabs use the custom family; More stays a system ellipsis", () => {
-  assert.match(tabs, /name="overview"/);
-  assert.match(tabs, /name="campaigns"/);
-  assert.match(tabs, /name="targeting"/);
-  assert.match(tabs, /name="books"/);
+test("product tabs use SF Symbols; More stays a system ellipsis", () => {
+  assert.match(tabs, /house\.fill/);
+  assert.match(tabs, /megaphone\.fill/);
+  assert.match(tabs, /name="scope"/);
+  assert.match(tabs, /books\.vertical/);
   assert.match(tabs, /ellipsis\.circle/);
-  assert.doesNotMatch(tabs, /megaphone|square\.grid\.2x2/);
+  assert.doesNotMatch(tabs, /InteliAdsIcon|ProductTabIcon/);
+  assert.doesNotMatch(tabs, /square\.grid\.2x2/);
 });
 
 test("BidBot is a tool mark, not a character or AI chip", () => {

@@ -3,14 +3,12 @@ import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   TouchableOpacity,
   RefreshControl,
   Animated,
-  LayoutAnimation,
   Platform,
-  UIManager,
 } from "react-native";
+import ReanimatedAnimated from "react-native-reanimated";
 import { AppScreen } from "@/src/components/ScreenAmbient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { markPerf } from "@/src/lib/perf";
@@ -26,10 +24,11 @@ import {
   isOverBreakEven,
 } from "@/src/lib/kdpTitlePresentation";
 import { useApp } from "@/src/contexts/AppContext";
-import { useTheme, acosTone, toneColor, useReduceMotion } from "@/src/lib/theme";
+import { useTheme, acosTone, toneColor, useReduceMotion, dashboard } from "@/src/lib/theme";
 import { formatCurrency, formatPercent, formatInt, parseDateOnly, toDateString } from "@/src/lib/format";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useKdpRoyaltySetupPrompt } from "@/src/hooks/useKdpRoyaltySetupPrompt";
+import { useScrollChromeCollapse } from "@/src/hooks/useScrollChromeCollapse";
 import { NET_ROYALTIES_LABEL, netRoyaltiesVoiceOver, resolveBookNet, bookNetIsKnown } from "@/src/lib/netRoyalties";
 import { buildBookColorMap, bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { TopBar } from "@/src/components/TopBar";
@@ -50,17 +49,14 @@ import { loadBooksFilterMemory, saveBooksFilterMemory } from "@/src/lib/filterMe
 import { countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
+import { bookDisplayTitle } from "@/src/lib/bookPresentation";
 import {
-  booksKdpQueryScope,
   booksListAwaitingRows,
   booksMoneyProfileIds,
   booksRoyaltyScopeForSelection,
   enabledSelectedProfileIds,
+  overviewKdpQueryScope,
 } from "@/src/lib/booksProfileScope";
-
-if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
 
 type Sort = "net" | "spend" | "acos" | "orders";
 
@@ -137,10 +133,16 @@ function bookRowKey(item: TopBookRow, index: number) {
 
 export default function ProductsScreen() {
   const t = useTheme();
-  const router = useRouter();
   const reduceMotion = useReduceMotion();
+  const router = useRouter();
   const { profiles, selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource } = useApp();
   const { guestMode } = useAuth();
+  const {
+    onScroll: onBooksScroll,
+    chromeAnimatedStyle,
+    onChromeLayout,
+    scrollEventThrottle,
+  } = useScrollChromeCollapse({ reduceMotion });
   const yesterdayYmd = useMemo(() => {
     const today = parseDateOnly(toDateString(new Date()));
     today.setDate(today.getDate() - 1);
@@ -186,9 +188,11 @@ export default function ProductsScreen() {
     () => sortedProfileIds(royaltyScope.profileIds),
     [royaltyScope.profileIds],
   );
-  const kdpQueryScope = booksKdpQueryScope(royaltyScope);
+  // Same Gross widen as Overview when every enabled Ads profile is selected —
+  // otherwise Books hides owned KDP shelves that still have royalties in range.
+  const kdpQueryScope = overviewKdpQueryScope(profiles, selectedProfileIds, royaltyScope);
   const kdpOnlyBooks = !isAdminViewer && !guestMode && isKdpOnlySessionScope(royaltyScope);
-  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope] as const;
+  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, 0] as const;
   const overviewBooksKey = [
     FINANCIAL_QUERY_ROOTS.topBooks,
     adminFilterUserId ?? "self",
@@ -212,7 +216,7 @@ export default function ProductsScreen() {
           start: dateRange.start,
           end: dateRange.end,
           royaltyRate: 0,
-          limit: 300,
+          limit: 0,
           filterUserId: adminFilterUserId,
           activityDays: 0,
         }).then((rows) => {
@@ -225,10 +229,9 @@ export default function ProductsScreen() {
     },
     enabled: moneyProfileIds.length > 0 || kdpOnlyBooks,
     ...LIST_PERIOD_QUERY_CACHE,
-    placeholderData: () =>
-      sameScopeWarmPlaceholder(
-        queryClient.getQueryData(overviewBooksKey) as TopBookRow[] | undefined,
-      ),
+    placeholderData: sameScopeWarmPlaceholder(
+      queryClient.getQueryData<TopBookRow[]>(overviewBooksKey),
+    ),
     retry: false,
     meta: financialQueryMeta(),
   });
@@ -314,15 +317,10 @@ export default function ProductsScreen() {
     (next: Sort) => {
       if (next === sort) return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      if (!reduceMotion) {
-        LayoutAnimation.configureNext({
-          duration: 280,
-          update: { type: LayoutAnimation.Types.easeInEaseOut },
-        });
-      }
+      // Instant reorder — avoid Yoga layout storms on dense list resorts.
       setSort(next);
     },
-    [reduceMotion, sort],
+    [sort],
   );
 
   const openBook = useCallback(
@@ -394,33 +392,44 @@ export default function ProductsScreen() {
 
   return (
     <AppScreen>
-      <TopBar />
-
-      <FilterChrome>
-        <IOSSearchBar
-          testID="products-search"
-          placeholder="Search by title or ASIN"
-          value={search}
-          onChangeText={setSearch}
-        />
-        <IOSSegmentedControl
-          testID="products-sort-segments"
-          value={sort}
-          onChange={applySort}
-          options={[
-            { key: "net", label: "Net roy." },
-            { key: "spend", label: "Spend" },
-            { key: "acos", label: "ACoS" },
-            { key: "orders", label: "Orders" },
-          ]}
-        />
-        {showSearchCount ? (
-          <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>
-            {filtered.length === 1 ? "1 book" : `${filtered.length} books`}
-            {isFetching && books.length > 0 ? " · updating" : ""}
-          </Text>
-        ) : null}
-      </FilterChrome>
+      {/* Soft collapse: stays mounted so profile/search return on scroll-up. */}
+      <ReanimatedAnimated.View
+        testID="books-scroll-chrome"
+        onLayout={onChromeLayout}
+        style={[{ overflow: "hidden", zIndex: 2 }, chromeAnimatedStyle]}
+      >
+        <TopBar />
+        <FilterChrome>
+          <IOSSearchBar
+            testID="products-search"
+            placeholder="Search by title or ASIN"
+            value={search}
+            onChangeText={setSearch}
+          />
+          <IOSSegmentedControl
+            testID="products-sort-segments"
+            value={sort}
+            onChange={applySort}
+            options={[
+              { key: "net", label: "Net roy." },
+              { key: "spend", label: "Spend" },
+              { key: "acos", label: "ACoS" },
+              { key: "orders", label: "Orders" },
+            ]}
+          />
+          {filtered.length > 0 ? (
+            <Text style={[t.typography.footnote, { color: t.colors.text_secondary, fontWeight: "600" }]}>
+              {filtered.length === 1 ? "1 book" : `${filtered.length} books`}
+              {search.trim() ? " matching" : " with royalties, ads, or campaigns"}
+              {isFetching && books.length > 0 ? " · updating" : ""}
+            </Text>
+          ) : showSearchCount ? (
+            <Text style={[t.typography.footnote, { color: t.colors.text_secondary, fontWeight: "600" }]}>
+              0 books matching
+            </Text>
+          ) : null}
+        </FilterChrome>
+      </ReanimatedAnimated.View>
 
       {showBlockingSpinner ? (
         <ScreenSpinner />
@@ -438,7 +447,7 @@ export default function ProductsScreen() {
           retrying={isRefetching}
         />
       ) : (
-        <FlatList
+        <ReanimatedAnimated.FlatList
           data={filtered}
           keyExtractor={bookRowKey}
           contentContainerStyle={{ padding: t.layout.pagePad, paddingBottom: t.layout.tabClearance }}
@@ -446,6 +455,8 @@ export default function ProductsScreen() {
           maxToRenderPerBatch={20}
           windowSize={7}
           removeClippedSubviews={Platform.OS !== "ios"}
+          onScroll={onBooksScroll}
+          scrollEventThrottle={scrollEventThrottle}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />
           }
@@ -515,7 +526,8 @@ const ProductCard = React.memo(function ProductCard({
   const resolvedNet = resolveBookNet(item);
   const amazonCover = fallbackAsinCoverUrl(item.asin || item.sku);
   const status = bookStatus(item, hasBreakEven);
-  const statusColor = toneColor(status.tone, t.colors);
+  const statusChipTone =
+    status.tone === "good" ? t.statusChip.good : status.tone === "warning" ? t.statusChip.warning : t.statusChip.danger;
   const acosOver = isOverBreakEven(item.acos, item.breakeven_acos);
   const rowKey = item.asin || item.sku || item.book_key;
 
@@ -547,14 +559,27 @@ const ProductCard = React.memo(function ProductCard({
               uri={item.image_url}
               fallbackUri={amazonCover}
               asin={item.asin || item.sku}
-              size="md"
+              size="lg"
               recyclingKey={item.book_key || item.asin || item.sku || undefined}
             />
 
             <View style={styles.titleBlock}>
               <View style={styles.titleWithFlags}>
-                <Text style={[t.typography.headline, { color: t.colors.text_primary, flex: 1, minWidth: 0 }]} numberOfLines={3}>
-                  {item.title || item.asin || item.sku}
+                <Text
+                  style={[
+                    t.typography.headline,
+                    {
+                      color: t.colors.text_primary,
+                      flex: 1,
+                      minWidth: 0,
+                      fontWeight: "700",
+                      letterSpacing: -0.25,
+                      lineHeight: 22,
+                    },
+                  ]}
+                  numberOfLines={2}
+                >
+                  {bookDisplayTitle(item)}
                 </Text>
                 <BookMarketplaceFlags
                   index={marketplaceIndex}
@@ -565,14 +590,20 @@ const ProductCard = React.memo(function ProductCard({
               <View
                 accessible={false}
                 importantForAccessibility="no"
-                style={[styles.statusPill, { backgroundColor: statusColor + "18" }]}
+                style={[
+                  styles.statusPill,
+                  {
+                    backgroundColor: statusChipTone.bg,
+                    borderColor: statusChipTone.fg + "55",
+                  },
+                ]}
               >
                 <SFSymbol
                   name={status.tone === "good" ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"}
                   size={12}
-                  color={statusColor}
+                  color={statusChipTone.fg}
                 />
-                <Text style={[t.typography.caption2, { fontWeight: "600", color: statusColor }]} numberOfLines={1}>
+                <Text style={[t.typography.caption2, { fontWeight: "700", color: statusChipTone.fg, letterSpacing: 0.1 }]} numberOfLines={1}>
                   {status.label}
                 </Text>
               </View>
@@ -580,34 +611,71 @@ const ProductCard = React.memo(function ProductCard({
 
             <View style={styles.profitBlock} accessible={false} importantForAccessibility="no">
               <Text
-                style={[t.typography.metric_compact, { color: resolvedNet == null ? t.colors.text_tertiary : netPos ? t.colors.tone_good : t.colors.tone_danger }]}
+                style={[
+                  t.typography.metric,
+                  {
+                    fontSize: 22,
+                    lineHeight: 26,
+                    fontWeight: "800",
+                    letterSpacing: -0.45,
+                    color: resolvedNet == null ? t.colors.text_tertiary : netPos ? t.colors.tone_good : t.colors.tone_danger,
+                    textAlign: "right",
+                    fontVariant: ["tabular-nums"],
+                  },
+                ]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
+                minimumFontScale={0.78}
               >
                 {resolvedNet == null ? "—" : `${netPos ? "+" : ""}${formatCurrency(resolvedNet, currency, { compact: true })}`}
               </Text>
-              <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 4 }]}>{NET_ROYALTIES_LABEL}</Text>
+              <Text
+                style={[
+                  t.typography.caption2,
+                  {
+                    color: t.colors.text_tertiary,
+                    marginTop: 2,
+                    fontWeight: "700",
+                    letterSpacing: 0.6,
+                    textTransform: "uppercase",
+                  },
+                ]}
+              >
+                Net
+              </Text>
             </View>
           </View>
 
           {adsReady && item.acos > 0 ? (
             <View style={styles.breakEven} accessible={false} importantForAccessibility="no">
               <View style={styles.breakEvenLabels}>
-                <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, flex: 1, flexShrink: 1 }]}>
-                  ACoS {formatPercent(item.acos, 0)} · BE {formatBreakEvenAcos(item.breakeven_acos)}
+                <Text style={[t.typography.caption1, { color: t.colors.text_secondary, flex: 1, flexShrink: 1 }]}>
+                  ACoS {formatPercent(item.acos, 0)}
+                  <Text style={{ color: t.colors.text_tertiary }}> · BE {formatBreakEvenAcos(item.breakeven_acos)}</Text>
                 </Text>
                 {hasBreakEven ? (
-                  <Text style={[t.typography.caption2, { color: toneColor(tone, t.colors), fontWeight: "600" }]}>
-                    {acosOver ? "OVER" : "SAFE"}
-                  </Text>
+                  <View
+                    style={[
+                      styles.efficiencyBadge,
+                      {
+                        backgroundColor: toneColor(tone, t.colors) + "1F",
+                        borderColor: toneColor(tone, t.colors) + "55",
+                      },
+                    ]}
+                  >
+                    <Text style={[t.typography.caption2, { color: toneColor(tone, t.colors), fontWeight: "800", letterSpacing: 0.5 }]}>
+                      {acosOver ? "OVER" : "SAFE"}
+                    </Text>
+                  </View>
                 ) : null}
               </View>
               {hasBreakEven ? (
                 <View style={[styles.breakEvenTrack, { backgroundColor: t.colors.background_tertiary }]}>
                   <View
                     style={{
-                      height: 6,
+                      height: 5,
                       borderRadius: 3,
+                      borderCurve: "continuous",
                       width: `${Math.min(100, (item.acos / item.breakeven_acos) * 100)}%`,
                       backgroundColor: toneColor(tone, t.colors),
                     }}
@@ -619,6 +687,7 @@ const ProductCard = React.memo(function ProductCard({
 
           <View style={[styles.metricsRow, { borderTopColor: t.colors.separator }]} accessible={false} importantForAccessibility="no">
             <MetricStrip
+              variant="book"
               items={[
                 { label: "Royalties", value: kdpAvailable ? formatCurrency(item.royalties!, currency, { compact: true }) : "—", color: kdpAvailable ? t.colors.tone_good : t.colors.text_tertiary },
                 { label: "Spend", value: adsReady ? formatCurrency(item.spend, currency, { compact: true }) : "—" },
@@ -641,10 +710,12 @@ const styles = StyleSheet.create({
   identityRow: {
     flexDirection: "row",
     gap: 12,
+    alignItems: "flex-start",
   },
   titleBlock: {
     flex: 1,
     minWidth: 0,
+    gap: 2,
   },
   titleWithFlags: {
     flexDirection: "row",
@@ -653,8 +724,8 @@ const styles = StyleSheet.create({
   },
   profitBlock: {
     alignItems: "flex-end",
-    paddingTop: 2,
-    minWidth: 72,
+    paddingTop: 1,
+    minWidth: 76,
     flexShrink: 0,
   },
   statusPill: {
@@ -662,24 +733,34 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
     alignSelf: "flex-start",
-    marginTop: 8,
+    marginTop: 6,
     paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 7,
+    paddingVertical: 4,
+    borderRadius: dashboard.statusChipRadius,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
   },
   breakEven: {
-    marginTop: 12,
+    marginTop: 10,
   },
   breakEvenLabels: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-start",
+    alignItems: "center",
     gap: 8,
-    marginBottom: 4,
+    marginBottom: 5,
+  },
+  efficiencyBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
   },
   breakEvenTrack: {
-    height: 6,
+    height: 5,
     borderRadius: 3,
+    borderCurve: "continuous",
     overflow: "hidden",
   },
   metricsRow: {

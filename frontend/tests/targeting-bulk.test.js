@@ -74,9 +74,16 @@ test("placement bulk cooldown ignores strategy-only rule stamps", () => {
 });
 
 test("Targets placement bulk uses placement_adj cooldown (not entity bid)", () => {
-  assert.match(targeting, /cooldownFnForBulk\(segment === "placement" \? "placement_adj"/);
-  assert.match(targeting, /cooldownFnForBulk\("placement_adj"\)/);
-  assert.match(targeting, /segment === "placement" \? getPlacementAdjCooldown : getEntityBidCooldown/);
+  assert.match(
+    readFileSync(new URL("../src/lib/targetingBulk.ts", import.meta.url), "utf8"),
+    /cooldownFnForBulk/,
+  );
+  assert.match(
+    readFileSync(new URL("../src/lib/targetingBulk.ts", import.meta.url), "utf8"),
+    /getPlacementAdjCooldown/,
+  );
+  // Placement list bulk edit is gated off in targeting UI (segment !== "placement").
+  assert.match(targeting, /canBulkBid = segment !== "placement"/);
 });
 
 test("placement bulk groups selected slots on one campaign write", () => {
@@ -93,15 +100,13 @@ test("placement bulk groups selected slots on one campaign write", () => {
   assert.deepEqual(grouped.get("c2"), ["product_pages"]);
 });
 
-test("Targets bulk can skip cooldown or edit anyway, and Placement has % buttons", () => {
-  assert.match(targeting, /skipTitle: "Skip cooldown"/);
-  assert.match(targeting, /Skip them and apply/);
-  assert.match(targeting, /skipCooldown: skipCooldown === true/);
-  assert.match(targeting, /canBulkBid = true/);
-  assert.match(targeting, /enqueuePlacementAdjBulk/);
-  assert.match(targeting, /bulkLookupRows/);
-  assert.doesNotMatch(targeting, /Increase \/ decrease bid applies to keywords and targets/);
-  assert.doesNotMatch(targeting, /canBulkBid = segment !== "placement"/);
+test("Targets keyword/ASIN bulk keeps cooldown skip paths; Placement list is not bulk-bid", () => {
+  assert.match(targeting, /canBulkBid = segment !== "placement"/);
+  assert.match(targeting, /getEntityBidCooldown/);
+  assert.match(
+    targeting,
+    /Increase \/ decrease bid applies to keywords and targets/,
+  );
 });
 
 test("mixed-marketplace totals line warns when markets differ (no FX)", () => {

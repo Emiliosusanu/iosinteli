@@ -52,11 +52,13 @@ test("iOS Amazon login uses auth session capture + Nest store + Supabase mint", 
   assert.match(mutations, /inteliads:\/\/auth\/amazon\/callback/);
 });
 
-test("floating tab bar follows light chrome with equal labeled slots", () => {
+test("floating tab bar uses solid theme-synced rail with equal labeled slots", () => {
   assert.match(floating, /tabbar_background/);
-  assert.doesNotMatch(floating, /BlurView/);
+  assert.match(floating, /PressableScale/);
+  assert.match(floating, /shadow\.floating/);
+  assert.match(floating, /activePill/);
   assert.doesNotMatch(floating, /rgba\(16, 16, 20/);
-  assert.doesNotMatch(floating, /activePill|sliding/);
-  assert.match(floating, /visual\.label/);
+  assert.doesNotMatch(floating, /sliding/);
+  assert.match(floating, /visual\.label|visual\.shortLabel/);
   assert.match(floating, /flex: 1/);
 });

@@ -13,6 +13,14 @@ export type BookFormatOption = {
   asin: string;
 };
 
+/** Accent for format badges — aligned with KDP format chart colors where shared. */
+export const FORMAT_KIND_ACCENT: Record<BookFormatKind, string> = {
+  kindle: "#5AC8FA",
+  paperback: "#E67E22",
+  hardcover: "#AF52DE",
+  audiobook: "#9B59B6",
+};
+
 const FORMAT_SPECS: Array<{ kind: BookFormatKind; label: string; re: RegExp }> = [
   { kind: "kindle", label: "Kindle", re: /DIGITAL=([A-Z0-9]{8,})/i },
   { kind: "paperback", label: "Paperback", re: /PRINT=([A-Z0-9]{8,})/i },

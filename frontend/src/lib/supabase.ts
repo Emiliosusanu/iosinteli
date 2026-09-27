@@ -1,6 +1,7 @@
 import "react-native-url-polyfill/auto";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { createSessionIdentityBoundary, createSessionRefresh } from "./sessionRefresh";
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
@@ -49,3 +50,19 @@ export const supabase: SupabaseClient = createClient(SAFE_SUPABASE_URL, SAFE_SUP
   },
   realtime,
 });
+
+// KDP ownership queries must use the current signed-in identity. Share one
+// refresh across concurrent screens, and invalidate pending work on sign-out or
+// an account switch so an old user's response cannot populate a new session.
+const sessionRecovery = createSessionRefresh({
+  getSession: () => supabase.auth.getSession(),
+  refreshSession: () => supabase.auth.refreshSession(),
+});
+const sessionIdentityChanged = createSessionIdentityBoundary();
+supabase.auth.onAuthStateChange((event, session) => {
+  if (sessionIdentityChanged(event, session)) sessionRecovery.reset();
+});
+
+export function ensureFreshSupabaseSession() {
+  return sessionRecovery.ensure();
+}

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 import {
   buildSponsoredMarketplaceIndex,
+  buildSponsoredMarketplaceIndexFromCampaignBooks,
   campaignBookFamilyKey,
   countriesForSponsoredBook,
   countriesForSponsoredCampaign,
@@ -12,6 +13,7 @@ import {
   marketplaceFlagEmojis,
   marketplaceFlagsA11y,
   multiMarketplaceCountries,
+  productAdsForVisibleCampaigns,
 } from "../src/lib/bookMarketplaces.ts";
 
 const campaignsUi = readFileSync(new URL("../app/(tabs)/campaigns.tsx", import.meta.url), "utf8");
@@ -42,7 +44,74 @@ test("US + CA shows both flags, United States first", () => {
   assert.equal(marketplaceFlagsA11y(["CA", "US"]), "Sponsored in United States and Canada");
 });
 
-test("same book via campaign names across US and CA gets flags", () => {
+test("each campaign in an exact multi-market book family receives its own marketplace identity", () => {
+  const index = buildSponsoredMarketplaceIndex({
+    profiles: [US, CA],
+    campaigns: [
+      { id: "us-campaign", state: "enabled", amazon_profile_id: "p-us" },
+      { id: "ca-campaign", state: "enabled", amazon_profile_id: "p-ca" },
+    ],
+    productAds: [
+      { campaign_id: "us-campaign", asin: "B0HFKCDPVG", amazon_profile_id: "p-us" },
+      { campaign_id: "ca-campaign", asin: "B0HFKCDPVG", amazon_profile_id: "p-ca" },
+    ],
+  });
+  assert.deepEqual(countriesForSponsoredCampaign(index, { id: "us-campaign" }), ["US", "CA"]);
+  assert.deepEqual(countriesForSponsoredCampaign(index, { id: "ca-campaign" }), ["US", "CA"]);
+});
+
+test("ownership-checked campaign book ids build exact admin-view flags", () => {
+  const index = buildSponsoredMarketplaceIndexFromCampaignBooks({
+    profiles: [US, CA],
+    campaigns: [
+      { id: "us-campaign", amazon_profile_id: "ads-us" },
+      { id: "ca-campaign", amazon_profile_id: "ads-ca" },
+    ],
+    books: [
+      { asin: "B0HFKCDPVG", campaignIds: ["us-campaign", "ca-campaign"] },
+    ],
+  });
+  assert.deepEqual(countriesForSponsoredCampaign(index, { id: "us-campaign" }), ["US", "CA"]);
+  assert.deepEqual(countriesForSponsoredCampaign(index, { id: "ca-campaign" }), ["US", "CA"]);
+  assert.deepEqual(countriesForSponsoredBook(index, { asin: "B0HFKCDPVG" }), ["US", "CA"]);
+});
+
+test("multi-market flags only use product ads from active or paused campaigns", () => {
+  const campaigns = [
+    { id: "us-live", state: "enabled" },
+    { id: "ca-paused", state: "PAUSED" },
+    { id: "uk-old", state: "archived" },
+  ];
+  const ads = [
+    { campaign_id: "us-live", asin: "B0PAPER001" },
+    { campaign_id: "ca-paused", asin: "B0PAPER001" },
+    { campaign_id: "uk-old", asin: "B0PAPER001" },
+    { campaign_id: "missing", asin: "B0PAPER001" },
+  ];
+  assert.deepEqual(
+    productAdsForVisibleCampaigns(campaigns, ads).map((row) => row.campaign_id),
+    ["us-live", "ca-paused"],
+  );
+});
+
+test("KDP work format siblings inherit exact paperback multi-market flags", () => {
+  const index = buildSponsoredMarketplaceIndex({
+    profiles: [US, CA],
+    productAds: [
+      { asin: "B0PAPER001", amazon_profile_id: "p-us" },
+      { asin: "B0PAPER001", amazon_profile_id: "p-ca" },
+    ],
+  });
+  assert.deepEqual(
+    countriesForSponsoredBook(index, {
+      asin: "B0KINDLE01",
+      book_key: "DIGITAL=B0KINDLE01:PRINT=B0PAPER001",
+    }),
+    ["US", "CA"],
+  );
+});
+
+test("campaign names alone never create cross-market book identity", () => {
   const index = buildSponsoredMarketplaceIndex({
     profiles: [US, CA],
     campaigns: [
@@ -51,11 +120,8 @@ test("same book via campaign names across US and CA gets flags", () => {
       { name: "NC - Auto", amazon_profile_id: "p-ca" },
     ],
   });
-  assert.deepEqual(
-    countriesForSponsoredCampaign(index, { name: "NC - Auto", amazon_profile_id: "p-us" }),
-    ["US", "CA"],
-  );
-  assert.deepEqual(countriesForSponsoredBook(index, { title: "NC" }), ["US", "CA"]);
+  assert.deepEqual(countriesForSponsoredCampaign(index, { name: "NC - Auto", amazon_profile_id: "p-us" }), []);
+  assert.deepEqual(countriesForSponsoredBook(index, { title: "NC" }), []);
 });
 
 test("different books do not inherit another title's countries", () => {
@@ -71,7 +137,7 @@ test("different books do not inherit another title's countries", () => {
   assert.deepEqual(countriesForSponsoredBook(index, { title: "VP Guide" }), []);
 });
 
-test("product-ad titles link marketplace ASINs of the same book", () => {
+test("product-ad titles never link different ASINs across marketplaces", () => {
   const index = buildSponsoredMarketplaceIndex({
     profiles: [US, CA, UK],
     productAds: [
@@ -79,10 +145,7 @@ test("product-ad titles link marketplace ASINs of the same book", () => {
       { asin: "B0CABOOK01", title: "Night City", amazon_profile_id: "ads-ca" },
     ],
   });
-  assert.deepEqual(
-    countriesForSponsoredBook(index, { title: "Night City", asin: "B0USBOOK01" }),
-    ["US", "CA"],
-  );
+  assert.deepEqual(countriesForSponsoredBook(index, { title: "Night City", asin: "B0USBOOK01" }), []);
   assert.deepEqual(countriesForSponsoredBook(index, { asin: "B0USBOOK01" }), []);
 });
 

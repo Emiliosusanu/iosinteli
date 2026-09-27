@@ -5,13 +5,16 @@ import { readFileSync } from "node:fs";
 import { parseLocaleNumber } from "../src/lib/format.ts";
 import {
   ADS_SECTION_FOOTER,
+  ADS_SECTION_TITLE,
   APPEARANCE_LABEL,
-  APPEARANCE_VALUE,
+  appearancePreferenceLabel,
+  appearancePreferenceSubtitle,
   DAILY_DIGEST_FOOTER,
+  DATA_SECTION_TITLE,
   GUEST_SETTINGS_NOTE,
   KDP_PROFIT_LABEL,
-  KDP_PROFIT_VALUE,
   KDP_SECTION_FOOTER,
+  KDP_SECTION_TITLE,
   KDP_SOURCE_PICKER_FOOTER,
   KDP_STALE_FOOTER,
   KDP_STALE_LABEL,
@@ -29,9 +32,16 @@ import {
 } from "../src/lib/settingsContract.ts";
 
 const screen = readFileSync(new URL("../app/more/settings.tsx", import.meta.url), "utf8");
+const appearancePage = readFileSync(new URL("../app/more/appearance.tsx", import.meta.url), "utf8");
+const theme = readFileSync(new URL("../src/lib/theme.ts", import.meta.url), "utf8");
+const rootLayout = readFileSync(new URL("../app/_layout.tsx", import.meta.url), "utf8");
 const notificationsPage = readFileSync(new URL("../app/more/notifications.tsx", import.meta.url), "utf8");
 const notifications = readFileSync(new URL("../src/lib/notifications.ts", import.meta.url), "utf8");
 const bidBot = readFileSync(new URL("../app/more/bid-bot.tsx", import.meta.url), "utf8");
+const primitives = readFileSync(
+  new URL("../src/components/settings/SettingsPrimitives.tsx", import.meta.url),
+  "utf8",
+);
 
 test("iPhone min/max are not labeled as BidBot engine caps", () => {
   assert.match(screen, /ADS_SECTION_FOOTER/);
@@ -41,14 +51,25 @@ test("iPhone min/max are not labeled as BidBot engine caps", () => {
   assert.match(bidBot, /MIN_MAX_DISPLAY_CAPTION/);
 });
 
-test("Appearance is display-only Follows system, not a fake selector", () => {
-  assert.equal(APPEARANCE_VALUE, "Follows system");
+test("Appearance opens Light/Dark/System picker and persists preference", () => {
+  assert.equal(appearancePreferenceLabel("system"), "System");
+  assert.equal(appearancePreferenceLabel("light"), "Light");
+  assert.equal(appearancePreferenceLabel("dark"), "Dark");
+  assert.match(appearancePreferenceSubtitle("light"), /White dock/);
+  assert.match(appearancePreferenceSubtitle("dark"), /Black dock/);
   assert.match(screen, /APPEARANCE_LABEL/);
-  assert.match(screen, /APPEARANCE_VALUE/);
+  assert.match(screen, /appearancePreferenceLabel/);
   assert.match(screen, /testID="settings-appearance"/);
-  assert.doesNotMatch(screen, /Light\/Dark|user_settings.*appearance|setColorScheme/);
+  assert.match(screen, /more\/appearance/);
+  assert.match(screen, /useThemePreference/);
   const appearanceBlock = screen.slice(screen.indexOf("settings-appearance"));
-  assert.doesNotMatch(appearanceBlock.slice(0, 400), /onPress/);
+  assert.match(appearanceBlock.slice(0, 500), /onPress/);
+  assert.match(appearancePage, /appearance-option-\$\{option\}/);
+  assert.match(appearancePage, /THEME_PREFERENCE_OPTIONS/);
+  assert.match(appearancePage, /setPreference/);
+  assert.match(theme, /inteliads\.appearance\.v1/);
+  assert.match(theme, /Appearance\.setColorScheme/);
+  assert.match(rootLayout, /more\/appearance/);
 });
 
 test("test notification is local and does not claim server push", () => {
@@ -125,7 +146,6 @@ test("KDP royalty source is switchable between Chrome and iPhone", () => {
   assert.equal(KDP_SECTION_FOOTER, "");
   assert.equal(KDP_SOURCE_PICKER_FOOTER, "");
   assert.match(screen, /KDP_SECTION_FOOTER/);
-  // The row now navigates to the picker and shows the live source value.
   assert.match(screen, /settings-kdp-source/);
   assert.match(screen, /more\/kdp-source/);
   assert.match(screen, /kdpSourceValue/);
@@ -134,7 +154,6 @@ test("KDP royalty source is switchable between Chrome and iPhone", () => {
   assert.match(screen, /settings-kdp-helper/);
   assert.match(screen, /settings-plan/);
   assert.match(screen, /settings-subscription-status/);
-  // Settings screen itself must stay clean of importer internals.
   assert.doesNotMatch(screen, /royaltyRate|setRoyaltyRate|WebView|scraper/);
 });
 
@@ -154,4 +173,23 @@ test("locale parser still treats a lone comma as the decimal mark", () => {
   assert.equal(parseSettingsNumber("1.25"), 1.25);
   assert.ok(Number.isNaN(parseSettingsNumber("")));
   assert.ok(Number.isNaN(parseSettingsNumber("abc")));
+});
+
+test("Settings home is an Apple-style hierarchy with native chrome", () => {
+  assert.equal(ADS_SECTION_TITLE, "Amazon Ads");
+  assert.equal(KDP_SECTION_TITLE, "KDP");
+  assert.equal(DATA_SECTION_TITLE, "Data & Sync");
+  assert.match(screen, /SettingsScreen/);
+  assert.match(screen, /SettingsSection/);
+  assert.match(screen, /settings-sync/);
+  assert.match(screen, /settings-data-coverage/);
+  assert.match(screen, /settings-version/);
+  assert.match(screen, /settings-amazon-accounts/);
+  assert.match(primitives, /export function SettingsScreen/);
+  assert.match(primitives, /export function SettingsToggleRow/);
+  assert.match(primitives, /export function SettingsNavigationRow/);
+  assert.match(primitives, /headerShown: true/);
+  assert.match(notificationsPage, /SettingsScreen/);
+  assert.doesNotMatch(screen, /SubScreen/);
+  assert.doesNotMatch(notificationsPage, /SubScreen/);
 });

@@ -129,13 +129,17 @@ test("guest and view-as cannot mutate production entities", () => {
   assert.doesNotMatch(mutations, /adminFilterUserId: filterUserId/);
 });
 
-test("Accounts Nest fallback does not require a Nest JWT", () => {
-  assert.match(queries, /Amazon login sends the Supabase bearer via nestApiFetch/);
-  assert.match(queries, /return fetchNestAmazonProfiles\(\)\.catch\(\(\) => \[\]\)/);
-  assert.doesNotMatch(
-    queries.slice(queries.indexOf("if (!linkedIds.length)"), queries.indexOf("if (!linkedIds.length)") + 420),
-    /if \(!\(await hasNestToken\(\)\)\) return \[\]/,
-  );
+test("Accounts Nest profile read uses Nest JWT path; books RPC still unions local paths", () => {
+  // fetchTargetingBookOptions: Nest is optional; local campaigns+KDP always run.
+  assert.match(queries, /Nest optional — local product_ads \+ KDP paths still fill the filter/);
+  assert.match(queries, /\.\.\.nestBooks/);
+  assert.match(queries, /\.\.\.campaignBooks/);
+  assert.match(queries, /\.\.\.kdpBooks/);
+  assert.doesNotMatch(queries, /return finish\(nestBooks\);/);
+  assert.match(queries, /fetchNestAmazonProfiles\(filterUserId\)/);
+  const fetchAmazon = queries.slice(queries.indexOf("export async function fetchAmazonProfiles"));
+  assert.match(fetchAmazon.slice(0, 600), /fetchNestAmazonProfiles/);
+  assert.doesNotMatch(fetchAmazon.slice(0, 600), /\.catch\(\(\) => \[\]\)/);
 });
 
 test("leftover Nest JWT is ignored until nestLogin marks the session live", () => {

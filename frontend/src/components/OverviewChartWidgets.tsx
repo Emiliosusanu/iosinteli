@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Text, TouchableOpacity, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -30,6 +30,22 @@ import { dashboard, useTheme, type Theme } from "@/src/lib/theme";
 
 export type { AdsEngineSeries } from "@/src/lib/adsEngineSeries";
 export { adsEnginePeriodLabel, dailyToAdsEngineSeries } from "@/src/lib/adsEngineSeries";
+
+type AdsEngineMoneyProps = {
+  moneyProfileIds: string[];
+  displayCurrency: string;
+  profileCurrencyById: ReadonlyMap<string, string>;
+  fxRates?: Map<string, number>;
+  fxReady: boolean;
+  fxRatesUpdatedAt: number;
+};
+
+function currencyScopeKey(profileCurrencyById: ReadonlyMap<string, string>): string {
+  return [...profileCurrencyById.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, currency]) => `${id}:${currency}`)
+    .join("|");
+}
 
 function FormatMixTile({
   label,
@@ -95,6 +111,13 @@ export function KdpRoyaltiesFormatPage({
   onImportRoyalties?: () => void;
 }) {
   const t = useTheme();
+  const [selectedDay, setSelectedDay] = useState<KdpFormatStackDay | null>(null);
+  const handleDaySelect = useCallback((day: KdpFormatStackDay | null) => {
+    setSelectedDay((prev) => {
+      if (prev?.date === day?.date && (prev?.total ?? null) === (day?.total ?? null)) return prev;
+      return day;
+    });
+  }, []);
 
   if (loading) return <SwipeEmpty message="Loading KDP royalties…" t={t} />;
   if (error) {
@@ -125,7 +148,10 @@ export function KdpRoyaltiesFormatPage({
     );
   }
 
-  const total = range.total || 1;
+  const paperback = selectedDay?.paperback ?? range.paperback;
+  const ku = selectedDay?.ku ?? range.ku;
+  const kindle = selectedDay?.kindle ?? range.kindle;
+  const total = (selectedDay?.total ?? range.total) || 1;
   const days: KdpFormatStackDay[] = range.daily.map((day) => ({
     date: day.date,
     label: formatKdpChartDate(day.date),
@@ -140,30 +166,37 @@ export function KdpRoyaltiesFormatPage({
       <View style={{ flexDirection: "row", gap: 8 }}>
         <FormatMixTile
           label="Paperback"
-          amount={range.paperback}
-          pct={formatSharePct(range.paperback, total)}
+          amount={paperback}
+          pct={formatSharePct(paperback, total)}
           color={KDP_FORMAT_CHART_COLORS.paperback}
           currency={currency}
           t={t}
         />
         <FormatMixTile
           label="KU"
-          amount={range.ku}
-          pct={formatSharePct(range.ku, total)}
+          amount={ku}
+          pct={formatSharePct(ku, total)}
           color={KDP_FORMAT_CHART_COLORS.ku}
           currency={currency}
           t={t}
         />
         <FormatMixTile
           label="Kindle"
-          amount={range.kindle}
-          pct={formatSharePct(range.kindle, total)}
+          amount={kindle}
+          pct={formatSharePct(kindle, total)}
           color={KDP_FORMAT_CHART_COLORS.kindle}
           currency={currency}
           t={t}
         />
       </View>
-      {days.length > 1 ? <KdpFormatRoyaltiesChart days={days} width={width} currency={currency} /> : null}
+      {selectedDay ? (
+        <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: -2 }]} numberOfLines={1}>
+          {selectedDay.label}
+        </Text>
+      ) : null}
+      {days.length > 1 ? (
+        <KdpFormatRoyaltiesChart days={days} width={width} currency={currency} onDaySelect={handleDaySelect} />
+      ) : null}
     </View>
   );
 }
@@ -202,19 +235,48 @@ export function AdsEngineKeywordsPage({
   end,
   breakEvenAcos,
   width,
+  moneyProfileIds,
+  displayCurrency,
+  profileCurrencyById,
+  fxRates,
+  fxReady,
+  fxRatesUpdatedAt,
 }: {
   profileIds: string[];
   start: string;
   end: string;
   breakEvenAcos: number;
   width: number;
-}) {
+} & AdsEngineMoneyProps) {
   const t = useTheme();
   const ids = useMemo(() => sortedProfileIds(profileIds), [profileIds]);
+  const moneyIds = useMemo(() => sortedProfileIds(moneyProfileIds), [moneyProfileIds]);
+  const currenciesKey = useMemo(
+    () => currencyScopeKey(profileCurrencyById),
+    [profileCurrencyById],
+  );
   const q = useQuery({
-    queryKey: ["ads-engine-keywords-daily", ids, start, end],
-    queryFn: () => withQueryTimeout(fetchKeywordDailyAggregate(ids, start, end), ADS_ENGINE_FUNNEL_TIMEOUT_MS),
-    enabled: ids.length > 0,
+    queryKey: [
+      "ads-engine-keywords-daily",
+      ids,
+      start,
+      end,
+      moneyIds,
+      displayCurrency,
+      currenciesKey,
+      fxRatesUpdatedAt,
+    ],
+    queryFn: () =>
+      withQueryTimeout(
+        fetchKeywordDailyAggregate(ids, start, end, {
+          moneyProfileIds: moneyIds,
+          displayCurrency,
+          profileCurrencyById,
+          fxRates,
+        }),
+        ADS_ENGINE_FUNNEL_TIMEOUT_MS,
+      ),
+    enabled: ids.length > 0 && fxReady,
     ...HOME_PERIOD_QUERY_CACHE,
   });
   const series = useMemo(() => dailyToAdsEngineSeries(q.data?.daily ?? []), [q.data]);
@@ -248,19 +310,48 @@ export function AdsEngineSearchTermsPage({
   end,
   breakEvenAcos,
   width,
+  moneyProfileIds,
+  displayCurrency,
+  profileCurrencyById,
+  fxRates,
+  fxReady,
+  fxRatesUpdatedAt,
 }: {
   profileIds: string[];
   start: string;
   end: string;
   breakEvenAcos: number;
   width: number;
-}) {
+} & AdsEngineMoneyProps) {
   const t = useTheme();
   const ids = useMemo(() => sortedProfileIds(profileIds), [profileIds]);
+  const moneyIds = useMemo(() => sortedProfileIds(moneyProfileIds), [moneyProfileIds]);
+  const currenciesKey = useMemo(
+    () => currencyScopeKey(profileCurrencyById),
+    [profileCurrencyById],
+  );
   const q = useQuery({
-    queryKey: ["ads-engine-search-terms-daily", ids, start, end],
-    queryFn: () => withQueryTimeout(fetchSearchTermDailyAggregate(ids, start, end), ADS_ENGINE_FUNNEL_TIMEOUT_MS),
-    enabled: ids.length > 0,
+    queryKey: [
+      "ads-engine-search-terms-daily",
+      ids,
+      start,
+      end,
+      moneyIds,
+      displayCurrency,
+      currenciesKey,
+      fxRatesUpdatedAt,
+    ],
+    queryFn: () =>
+      withQueryTimeout(
+        fetchSearchTermDailyAggregate(ids, start, end, {
+          moneyProfileIds: moneyIds,
+          displayCurrency,
+          profileCurrencyById,
+          fxRates,
+        }),
+        ADS_ENGINE_FUNNEL_TIMEOUT_MS,
+      ),
+    enabled: ids.length > 0 && fxReady,
     ...HOME_PERIOD_QUERY_CACHE,
   });
   const series = useMemo(() => dailyToAdsEngineSeries(q.data?.daily ?? []), [q.data]);
@@ -288,6 +379,6 @@ export function AdsEngineSearchTermsPage({
 }
 
 export function formatBreakEvenHint(breakEvenAcos: number): string {
-  if (!hasAuthoritativeBreakEven(breakEvenAcos)) return "Impressions · clicks · orders · ACoS";
-  return `Break-even ${formatPercent(breakEvenAcos, 0)}`;
+  if (!hasAuthoritativeBreakEven(breakEvenAcos)) return "";
+  return `BE ${formatPercent(breakEvenAcos, 0)}`;
 }

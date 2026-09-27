@@ -2,6 +2,8 @@
 export const motion = {
   pressFeedback: 100,
   fastState: 140,
+  /** Chart-day KPI tick while the finger is on the plot. */
+  scrubTick: 90,
   contentChange: 200,
   segmentTransition: 200,
   sheetTransition: 280,
@@ -10,9 +12,12 @@ export const motion = {
   interactionFast: 140,
   contentUpdate: 200,
   /** Soft settle after glass / scrub interactions. */
-  glassSettle: 260,
-  staggerStep: 45,
+  glassSettle: 180,
+  staggerStep: 28,
 } as const;
+
+/** How Overview hero metrics animate when the string/amount changes. */
+export type MetricMotionMode = "crossfade" | "scrub";
 
 /** Slightly deeper press for glass chips — still subtle, not bouncy UI. */
 export const PRESS_SCALE = 0.972;
@@ -50,6 +55,7 @@ export function syncChrome(input: {
   syncing?: boolean;
   stale: boolean;
   warning: boolean;
+  kdpStalled?: boolean;
   lastCompletedAt?: string | null;
   now?: number;
 }): { state: SyncChromeState; compact: string; label: string } {
@@ -62,7 +68,7 @@ export function syncChrome(input: {
   if (input.syncing) {
     return { state: "refreshing", compact: "Syncing", label: "Amazon sync in progress" };
   }
-  if (input.stale || input.warning) {
+  if (input.stale || input.warning || input.kdpStalled) {
     return { state: "stale", compact: "Stale", label: "Stale" };
   }
   const updated = formatUpdatedAgo(input.lastCompletedAt, input.now);

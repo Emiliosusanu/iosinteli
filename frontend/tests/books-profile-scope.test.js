@@ -9,7 +9,9 @@ import {
   booksMoneyProfileIds,
   booksRoyaltyScope,
   booksRoyaltyScopeForSelection,
+  coversAllEnabledAdsProfiles,
   enabledSelectedProfileIds,
+  overviewKdpQueryScope,
   ownedKdpAccountIds,
 } from "../src/lib/booksProfileScope.ts";
 import { isKdpOnlySessionScope } from "../src/lib/kdpRoyaltyScope.ts";
@@ -265,17 +267,58 @@ test("Amazon Sep 1–22 KDP ground truth is not the Sep 16–22 Overview week Gr
   assert.ok(amazonMonth - proportionalWeek > 2400);
 });
 
-test("Overview uses money-chip linked KDP scope (web US 4 / currency S)", () => {
+test("coversAllEnabledAdsProfiles and overviewKdpQueryScope mirror Nest widen", () => {
+  const usCa = [
+    {
+      id: "us",
+      profile_id: "ads-us",
+      country_code: "US",
+      currency_code: "USD",
+      is_enabled: true,
+      account_name: "US",
+      nickname: null,
+      marketplace_id: null,
+      account_type: null,
+      account_id: "a",
+      created_at: "",
+      updated_at: "",
+    },
+    {
+      id: "ca",
+      profile_id: "ads-ca",
+      country_code: "CA",
+      currency_code: "CAD",
+      is_enabled: true,
+      account_name: "CA",
+      nickname: null,
+      marketplace_id: null,
+      account_type: null,
+      account_id: "b",
+      created_at: "",
+      updated_at: "",
+    },
+  ];
+  const fullScope = booksRoyaltyScopeForSelection(usCa, ["us", "ca", "ads-us", "ads-ca"]);
+  assert.equal(coversAllEnabledAdsProfiles(usCa, ["us", "ca"]), true);
+  assert.equal(overviewKdpQueryScope(usCa, ["us", "ca"], fullScope), "user_accounts");
+
+  const caOnly = booksRoyaltyScopeForSelection(usCa, ["ca", "ads-ca"]);
+  assert.equal(coversAllEnabledAdsProfiles(usCa, ["ca", "ads-ca"]), false);
+  assert.equal(overviewKdpQueryScope(usCa, ["ca", "ads-ca"], caOnly), "linked_profiles");
+  assert.equal(booksKdpQueryScope(fullScope), "linked_profiles");
+});
+
+test("Overview uses Nest all-enabled Gross widen (not legacy / portfolio country helper)", () => {
   assert.match(home, /booksRoyaltyScopeForSelection\(profiles, moneyProfileIds\)/);
   assert.match(home, /scopeProfiles = moneyProfileIds/);
   assert.match(home, /booksMoneyProfileIds/);
-  assert.match(home, /booksKdpQueryScope/);
-  assert.match(home, /const kdpQueryScope = booksKdpQueryScope\(royaltyScope\)/);
+  assert.match(home, /overviewKdpQueryScope\(profiles, enabledPortfolioIds, royaltyScope\)/);
   assert.match(home, /allowLegacyProfileLinks:\s*false/);
   assert.doesNotMatch(home, /overviewRoyaltyScopeForPortfolio/);
   assert.doesNotMatch(home, /includePausedLinks:\s*true/);
   assert.doesNotMatch(home, /CERTIFIED_MONEY_/);
   assert.doesNotMatch(home, /kdpRoyaltyQueryScope\(royaltyScope\)/);
+  assert.doesNotMatch(home, /const kdpQueryScope = booksKdpQueryScope\(royaltyScope\)/);
   assert.match(queries, /\.eq\("user_id", userId\)/);
   assert.match(queries, /ensureFreshSupabaseSession/);
   assert.match(queries, /filterOwnedKdpAccountIds|owned-active/);
@@ -304,7 +347,10 @@ test("booksListAwaitingRows treats pending undefined data as loading not empty",
 test("Books tab uses enabled profile scope and empty-state gate", () => {
   assert.match(products, /booksMoneyProfileIds/);
   assert.match(products, /booksRoyaltyScopeForSelection/);
-  assert.match(products, /booksKdpQueryScope/);
+  // Widen to owned KDP shelves when every enabled Ads profile is selected
+  // (same Gross contract as Overview) so royalties-in-range books are not missed.
+  assert.match(products, /overviewKdpQueryScope\(profiles, selectedProfileIds, royaltyScope\)/);
+  assert.doesNotMatch(products, /const kdpQueryScope = booksKdpQueryScope\(royaltyScope\)/);
   assert.match(products, /booksListAwaitingRows/);
   assert.match(products, /data: booksData/);
   assert.match(products, /No enabled profiles/);
@@ -315,7 +361,8 @@ test("Books tab uses enabled profile scope and empty-state gate", () => {
 test("Book detail scopes to enabled profiles and offers Create campaign", () => {
   assert.match(detail, /booksMoneyProfileIds/);
   assert.match(detail, /booksRoyaltyScopeForSelection/);
-  assert.match(detail, /booksKdpQueryScope/);
+  assert.match(detail, /overviewKdpQueryScope\(profiles, selectedProfileIds, royaltyScope\)/);
+  assert.doesNotMatch(detail, /const kdpQueryScope = booksKdpQueryScope\(royaltyScope\)/);
   assert.match(detail, /Create campaign/);
   assert.match(detail, /\/campaign\/create/);
   assert.match(detail, /formatsFromWorkKey/);

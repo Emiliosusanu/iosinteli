@@ -59,6 +59,9 @@ export function OverviewCardHeader({
   onAction,
   action,
   actionTestID,
+  subtitle,
+  meta,
+  trailing,
 }: {
   title: string;
   icon?: InteliAdsIconName;
@@ -66,18 +69,33 @@ export function OverviewCardHeader({
   onAction?: () => void;
   action?: React.ReactNode;
   actionTestID?: string;
+  /** Tertiary caption under the title (alias of meta). */
+  subtitle?: string;
+  /** Tertiary caption under the title (e.g. break-even %). */
+  meta?: string;
+  /** One-line metrics (or other content) top-right, before the action. */
+  trailing?: React.ReactNode;
 }) {
   const t = useTheme();
+  const caption = meta ?? subtitle;
   return (
     <View style={styles.header}>
       {icon ? <InteliAdsIcon name={icon} size={dashboard.iconMd} color={t.colors.text_secondary} /> : null}
-      <Text
-        style={[t.typography.sectionTitle, { color: t.colors.text_primary, flex: 1 }]}
-        numberOfLines={1}
-        accessibilityRole="header"
-      >
-        {title}
-      </Text>
+      <View style={styles.titleBlock}>
+        <Text
+          style={[t.typography.sectionTitle, { color: t.colors.text_primary }]}
+          numberOfLines={1}
+          accessibilityRole="header"
+        >
+          {title}
+        </Text>
+        {caption ? (
+          <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 1 }]} numberOfLines={1}>
+            {caption}
+          </Text>
+        ) : null}
+      </View>
+      {trailing}
       {action
         ? action
         : actionLabel && onAction
@@ -198,6 +216,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: dashboard.compactGap,
     minHeight: 28,
+  },
+  titleBlock: {
+    flex: 1,
+    minWidth: 0,
   },
   action: {
     flexDirection: "row",

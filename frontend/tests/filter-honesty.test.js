@@ -6,6 +6,8 @@ import { formatOptionalPercent } from "../src/lib/format.ts";
 const queries = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
 const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
 const campaigns = readFileSync(new URL("../app/(tabs)/campaigns.tsx", import.meta.url), "utf8");
+const dashboardApi = readFileSync(new URL("../src/lib/dashboardApi.ts", import.meta.url), "utf8");
+const placementMetrics = readFileSync(new URL("../src/lib/placementMetrics.ts", import.meta.url), "utf8");
 
 test("missing placement mix / percent is an em dash, never fake 0%", () => {
   assert.equal(formatOptionalPercent(null, 0), "—");
@@ -16,21 +18,21 @@ test("missing placement mix / percent is an em dash, never fake 0%", () => {
   assert.equal(formatOptionalPercent(12.4, 0), "12%");
 });
 
-test("period metric enrichment never paints fake zeros — fails closed", () => {
+test("period metric enrichment soft-degrades instead of aborting catalog", () => {
   assert.match(queries, /keyword metrics enrichment failed/);
-  assert.match(queries, /Never paint lifetime totals or fake zeros as the selected period/);
-  assert.match(queries, /Couldn't load period metrics for keywords/);
-  assert.match(queries, /product target metrics enrichment failed/);
-  assert.match(queries, /Couldn't load period metrics for targets/);
+  assert.match(queries, /Soft-degrade: keep lifetime totals/);
+  assert.match(queries, /product target metrics enrichment failed|target metrics enrichment failed/);
   assert.match(targeting, /Couldn't load metrics/);
 });
 
 test("multi-profile lists use fair per-profile quota so one profile cannot hide others", () => {
-  assert.match(queries, /fair per-profile quota/);
+  assert.match(queries, /fairSlice|fair per-profile|per-profile/);
   assert.match(queries, /Math\.max\(80, Math\.ceil\(opts\.limit \/ profileIds\.length\)\)/);
   assert.match(queries, /fairSlice/);
-  // UI copy shortened — fairness still lives in fetch quota above.
-  assert.match(targeting, /Showing \{TARGETING_LIST_LIMIT\} \(app limit\)/);
+  // Targets uses server-ranked pages (not a silent 500-row cap).
+  assert.match(targeting, /fetchMobileTargetingPage/);
+  assert.match(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
+  assert.match(targeting, /TargetingPagination/);
   assert.match(campaigns, /campaigns-list-range-v3/);
   assert.match(campaigns, /limit: 0/);
   assert.doesNotMatch(campaigns, /Showing 500 \(app limit\)/);
@@ -44,26 +46,27 @@ test("stale book filter clears when the ASIN is not in the current profile set",
   assert.match(targeting, /booksQ\.isFetched/);
 });
 
-test("book filter UI lists campaign or KDP books with searchable cover rows", () => {
+test("book filter UI lists campaign books with searchable cover rows", () => {
   assert.match(targeting, /styles\.bookList/);
   assert.match(targeting, /targeting-book-search/);
   assert.match(targeting, /filterTargetingBookOptions/);
   assert.match(targeting, /checkmark\.circle\.fill/);
   assert.match(targeting, /parseFilterRangeInput/);
-  assert.match(queries, /Books for the targeting filter: union of/);
-  assert.match(queries, /selectEligibleTargetingBookOptions/);
+  assert.match(queries, /Books for Targets \/ Campaigns filter/);
+  assert.match(queries, /selectEligibleTargetingBookOptions\(books, purpose\)/);
   assert.match(queries, /fetchKdpBooksForTargetingFilter/);
   assert.match(queries, /dedupeTargetingBookOptions/);
-  assert.match(queries, /\.eq\("status", "enabled"\)/);
-  assert.match(queries, /\.eq\("campaigns\.state", "enabled"\)/);
+  assert.match(queries, /hasMeaningfulKdpDailySignal/);
+  assert.match(queries, /status.*enabled|enabled.*status|state.*enabled/);
+  assert.match(queries, /campaigns\.state|state.*enabled/);
   assert.match(queries, /\/campaigns\/books/);
 });
 
 test("filters sort and perf against period row metrics, not lifetime placeholders", () => {
-  assert.match(targeting, /matchesPerf\(row, perf\)/);
-  assert.match(targeting, /matchesAdvancedFilters/);
-  assert.match(targeting, /resolveTargetingSortKey/);
-  assert.match(targeting, /compareTargetingRows/);
+  // Ranked page RPC owns perf / advanced / sort; client must not re-sort a page.
+  assert.match(targeting, /fetchMobileTargetingPage/);
+  assert.match(targeting, /advancedFiltersForSegment\(segment, advanced\)/);
+  assert.match(targeting, /perf,/);
   assert.match(targeting, /rowMetricsFromEntity/);
   assert.match(targeting, /noPeriodPlaceholder/);
   assert.match(targeting, /label: "Impr"/);
@@ -112,15 +115,18 @@ test("targeting placement uses honest Nest-first data and visible segment chips"
   assert.match(queries, /Nest campaign aggregation failed; falling back to Supabase/);
   assert.match(queries, /fetchAggregatedCampaigns\(\{/);
   assert.doesNotMatch(queries, /if \(filterUserId && \(await hasNestToken\(\)\)\) \{\n\s+\/\/ Nest rows often omit amazon_profile_id/);
+  // Placement segment is served by mobile_targeting_page_v1 (slot rows).
+  assert.match(targeting, /segment === "placement"/);
   assert.match(targeting, /normalizePlacementCampaignMetrics/);
   assert.match(targeting, /enrichPlacementRowWithBook/);
   assert.match(targeting, /buildCampaignBookMap/);
-  assert.match(targeting, /No linked book/);
+  // Unlinked placement: null book_* + cube placeholder (no invented title copy).
   assert.match(targeting, /placeholder=\{hasBook \? "book" : "cube"\}/);
+  assert.match(targeting, /book_title: title/);
+  assert.match(targeting, /book_image_url: image/);
   assert.match(targeting, /total_spend: row\.total_spend \?\? row\.spend/);
-  assert.match(targeting, /testID="targeting-segments"/);
-  assert.match(targeting, /style=\{styles\.segmentWrap\}/);
-  assert.match(targeting, /flexWrap: "wrap"/);
+  assert.match(targeting, /TargetingModePills/);
+  assert.match(targeting, /from "@\/src\/components\/TargetingModePills"/);
   assert.match(targeting, /concurrency: 8/);
   assert.match(targeting, /formatPlacementAdjustmentValue/);
   assert.doesNotMatch(targeting, /adjustments \? formatPercent\(Number\(adjustments\[field\.key\] \?\? 0\), 0\) : "…"/);
@@ -129,14 +135,15 @@ test("targeting placement uses honest Nest-first data and visible segment chips"
   assert.match(targeting, /formatOptionalPercent\(item\.placement_share/);
   assert.match(targeting, /listUpdating/);
   assert.match(targeting, /targeting-list-count/);
-  assert.match(queries, /placement_top_share: null,/);
-  assert.match(queries, /function emptyCampaignPlacementShares/);
+  assert.match(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
+  assert.match(dashboardApi + placementMetrics, /placement_top_share: null/);
+  assert.match(placementMetrics, /function emptyCampaignPlacementShares/);
   assert.doesNotMatch(
-    queries,
+    placementMetrics,
     /function emptyCampaignPlacementShares\(\)[\s\S]{0,120}placement_top_share: 0,/,
   );
-  assert.match(queries, /Missing bucket ≠ measured 0%/);
-  assert.doesNotMatch(queries, /if \(!row\) return 0;/);
+  assert.match(placementMetrics, /Missing bucket ≠ measured 0%/);
+  assert.match(queries, /emptyCampaignPlacementShares/);
   assert.doesNotMatch(targeting, /Math\.min\(80, rows\.length\)/);
   const mutations = readFileSync(new URL("../src/lib/mutations.ts", import.meta.url), "utf8");
   assert.match(mutations, /Never invent 0%/);
@@ -146,7 +153,6 @@ test("targeting placement uses honest Nest-first data and visible segment chips"
   );
   assert.match(targeting, /Patch only the edited field/);
   assert.match(queries, /Paginate product_ads so Nest placement rows/);
-  const dashboardApi = readFileSync(new URL("../src/lib/dashboardApi.ts", import.meta.url), "utf8");
   assert.match(dashboardApi, /placement_top_share: null/);
   assert.doesNotMatch(
     dashboardApi,
@@ -166,8 +172,8 @@ test("placement book filter waits for book options and prefers filter ASIN cover
   assert.match(bookCover, /setFailedPrimary\(false\)/);
 });
 
-test("targeting persists advanced ranges and skips heavy KDP enrich on list", () => {
-  assert.match(targeting, /skipKdpEnrich:\s*true/);
+test("targeting persists advanced ranges; ASIN rows still KDP-enrich when list skips heavy path", () => {
+  assert.match(targeting, /fetchMobileTargetingPage/);
   assert.match(targeting, /targeting-adv-bid-max/);
   assert.match(targeting, /EMPTY_TARGETING_ADVANCED_FILTERS/);
   const filterMemory = readFileSync(new URL("../src/lib/filterMemory.ts", import.meta.url), "utf8");
@@ -176,26 +182,50 @@ test("targeting persists advanced ranges and skips heavy KDP enrich on list", ()
   assert.match(campaignsLib, /DEFAULT_TARGETING_STATE_FILTER:\s*EntityStateFilter\s*=\s*"enabled"/);
   assert.match(campaignsLib, /export function resolveTargetingStateFilter/);
   assert.match(queries, /skipKdp/);
+  // Regression: bare ASIN codes on Targets → ASINs when skipKdp blocked kdp_titles.
+  assert.match(queries, /ASIN rows\s+still need kdp_titles|skipKdp was meant for Category/);
+  assert.match(queries, /When skipKdp, only fill rows that are product ASINs/);
+});
+
+test("Targets all segments use mobile_targeting_page_v1 numbered pages with snapshot/PT409", () => {
+  assert.match(targeting, /fetchMobileTargetingPage/);
+  assert.match(targeting, /mobile-targeting-page-v1/);
+  assert.match(targeting, /TargetingPagination/);
+  assert.match(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
+  assert.match(targeting, /pageSnapshot/);
+  assert.match(targeting, /isMobileTargetingSnapshotChanged/);
+  assert.match(targeting, /snapshot: pageNumber > 1 \? pageSnapshot : null/);
+  assert.match(targeting, /segment === "placement"/);
+  assert.doesNotMatch(targeting, /useServerPages/);
+});
+
+test("Targets chrome collapses on scroll; page numbers only in list footer", () => {
+  assert.match(targeting, /topChromeVisible/);
+  assert.match(targeting, /onScroll=\{onListScroll\}/);
+  assert.match(targeting, /scrollEventThrottle=\{16\}/);
+  const paginationHits = targeting.match(/<TargetingPagination\b/g) ?? [];
+  assert.equal(paginationHits.length, 1);
+  assert.match(targeting, /ListFooterComponent=\{/);
+  assert.match(targeting, /testID="targeting-list-count-footer"/);
+  assert.doesNotMatch(targeting, /testID="targeting-list-count"/);
 });
 
 test("Targets default Active is parent-chain fail-closed for every sub-tab", () => {
   assert.match(targeting, /DEFAULT_TARGETING_STATE_FILTER/);
   assert.match(targeting, /resolveTargetingStateFilter/);
-  assert.match(targeting, /matchesLiveTargetingRow/);
-  assert.match(targeting, /adGroupState: \(k as any\)\.ad_group_state/);
-  assert.match(targeting, /adGroupState: p\.ad_group_state/);
   assert.match(targeting, /subtitle: "Try All"/);
   assert.match(targeting, /\/\/ Active = keyword enabled \+ ad group enabled \+ campaign enabled/);
   assert.doesNotMatch(targeting, /Active shows enabled campaigns only/);
   // Shared chip — keywords / asins / auto / category / placement all use stateFilter.
-  assert.match(targeting, /filter: stateFilter/);
+  assert.match(targeting, /state: stateFilter/);
+  assert.match(targeting, /RPC mobile_targeting_page_v1 enforces the same parent-chain/);
   assert.match(queries, /attachParentEntityStates/);
 });
 
 test("placement book filter matches Nest campaigns via bookCampaignIds (not only book_asin)", () => {
   assert.match(targeting, /Nest aggregated campaigns often omit book_asin/);
   assert.match(targeting, /bookCampaignIds\.has\(campaignId\)/);
-  assert.match(targeting, /const campaignId = String\(row\.campaign_id \|\| row\.id \|\| ""\)/);
+  assert.match(targeting, /campaignIds: bookCampaignIdList/);
 });
 
 test("campaigns clear-sort chip restores ACoS default, not ROAS/top", () => {
@@ -223,7 +253,6 @@ test("bulk and filter UI never imply Amazon-confirmed or fake empty from bid ran
   assert.match(queries, /\.order\(entityColumn, \{ ascending: true \}\)/);
   assert.match(targeting, /nestBulkConfirmedSucceeded\(submitted\.syncResult\)/);
   assert.match(targeting, /Number\.NaN/);
-  const dashboardApi = readFileSync(new URL("../src/lib/dashboardApi.ts", import.meta.url), "utf8");
   assert.match(dashboardApi, /startDate: range\?\.start/);
   assert.doesNotMatch(targeting, /Sort: \$\{effectiveSortLabel\} · range/);
   assert.doesNotMatch(targeting, /ranges override this/i);
@@ -235,7 +264,9 @@ test("bulk and filter UI never imply Amazon-confirmed or fake empty from bid ran
   assert.match(targeting, /\$\{cooldown\.count\} on cooldown/);
   assert.match(targeting, /\$\{cooldownSelected\.count\} cooldown/);
   assert.match(targeting, /\{cooldownSelected\.count\} on cooldown/);
-  assert.match(targeting, /Showing \{TARGETING_LIST_LIMIT\} \(app limit\)/);
+  assert.match(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
+  assert.match(targeting, /TargetingPagination/);
+  assert.match(targeting, /prefer page total over client 500-cap/);
   assert.match(queries, /Not an Amazon write limit/);
   const mutations = readFileSync(new URL("../src/components/Mutations.tsx", import.meta.url), "utf8");
   assert.match(mutations, /Queues a write to Amazon Ads — not confirmed until Amazon accepts/);

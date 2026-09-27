@@ -183,6 +183,17 @@ export function isKdpOnlySessionScope(scope: KdpRoyaltyScope): boolean {
   return scope.kind === "user_accounts";
 }
 
+/**
+ * Query path for royalty reads: linked Ads↔KDP only while any Ads rows exist.
+ * Never widen to every owned KDP shelf for US (or any) Ads country scope.
+ */
+export function kdpRoyaltyQueryScope(
+  scope: KdpRoyaltyScope,
+): "linked_profiles" | "user_accounts" {
+  if (isKdpOnlySessionScope(scope)) return "user_accounts";
+  return "linked_profiles";
+}
+
 /** Known KDP totals only. hasKdpData false must not become 0. */
 export function knownKdpRoyaltyTotal(range: { hasKdpData?: boolean; totalRoyalties?: number } | null | undefined): number | null {
   if (!range?.hasKdpData) return null;

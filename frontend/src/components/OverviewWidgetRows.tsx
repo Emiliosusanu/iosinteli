@@ -16,8 +16,8 @@ const ROW = StyleSheet.create({
   row: {
     flexDirection: "row",
     alignItems: "center",
-    minHeight: 48,
-    paddingVertical: 10,
+    minHeight: 44,
+    paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
 });
@@ -65,18 +65,21 @@ export function KeywordWidgetRow({
           {formatCurrency(spend, currency, { compact: true })} spend{match ? ` · ${match}` : ""}
         </Text>
       </View>
-      <Text
-        style={[
-          t.typography.metric_compact,
-          {
-            color: !hasSales
-              ? t.colors.tone_danger
-              : toneColor(acosTone(acos), t.colors),
-          },
-        ]}
-      >
-        {hasSales ? formatPercent(acos) : "—"}
-      </Text>
+      <View style={{ alignItems: "flex-end" }}>
+        <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: 2 }]}>ACoS</Text>
+        <Text
+          style={[
+            t.typography.metric_compact,
+            {
+              color: !hasSales
+                ? t.colors.tone_danger
+                : toneColor(acosTone(acos), t.colors),
+            },
+          ]}
+        >
+          {hasSales ? formatPercent(acos) : "—"}
+        </Text>
+      </View>
     </TouchableOpacity>
   );
 }
@@ -94,9 +97,9 @@ export function SearchTermWidgetRow({
   onPress?: () => void;
   isLast?: boolean;
 }) {
-  const spend = Number(row.total_spend ?? row.spend) || 0;
-  const acos = Number(row.total_acos ?? row.acos) || 0;
-  const hasSales = Number(row.total_sales ?? row.sales) > 0;
+  const spend = Number(row.total_spend) || 0;
+  const acos = Number(row.total_acos) || 0;
+  const hasSales = Number(row.total_sales) > 0;
   const label = row.search_term || "Search term";
   const body = (
     <>
@@ -105,17 +108,20 @@ export function SearchTermWidgetRow({
           {label}
         </Text>
         <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]} numberOfLines={1}>
-          {formatCurrency(spend, currency, { compact: true })} · {formatInt(Number(row.total_orders ?? row.orders))} orders
+          {formatCurrency(spend, currency, { compact: true })} spend · {formatInt(Number(row.total_orders))} orders
         </Text>
       </View>
-      <Text
-        style={[
-          t.typography.metric_compact,
-          { color: hasSales ? toneColor(acosTone(acos), t.colors) : t.colors.tone_danger },
-        ]}
-      >
-        {hasSales ? formatPercent(acos) : "—"}
-      </Text>
+      <View style={{ alignItems: "flex-end" }}>
+        <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: 2 }]}>ACoS</Text>
+        <Text
+          style={[
+            t.typography.metric_compact,
+            { color: hasSales ? toneColor(acosTone(acos), t.colors) : t.colors.tone_danger },
+          ]}
+        >
+          {hasSales ? formatPercent(acos) : "—"}
+        </Text>
+      </View>
     </>
   );
   if (!onPress) {
@@ -154,21 +160,24 @@ export function CampaignWidgetRow({
         </Text>
         {showPlacement ? <PlacementShareLine item={campaign} t={t} /> : null}
       </View>
-      <Text
-        style={[
-          t.typography.metric_compact,
-          {
-            color:
-              campaign.orders === 0 && campaign.spend > 0
-                ? t.colors.tone_danger
-                : campaign.sales > 0
-                  ? toneColor(acosTone(campaign.acos), t.colors)
-                  : t.colors.text_secondary,
-          },
-        ]}
-      >
-        {campaign.sales > 0 ? formatPercent(campaign.acos) : "—"}
-      </Text>
+      <View style={{ alignItems: "flex-end" }}>
+        <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: 2 }]}>ACoS</Text>
+        <Text
+          style={[
+            t.typography.metric_compact,
+            {
+              color:
+                campaign.orders === 0 && campaign.spend > 0
+                  ? t.colors.tone_danger
+                  : campaign.sales > 0
+                    ? toneColor(acosTone(campaign.acos ?? 0), t.colors)
+                    : t.colors.text_secondary,
+            },
+          ]}
+        >
+          {campaign.sales > 0 ? formatPercent(campaign.acos ?? 0) : "—"}
+        </Text>
+      </View>
     </TouchableOpacity>
   );
 }
@@ -186,9 +195,9 @@ export function AdGroupWidgetRow({
   onPress: () => void;
   isLast?: boolean;
 }) {
-  const spend = Number(row.total_spend ?? row.spend) || 0;
-  const acos = Number(row.total_acos ?? row.acos) || 0;
-  const hasSales = Number(row.total_sales ?? row.sales) > 0;
+  const spend = Number(row.total_spend) || 0;
+  const acos = Number(row.total_acos) || 0;
+  const hasSales = Number(row.total_sales) > 0;
   return (
     <TouchableOpacity onPress={onPress} accessibilityRole="button" style={[ROW.row, rowBorder(t, !!isLast)]}>
       <View style={{ flex: 1, marginRight: t.spacing.md }}>
@@ -267,10 +276,10 @@ export function BookWidgetRow({
           ) : null}
         </View>
         <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 2 }]}>
-          {bookKdpAvailable ? `${formatCurrency(book.royalties!, currency, { compact: true })} royalties · ` : ""}
-          {formatCurrency(book.spend, currency, { compact: true })} spend ·{" "}
+          {bookKdpAvailable ? `${formatCurrency(book.royalties!, currency, { compact: true })} · ` : ""}
+          {formatCurrency(book.spend, currency, { compact: true })} ·{" "}
           <Text style={{ color: book.sales > 0 ? toneColor(hasAuthoritativeBreakEven(book.breakeven_acos) ? acosTone(book.acos, book.breakeven_acos) : "inactive", t.colors) : t.colors.text_secondary }}>
-            {book.sales > 0 ? formatPercent(book.acos) : "—"} ACoS
+            {book.sales > 0 ? formatPercent(book.acos) : "—"}
           </Text>
         </Text>
       </View>

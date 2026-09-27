@@ -23,6 +23,20 @@ test("formatsFromWorkKey lists only encoded formats", () => {
   assert.equal(defaultCreateFormatAsin(formats), "B0PRINT001");
 });
 
+test("formatsFromWorkKey returns empty when work key has no format ASINs", () => {
+  assert.deepEqual(formatsFromWorkKey(""), []);
+  assert.deepEqual(formatsFromWorkKey("B0H26KZBDN"), []);
+  assert.deepEqual(formatsFromWorkKey(null), []);
+});
+
+test("FORMAT_KIND_ACCENT covers every format kind", async () => {
+  const { FORMAT_KIND_ACCENT } = await import("../src/lib/bookCampaignFormats.ts");
+  assert.equal(FORMAT_KIND_ACCENT.kindle, "#5AC8FA");
+  assert.equal(FORMAT_KIND_ACCENT.paperback, "#E67E22");
+  assert.ok(FORMAT_KIND_ACCENT.hardcover);
+  assert.ok(FORMAT_KIND_ACCENT.audiobook);
+});
+
 test("createFlowFormatOptions hides audiobook chips", () => {
   const formats = formatsFromWorkKey(
     "DIGITAL=B0KINDLE01:PRINT=B0PRINT001:HARDCOVER=B0HARD001:AUDIO=B0AUDIO001::",
@@ -101,6 +115,8 @@ test("Create campaign format chips switch exclusively without forcing PRINT high
 test("Products targeting auto-fetches suggestions with explicit targeting arg", () => {
   assert.match(create, /previewM\.mutate\(type\)/);
   assert.match(create, /mutationFn: \(nextTargeting\?: CampaignCreationTargeting\)/);
-  assert.match(create, /Paste ASINs below to continue/);
-  assert.match(create, /Loading product suggestions/);
+  // Soft paste path — no over-explain banner; placeholder stays on the ASIN field.
+  assert.match(create, /B0… one per line/);
+  assert.match(create, /Your product ASINs/);
+  assert.match(create, /Couldn't load suggestions|Loading…/);
 });

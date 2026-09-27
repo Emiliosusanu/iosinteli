@@ -13,9 +13,9 @@ test("Overview ops cards use glass + stagger + status affordances", () => {
   assert.match(cards, /StaggerReveal/);
   assert.match(cards, /LinearGradient/);
   assert.match(cards, /SwipeOpen|Gesture\.Pan/);
-  assert.match(cards, /Today not synced yet/);
+  assert.match(cards, /Not synced|Waiting for sync/);
   assert.doesNotMatch(cards, /withRepeat/);
-  assert.match(cards, /Daily budget is almost gone/);
+  assert.match(cards, /Almost gone|% used/);
 });
 
 test("Home wires the redesigned ops cards without prior-day budget fallback", () => {

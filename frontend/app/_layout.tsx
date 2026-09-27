@@ -19,6 +19,7 @@ import { resolveDeepLinkHref } from "@/src/lib/deepLinkContract";
 import { markPerf } from "@/src/lib/perf";
 import { debugIngest } from "@/src/lib/debugIngest";
 import * as Linking from "expo-linking";
+import { ThemeProvider, useTheme } from "@/src/lib/theme";
 
 // Hold the native splash until our JS is mounted, then hand off to the branded React splash.
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -199,6 +200,11 @@ function SplashGate({ children }: { children: React.ReactNode }) {
   );
 }
 
+function ThemedStatusBar() {
+  const t = useTheme();
+  return <StatusBar style={t.scheme === "dark" ? "light" : "dark"} translucent />;
+}
+
 export default function RootLayout() {
   // Restore the persisted query cache after mounting so a large/corrupt cache
   // can never block the first React paint. Persistence starts after hydration.
@@ -220,6 +226,7 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
+        <ThemeProvider>
         <QueryClientProvider client={queryClient}>
           <FinancialForegroundRefetch />
           <AuthProvider>
@@ -228,7 +235,7 @@ export default function RootLayout() {
               <KdpHelperHost />
               <SplashGate>
                 <RouteGuard>
-                  <StatusBar style="auto" translucent />
+                  <ThemedStatusBar />
                   <Stack screenOptions={{ headerShown: false, animation: "slide_from_right", contentStyle: { backgroundColor: "transparent" } }}>
                     <Stack.Screen name="index" />
                     <Stack.Screen name="auth/welcome" />
@@ -238,11 +245,15 @@ export default function RootLayout() {
                     <Stack.Screen name="auth/reset" />
                     <Stack.Screen name="(tabs)" />
                     <Stack.Screen name="campaign/[id]" options={{ headerShown: false, presentation: "card" }} />
+                    <Stack.Screen name="campaign/create" options={{ headerShown: false, presentation: "card" }} />
+                    <Stack.Screen name="campaign/ad-group-create" options={{ headerShown: false, presentation: "card" }} />
+                    <Stack.Screen name="adgroup/add-targets" options={{ headerShown: false, presentation: "card" }} />
                     <Stack.Screen name="product/[asin]" options={{ headerShown: false, presentation: "card" }} />
                     <Stack.Screen name="keyword/[id]" options={{ headerShown: false, presentation: "card" }} />
                     <Stack.Screen name="target/[id]" options={{ headerShown: false, presentation: "card" }} />
                     <Stack.Screen name="search-term/[id]" options={{ headerShown: false, presentation: "card" }} />
                     <Stack.Screen name="more/settings" />
+                    <Stack.Screen name="more/appearance" />
                     <Stack.Screen name="more/notifications" />
                     <Stack.Screen name="more/automation" />
                     <Stack.Screen name="more/rule-create" />
@@ -265,6 +276,7 @@ export default function RootLayout() {
             </AppProvider>
           </AuthProvider>
         </QueryClientProvider>
+        </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

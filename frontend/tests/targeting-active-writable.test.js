@@ -13,7 +13,8 @@ import {
   shouldShowActiveOrPausedWithData,
 } from "../src/lib/campaigns.ts";
 import {
-  getCampaignSettingsCooldown,
+  getCampaignStrategyCooldown,
+  getPlacementAdjCooldown,
   getEntityBidCooldown,
   resolveBidChangeAt,
 } from "../src/lib/bidCooldown.ts";
@@ -90,7 +91,7 @@ test("bidding strategy labels and nest codes cover up/down", () => {
   assert.equal(isDynamicBiddingStrategy("manual"), false);
 });
 
-test("campaign settings cooldown uses placement_adj stamp", () => {
+test("campaign strategy and placement cooldowns are independent", () => {
   const now = Date.parse("2026-09-05T12:00:00.000Z");
   const recent = new Date(now - 2 * 60 * 60 * 1000).toISOString();
   assert.equal(
@@ -100,12 +101,20 @@ test("campaign settings cooldown uses placement_adj stamp", () => {
     }),
     recent,
   );
-  const info = getCampaignSettingsCooldown(
+  const info = getPlacementAdjCooldown(
     { placement_adj_last_modified_at: recent, placement_adj_change_source: "manual" },
     48,
     now,
   );
   assert.equal(info.isInCooldown, true);
+  assert.equal(
+    getCampaignStrategyCooldown(
+      { placement_adj_last_modified_at: recent, placement_adj_change_source: "manual" },
+      48,
+      now,
+    ).isInCooldown,
+    false,
+  );
   assert.equal(getEntityBidCooldown({ rule_last_modified_at: recent }, 48, now).isInCooldown, true);
 });
 
@@ -113,21 +122,26 @@ test("targeting defaults to Active across all segments with parent-chain matchin
   assert.match(targetingSource, /useState<EntityStateFilter>\(DEFAULT_TARGETING_STATE_FILTER\)/);
   assert.match(targetingSource, /DEFAULT_TARGETING_STATE_FILTER/);
   assert.match(targetingSource, /resolveTargetingStateFilter/);
-  assert.match(targetingSource, /matchesLiveTargetingRow/);
-  // Keywords + product targets pass campaign + ad group; placement is campaign-only.
-  assert.match(targetingSource, /adGroupState: \(k as any\)\.ad_group_state/);
-  assert.match(targetingSource, /adGroupState: p\.ad_group_state/);
-  assert.match(targetingSource, /campaignState: \(k as any\)\.campaign_state/);
-  assert.match(targetingSource, /campaignState: p\.campaign_state/);
+  // Parent-chain Active is enforced server-side via mobile_targeting_page_v1 (not client matchesLiveTargetingRow).
+  assert.match(targetingSource, /fetchMobileTargetingPage/);
+  assert.match(targetingSource, /state: stateFilter/);
+  assert.match(targetingSource, /RPC mobile_targeting_page_v1 enforces the same parent-chain/);
+  assert.match(targetingSource, /\/\/ Active = keyword enabled \+ ad group enabled \+ campaign enabled/);
+  assert.match(targetingSource, /ASINs \/ Auto \/ Category: Active = target \+ ad group \+ campaign enabled/);
+  assert.match(targetingSource, /Placement rows are campaigns — Active = campaign enabled/);
+  assert.match(
+    targetingSource,
+    /Paused = entity paused AND live parents \(ad group \+ campaign enabled\) — use All to see paused-under-paused/,
+  );
+  assert.doesNotMatch(targetingSource, /Paused[\s\S]{0,80}no parent-chain/);
   assert.match(targetingSource, /subtitle: "Try All"/);
-  assert.match(targetingSource, /\/\/ Active = entity \+ ad group \+ campaign/);
   // Shared stateFilter — segment switch must not reset Active → All.
   assert.match(targetingSource, /onPress=\{\(\) => \{\s*setSegment\(s\.key\);\s*setSelectedIds\(\[\]\);/);
   assert.doesNotMatch(targetingSource, /setSegment\(s\.key\);\s*setStateFilter/);
-  assert.match(targetingSource, /PLACEMENT_FIELDS\.map/);
+  assert.match(targetingSource, /PLACEMENT_FIELDS\.find/);
   assert.match(targetingSource, /placement_key/);
-  assert.match(targetingSource, /getCampaignSettingsCooldown/);
-  assert.match(targetingSource, /ownerUserId/);
+  assert.match(targetingSource, /getPlacementAdjCooldown/);
+  assert.match(targetingSource, /ownerId:/);
   assert.match(targetingSource, /requeuePermanentBulkFailures/);
   assert.match(targetingSource, /dismissPermanentBulkFailures/);
   assert.match(targetingSource, /viewAsOtherUser/);
@@ -189,8 +203,10 @@ test("campaigns default Active and expose bidding strategy sheet", () => {
   assert.match(campaignsSource, /useState<StateFilter>\("enabled"\)/);
   assert.match(campaignsSource, /BiddingStrategySheet/);
   assert.match(campaignsSource, /onLongPress/);
-  assert.match(campaignsSource, /getCampaignSettingsCooldown/);
-  assert.match(campaignsSource, /cooldown=\{settingsCooldown\}/);
+  assert.match(campaignsSource, /getCampaignStrategyCooldown/);
+  assert.match(campaignsSource, /getPlacementAdjCooldown/);
+  assert.match(campaignsSource, /settingsCooldown\.isInCooldown/);
+  assert.match(campaignsSource, /cooldown=\{placementCooldown\}/);
 });
 
 test("list fetch restricts to owned campaigns before Nest not-found writes", () => {

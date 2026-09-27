@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { activeLinkedKdpAccountIdsFromRows } from "../src/lib/kdpAccountLinks.ts";
+import { activeLinkedKdpAccountIdsFromRows, kdpAccountCountsByAmazonProfileId } from "../src/lib/kdpAccountLinks.ts";
 import { formatCompact } from "../src/lib/format.ts";
 import { kdpRoyaltyQueryScope, selectKdpRoyaltyScope } from "../src/lib/kdpRoyaltyScope.ts";
 import { booksKdpQueryScope } from "../src/lib/booksProfileScope.ts";
@@ -12,6 +12,7 @@ const royaltyScopeSrc = readFileSync(
   "utf8",
 );
 const queriesSrc = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
+const mutationsSrc = readFileSync(new URL("../src/lib/mutations.ts", import.meta.url), "utf8");
 
 test("same kdp_account linked to US+CA is counted once for royalty aggregation", () => {
   const linked = activeLinkedKdpAccountIdsFromRows(
@@ -27,6 +28,25 @@ test("same kdp_account linked to US+CA is counted once for royalty aggregation",
     ["us-emi", "ca-emi", "us-vp1", "us-vp2", "ca-vp2", "us-mary"],
   ).sort();
   assert.deepEqual(linked, ["kdp-emi", "kdp-mary", "kdp-vp1", "kdp-vp2"]);
+});
+
+test("kdp_account_count per Ads profile ignores paused and dedupes multi-market shelves", () => {
+  const counts = kdpAccountCountsByAmazonProfileId([
+    { kdp_account_id: "kdp-emi", amazon_profile_id: "us-emi", is_paused: false },
+    { kdp_account_id: "kdp-emi", amazon_profile_id: "us-emi", is_paused: false },
+    { kdp_account_id: "kdp-other", amazon_profile_id: "us-emi", is_paused: false },
+    { kdp_account_id: "kdp-paused", amazon_profile_id: "us-emi", is_paused: true },
+    { kdp_account_id: "kdp-ca", amazon_profile_id: "ca-emi", is_paused: false },
+  ]);
+  assert.equal(counts["us-emi"], 2);
+  assert.equal(counts["ca-emi"], 1);
+  assert.equal(counts["missing"], undefined);
+});
+
+test("fetchAmazonProfiles enriches kdp_account_count from bridge (Nest often ships 0)", () => {
+  assert.match(queriesSrc, /attachKdpAccountCountsFromBridge/);
+  assert.match(queriesSrc, /kdpAccountCountsByAmazonProfileId/);
+  assert.match(mutationsSrc, /kdpAccountCount \?\? p\.kdp_account_count/);
 });
 
 test("Sep 1–22 Amazon estimator ground truth formats as $3.8K not $4.1K/$4.2K", () => {
@@ -62,6 +82,7 @@ test("Overview Gross skips legacy profile links and paused-only shelves", () => 
   assert.match(home, /allowLegacyProfileLinks:\s*false/);
   assert.match(home, /booksRoyaltyScopeForSelection\(profiles, moneyProfileIds\)/);
   assert.match(home, /scopeProfiles = moneyProfileIds/);
+  assert.match(home, /overviewKdpQueryScope\(profiles, enabledPortfolioIds, royaltyScope\)/);
   assert.doesNotMatch(home, /includePausedLinks:\s*true/);
   assert.doesNotMatch(home, /CERTIFIED_MONEY_/);
   assert.doesNotMatch(home, /overviewRoyaltyScopeForPortfolio/);

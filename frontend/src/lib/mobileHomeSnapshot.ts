@@ -256,14 +256,34 @@ export function buildMobileHomeSnapshotFromAds(input: {
   currency: string | null;
   timeZone: string;
   localDate: string;
-  rows: Array<{ date?: string | null; spend?: number | null; sales?: number | null; orders?: number | null }>;
+  rows: Array<{
+    date?: string | null;
+    spend?: number | null;
+    sales?: number | null;
+    orders?: number | null;
+    amazon_profile_id?: string | null;
+  }>;
+  moneyProfileIds?: readonly string[];
+  mixedCurrency?: boolean;
+  lastSuccessfulAdsSync?: string | null;
   generatedAt?: string;
 }): MobileHomeSnapshot {
   const localDate = input.localDate;
   const [year, month, day] = localDate.split("-").map(Number);
   const seven = iosRolling7Range(new Date(year, month - 1, day, 12));
   const byDate = new Map<string, { spend: number; sales: number; orders: number; rows: number }>();
+  // Mirror aggregateDailyMetricsForDisplay: isolate only when rows carry profile tags.
+  // Untagged money-scoped fetches must not wipe to empty widgets on cold start.
+  const anyTagged = input.rows.some((row) => String(row.amazon_profile_id || "").trim() !== "");
+  const moneyProfiles =
+    anyTagged && input.moneyProfileIds != null
+      ? new Set(input.moneyProfileIds.map((id) => String(id)))
+      : null;
   for (const row of input.rows) {
+    if (moneyProfiles) {
+      const id = String(row.amazon_profile_id ?? "").trim();
+      if (!id || !moneyProfiles.has(id)) continue;
+    }
     const date = String(row.date ?? "").slice(0, 10);
     if (!date) continue;
     const current = byDate.get(date) ?? { spend: 0, sales: 0, orders: 0, rows: 0 };
@@ -312,13 +332,13 @@ export function buildMobileHomeSnapshotFromAds(input: {
       userId: input.userId,
       profileIds: [...input.profileIds],
       currency: input.currency,
-      mixedCurrency: false,
+      mixedCurrency: input.mixedCurrency === true,
       timeZone: input.timeZone,
       localDate,
     },
     freshness: {
       adsDataAsOf: maxKnownDate || null,
-      lastSuccessfulAdsSync: null,
+      lastSuccessfulAdsSync: input.lastSuccessfulAdsSync ?? null,
       kdpDataAsOf: null,
       generatedAt,
       dataVersion: localDate,
@@ -357,7 +377,10 @@ export function buildMobileHomeSnapshotFromAds(input: {
     topBooks: [],
     recentActivity: [],
     activityModes: ["all"],
-    sync: { lastSuccessfulAdsSync: null, pending: false },
+    sync: {
+      lastSuccessfulAdsSync: input.lastSuccessfulAdsSync ?? null,
+      pending: false,
+    },
   };
 }
 

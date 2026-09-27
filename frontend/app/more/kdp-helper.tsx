@@ -1,10 +1,13 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, View, ScrollView } from "react-native";
 import { WebView } from "react-native-webview";
-import { SubScreen } from "@/src/components/SubScreen";
 import { PrimaryButton, SecondaryButton } from "@/src/components/Primitives";
-import { IOSGroupedSection } from "@/src/components/ios/Native";
 import { KdpReportsWebView, KDP_HELPER_HOME } from "@/src/components/KdpReportsWebView";
+import {
+  SettingsRow,
+  SettingsScreen,
+  SettingsSection,
+} from "@/src/components/settings/SettingsPrimitives";
 import { useApp } from "@/src/contexts/AppContext";
 import { useTheme } from "@/src/lib/theme";
 import { setKdpHelperScreenFocused } from "@/src/lib/kdp/helperUi";
@@ -17,6 +20,10 @@ import {
 } from "@/src/lib/kdp/runtime";
 import { KDP_CAPTURE_PAGES } from "@/src/lib/kdp/templates";
 import { isIosHelperEnabled } from "@/src/lib/kdp/source";
+import {
+  KDP_HELPER_FOOTER_DISABLED,
+  KDP_HELPER_FOOTER_ENABLED,
+} from "@/src/lib/settingsContract";
 
 export default function KdpHelperScreen() {
   const t = useTheme();
@@ -55,66 +62,76 @@ export default function KdpHelperScreen() {
     void runKdpIosHelperTick("manual", { force: true, profileIds: selectedProfileIds });
   };
 
+  const statusLabel = status.loggedIn ? "Signed in" : "Waiting for sign-in";
+  const captureValue = captured.length ? captured.join(", ") : "Not yet";
+
   return (
-    <SubScreen title="iPhone KDP helper">
-      <IOSGroupedSection
-        footer={
-          enabled
-            ? "Sign in to KDP below once. Every ~15 minutes this iPhone imports today and yesterday. If Chrome has not already imported the last 90 days, this iPhone finishes that backfill in the background — even if you close the app — and resumes on the next wake. After 2am it starts a full 30-day correction and keeps going until every leftover day is in."
-            : "Turn on Royalty source → Chrome + iPhone in Settings first."
-        }
+    <SettingsScreen title="iPhone KDP helper">
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 32 }}
+        contentInsetAdjustmentBehavior="automatic"
+        keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.meta}>
-          <Text style={[t.typography.body, { color: t.colors.text_primary }]}>
-            {status.loggedIn ? "Signed in to KDP" : "Waiting for KDP sign-in"}
-          </Text>
-          <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 4 }]}>
-            {captured.length
-              ? `Captured: ${captured.join(", ")}`
-              : "Open royalties, orders, and KENP once after sign-in so the helper can learn the report requests."}
-          </Text>
+        <SettingsSection footer={enabled ? KDP_HELPER_FOOTER_ENABLED : KDP_HELPER_FOOTER_DISABLED}>
+          <SettingsRow
+            label="KDP session"
+            value={statusLabel}
+            symbol={status.loggedIn ? "checkmark.circle.fill" : "person.crop.circle"}
+            symbolColor={status.loggedIn ? t.colors.tone_good : t.colors.tone_inactive}
+          />
+          <SettingsRow
+            label="Report capture"
+            value={captureValue}
+            subtitle={
+              captured.length
+                ? undefined
+                : "Open royalties, orders, and KENP once after sign-in"
+            }
+            last={!status.lastMessage && !status.lastError}
+          />
           {status.lastMessage ? (
-            <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 6 }]}>
-              {status.lastMessage}
-            </Text>
+            <SettingsRow label="Last update" subtitle={status.lastMessage} last={!status.lastError} />
           ) : null}
           {status.lastError ? (
-            <Text style={[t.typography.footnote, { color: t.colors.tone_danger, marginTop: 6 }]}>
-              {status.lastError}
-            </Text>
+            <SettingsRow
+              label="Error"
+              subtitle={status.lastError}
+              destructive
+              last
+            />
           ) : null}
+        </SettingsSection>
+
+        <View style={styles.webWrap}>
+          <KdpReportsWebView webRef={ref} style={styles.web} />
         </View>
-      </IOSGroupedSection>
 
-      <View style={styles.webWrap}>
-        <KdpReportsWebView webRef={ref} style={styles.web} />
-      </View>
-
-      <View style={styles.actions}>
-        <PrimaryButton
-          label={status.running ? "Importing…" : kdpTemplatesReady() ? "Import now" : "Capture and import"}
-          onPress={onSync}
-          disabled={!enabled || status.running || !status.loggedIn}
-        />
-        <View style={{ height: 10 }} />
-        <SecondaryButton
-          label="Open royalties"
-          onPress={() =>
-            ref.current?.injectJavaScript(`window.location.href=${JSON.stringify(KDP_HELPER_HOME)};true;`)
-          }
-        />
-      </View>
-    </SubScreen>
+        <View style={styles.actions}>
+          <PrimaryButton
+            label={status.running ? "Importing…" : kdpTemplatesReady() ? "Import now" : "Capture and import"}
+            onPress={onSync}
+            disabled={!enabled || status.running || !status.loggedIn}
+          />
+          <View style={{ height: 10 }} />
+          <SecondaryButton
+            label="Open royalties"
+            onPress={() =>
+              ref.current?.injectJavaScript(`window.location.href=${JSON.stringify(KDP_HELPER_HOME)};true;`)
+            }
+          />
+        </View>
+      </ScrollView>
+    </SettingsScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  meta: { paddingHorizontal: 16, paddingVertical: 12 },
   webWrap: {
     height: 360,
     marginHorizontal: 16,
-    marginTop: 8,
-    borderRadius: 12,
+    marginTop: 16,
+    borderRadius: 10,
+    borderCurve: "continuous",
     overflow: "hidden",
   },
   web: { flex: 1, backgroundColor: "#fff" },

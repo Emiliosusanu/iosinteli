@@ -96,6 +96,7 @@ test("production assemble stays on group_key and Kindle primary ASIN", () => {
   assert.equal(booksReadSource.includes("primaryAsinFromGroupKey"), true);
   assert.equal(booksReadSource.includes("pickCalculatorBreakEvenAcos"), true);
   assert.equal(booksReadSource.includes("if (!asin) continue"), true);
+  assert.equal(booksReadSource.includes("format_asins:"), true);
 });
 
 test("leftover campaign groupKey cannot become every book's book_key", () => {
@@ -105,7 +106,7 @@ test("leftover campaign groupKey cannot become every book's book_key", () => {
   );
   assert.equal(fetchFn.includes("book_key: groupKey"), false);
   assert.equal(fetchFn.includes("assembleLogicalBookRows"), true);
-  assert.equal(fetchFn.includes("fetchAllPages"), true);
+  assert.equal(fetchFn.includes("fetchRequiredPages"), true);
   assert.equal(fetchFn.includes("BooksReadError"), true);
   assert.equal(fetchFn.includes("onCoreRows"), true);
   assert.equal(fetchFn.includes('finalizeBook(row, "pending")'), true);
@@ -118,6 +119,22 @@ test("core Books query paginates and chunks large .in() filters", () => {
   assert.equal(queriesSource.includes('.order("date", { ascending: true })'), true);
 });
 
+test("Books catalog unions Nest break-even with Create/KDP shelf (Nest alone can omit titles)", () => {
+  const fetchFn = queriesSource.slice(
+    queriesSource.indexOf("export async function fetchTopBooksRange"),
+    queriesSource.indexOf("// ---------- Optimization Rules ----------"),
+  );
+  const webRead = fetchFn.indexOf("const nestRows = await fetchNestTopBooks");
+  const rankedOnly = fetchFn.indexOf("if (nestRows.length && activityDays > 0)");
+  const catalogSeed = fetchFn.indexOf("nestBooksCatalogSeed = nestRows");
+  const fallbackStart = fetchFn.indexOf("nestShelfPromise = nestShelfCatalogRows()");
+  assert.ok(webRead >= 0);
+  assert.ok(rankedOnly > webRead);
+  assert.ok(catalogSeed > rankedOnly);
+  assert.ok(fallbackStart > catalogSeed);
+  assert.equal(fetchFn.includes("if (nestRows.length) {\n        return finalizeTopBooksList"), false);
+});
+
 test("Ads/cover/campaign enrichment cannot throw the whole Books list", () => {
   const fetchFn = queriesSource.slice(
     queriesSource.indexOf("export async function fetchTopBooksRange"),
@@ -126,8 +143,8 @@ test("Ads/cover/campaign enrichment cannot throw the whole Books list", () => {
   assert.equal(fetchFn.includes('fetchOptionalInPages<any>("kdp_titles"'), true);
   assert.equal(fetchFn.includes('fetchOptionalInPages<any>("product_ads"'), true);
   assert.equal(fetchFn.includes('fetchOptionalInPages<any>("product_ad_metrics"'), true);
-  assert.equal(fetchFn.includes('fetchOptionalInPages<any>("campaigns"'), true);
-  assert.equal(fetchFn.includes('fetchOptionalInPages<any>("campaign_metrics"'), true);
+  assert.equal(fetchFn.includes('.from("campaigns")'), true);
+  assert.equal(fetchFn.includes('fetchOptionalInPages<any>("verified_book_campaign_metrics"'), true);
   assert.equal(fetchFn.includes("if (titlesErr) throw titlesErr"), false);
   assert.equal(fetchFn.includes("if (adsErr) throw adsErr"), false);
   assert.equal(fetchFn.includes("if (metricsErr) throw metricsErr"), false);
@@ -138,10 +155,10 @@ test("selected Amazon profiles stay the Ads scope; KDP uses linked accounts", ()
     queriesSource.indexOf("export async function fetchTopBooksRange"),
     queriesSource.indexOf("// ---------- Optimization Rules ----------"),
   );
-  assert.equal(fetchFn.includes("fetchLinkedKdpAccountIds(kdpLinkProfileIds)"), true);
+  assert.equal(fetchFn.includes("fetchKdpAccountIdsForRoyaltyQuery(kdpLinkProfileIds"), true);
   assert.equal(fetchFn.includes("kdpProfileIds !== undefined ? opts.kdpProfileIds : profileIds"), true);
   assert.equal(fetchFn.includes('.in("amazon_profile_id", chunk)'), true);
-  assert.equal(fetchFn.includes("from(\"amazon_profiles\")"), false);
+  assert.equal(fetchFn.includes("kdpLinkProfileIds"), true);
 });
 
 test("failed Books results are not persisted over a good v5 cache", () => {
@@ -251,7 +268,8 @@ test("Ads-only fallback does not invent royalties from break-even", () => {
   );
   assert.equal(fetchFn.includes("r.sales * (r.breakeven_acos / 100)"), false);
   assert.equal(fetchFn.includes("effectiveRoyaltyRate"), false);
-  assert.equal(fetchFn.includes("breakeven_acos: kdpTitle?.breakeven_acos ?? 0"), true);
+  assert.equal(fetchFn.includes("calculatorBreakEvenFromKdpTitle"), true);
+  assert.equal(booksReadSource.includes("pickCalculatorBreakEvenAcos"), true);
 });
 
 test("Ads fallback keeps royalty-only books in the selected period", () => {
@@ -260,12 +278,34 @@ test("Ads fallback keeps royalty-only books in the selected period", () => {
     queriesSource.indexOf("// ---------- Optimization Rules ----------"),
   );
   assert.equal(fetchFn.includes(".filter((r) => r.spend > 0 || r.sales > 0)"), false);
-  assert.equal(fetchFn.includes(".filter(bookHasSignalInRange)"), true);
+  assert.equal(fetchFn.includes("finalizeTopBooksList"), true);
+  assert.equal(queriesSource.includes(".filter(bookHasSignalInRange)"), true);
+  // Ads ASINs without KDP identity still list when the period has a number.
+  assert.equal(fetchFn.includes("ensureAdsMetricGroup"), true);
+});
+
+test("finalizeTopBooksList does not drop blank-title KDP/Ads evidence rows", () => {
+  const finalizeFn = queriesSource.slice(
+    queriesSource.indexOf("async function finalizeTopBooksList"),
+    queriesSource.indexOf("async function nestShelfCatalogRows"),
+  );
+  // Must NOT bare-filter on title.trim().length alone before evidence check.
+  assert.equal(
+    /const titled = rows\.filter\(\(row\) => String\(row\.title \?\? ""\)\.trim\(\)\.length > 0\);/.test(
+      finalizeFn,
+    ),
+    false,
+  );
+  assert.match(
+    finalizeFn,
+    /String\(row\.title \?\? ""\)\.trim\(\)\.length > 0 \|\| bookHasKdpOrAdsEvidence\(row\)/,
+  );
+  assert.match(finalizeFn, /bookHasKdpOrAdsEvidence/);
 });
 
 test("Book Detail restores title/BE from the Books row, including missing BE as em dash", () => {
   assert.equal(productSource.includes("bookRowMatchesOpenedAsin"), true);
-  assert.equal(productSource.includes("formatBreakEvenAcos(book.breakeven_acos)"), true);
+  assert.equal(productSource.includes("formatBreakEvenAcos(displayBook.breakeven_acos)"), true);
   assert.equal(productSource.includes("{book && book.acos > 0 ?"), false);
   assert.equal(booksSource.includes("BooksReadError"), true);
   assert.equal(booksSource.includes("Something went wrong loading your books"), true);

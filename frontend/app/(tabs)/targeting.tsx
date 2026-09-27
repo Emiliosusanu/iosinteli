@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -22,20 +22,19 @@ import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { isHomeQueryTimeout, queryStillWaiting, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import {
   fetchAdGroupDefaultBids,
-  fetchKeywords,
-  fetchProductTargets,
+  fetchMobileTargetingPage,
   fetchTargetingBookOptions,
-  fetchTopCampaignsRange,
-  restrictRowsToOwnedCampaigns,
-  TARGETING_LIST_LIMIT,
+  isMobileTargetingSnapshotChanged,
+  type MobileTargetingSort,
   type TargetingBookOption,
 } from "@/src/lib/queries";
+import { TargetingPagination } from "@/src/components/TargetingPagination";
+import { TARGETING_PAGE_SIZE, targetingTotalPages } from "@/src/lib/targetingPage";
 import { filterTargetingBookOptions } from "@/src/lib/targetingBookFilter";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 import {
   DEFAULT_TARGETING_STATE_FILTER,
-  matchesLiveTargetingRow,
   resolveTargetingStateFilter,
   type EntityStateFilter,
 } from "@/src/lib/campaigns";
@@ -83,7 +82,9 @@ import {
   describeProductTarget,
   extractTargetAsin,
   fallbackAsinCoverUrl,
+  formatMatchTypeLabel,
   isCategoryTarget,
+  isExactMatchType,
   productTargetHeading,
   readTargetBid,
 } from "@/src/lib/targeting";
@@ -95,11 +96,9 @@ import {
   applyBidDeltaPercent,
   applyBidDeltaUsd,
   BID_CHANGE_CONFIRM_PCT,
-  compareTargetingRows,
   countActiveAdvancedFilters,
   EMPTY_TARGETING_ADVANCED_FILTERS,
   hasActiveAdvancedFilters,
-  matchesAdvancedFilters,
   normalizeTargetingAdvancedFilters,
   parseFilterRangeInput,
   requiresBidChangeConfirm,
@@ -127,7 +126,7 @@ import {
 } from "@/src/components/Mutations";
 import {
   formatCooldownRemaining,
-  getCampaignSettingsCooldown,
+  getPlacementAdjCooldown,
   getEntityBidCooldown,
   type EntityBidCooldownFields,
 } from "@/src/lib/bidCooldown";
@@ -139,11 +138,16 @@ import { formatCurrency, formatPercent, formatInt, formatOptionalPercent } from 
 import { TopBar } from "@/src/components/TopBar";
 import { EmptyState, ToneDot, RetryState, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard } from "@/src/components/Primitives";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
+import {
+  TargetingModePills,
+  type TargetingModeKey,
+} from "@/src/components/TargetingModePills";
 import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
+import { rowCurrencyOfProfile } from "@/src/lib/accountsUi";
 import { enabledSpoken, matchTypeSpoken, targetingSpeech } from "@/src/lib/targetingA11y";
 import { type Href, useRouter } from "expo-router";
 
-type Segment = "keywords" | "asins" | "auto" | "category" | "placement";
+type Segment = TargetingModeKey;
 
 function rowDisplayName(segment: Segment, row: any): string {
   if (segment === "keywords") return String(row?.keyword_text || row?.id || "Keyword");
@@ -436,7 +440,7 @@ export default function TargetingScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const invalidateAds = useInvalidateAds();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles } = useApp();
   const { user, guestMode } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
   const writeGuard = { guestMode, viewAsOtherUser };
@@ -467,7 +471,13 @@ export default function TargetingScreen() {
   const [bulkDeltaEditor, setBulkDeltaEditor] = useState<BulkDeltaMode | null>(null);
   const [advanced, setAdvanced] = useState<TargetingAdvancedFilters>({ ...EMPTY_TARGETING_ADVANCED_FILTERS });
   const [outboxPending, setOutboxPending] = useState(0);
+  /** Match Campaigns: collapse TopBar + filter chrome while scrolling the list. */
+  const [topChromeVisible, setTopChromeVisible] = useState(true);
+  const topChromeVisibleRef = useRef(true);
   const [outboxFailed, setOutboxFailed] = useState(0);
+  const [pageNumber, setPageNumber] = useState(1);
+  const [pageSnapshot, setPageSnapshot] = useState<string | null>(null);
+  const listRef = useRef<FlatList>(null);
 
   useEffect(() => {
     markPerf("targets.mount");
@@ -545,56 +555,16 @@ export default function TargetingScreen() {
     setOutboxFailed(local.failed + nest.failed);
   }
 
-  const listQueryOpts = {
-    start: dateRange.start,
-    end: dateRange.end,
-    limit: TARGETING_LIST_LIMIT,
-    filterUserId: adminFilterUserId,
-    // When viewing as another seller, Nest list is pivot-scoped for them — do not
-    // also filter by the admin's user_campaigns (would empty the list).
-    ownerUserId: viewAsOtherUser ? null : user?.id ?? null,
-  } as const;
   const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
   const periodKey = financialPeriodQueryKey(dateRange, scopeProfiles, primaryCurrency);
   const profileScopeKey = scopeProfiles.join("|");
+  const searchNeedle = search.trim();
+  const advancedForRpc = advancedFiltersForSegment(segment, advanced);
+  const advancedScopeKey = JSON.stringify(advancedForRpc);
   const targetingListCache = {
     ...LIST_PERIOD_QUERY_CACHE,
     placeholderData: noPeriodPlaceholder,
   } as const;
-
-  const keywordsQ = useQuery({
-    // Include signed-in owner id (like placements) so persisted cache cannot paint
-    // another account's rows before ownership filtering hydrates.
-    queryKey: ["targeting-keywords", adminFilterUserId ?? "self", user?.id ?? "anon", periodKey],
-    queryFn: async ({ signal }) => {
-      markPerf("targets.keywords.start");
-      const rows = await withQueryTimeout(
-        fetchKeywords(scopeProfiles, listQueryOpts),
-        TARGETING_QUERY_TIMEOUT_MS,
-        signal,
-      );
-      markPerf("targets.keywords.end");
-      return rows;
-    },
-    enabled: scopeProfiles.length > 0,
-    ...targetingListCache,
-  });
-
-  const productsQ = useQuery({
-    queryKey: ["targeting-products", adminFilterUserId ?? "self", user?.id ?? "anon", periodKey, "skip-kdp"],
-    queryFn: async ({ signal }) => {
-      markPerf("targets.products.start");
-      const rows = await withQueryTimeout(
-        fetchProductTargets(scopeProfiles, { ...listQueryOpts, skipKdpEnrich: true }),
-        TARGETING_QUERY_TIMEOUT_MS,
-        signal,
-      );
-      markPerf("targets.products.end");
-      return rows;
-    },
-    enabled: scopeProfiles.length > 0,
-    ...targetingListCache,
-  });
 
   const adGroupDefaultBidsQ = useQuery({
     queryKey: ["targeting-adgroup-default-bids", adminFilterUserId ?? "self", profileScopeKey],
@@ -613,31 +583,16 @@ export default function TargetingScreen() {
   });
   const bookOptions = booksQ.data ?? [];
   const selectedBook = bookAsin ? bookOptions.find((b) => b.asin === bookAsin) ?? null : null;
-  const bookCampaignIds = useMemo(
-    () => new Set(selectedBook?.campaignIds ?? []),
+  const bookFilterActive = Boolean(bookAsin);
+  // Nest aggregated campaigns often omit book_asin — match via book→campaign map.
+  const bookCampaignIdList = useMemo(
+    () => [...new Set(selectedBook?.campaignIds ?? [])].map(String).sort(),
     [selectedBook],
   );
   const campaignBookById = useMemo(
     () => buildCampaignBookMap(bookOptions, bookAsin),
     [bookOptions, bookAsin],
   );
-
-  const productSegmentBuckets = useMemo(() => {
-    const buckets: Record<Exclude<Segment, "keywords" | "placement">, any[]> = {
-      asins: [],
-      auto: [],
-      category: [],
-    };
-    for (const product of productsQ.data ?? []) {
-      const described = describeProductTarget(product.expression, product.expression_type, product.resolved_expression);
-      const category = isCategoryTarget(product.expression, product.expression_type);
-      const enriched = { ...product, __targetingDescription: described, __targetingIsCategory: category };
-      if (described.isAuto) buckets.auto.push(enriched);
-      else if (category) buckets.category.push(enriched);
-      else buckets.asins.push(enriched);
-    }
-    return buckets;
-  }, [productsQ.data]);
 
   // Drop a remembered book filter that isn't in the current profile set — never
   // show an empty misleading "book filter" with no matching campaigns.
@@ -649,223 +604,196 @@ export default function TargetingScreen() {
     setBookAsin(null);
   }, [bookAsin, booksQ.isFetched, booksQ.isFetching, booksQ.isLoading, selectedBook]);
 
-  const placementsQ = useQuery({
-    queryKey: ["targeting-placements-v2", adminFilterUserId ?? "self", user?.id ?? "anon", periodKey],
+  // Numbered pages: any scope / filter / sort / segment / period / book change
+  // restarts at page 1 so we never paint another selection's ranking.
+  useEffect(() => {
+    setPageNumber(1);
+    setPageSnapshot(null);
+  }, [
+    periodKey,
+    profileScopeKey,
+    bookAsin,
+    adminFilterUserId,
+    stateFilter,
+    searchNeedle,
+    perf,
+    sort,
+    advancedScopeKey,
+    segment,
+  ]);
+
+  const effectiveSortKey = resolveTargetingSortKey(sort, advanced);
+  const serverSort: MobileTargetingSort =
+    effectiveSortKey === "bid" ||
+    effectiveSortKey === "spend" ||
+    effectiveSortKey === "orders" ||
+    effectiveSortKey === "clicks" ||
+    effectiveSortKey === "impressions" ||
+    effectiveSortKey === "acos"
+      ? effectiveSortKey
+      : "acos";
+
+  const mobilePageQueryKey = [
+    "mobile-targeting-page-v1",
+    adminFilterUserId ?? "self",
+    // Include signed-in owner id so persisted cache cannot paint another account's rows.
+    viewAsOtherUser ? "view" : user?.id ?? "anon",
+    periodKey,
+    profileScopeKey,
+    bookAsin ?? "all",
+    bookCampaignIdList.join("|"),
+    segment,
+    stateFilter,
+    searchNeedle,
+    perf,
+    serverSort,
+    advancedScopeKey,
+    pageNumber,
+    pageNumber === 1 ? "page-1" : pageSnapshot ?? "waiting-snapshot",
+  ] as const;
+
+  // Don't apply book filter until options are fetched — otherwise a remembered
+  // ASIN empties the list while booksQ is still loading (misleading "no matches").
+  // bookCampaignIds.has(campaignId) scope is passed as campaignIds to the RPC.
+  const canReadPage =
+    scopeProfiles.length > 0 &&
+    (!bookFilterActive || booksQ.isSuccess) &&
+    (pageNumber === 1 || Boolean(pageSnapshot));
+
+  const mobilePageQ = useQuery({
+    queryKey: mobilePageQueryKey,
     queryFn: async ({ signal }) => {
-      markPerf("targets.placements.start");
-      let rows = await withQueryTimeout(
-        fetchTopCampaignsRange({
-          profileIds: scopeProfiles,
-          start: dateRange.start,
-          end: dateRange.end,
-          limit: TARGETING_LIST_LIMIT,
-          filterUserId: adminFilterUserId,
-        }),
-        TARGETING_QUERY_TIMEOUT_MS,
-        signal,
-      );
-      if (!viewAsOtherUser && user?.id) {
-        rows = await restrictRowsToOwnedCampaigns(
-          rows.map((row) => ({ ...row, campaign_id: row.id })),
-          user.id,
+      markPerf("targets.page.start");
+      try {
+        return await withQueryTimeout(
+          fetchMobileTargetingPage({
+            segment,
+            sort: serverSort,
+            page: pageNumber,
+            pageSize: TARGETING_PAGE_SIZE,
+            start: dateRange.start,
+            end: dateRange.end,
+            profiles: scopeProfiles,
+            // Keep parent ownership: view-as uses admin filter; self uses signed-in user.
+            ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+            ...(bookFilterActive ? { campaignIds: bookCampaignIdList } : {}),
+            // Active = keyword enabled + ad group enabled + campaign enabled (fail-closed).
+            // ASINs / Auto / Category: Active = target + ad group + campaign enabled.
+            // Placement rows are campaigns — Active = campaign enabled (no ad-group parent).
+            // Paused = entity paused AND live parents (ad group + campaign enabled) — use All to see paused-under-paused.
+            // RPC mobile_targeting_page_v1 enforces the same parent-chain rules server-side.
+            state: stateFilter,
+            search: searchNeedle,
+            perf,
+            advanced: advancedForRpc,
+            snapshot: pageNumber > 1 ? pageSnapshot : null,
+            signal,
+          }),
+          TARGETING_QUERY_TIMEOUT_MS,
+          signal,
         );
+      } finally {
+        markPerf("targets.page.end");
       }
-      markPerf("targets.placements.end");
-      return rows;
     },
-    enabled: scopeProfiles.length > 0,
+    enabled: canReadPage,
     ...targetingListCache,
   });
 
+  useEffect(() => {
+    if (pageNumber !== 1) return;
+    const snap = mobilePageQ.data?.snapshot;
+    if (typeof snap === "string" && snap.length > 0 && snap !== pageSnapshot) {
+      setPageSnapshot(snap);
+    }
+  }, [mobilePageQ.data?.snapshot, pageNumber, pageSnapshot]);
+
+  useEffect(() => {
+    if (!isMobileTargetingSnapshotChanged(mobilePageQ.error)) return;
+    setPageNumber(1);
+    setPageSnapshot(null);
+  }, [mobilePageQ.error]);
+
+  // Display-only enrichment — do not re-filter or re-sort a server page.
+  const data = useMemo(() => {
+    const rows = (mobilePageQ.data?.rows ?? []) as any[];
+    return rows.map((row) => {
+      if (segment === "placement") {
+        const campaignId = String(row.campaign_id || String(row.id || "").split("::")[0] || "");
+        return enrichPlacementRowWithBook(
+          {
+            ...normalizePlacementCampaignMetrics(row),
+            id: row.id,
+            campaign_id: campaignId,
+            placement_key: row.placement_key,
+            placement_label: row.placement_label,
+            placement_share:
+              row.placement_share == null || row.placement_share === "" || !Number.isFinite(Number(row.placement_share))
+                ? null
+                : Number(row.placement_share),
+          },
+          campaignBookById,
+        );
+      }
+      if (segment === "keywords") return row;
+      const described = describeProductTarget(row.expression, row.expression_type, row.resolved_expression);
+      return {
+        ...row,
+        __targetingDescription: described,
+        __targetingIsCategory: isCategoryTarget(row.expression, row.expression_type),
+      };
+    });
+  }, [mobilePageQ.data?.rows, segment, campaignBookById]);
+
   // Prefetch real Amazon placement % (never invent 0 when Amazon returns null).
   useEffect(() => {
-    const rows = placementsQ.data;
-    if (!rows?.length) return;
+    if (segment !== "placement") return;
+    if (!data.length) return;
     let cancelled = false;
-    const missing = rows
-      .map((row: any) => String(row.id || ""))
+    const missing = data
+      .map((row: any) => String(row.campaign_id || String(row.id || "").split("::")[0] || ""))
       .filter((id: string) => id && placementAdj[id] == null);
-    if (!missing.length) return;
-    void prefetchCampaignPlacementAdjustments(missing, { concurrency: 8 }).then((map) => {
+    const unique = [...new Set(missing)];
+    if (!unique.length) return;
+    void prefetchCampaignPlacementAdjustments(unique, { concurrency: 8 }).then((map) => {
       if (cancelled || !Object.keys(map).length) return;
       setPlacementAdj((prev) => ({ ...map, ...prev }));
     });
     return () => {
       cancelled = true;
     };
-    // Only re-run when the placement list identity changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [placementsQ.data]);
+  }, [segment, mobilePageQ.data?.snapshot, data.length]);
 
-  const data = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    let rows: any[] = [];
+  const serverTotal = Number(mobilePageQ.data?.total ?? 0);
+  const serverPageSize = Number(mobilePageQ.data?.pageSize ?? TARGETING_PAGE_SIZE) || TARGETING_PAGE_SIZE;
+  const totalPages = targetingTotalPages(serverTotal, serverPageSize);
 
-    if (segment === "keywords") {
-      // Active = keyword enabled + ad group enabled + campaign enabled (fail-closed).
-      rows = (keywordsQ.data ?? [])
-        .filter((k) =>
-          matchesLiveTargetingRow({
-            entityState: k.status,
-            campaignState: (k as any).campaign_state,
-            adGroupState: (k as any).ad_group_state,
-            filter: stateFilter,
-          }),
-        )
-        .filter((k) => (needle ? (k.keyword_text ?? "").toLowerCase().includes(needle) : true));
-    } else if (segment === "placement") {
-      // Placement rows are campaigns — Active = campaign enabled (no ad-group parent).
-      const campaigns = (placementsQ.data ?? [])
-        .map(normalizePlacementCampaignMetrics)
-        .map((c) => enrichPlacementRowWithBook(c, campaignBookById))
-        .filter((c) =>
-          matchesLiveTargetingRow({
-            entityState: c.state,
-            campaignState: c.state,
-            filter: stateFilter,
-          }),
-        )
-        .filter((c) => (needle ? (c.name ?? "").toLowerCase().includes(needle) : true));
-      // One list row per Amazon placement type (not mashed into a single card).
-      rows = campaigns.flatMap((c) =>
-        PLACEMENT_FIELDS.map((field) => {
-          const shareKey =
-            field.key === "top_of_search"
-              ? "placement_top_share"
-              : field.key === "product_pages"
-                ? "placement_product_share"
-                : "placement_rest_share";
-          const rawShare = (c as any)[shareKey];
-          const share =
-            rawShare == null || rawShare === "" || !Number.isFinite(Number(rawShare))
-              ? null
-              : Number(rawShare);
-          return {
-            ...c,
-            id: `${c.id}::${field.key}`,
-            campaign_id: c.id,
-            placement_key: field.key,
-            placement_label: field.title,
-            placement_share: share,
-          };
-        }),
-      );
-    } else {
-      // ASINs / Auto / Category: Active = target + ad group + campaign enabled.
-      rows = productSegmentBuckets[segment]
-        .filter((p) =>
-          matchesLiveTargetingRow({
-            entityState: p.state,
-            campaignState: p.campaign_state,
-            adGroupState: p.ad_group_state,
-            filter: stateFilter,
-          }),
-        )
-        .filter((p) => {
-          if (!needle) return true;
-          const described = p.__targetingDescription;
-          return (
-            (p.title ?? "").toLowerCase().includes(needle) ||
-            productTargetHeading(p).toLowerCase().includes(needle) ||
-            String(described?.label ?? "")
-              .toLowerCase()
-              .includes(needle) ||
-            String(described?.name ?? "")
-              .toLowerCase()
-              .includes(needle) ||
-            String(described?.asin ?? "")
-              .toLowerCase()
-              .includes(needle) ||
-            extractTargetAsin(p.expression).toLowerCase().includes(needle)
-          );
-        });
-    }
+  useEffect(() => {
+    if (!mobilePageQ.isSuccess) return;
+    if (pageNumber > totalPages) setPageNumber(totalPages);
+  }, [mobilePageQ.isSuccess, pageNumber, totalPages]);
 
-    rows = rows.filter((row) => matchesPerf(row, perf));
-
-    // Don't apply book filter until options are fetched — otherwise a remembered
-    // ASIN empties the list while booksQ is still loading (misleading "no matches").
-    if (bookAsin && booksQ.isFetched) {
-      const needleAsin = bookAsin.toUpperCase();
-      rows = rows.filter((row: any) => {
-        if (segment === "placement") {
-          const campaignId = String(row.campaign_id || row.id || "");
-          // Nest aggregated campaigns often omit book_asin — match via book→campaign map.
-          if (bookCampaignIds.has(campaignId)) return true;
-          return String(row.book_asin || "").toUpperCase() === needleAsin;
-        }
-        if (segment === "keywords") {
-          return bookCampaignIds.has(String(row.campaign_id || ""));
-        }
-        const described =
-          row.__targetingDescription ??
-          describeProductTarget(row.expression, row.expression_type, row.resolved_expression);
-        const asin = (
-          described?.asin ||
-          extractTargetAsin(row.expression) ||
-          String(row.cover_asin || "")
-        ).toUpperCase();
-        if (asin && asin === needleAsin) return true;
-        // Auto / category under a book campaign
-        return bookCampaignIds.has(String(row.campaign_id || ""));
-      });
-    }
-
-    if (hasActiveAdvancedFilters(advanced)) {
-      const filtersForSegment = advancedFiltersForSegment(segment, advanced);
-      rows = rows.filter((row: any) => {
-        const bid = baseBidForRow(segment, row, defaultBidByAdGroupId);
-        return matchesAdvancedFilters(rowMetricsFromEntity(row, bid), filtersForSegment);
-      });
-    }
-
-    const effectiveSort = resolveTargetingSortKey(sort, advanced);
-    return [...rows].sort((a: any, b: any) =>
-      compareTargetingRows(
-        rowMetricsFromEntity(a, baseBidForRow(segment, a, defaultBidByAdGroupId)),
-        rowMetricsFromEntity(b, baseBidForRow(segment, b, defaultBidByAdGroupId)),
-        effectiveSort,
-      ),
-    );
-  }, [
-    segment,
-    search,
-    sort,
-    perf,
-    stateFilter,
-    bookAsin,
-    bookCampaignIds,
-    campaignBookById,
-    booksQ.isFetched,
-    advanced,
-    defaultBidByAdGroupId,
-    keywordsQ.data,
-    productSegmentBuckets,
-    placementsQ.data,
-  ]);
-
-  const activeQuery = segment === "keywords" ? keywordsQ : segment === "placement" ? placementsQ : productsQ;
-  const isError = activeQuery.isError;
+  const activeQuery = mobilePageQ;
+  const isError = activeQuery.isError || (bookFilterActive && booksQ.isError);
   const isRefetching = activeQuery.isRefetching;
 
   useEffect(() => {
     const err = activeQuery.error instanceof Error ? activeQuery.error.message : activeQuery.isError ? "error" : "ok";
     console.log(
       `[inteliads:targeting] segment=${segment} period=${dateRange.start}..${dateRange.end} ` +
-        `kw=${keywordsQ.fetchStatus}/${keywordsQ.data?.length ?? "-"} ` +
-        `prod=${productsQ.fetchStatus}/${productsQ.data?.length ?? "-"} ` +
-        `place=${placementsQ.fetchStatus}/${placementsQ.data?.length ?? "-"} active=${err}`,
+        `page=${pageNumber}/${totalPages} total=${mobilePageQ.data?.total ?? "-"} ` +
+        `rows=${data.length} status=${activeQuery.fetchStatus} active=${err}`,
     );
   }, [
     segment,
     dateRange.start,
     dateRange.end,
-    keywordsQ.fetchStatus,
-    keywordsQ.data?.length,
-    productsQ.fetchStatus,
-    productsQ.data?.length,
-    placementsQ.fetchStatus,
-    placementsQ.data?.length,
+    pageNumber,
+    totalPages,
+    mobilePageQ.data?.total,
+    data.length,
+    activeQuery.fetchStatus,
     activeQuery.isError,
     activeQuery.error,
   ]);
@@ -874,14 +802,23 @@ export default function TargetingScreen() {
     data.length === 0 &&
     !activeQuery.isPlaceholderData &&
     !isError &&
-    (queryStillWaiting(activeQuery) || activeQuery.isFetching);
+    (queryStillWaiting(activeQuery) || activeQuery.isFetching || (bookFilterActive && !booksQ.isSuccess));
   const listUpdating =
     (activeQuery.isFetching || !!activeQuery.isPlaceholderData) && data.length > 0 && !isError;
-  const listTruncated =
-    !showBlockingSpinner &&
-    !isError &&
-    Array.isArray(activeQuery.data) &&
-    activeQuery.data.length >= TARGETING_LIST_LIMIT;
+
+  // Server owns ranked totals via mobile_targeting_page_v1 — prefer page total over client 500-cap.
+  const pageSummary = mobilePageQ.data
+    ? `Page ${pageNumber} of ${totalPages} · ${serverTotal} rows${listUpdating ? " · updating" : ""}`
+    : null;
+
+  const changePage = (page: number) => {
+    const next = Math.max(1, Math.min(Math.floor(page) || 1, totalPages));
+    if (next === pageNumber) return;
+    setSelectedIds([]);
+    setSelectMode(false);
+    setPageNumber(next);
+    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+  };
 
   // Placement list is 3 rows per campaign; Amazon writes once per campaign.
   const visibleWriteCount = useMemo(() => {
@@ -897,8 +834,21 @@ export default function TargetingScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await activeQuery.refetch();
-    setRefreshing(false);
+    try {
+      if (bookFilterActive && booksQ.isError) await booksQ.refetch();
+      else await activeQuery.refetch();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const onListScroll = (event: { nativeEvent: { contentOffset: { y: number } } }) => {
+    const y = event.nativeEvent.contentOffset.y;
+    const nextVisible = topChromeVisibleRef.current ? y < 104 : y <= 28;
+    if (nextVisible === topChromeVisibleRef.current) return;
+    topChromeVisibleRef.current = nextVisible;
+    // Instant toggle — avoid scroll-driven layout storms during tab switches.
+    setTopChromeVisible(nextVisible);
   };
 
   const openPlacementEditor = async (item: any, field: PlacementField) => {
@@ -1470,6 +1420,11 @@ export default function TargetingScreen() {
     );
   };
 
+  const cooldownSelected = useMemo(
+    () => selectedCooldownSummary(segment, selectedIds, data, entityCooldownHours),
+    [segment, selectedIds, data, entityCooldownHours],
+  );
+
   if (selectedProfileIds.length === 0) {
     return (
       <AppScreen>
@@ -1495,10 +1450,6 @@ export default function TargetingScreen() {
       ? bookAsin
       : null;
   const advancedCount = countActiveAdvancedFilters(advanced);
-  const cooldownSelected = useMemo(
-    () => selectedCooldownSummary(segment, selectedIds, data, entityCooldownHours),
-    [segment, selectedIds, data, entityCooldownHours],
-  );
   const canBulkBid = segment !== "placement";
 
   const filtersActive =
@@ -1512,50 +1463,17 @@ export default function TargetingScreen() {
 
   return (
     <AppScreen>
-      <TopBar />
+      {topChromeVisible ? <TopBar /> : null}
 
+      {topChromeVisible ? (
       <FilterChrome>
-        <View
-          testID="targeting-segments"
-          style={styles.segmentWrap}
-          accessibilityRole="tablist"
-        >
-          {SEGMENTS.map((s) => {
-            const active = segment === s.key;
-            return (
-              <TouchableOpacity
-                key={s.key}
-                testID={`segment-${s.key}`}
-                accessibilityRole="tab"
-                accessibilityState={{ selected: active }}
-                accessibilityLabel={s.label}
-                onPress={() => {
-                  setSegment(s.key);
-                  setSelectedIds([]);
-                }}
-                style={[
-                  styles.segmentChip,
-                  {
-                    backgroundColor: active ? t.colors.tone_primary + "22" : t.colors.background_tertiary,
-                    borderColor: active ? t.colors.tone_primary + "66" : t.colors.separator,
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    t.typography.caption1,
-                    {
-                      color: active ? t.colors.tone_primary : t.colors.text_secondary,
-                      fontWeight: active ? "700" : "500",
-                    },
-                  ]}
-                >
-                  {s.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+        <TargetingModePills
+          value={segment}
+          onChange={(next) => {
+            setSegment(next);
+            setSelectedIds([]);
+          }}
+        />
         <FilterSearchRow>
           <View style={{ flex: 1, minWidth: 0 }}>
             <IOSSearchBar
@@ -1633,19 +1551,6 @@ export default function TargetingScreen() {
               />
             ) : null}
           </ActiveFilterRow>
-        ) : null}
-        {!showBlockingSpinner && !isError ? (
-          <Text
-            testID="targeting-list-count"
-            style={[t.typography.caption1, { color: t.colors.text_tertiary }]}
-          >
-            {visibleWriteCount === 1
-              ? segment === "placement"
-                ? "1 campaign"
-                : "1 row"
-              : `${visibleWriteCount} ${segment === "placement" ? "campaigns" : "rows"}`}
-            {listUpdating ? " · updating" : ""}
-          </Text>
         ) : null}
         {filtersActive ? (
           <ActiveFilterRow>
@@ -1756,6 +1661,7 @@ export default function TargetingScreen() {
           </View>
         ) : null}
       </FilterChrome>
+      ) : null}
 
       {showBlockingSpinner ? (
         <ScreenSpinner />
@@ -1788,8 +1694,11 @@ export default function TargetingScreen() {
         />
       ) : (
         <FlatList
+          ref={listRef}
           data={data}
           keyExtractor={(item: any) => item.id}
+          onScroll={onListScroll}
+          scrollEventThrottle={16}
           contentContainerStyle={{
             padding: t.layout.pagePad,
             paddingBottom: selectedIds.length > 0 ? t.layout.tabClearance + 110 : t.layout.tabClearance,
@@ -1818,18 +1727,27 @@ export default function TargetingScreen() {
             />
           }
           ListFooterComponent={
-            listTruncated ? (
-              <Text
-                testID="targeting-list-cap-note"
-                style={[t.typography.footnote, { color: t.colors.text_secondary, textAlign: "center", marginTop: t.spacing.md }]}
-              >
-                Showing {TARGETING_LIST_LIMIT} (app limit)
-              </Text>
+            mobilePageQ.data ? (
+              <View style={{ gap: 8, paddingTop: 8 }}>
+                {pageSummary ? (
+                  <Text
+                    testID="targeting-list-count-footer"
+                    accessibilityLabel={pageSummary}
+                    style={[t.typography.caption1, { color: t.colors.text_tertiary, textAlign: "center" }]}
+                  >
+                    {pageSummary}
+                  </Text>
+                ) : null}
+                {totalPages > 1 ? (
+                  <TargetingPagination page={pageNumber} totalPages={totalPages} onChange={changePage} theme={t} />
+                ) : null}
+              </View>
             ) : null
           }
-          // fair per-profile fetch is enforced in queries (list cap is app-only).
+          // Server owns ranked totals via mobile_targeting_page_v1 — prefer page total over client 500-cap.
           renderItem={({ item }: any) => {
             const selected = selectedIds.includes(item.id);
+            const rowCurrency = rowCurrencyOfProfile(profiles, item.amazon_profile_id, primaryCurrency);
             const onRowPress = () => {
               if (selectMode) {
                 toggleSelected(item.id);
@@ -1850,7 +1768,7 @@ export default function TargetingScreen() {
               return (
                 <KeywordRow
                   item={item}
-                  currency={primaryCurrency}
+                  currency={rowCurrency}
                   t={t}
                   viewAsOtherUser={viewAsOtherUser}
                   onPress={onRowPress}
@@ -1874,7 +1792,7 @@ export default function TargetingScreen() {
               return (
                 <PlacementRow
                   item={item}
-                  currency={primaryCurrency}
+                  currency={rowCurrency}
                   t={t}
                   field={field}
                   adjustments={placementAdj[campaignId]}
@@ -1890,7 +1808,7 @@ export default function TargetingScreen() {
             return (
               <ProductTargetRow
                 item={item}
-                currency={primaryCurrency}
+                currency={rowCurrency}
                 inheritedDefaultBid={
                   item.ad_group_id ? defaultBidByAdGroupId[String(item.ad_group_id)] : undefined
                 }
@@ -2079,20 +1997,32 @@ export default function TargetingScreen() {
             ...prev,
             [percentEditor.id]: { ...(prev[percentEditor.id] ?? {}), ...payload },
           }));
-          // Optimistic cooldown stamp so Placement Cooldown badge updates immediately.
-          queryClient.setQueriesData({ queryKey: ["targeting-placements-v2"] }, (old: unknown) => {
-            if (!Array.isArray(old)) return old;
+          // Optimistic cooldown stamp — only the edited placement slot on RPC page rows.
+          queryClient.setQueriesData({ queryKey: ["mobile-targeting-page-v1"] }, (old: unknown) => {
+            if (!old || typeof old !== "object" || !Array.isArray((old as { rows?: unknown }).rows)) return old;
+            const page = old as { rows: any[] };
             const now = new Date().toISOString();
-            return old.map((row: any) =>
-              String(row.id) === String(percentEditor.id)
-                ? {
-                    ...row,
-                    rule_last_modified_at: now,
-                    placement_adj_last_modified_at: now,
-                    placement_adj_change_source: "manual",
-                  }
-                : row,
-            );
+            return {
+              ...page,
+              rows: page.rows.map((row: any) => {
+                const campaignId = String(row.campaign_id || String(row.id || "").split("::")[0] || "");
+                if (campaignId !== String(percentEditor.id)) return row;
+                const prevStamp =
+                  row.placement_adj_last_modified_at &&
+                  typeof row.placement_adj_last_modified_at === "object"
+                    ? { ...row.placement_adj_last_modified_at }
+                    : {};
+                const prevSource =
+                  row.placement_adj_change_source && typeof row.placement_adj_change_source === "object"
+                    ? { ...row.placement_adj_change_source }
+                    : {};
+                return {
+                  ...row,
+                  placement_adj_last_modified_at: { ...prevStamp, [percentEditor.field]: now },
+                  placement_adj_change_source: { ...prevSource, [percentEditor.field]: "manual" },
+                };
+              }),
+            };
           });
           await invalidateAds();
         }}
@@ -2354,7 +2284,7 @@ function FilterSheetFields({
         </View>
         {!bookOptions.length ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: t.spacing.xs }]}>
-            No campaign or KDP books on these profiles yet.
+            No books with active campaigns on these profiles yet.
           </Text>
         ) : bookQuery.trim() && !visibleBooks.length ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: t.spacing.xs }]}>
@@ -2606,8 +2536,18 @@ function KeywordRow({
         >
           <View style={styles.titleRow}>
             <Text
-              style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600", flex: 1, minWidth: 0 }]}
-              numberOfLines={1}
+              style={[
+                t.typography.subhead,
+                {
+                  color: t.colors.text_primary,
+                  fontWeight: "700",
+                  flex: 1,
+                  minWidth: 0,
+                  letterSpacing: -0.25,
+                  lineHeight: 20,
+                },
+              ]}
+              numberOfLines={2}
             >
               {item.keyword_text ?? "—"}
             </Text>
@@ -2631,16 +2571,29 @@ function KeywordRow({
               {status.label}
             </Text>
             {item.match_type ? (
-              <Text style={[t.typography.caption2, { color: t.colors.text_secondary }]}>{item.match_type}</Text>
+              <Text
+                style={[
+                  t.typography.caption2,
+                  {
+                    color: t.colors.text_secondary,
+                    fontWeight: isExactMatchType(item.match_type) ? "700" : "500",
+                  },
+                ]}
+              >
+                {formatMatchTypeLabel(item.match_type)}
+              </Text>
             ) : null}
-            {getEntityBidCooldown(item, entityCooldownHours).isInCooldown ? (
+            {(() => {
+              const cooldown = getEntityBidCooldown(item, entityCooldownHours);
+              return cooldown.isInCooldown ? (
               <Text
                 testID={`targeting-cooldown-badge-${item.id}`}
                 style={[t.typography.caption2, { color: t.colors.tone_warning, fontWeight: "700" }]}
               >
-                Cooldown
+                {`Cooldown · ${cooldown.sourceTag}`}
               </Text>
-            ) : null}
+              ) : null;
+            })()}
           </View>
           <DenseMetricLine items={targetingMetricItems(item, currency, t)} />
         </TouchableOpacity>
@@ -2739,7 +2692,7 @@ function ProductTargetRow({
               uri={item.image_url}
               fallbackUri={fallbackAsinCoverUrl(coverAsin)}
               asin={coverAsin}
-              size="xs"
+              size="md"
               placeholder={target.isAuto ? "auto" : category ? "category" : coverAsin ? "book" : "cube"}
               recyclingKey={coverAsin || item.id}
             />
@@ -2747,8 +2700,18 @@ function ProductTargetRow({
             <View style={{ flex: 1, minWidth: 0 }}>
               <View style={styles.titleRow}>
                 <Text
-                  style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600", flex: 1, minWidth: 0 }]}
-                  numberOfLines={1}
+                  style={[
+                    t.typography.subhead,
+                    {
+                      color: t.colors.text_primary,
+                      fontWeight: "700",
+                      flex: 1,
+                      minWidth: 0,
+                      letterSpacing: -0.25,
+                      lineHeight: 20,
+                    },
+                  ]}
+                  numberOfLines={2}
                 >
                   {displayTitle}
                 </Text>
@@ -2768,25 +2731,42 @@ function ProductTargetRow({
               </View>
               <View style={styles.metaRow}>
                 <ToneDot value={Number(item.total_acos)} />
-                <Text style={[t.typography.caption2, { color: toneColor(target.tone, t.colors) }]}>
+                <Text
+                  style={[
+                    t.typography.caption2,
+                    {
+                      color:
+                        category || target.isAuto
+                          ? toneColor(target.tone, t.colors)
+                          : t.colors.text_secondary,
+                      fontWeight:
+                        category || target.isAuto || isExactMatchType(target.label)
+                          ? "700"
+                          : "500",
+                    },
+                  ]}
+                >
                   {target.isAuto
                     ? `Auto · ${target.label}`
                     : category
                       ? target.asin
                         ? `Category · ${target.asin}`
                         : "Category"
-                      : target.asin && displayTitle !== target.asin
-                        ? `${target.label} · ${target.asin}`
-                        : target.label}
+                      : target.asin
+                        ? `${formatMatchTypeLabel(target.label) || target.label} · ${target.asin}`
+                        : formatMatchTypeLabel(target.label) || target.label}
                 </Text>
-                {getEntityBidCooldown(item, entityCooldownHours).isInCooldown ? (
+                {(() => {
+                  const cooldown = getEntityBidCooldown(item, entityCooldownHours);
+                  return cooldown.isInCooldown ? (
                   <Text
                     testID={`targeting-cooldown-badge-${item.id}`}
                     style={[t.typography.caption2, { color: t.colors.tone_warning, fontWeight: "700" }]}
                   >
-                    Cooldown
+                    {`Cooldown · ${cooldown.sourceTag}`}
                   </Text>
-                ) : null}
+                  ) : null;
+                })()}
               </View>
               <DenseMetricLine items={targetingMetricItems(item, currency, t)} />
             </View>
@@ -2823,14 +2803,12 @@ function PlacementRow({
   const campaignId = String(item.campaign_id || item.id || "");
   const coverAsin = item.book_asin ? String(item.book_asin).toUpperCase() : null;
   const hasBook = Boolean(coverAsin);
-  const bookSubtitle = item.book_title
-    ? String(item.book_title)
-    : hasBook
-      ? coverAsin
-      : "No linked book";
+  const campaignName = String(item.name ?? "").trim() || "Campaign";
   const placementLabel = String(item.placement_label || field);
   const { entityCooldownHours } = useApp();
-  const cooldown = getCampaignSettingsCooldown(item as EntityBidCooldownFields, entityCooldownHours);
+  // A placement edit must only inherit the placement cooldown stamp. Strategy,
+  // keyword and product-target changes have independent cooldown lifecycles.
+  const cooldown = getPlacementAdjCooldown(item as EntityBidCooldownFields, entityCooldownHours, Date.now(), field);
   const fieldMeta = PLACEMENT_FIELDS.find((entry) => entry.key === field);
   return (
     <ListCard testID={`placement-row-${item.id}`} compact>
@@ -2855,9 +2833,8 @@ function PlacementRow({
             accessible
             accessibilityRole="button"
             accessibilityLabel={targetingSpeech([
-              item.name ?? "Campaign",
               placementLabel,
-              hasBook ? bookSubtitle : "No linked book",
+              campaignName,
               "Placement bid adjustment",
               `Spend ${formatCurrency(Number(item.total_spend ?? item.spend) || 0, currency)}`,
               `Orders ${formatInt(Number(item.total_orders ?? item.orders) || 0)}`,
@@ -2867,28 +2844,39 @@ function PlacementRow({
             <View style={styles.cardHeader}>
               <BookCover
                 uri={hasBook ? item.book_image_url : null}
-                fallbackUri={null}
-                asin={null}
-                size="xs"
+                fallbackUri={fallbackAsinCoverUrl(coverAsin)}
+                asin={coverAsin}
+                size="md"
                 placeholder={hasBook ? "book" : "cube"}
                 recyclingKey={coverAsin || campaignId}
               />
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600" }]} numberOfLines={1}>
-                  {placementLabel}
-                </Text>
                 <Text
                   style={[
-                    t.typography.caption2,
+                    t.typography.subhead,
                     {
-                      color: hasBook ? t.colors.text_secondary : t.colors.text_tertiary,
-                      marginTop: 2,
+                      color: t.colors.text_primary,
+                      fontWeight: "700",
+                      letterSpacing: -0.25,
+                      lineHeight: 20,
                     },
                   ]}
                   numberOfLines={1}
                 >
-                  {item.name ?? "Campaign"}
-                  {bookSubtitle ? ` · ${bookSubtitle}` : ""}
+                  {placementLabel}
+                </Text>
+                <Text
+                  style={[
+                    t.typography.caption1,
+                    {
+                      color: t.colors.text_secondary,
+                      marginTop: 2,
+                      fontWeight: "500",
+                    },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {campaignName}
                 </Text>
               </View>
               {cooldown.isInCooldown ? (
@@ -2932,11 +2920,11 @@ function PlacementRow({
 }
 
 const styles = StyleSheet.create({
-  leadRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  switchWell: { minWidth: 42, alignItems: "flex-start", justifyContent: "center" },
+  leadRow: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: layout.minTap },
+  switchWell: { minWidth: 44, minHeight: layout.minTap, alignItems: "flex-start", justifyContent: "center" },
   selectHit: { minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" },
-  cardHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
-  titleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  cardHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 28 },
   metaRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2949,22 +2937,6 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 6,
     marginTop: 8,
-  },
-  segmentWrap: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: 8,
-    paddingVertical: 2,
-    paddingLeft: 2,
-    paddingRight: 2,
-  },
-  segmentChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexShrink: 0,
   },
   chipWrap: {
     flexDirection: "row",

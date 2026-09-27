@@ -1,6 +1,16 @@
 import type { SearchTerm } from "@/src/lib/types";
 import type { TopBookRow, TopCampaignRow, AdGroupEnriched } from "@/src/lib/queries";
+import { normalizeEntityState } from "./campaigns.ts";
 import { resolveBookNet } from "./netRoyalties.ts";
+
+/** Overview Campaigns / Ad groups swipe: pause means action already taken — do not rank. */
+export function isPausedForOverviewWidget(state: string | null | undefined): boolean {
+  return normalizeEntityState(state) === "paused";
+}
+
+function actionableOverviewWidgetRows<T extends { state?: string | null }>(rows: readonly T[]): T[] {
+  return rows.filter((row) => !isPausedForOverviewWidget(row.state));
+}
 
 type MetricRow = {
   total_spend?: number | null;
@@ -9,12 +19,12 @@ type MetricRow = {
   total_acos?: number | null;
   total_clicks?: number | null;
   total_impressions?: number | null;
-  spend?: number;
-  orders?: number;
-  sales?: number;
-  acos?: number;
-  clicks?: number;
-  impressions?: number;
+  spend?: number | null;
+  orders?: number | null;
+  sales?: number | null;
+  acos?: number | null;
+  clicks?: number | null;
+  impressions?: number | null;
   metrics_updated_at?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
@@ -108,40 +118,38 @@ function acosFillTiers<T extends MetricRow>(direction: "high" | "low"): FillTier
     direction === "high"
       ? (a: T, b: T) => acosOf(b) - acosOf(a)
       : (a: T, b: T) => acosOf(a) - acosOf(b);
+  // Honest labels only: converting ACoS rows, then spenders (no ACoS), then
+  // impressions. Never pad with zero-metric entities under "High ACoS".
   return [
     {
       pick: (row) => salesOf(row) > 0 && acosOf(row) > 0,
       compare: acosCompare,
     },
     {
-      pick: (row) => spendOf(row) > 0,
+      pick: (row) => spendOf(row) > 0 && salesOf(row) === 0,
       compare: (a, b) => spendOf(b) - spendOf(a),
     },
     {
-      pick: (row) => impressionsOf(row) > 0,
+      pick: (row) => impressionsOf(row) > 0 && spendOf(row) === 0 && salesOf(row) === 0,
       compare: (a, b) => impressionsOf(b) - impressionsOf(a),
-    },
-    {
-      pick: () => true,
-      compare: (a, b) => lastSyncedMs(b) - lastSyncedMs(a),
     },
   ];
 }
 
 function spendFillTiers<T extends MetricRow>(opts?: { requireNoOrders?: boolean }): FillTier<T> {
   const requireNoOrders = opts?.requireNoOrders === true;
+  // Pad tiers keep the page contract: no-orders pages must not include converters.
   return [
     {
       pick: (row) => spendOf(row) > 0 && (!requireNoOrders || ordersOf(row) === 0),
       compare: (a, b) => spendOf(b) - spendOf(a),
     },
     {
-      pick: (row) => impressionsOf(row) > 0,
+      pick: (row) =>
+        impressionsOf(row) > 0 &&
+        spendOf(row) === 0 &&
+        (!requireNoOrders || ordersOf(row) === 0),
       compare: (a, b) => impressionsOf(b) - impressionsOf(a),
-    },
-    {
-      pick: () => true,
-      compare: (a, b) => lastSyncedMs(b) - lastSyncedMs(a),
     },
   ];
 }
@@ -167,12 +175,9 @@ export function booksSpendingNoAdSales(rows: TopBookRow[], limit = OVERVIEW_SWIP
         compare: (a, b) => b.spend - a.spend,
       },
       {
-        pick: (row) => (Number(row.impressions) || 0) > 0,
+        pick: (row) =>
+          (Number(row.impressions) || 0) > 0 && row.spend === 0 && row.sales === 0,
         compare: (a, b) => (Number(b.impressions) || 0) - (Number(a.impressions) || 0),
-      },
-      {
-        pick: () => true,
-        compare: (a, b) => lastSyncedMs(b) - lastSyncedMs(a),
       },
     ],
     limit,
@@ -181,7 +186,7 @@ export function booksSpendingNoAdSales(rows: TopBookRow[], limit = OVERVIEW_SWIP
 }
 
 export function campaignsTopSpend(rows: TopCampaignRow[], limit = OVERVIEW_SWIPE_ROW_LIMIT): TopCampaignRow[] {
-  return fillOverviewWidgetRows(rows, spendFillTiers<TopCampaignRow>(), limit);
+  return fillOverviewWidgetRows(actionableOverviewWidgetRows(rows), spendFillTiers<TopCampaignRow>(), limit);
 }
 
 /** Hide a second swipe page when it is the same entities sorted differently. */
@@ -230,13 +235,13 @@ export function booksWorstProfit(rows: TopBookRow[], limit = OVERVIEW_SWIPE_ROW_
 }
 
 export function campaignsHighAcos(rows: TopCampaignRow[], limit = OVERVIEW_SWIPE_ROW_LIMIT): TopCampaignRow[] {
-  return fillOverviewWidgetRows(rows, acosFillTiers<TopCampaignRow>("high"), limit);
+  return fillOverviewWidgetRows(actionableOverviewWidgetRows(rows), acosFillTiers<TopCampaignRow>("high"), limit);
 }
 
 export function campaignsLowAcos(rows: TopCampaignRow[], limit = OVERVIEW_SWIPE_ROW_LIMIT): TopCampaignRow[] {
-  return fillOverviewWidgetRows(rows, acosFillTiers<TopCampaignRow>("low"), limit);
+  return fillOverviewWidgetRows(actionableOverviewWidgetRows(rows), acosFillTiers<TopCampaignRow>("low"), limit);
 }
 
 export function adGroupsHighAcos(rows: AdGroupEnriched[], limit = OVERVIEW_SWIPE_ROW_LIMIT): AdGroupEnriched[] {
-  return fillOverviewWidgetRows(rows, acosFillTiers<AdGroupEnriched>("high"), limit);
+  return fillOverviewWidgetRows(actionableOverviewWidgetRows(rows), acosFillTiers<AdGroupEnriched>("high"), limit);
 }

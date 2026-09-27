@@ -3,15 +3,20 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  collapseTargetingBookOptionsByParent,
   dedupeTargetingBookOptions,
   filterTargetingBookOptions,
+  hasMeaningfulKdpDailySignal,
   isEligibleTargetingBookOption,
   mergeTargetingBookOptionSources,
+  selectEligibleCreateBookOptions,
   selectEligibleTargetingBookOptions,
+  unionCampaignIdsForBookAsins,
 } from "../src/lib/targetingBookFilter.ts";
 
 const queries = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
 const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
+const mutations = readFileSync(new URL("../src/lib/mutations.ts", import.meta.url), "utf8");
 
 test("book filter keeps distinct ASINs even when titles match", () => {
   const rows = dedupeTargetingBookOptions([
@@ -81,7 +86,18 @@ test("filterTargetingBookOptions matches title or ASIN", () => {
   assert.equal(filterTargetingBookOptions(books, "prague").length, 0);
 });
 
-test("isEligibleTargetingBookOption keeps campaign/KDP books and drops bare orphans", () => {
+test("hasMeaningfulKdpDailySignal requires royalties, orders, KENP, or format cents", () => {
+  assert.equal(hasMeaningfulKdpDailySignal({ royalties: 0, orders: 0 }), false);
+  assert.equal(hasMeaningfulKdpDailySignal({ royalties: 0.01 }), true);
+  assert.equal(hasMeaningfulKdpDailySignal({ orders: 1 }), true);
+  assert.equal(hasMeaningfulKdpDailySignal({ kenp_royalties: 0.5 }), true);
+  assert.equal(hasMeaningfulKdpDailySignal({ ebook_royalties: 1 }), true);
+  assert.equal(hasMeaningfulKdpDailySignal({ paperback_royalties: 2 }), true);
+  assert.equal(hasMeaningfulKdpDailySignal({ pages_read: 12 }), true);
+  assert.equal(hasMeaningfulKdpDailySignal({ kenp_pages: 3 }), true);
+});
+
+test("targets eligibility keeps campaign books only; drops KDP-only and stock-only", () => {
   assert.equal(
     isEligibleTargetingBookOption({
       asin: "B0ALASKA01",
@@ -97,14 +113,15 @@ test("isEligibleTargetingBookOption keeps campaign/KDP books and drops bare orph
       campaignIds: [],
       hasKdpData: true,
     }),
-    true,
+    false,
   );
   assert.equal(
     isEligibleTargetingBookOption({
-      asin: "1803627867",
-      title: "1803627867",
-      campaignIds: ["c9"],
+      asin: "180797376X",
+      title: "Alaska 2027",
+      campaignIds: [],
       hasKdpData: false,
+      inStock: true,
     }),
     false,
   );
@@ -112,8 +129,8 @@ test("isEligibleTargetingBookOption keeps campaign/KDP books and drops bare orph
     isEligibleTargetingBookOption({
       asin: "1803627867",
       title: "1803627867",
-      image_url: "https://example.com/cover.jpg",
       campaignIds: ["c9"],
+      hasKdpData: false,
     }),
     true,
   );
@@ -123,12 +140,217 @@ test("isEligibleTargetingBookOption keeps campaign/KDP books and drops bare orph
       title: "Mystery Title",
       campaignIds: [],
       hasKdpData: false,
+      inStock: false,
     }),
     false,
   );
 });
 
-test("mergeTargetingBookOptionSources unions campaign + KDP and dedupes by ASIN", () => {
+test("create eligibility requires in-stock AND (KDP or Ads); drops stock-only and out-of-stock", () => {
+  assert.equal(
+    isEligibleTargetingBookOption(
+      {
+        asin: "B0CW1CHVNS",
+        title: "B0CW1CHVNS",
+        campaignIds: [],
+        hasKdpData: true,
+        inStock: true,
+      },
+      "create",
+    ),
+    true,
+  );
+  assert.equal(
+    isEligibleTargetingBookOption(
+      {
+        asin: "B0STOCKKDP",
+        title: "Stock + KDP",
+        campaignIds: [],
+        hasKdpData: true,
+        inStock: true,
+      },
+      "create",
+    ),
+    true,
+  );
+  assert.equal(
+    isEligibleTargetingBookOption(
+      {
+        asin: "B0STOCKADS",
+        title: "Stock + Ads",
+        campaignIds: ["c1"],
+        hasKdpData: false,
+        inStock: true,
+      },
+      "create",
+    ),
+    true,
+  );
+  // Stock-only empty — no KDP, no Ads
+  assert.equal(
+    isEligibleTargetingBookOption(
+      {
+        asin: "180797376X",
+        title: "Alaska 2027",
+        campaignIds: [],
+        inStock: true,
+        hasKdpData: false,
+      },
+      "create",
+    ),
+    false,
+  );
+  // KDP without stock
+  assert.equal(
+    isEligibleTargetingBookOption(
+      {
+        asin: "B0KDPONLY1",
+        title: "KDP Only",
+        campaignIds: [],
+        hasKdpData: true,
+        inStock: false,
+      },
+      "create",
+    ),
+    false,
+  );
+  // Ads without stock
+  assert.equal(
+    isEligibleTargetingBookOption(
+      {
+        asin: "B0CAMPAIGN",
+        title: "Has Ads Only",
+        campaignIds: ["c1"],
+        hasKdpData: false,
+        inStock: false,
+      },
+      "create",
+    ),
+    false,
+  );
+  assert.equal(
+    isEligibleTargetingBookOption(
+      {
+        asin: "ORPHAN0001",
+        title: "Old Published",
+        campaignIds: [],
+        hasKdpData: false,
+        inStock: false,
+      },
+      "create",
+    ),
+    false,
+  );
+});
+
+test("collapseTargetingBookOptionsByParent unions Kindle + paperback as one filter row", () => {
+  const KINDLE = "B0BARNKIN1";
+  const PRINT = "B0BARNPRT1";
+  const GROUP = `DIGITAL=${KINDLE}:PRINT=${PRINT}::`;
+  const collapsed = collapseTargetingBookOptionsByParent([
+    {
+      asin: KINDLE,
+      title: "Barndominium Plans Kindle",
+      campaignIds: ["c-kindle"],
+      hasKdpData: true,
+      formatAsins: [KINDLE, PRINT],
+      groupKey: GROUP,
+    },
+    {
+      asin: PRINT,
+      title: "Barndominium Plans Paperback",
+      campaignIds: ["c-print"],
+      hasKdpData: true,
+      formatAsins: [KINDLE, PRINT],
+      groupKey: GROUP,
+    },
+  ]);
+  assert.equal(collapsed.length, 1);
+  assert.equal(collapsed[0].asin, KINDLE);
+  assert.deepEqual(collapsed[0].campaignIds.sort(), ["c-kindle", "c-print"]);
+  assert.ok(collapsed[0].formatAsins.includes(PRINT));
+  assert.equal(collapsed[0].hasKdpData, true);
+  assert.deepEqual(
+    unionCampaignIdsForBookAsins(collapsed, [PRINT]).sort(),
+    ["c-kindle", "c-print"],
+  );
+});
+
+test("targets selectEligible keeps parent with campaigns; drops KDP-only orphans", () => {
+  const KINDLE = "B0PARENTK1";
+  const PRINT = "B0PARENTP1";
+  const GROUP = `DIGITAL=${KINDLE}:PRINT=${PRINT}::`;
+  const selected = selectEligibleTargetingBookOptions([
+    {
+      asin: KINDLE,
+      title: "Parent Guide Kindle",
+      campaignIds: ["c1"],
+      formatAsins: [KINDLE, PRINT],
+      groupKey: GROUP,
+    },
+    {
+      asin: PRINT,
+      title: "Parent Guide Print",
+      campaignIds: [],
+      hasKdpData: true,
+      formatAsins: [KINDLE, PRINT],
+      groupKey: GROUP,
+    },
+    {
+      asin: "ORPHAN0001",
+      title: "Old Dead Title",
+      campaignIds: [],
+      hasKdpData: true,
+    },
+  ]);
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].asin, KINDLE);
+  assert.ok(selected[0].hasKdpData);
+  assert.deepEqual(selected[0].campaignIds, ["c1"]);
+});
+
+test("create selectEligible keeps in-stock+(KDP|Ads); drops stock-only, KDP-only, Ads-only", () => {
+  const selected = selectEligibleCreateBookOptions([
+    {
+      asin: "B0KDPONLY1",
+      title: "KDP Only Guide",
+      campaignIds: [],
+      hasKdpData: true,
+    },
+    {
+      asin: "B0STOCK001",
+      title: "In Stock Empty",
+      campaignIds: [],
+      inStock: true,
+    },
+    {
+      asin: "B0STOCKKDP",
+      title: "Stock + KDP",
+      campaignIds: [],
+      hasKdpData: true,
+      inStock: true,
+    },
+    {
+      asin: "B0STOCKADS",
+      title: "Stock + Ads",
+      campaignIds: ["c1"],
+      inStock: true,
+    },
+    {
+      asin: "B0ADSONLY1",
+      title: "Ads Only",
+      campaignIds: ["c1"],
+    },
+    {
+      asin: "ORPHAN0001",
+      title: "Published Empty",
+      campaignIds: [],
+    },
+  ]);
+  assert.deepEqual(selected.map((b) => b.asin).sort(), ["B0STOCKADS", "B0STOCKKDP"]);
+});
+
+test("mergeTargetingBookOptionSources defaults to targets (campaigns only)", () => {
   const merged = mergeTargetingBookOptionSources(
     [
       {
@@ -160,29 +382,67 @@ test("mergeTargetingBookOptionSources unions campaign + KDP and dedupes by ASIN"
     ],
   );
   const asins = merged.map((b) => b.asin).sort();
-  assert.deepEqual(asins, ["B0KDPONLY1", "B0SHARED01"]);
+  assert.deepEqual(asins, ["1803627867", "B0SHARED01"]);
   const shared = merged.find((b) => b.asin === "B0SHARED01");
   assert.ok(shared);
   assert.equal(shared.title, "Shared Book Longer Title From KDP");
   assert.deepEqual(shared.campaignIds, ["c1"]);
   assert.equal(shared.hasKdpData, true);
-  assert.equal(
-    selectEligibleTargetingBookOptions([
-      { asin: "B0BARE0001", title: "B0BARE0001", campaignIds: ["c1"] },
-    ]).length,
-    0,
+
+  const createMerged = mergeTargetingBookOptionSources(
+    [{ asin: "B0ADSONLY1", title: "Ads", campaignIds: ["c1"] }],
+    [{ asin: "B0KDPONLY1", title: "KDP", campaignIds: [], hasKdpData: true }],
+    "create",
+  );
+  assert.deepEqual(createMerged.map((b) => b.asin), []);
+
+  const createStockMerged = mergeTargetingBookOptionSources(
+    [
+      {
+        asin: "B0STOCKADS",
+        title: "Stock Ads",
+        campaignIds: ["c1"],
+        inStock: true,
+      },
+    ],
+    [
+      {
+        asin: "B0STOCKKDP",
+        title: "Stock KDP",
+        campaignIds: [],
+        hasKdpData: true,
+        inStock: true,
+      },
+    ],
+    "create",
+  );
+  assert.deepEqual(
+    createStockMerged.map((b) => b.asin).sort(),
+    ["B0STOCKADS", "B0STOCKKDP"],
   );
 });
 
-test("targeting filter sheet wires search, list rows, and fetch-side eligibility", () => {
+test("targeting filter sheet wires search, list rows, and context eligibility", () => {
   assert.match(targeting, /targeting-book-search/);
   assert.match(targeting, /styles\.bookList/);
   assert.match(targeting, /filterTargetingBookOptions/);
   assert.match(targeting, /book\.asin/);
   assert.match(targeting, /checkmark\.circle\.fill/);
-  assert.match(targeting, /campaign or KDP books/);
   assert.match(queries, /dedupeTargetingBookOptions/);
-  assert.match(queries, /selectEligibleTargetingBookOptions/);
+  assert.match(queries, /selectEligibleTargetingBookOptions\(books, purpose\)/);
   assert.match(queries, /fetchKdpBooksForTargetingFilter/);
   assert.match(queries, /from "\.\/targetingBookFilter"/);
+  assert.match(queries, /Catalog titles alone must NOT enter/);
+  assert.match(queries, /hasMeaningfulKdpDailySignal/);
+  assert.match(queries, /collapseTargetingBookOptionsByParent/);
+  assert.match(queries, /purpose === "create"/);
+  assert.match(mutations, /evidence !== "amazon_catalog"/);
+});
+
+test("fetchTargetingBookOptions always unions Nest with local campaigns+KDP", () => {
+  assert.doesNotMatch(queries, /return finish\(nestBooks\);/);
+  assert.match(queries, /\.\.\.nestBooks/);
+  assert.match(queries, /\.\.\.campaignBooks/);
+  assert.match(queries, /\.\.\.kdpBooks/);
+  assert.match(queries, /Targets \(\`purpose: "targets"/);
 });

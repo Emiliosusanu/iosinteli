@@ -17,8 +17,8 @@ import { GlassPanel } from "@/src/components/GlassPanel";
 import { InteliAdsIcon } from "@/src/components/InteliAdsIcon";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { PressableScale, StaggerReveal, VerifiedValue } from "@/src/components/Motion";
-import { autoModeLabel, bidBotOperationalCopy } from "@/src/lib/bidBotContract";
-import { formatCurrency, formatDateShort, formatInt, formatPercent } from "@/src/lib/format";
+import { autoModeLabel } from "@/src/lib/bidBotContract";
+import { formatCurrency, formatInt, formatPercent } from "@/src/lib/format";
 import { motion } from "@/src/lib/motion";
 import { dashboard, useReduceMotion, useTheme, type Theme } from "@/src/lib/theme";
 
@@ -270,7 +270,6 @@ export function OverviewBudgetTodayCard({
 }) {
   const t = useTheme();
   const remaining = Math.max(0, budget - spent);
-  const barPct = budget > 0 && todaySynced ? Math.min(1, Math.max(0, spent / budget)) : 0;
   const barColor = danger
     ? t.colors.tone_danger
     : usedPct >= 80
@@ -285,52 +284,29 @@ export function OverviewBudgetTodayCard({
           spent={todaySynced ? spent : 0}
           budget={budget}
           currency={currency}
-          size={124}
+          size={108}
         />
         <View style={styles.budgetCopy}>
-          <Text style={[t.typography.title3, { color: t.colors.text_primary, fontWeight: "700" }]}>
+          <Text style={[t.typography.metric_compact, { color: t.colors.text_primary }]} numberOfLines={1}>
             {!todaySynced
-              ? "Today not synced yet"
+              ? "Not synced"
               : budget > 0
-                ? `${Math.round(usedPct)}% used`
-                : "Spend so far"}
+                ? `${formatCurrency(spent, currency, { compact: true })} of ${formatCurrency(budget, currency, { compact: true })}`
+                : formatCurrency(spent, currency, { compact: true })}
           </Text>
-          <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 4 }]}>
-            {todaySynced
-              ? `${formatCurrency(spent, currency, { compact: true })}${
-                  budget > 0 ? ` of ${formatCurrency(budget, currency, { compact: true })}` : ""
-                }`
-              : budget > 0
-                ? `Daily budget ${formatCurrency(budget, currency, { compact: true })}`
-                : "Waiting for today’s Ads sync"}
-          </Text>
-          {budget > 0 && todaySynced ? (
-            <View style={styles.meterTrack}>
-              <View
-                style={[
-                  styles.meterFill,
-                  {
-                    width: barPct > 0 ? `${barPct * 100}%` : 0,
-                    backgroundColor: barColor,
-                  },
-                ]}
-              />
-            </View>
-          ) : null}
-          {budget > 0 && todaySynced ? (
-            <View style={styles.chipRow}>
+          <View style={styles.chipRow}>
+            {!todaySynced ? (
+              <StatusChip label="Waiting for sync" tone="inactive" t={t} />
+            ) : budget > 0 ? (
               <StatusChip
-                label={`${formatCurrency(remaining, currency, { compact: true })} left`}
-                tone={danger ? "danger" : "primary"}
+                label={danger ? "Almost gone" : `${Math.round(usedPct)}% used · ${formatCurrency(remaining, currency, { compact: true })} left`}
+                tone={danger ? "danger" : usedPct >= 80 ? "warning" : "primary"}
                 t={t}
               />
-            </View>
-          ) : null}
-          {danger && todaySynced ? (
-            <Text style={[t.typography.caption1, { color: t.colors.tone_warning, marginTop: 8 }]}>
-              Daily budget is almost gone.
-            </Text>
-          ) : null}
+            ) : (
+              <StatusChip label="Spend so far" tone="neutral" t={t} />
+            )}
+          </View>
         </View>
       </View>
     </OpsCardShell>
@@ -340,7 +316,7 @@ export function OverviewBudgetTodayCard({
 export function OverviewBidBotCard({
   autoMode,
   pendingCount,
-  lastRunAt,
+  lastRunAt: _lastRunAt,
   targetAcos,
   recommendations,
   statusError,
@@ -365,7 +341,6 @@ export function OverviewBidBotCard({
     : live
       ? t.colors.tone_good
       : t.colors.tone_inactive;
-  const copy = bidBotOperationalCopy({ autoMode, pendingCount, lastRunAt });
 
   return (
     <StaggerReveal index={staggerIndex}>
@@ -395,7 +370,7 @@ export function OverviewBidBotCard({
               <OverviewCardHeader title="BidBot" icon="bidBot" />
               {statusError ? (
                 <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 10 }]}>
-                  Status unavailable. Open BidBot to retry.
+                  Status unavailable
                 </Text>
               ) : (
                 <View style={styles.bidBody}>
@@ -407,10 +382,14 @@ export function OverviewBidBotCard({
                       <View style={[styles.liveDot, { backgroundColor: accent }]} />
                     </View>
                     <Text
-                      style={[t.typography.title3, { color: t.colors.text_primary, fontWeight: "700", flex: 1 }]}
-                      numberOfLines={2}
+                      style={[t.typography.metric_compact, { color: t.colors.text_primary, flex: 1 }]}
+                      numberOfLines={1}
                     >
-                      {copy.title.replace(/^BidBot\s+/, "")}
+                      {ready
+                        ? `${formatInt(pendingCount ?? 0)} pending`
+                        : live
+                          ? "Monitoring"
+                          : "Off"}
                     </Text>
                     <SFSymbol name="chevron.right" size={14} color={t.colors.text_tertiary} />
                   </View>
@@ -429,12 +408,6 @@ export function OverviewBidBotCard({
                       />
                     ) : null}
                   </View>
-                  <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: 10 }]}>
-                    {lastRunAt
-                      ? `Last run ${formatDateShort(String(lastRunAt).slice(0, 10))}`
-                      : "No run recorded yet"}
-                    {" · Swipe left to open"}
-                  </Text>
                 </View>
               )}
             </View>
@@ -556,17 +529,6 @@ const styles = StyleSheet.create({
   arcCenter: {
     alignItems: "center",
     justifyContent: "center",
-  },
-  meterTrack: {
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: "rgba(120,120,128,0.18)",
-    marginTop: 12,
-    overflow: "hidden",
-  },
-  meterFill: {
-    height: "100%",
-    borderRadius: 999,
   },
   chipRow: {
     flexDirection: "row",

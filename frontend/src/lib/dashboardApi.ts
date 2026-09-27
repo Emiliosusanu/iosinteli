@@ -23,6 +23,28 @@ function n(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/** After Nest keyword-list 408/timeout, skip Nest sort for a cooldown (Load more). */
+const NEST_KEYWORD_SORT_COOLDOWN_MS = 60_000;
+let nestKeywordSortDisabledUntil = 0;
+
+export function isNestKeywordSortAvailable(): boolean {
+  return Date.now() >= nestKeywordSortDisabledUntil;
+}
+
+export function noteNestKeywordSortFailure(error: unknown): void {
+  const message = String((error as { message?: string })?.message ?? error ?? "").toLowerCase();
+  const status = Number((error as { status?: number })?.status ?? 0);
+  if (
+    status === 408 ||
+    message.includes("408") ||
+    message.includes("timeout") ||
+    message.includes("timed out") ||
+    message.includes("abort")
+  ) {
+    nestKeywordSortDisabledUntil = Date.now() + NEST_KEYWORD_SORT_COOLDOWN_MS;
+  }
+}
+
 export type MetricsSummary = {
   totalSpend: number;
   totalSales: number;
@@ -78,6 +100,19 @@ export type KdpBreakEvenBookRow = {
   listPrice?: number | null;
 };
 
+export type BookProfitabilityDetail = {
+  asin: string;
+  formatAsins: string[];
+  summary: {
+    breakEvenAcos: number | null;
+    calculatorListPrice: number | null;
+    calculatorNetRoyalty: number | null;
+    calculatorMarketplace: string | null;
+    calculatorCurrency: string | null;
+    pricingSynced: boolean;
+  };
+};
+
 export type BleedingEntityRow = {
   id: string;
   kind: "keyword" | "asin" | "auto";
@@ -119,6 +154,8 @@ export type EntityMetrics = {
 };
 
 export type AggregatedEntityMetricsResponse = {
+  unavailable?: boolean;
+  message?: string;
   data: Array<{ date: string }>;
   entities: Array<{
     id: string;
@@ -187,6 +224,7 @@ export async function fetchAggregatedCampaigns(params: {
   endDate: string;
   profileIds: string[];
   filterUserId?: string | null;
+  state?: string;
 }): Promise<TopCampaignRow[]> {
   const data = await nestApiJson<AggregatedEntityMetricsResponse>(
     "/dashboard/aggregated-entity-metrics",
@@ -205,7 +243,17 @@ export async function fetchAggregatedCampaigns(params: {
     },
     "Couldn't load campaigns.",
   );
-  return (data.entities ?? []).map((entity) => {
+  // Nest can return HTTP 200 with unavailable=true after a DB timeout.
+  // Treat that as a failed read, never as a real account with zero campaigns.
+  if (data.unavailable || !Array.isArray(data.entities)) {
+    throw new Error(data.message || "Couldn't load campaigns.");
+  }
+  const entities = params.state
+    ? (data.entities ?? []).filter(
+        (entity) => String(entity.state ?? "").toLowerCase() === params.state!.toLowerCase(),
+      )
+    : data.entities ?? [];
+  return entities.map((entity) => {
     const spend = n(entity.metrics?.spend);
     const sales = n(entity.metrics?.sales);
     return {
@@ -244,14 +292,14 @@ export function dailyPointsToMetrics(points: DailyCombinedPoint[]): CampaignMetr
       date: point.date,
       impressions,
       clicks,
-      ctr: impressions > 0 ? clicks / impressions : null,
+      ctr: impressions > 0 ? (clicks / impressions) * 100 : null,
       spend,
       sales,
       orders,
       acos: sales > 0 ? (spend / sales) * 100 : null,
       roas: spend > 0 ? sales / spend : null,
       cpc: clicks > 0 ? spend / clicks : null,
-      conversion_rate: clicks > 0 ? orders / clicks : null,
+      conversion_rate: clicks > 0 ? (orders / clicks) * 100 : null,
     };
   });
 }
@@ -311,25 +359,41 @@ export function bootstrapToRoyalties(boot: DashboardBootstrapResponse | undefine
 
 export function bootstrapToTopBooks(boot: DashboardBootstrapResponse | undefined): TopBookRow[] {
   return (boot?.topBooks?.data ?? []).map((book) => {
-    const spend = n(book.adSpend);
-    const sales = n(book.adSales);
-    const royalties = n(book.royalties);
+    const raw = book as KdpBreakEvenBookRow & {
+      break_even_acos?: number | null;
+      calculator_break_even_acos?: number | null;
+      pricing_synced?: boolean;
+      ad_spend?: number;
+      ad_sales?: number;
+      cover_url?: string | null;
+      current_acos?: number | null;
+    };
+    const spend = n(raw.adSpend ?? raw.ad_spend);
+    const sales = n(raw.adSales ?? raw.ad_sales);
+    const royalties = n(raw.royalties);
+    const normalized = {
+      ...raw,
+      breakEvenAcos: raw.breakEvenAcos ?? raw.break_even_acos ?? null,
+      calculatorBreakEvenAcos:
+        raw.calculatorBreakEvenAcos ?? raw.calculator_break_even_acos ?? null,
+      pricingSynced: raw.pricingSynced ?? raw.pricing_synced,
+    };
     return {
-      book_key: book.asin,
-      asin: book.asin,
+      book_key: raw.asin,
+      asin: raw.asin,
       sku: null,
-      title: book.title,
-      image_url: book.coverUrl,
+      title: raw.title,
+      image_url: raw.coverUrl ?? raw.cover_url ?? null,
       impressions: 0,
       clicks: 0,
-      orders: n(book.orders),
+      orders: n(raw.orders),
       spend,
       sales,
       royalties,
-      acos: sales > 0 ? (spend / sales) * 100 : n(book.currentAcos),
+      acos: sales > 0 ? (spend / sales) * 100 : n(raw.currentAcos ?? raw.current_acos),
       roas: spend > 0 ? sales / spend : null,
       net: netRoyaltiesKnown(royalties, spend),
-      breakeven_acos: resolveAuthoritativeBreakEvenAcos(book) ?? 0,
+      breakeven_acos: resolveAuthoritativeBreakEvenAcos(normalized) ?? 0,
       ads_state: "ready" as const,
       kdp_state: "ready" as const,
     };
@@ -432,7 +496,7 @@ function emptyKdpRange(): KdpRoyaltyRange {
 }
 
 export type NestEntityListOpts = {
-  filterUserId: string;
+  filterUserId?: string | null;
   startDate?: string;
   endDate?: string;
   profileIds?: string[];
@@ -445,14 +509,22 @@ export type NestEntityListOpts = {
   limit?: number;
 };
 
+/**
+ * Nest `/keywords` + `/product-targets` clamp per_page at 200.
+ * Requesting 500 still returns at most 200 — clients MUST paginate.
+ */
+export const NEST_TARGETING_MAX_PAGE_SIZE = 200;
+const NEST_TARGETING_MAX_PAGES = 100;
+
 function nestPageSize(limit?: number) {
-  if (!limit || limit >= 500) return 500;
-  if (limit <= 10) return 10;
-  if (limit <= 25) return 25;
-  if (limit <= 50) return 50;
-  if (limit <= 100) return 100;
-  if (limit <= 200) return 200;
-  return 500;
+  const want = !limit
+    ? NEST_TARGETING_MAX_PAGE_SIZE
+    : Math.min(Math.max(1, Math.floor(limit)), NEST_TARGETING_MAX_PAGE_SIZE);
+  if (want <= 10) return 10;
+  if (want <= 25) return 25;
+  if (want <= 50) return 50;
+  if (want <= 100) return 100;
+  return Math.min(want, NEST_TARGETING_MAX_PAGE_SIZE);
 }
 
 function metricTotals(row: Record<string, unknown>): MetricsTotals {
@@ -468,10 +540,10 @@ function metricTotals(row: Record<string, unknown>): MetricsTotals {
     total_sales: sales,
     total_spend: spend,
     total_acos: sales > 0 ? (spend / sales) * 100 : n(row.total_acos),
-    total_ctr: impressions > 0 ? clicks / impressions : n(row.total_ctr),
+    total_ctr: impressions > 0 ? (clicks / impressions) * 100 : n(row.total_ctr),
     total_roas: spend > 0 ? sales / spend : n(row.total_roas),
     total_cpc: clicks > 0 ? spend / clicks : n(row.total_cpc),
-    total_conversion_rate: clicks > 0 ? orders / clicks : n(row.total_conversion_rate),
+    total_conversion_rate: clicks > 0 ? (orders / clicks) * 100 : n(row.total_conversion_rate),
   };
 }
 
@@ -506,6 +578,10 @@ export function mapNestKeyword(row: unknown): Keyword {
     bid_last_modified_at: (r.bidLastModifiedAt ?? r.bid_last_modified_at ?? null) as string | null,
     rule_last_modified_at: (r.ruleLastModifiedAt ?? r.rule_last_modified_at ?? null) as string | null,
     bid_change_source: (r.bidChangeSource ?? r.bid_change_source ?? null) as string | null,
+    bid_previous_value:
+      r.bidPreviousValue != null || r.bid_previous_value != null
+        ? n(r.bidPreviousValue ?? r.bid_previous_value)
+        : null,
     ...metricTotals(r),
   };
 }
@@ -529,6 +605,10 @@ export function mapNestProductTarget(row: unknown): ProductTarget {
     bid_last_modified_at: (r.bidLastModifiedAt ?? r.bid_last_modified_at ?? null) as string | null,
     rule_last_modified_at: (r.ruleLastModifiedAt ?? r.rule_last_modified_at ?? null) as string | null,
     bid_change_source: (r.bidChangeSource ?? r.bid_change_source ?? null) as string | null,
+    bid_previous_value:
+      r.bidPreviousValue != null || r.bid_previous_value != null
+        ? n(r.bidPreviousValue ?? r.bid_previous_value)
+        : null,
     ...metricTotals(r),
   };
 }
@@ -573,61 +653,87 @@ export function mapNestCampaign(row: unknown): Campaign {
 }
 
 export async function fetchNestKeywords(params: NestEntityListOpts): Promise<Keyword[]> {
-  const data = await nestApiJson<{ data?: unknown[] }>(
-    `/keywords${qs({
-      filterUserId: params.filterUserId,
-      startDate: params.startDate,
-      endDate: params.endDate,
-      sortBy: "total_spend",
-      sortOrder: "desc",
-      per_page: nestPageSize(params.limit),
-      page: 1,
-      includeEnrichments: "false",
-      campaignId: params.campaignId,
-      adGroupId: params.adGroupId,
-      matchType: params.matchType,
-      status: params.status,
-      search: params.search,
-      amazonProfileId: params.profileIds?.length === 1 ? params.profileIds[0] : undefined,
-    })}`,
-    { method: "GET" },
-    "Couldn't load keywords.",
-  );
-  let rows = (data.data ?? []).map(mapNestKeyword).filter((row) => pickProfileId(asRecord({
-    amazonProfileId: row.amazon_profile_id,
-  }), params.profileIds));
+  const pageSize = nestPageSize(params.limit);
+  const maxRows = params.limit ?? Number.POSITIVE_INFINITY;
+  const byId = new Map<string, Keyword>();
+  for (let page = 1; page <= NEST_TARGETING_MAX_PAGES && byId.size < maxRows; page += 1) {
+    const data = await nestApiJson<{ data?: unknown[] }>(
+      `/keywords${qs({
+        filterUserId: params.filterUserId,
+        startDate: params.startDate,
+        endDate: params.endDate,
+        sortBy: "total_spend",
+        sortOrder: "desc",
+        per_page: pageSize,
+        page,
+        includeEnrichments: "false",
+        campaignId: params.campaignId,
+        adGroupId: params.adGroupId,
+        matchType: params.matchType,
+        status: params.status,
+        search: params.search,
+        amazonProfileId: params.profileIds?.length === 1 ? params.profileIds[0] : undefined,
+      })}`,
+      { method: "GET" },
+      "Couldn't load keywords.",
+    );
+    const batch = (data.data ?? [])
+      .map(mapNestKeyword)
+      .filter((row) =>
+        pickProfileId(
+          asRecord({ amazonProfileId: row.amazon_profile_id }),
+          params.profileIds,
+        ),
+      );
+    for (const row of batch) byId.set(row.id, row);
+    if (batch.length < pageSize) break;
+  }
+  let rows = [...byId.values()];
   if (params.limit) rows = rows.slice(0, params.limit);
   return rows;
 }
 
 export async function fetchNestProductTargets(params: NestEntityListOpts): Promise<ProductTarget[]> {
-  const data = await nestApiJson<{ data?: unknown[] }>(
-    `/product-targets${qs({
-      filterUserId: params.filterUserId,
-      startDate: params.startDate,
-      endDate: params.endDate,
-      sortBy: "total_spend",
-      sortOrder: "desc",
-      per_page: nestPageSize(params.limit),
-      page: 1,
-      includeEnrichments: "false",
-      campaignId: params.campaignId,
-      adGroupId: params.adGroupId,
-      state: params.state,
-      amazonProfileId: params.profileIds?.length === 1 ? params.profileIds[0] : undefined,
-    })}`,
-    { method: "GET" },
-    "Couldn't load targets.",
-  );
-  let rows = (data.data ?? []).map(mapNestProductTarget).filter((row) => pickProfileId(asRecord({
-    amazonProfileId: row.amazon_profile_id,
-  }), params.profileIds));
+  const pageSize = nestPageSize(params.limit);
+  const maxRows = params.limit ?? Number.POSITIVE_INFINITY;
+  const byId = new Map<string, ProductTarget>();
+  for (let page = 1; page <= NEST_TARGETING_MAX_PAGES && byId.size < maxRows; page += 1) {
+    const data = await nestApiJson<{ data?: unknown[] }>(
+      `/product-targets${qs({
+        filterUserId: params.filterUserId,
+        startDate: params.startDate,
+        endDate: params.endDate,
+        sortBy: "total_spend",
+        sortOrder: "desc",
+        per_page: pageSize,
+        page,
+        includeEnrichments: "false",
+        campaignId: params.campaignId,
+        adGroupId: params.adGroupId,
+        state: params.state,
+        amazonProfileId: params.profileIds?.length === 1 ? params.profileIds[0] : undefined,
+      })}`,
+      { method: "GET" },
+      "Couldn't load targets.",
+    );
+    const batch = (data.data ?? [])
+      .map(mapNestProductTarget)
+      .filter((row) =>
+        pickProfileId(
+          asRecord({ amazonProfileId: row.amazon_profile_id }),
+          params.profileIds,
+        ),
+      );
+    for (const row of batch) byId.set(row.id, row);
+    if (batch.length < pageSize) break;
+  }
+  let rows = [...byId.values()];
   if (params.limit) rows = rows.slice(0, params.limit);
   return rows;
 }
 
 export async function fetchNestTopBooks(params: {
-  filterUserId: string;
+  filterUserId?: string | null;
   startDate: string;
   endDate: string;
   profileIds: string[];
@@ -701,6 +807,26 @@ export async function fetchNestBookCampaigns(params: {
       match_source: "product_ad" as const,
     };
   });
+}
+
+export async function fetchNestBookProfitabilityDetail(params: {
+  filterUserId?: string | null;
+  asin: string;
+  startDate: string;
+  endDate: string;
+  profileIds: string[];
+}): Promise<BookProfitabilityDetail> {
+  return nestApiJson<BookProfitabilityDetail>(
+    `/dashboard/book-profitability-detail${qs({
+      asin: params.asin,
+      startDate: params.startDate,
+      endDate: params.endDate,
+      profileIds: params.profileIds.join(","),
+      filterUserId: params.filterUserId,
+    })}`,
+    { method: "GET" },
+    "Couldn't load book pricing.",
+  );
 }
 
 export async function fetchNestCampaignById(id: string): Promise<Campaign | null> {

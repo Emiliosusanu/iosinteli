@@ -12,10 +12,10 @@ export interface ProductTargetDescriptor extends TargetLabel {
 }
 
 const EXPRESSION_TYPE_LABELS: Record<string, TargetLabel> = {
-  asinsameas: { label: "Exact ASIN", tone: "primary", isAuto: false },
+  asinsameas: { label: "Exact", tone: "primary", isAuto: false },
   asincategorysameas: { label: "Category", tone: "product", isAuto: false },
   asinbrandsameas: { label: "Brand", tone: "product", isAuto: false },
-  asinexpandedfrom: { label: "Expanded ASIN", tone: "product", isAuto: false },
+  asinexpandedfrom: { label: "Expanded", tone: "product", isAuto: false },
   queryhighrelmatches: { label: "Close Match", tone: "primary", isAuto: true },
   querybroadrelmatches: { label: "Loose Match", tone: "warning", isAuto: true },
   asinaccessoryrelated: { label: "Complements", tone: "good", isAuto: true },
@@ -67,13 +67,16 @@ function findKnownLabel(expression: unknown, expressionType: string | null | und
   return null;
 }
 
-function isAsin(value: unknown): value is string {
+type Asin = string & { readonly __asin: unique symbol };
+
+function isAsin(value: unknown): value is Asin {
   return typeof value === "string" && /^[A-Z0-9]{10}$/i.test(value);
 }
 
 export function fallbackAsinCoverUrl(asin: string | null | undefined): string | null {
   if (!isAsin(asin)) return null;
-  return `https://images-na.ssl-images-amazon.com/images/P/${asin.toUpperCase()}.01._SCLZZZZZZZ_.jpg`;
+  // SL500 is crisp at list sizes; SCLZZZZZZZ is a tiny thumbnail that looks soft on retina.
+  return `https://images-na.ssl-images-amazon.com/images/P/${asin.toUpperCase()}.01._SL500_.jpg`;
 }
 
 export function extractTargetAsin(expression: unknown): string {
@@ -163,6 +166,52 @@ export function readTargetBid(
   return null;
 }
 
+/** Real bibliographic title — not blank, not a bare ASIN / placeholder. */
+export function isUsableBookTitle(value: unknown): boolean {
+  const titled = String(value ?? "").trim();
+  if (!titled) return false;
+  if (/^title unavailable$/i.test(titled)) return false;
+  return !/^[A-Z0-9]{10}$/i.test(titled);
+}
+
+/**
+ * Shared match-type colors across Keywords + Product targets.
+ * Exact = blue (primary), Expanded = purple (product),
+ * Phrase = orange (warning), Broad = green (good).
+ */
+export function matchTypeTone(
+  match: string | null | undefined,
+): "primary" | "product" | "warning" | "good" | "inactive" {
+  const n = String(match ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  if (!n) return "inactive";
+  if (n === "exact" || n === "asinsameas" || n.endsWith("exact")) return "primary";
+  if (n === "expanded" || n === "asinexpandedfrom" || n.includes("expanded")) return "product";
+  if (n === "phrase" || n.includes("phrase")) return "warning";
+  if (n === "broad" || n.includes("broad")) return "good";
+  return "inactive";
+}
+
+export function formatMatchTypeLabel(match: string | null | undefined): string {
+  const raw = String(match ?? "").trim();
+  if (!raw) return "";
+  const n = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (n === "exact" || n === "asinsameas") return "Exact";
+  if (n === "expanded" || n === "asinexpandedfrom") return "Expanded";
+  if (n === "phrase") return "Phrase";
+  if (n === "broad") return "Broad";
+  return raw.replace(/\basin\b/gi, "").replace(/\s+/g, " ").trim() || raw;
+}
+
+/** Exact is bold; Broad/Phrase/Expanded stay plain — no color coding. */
+export function isExactMatchType(match: string | null | undefined): boolean {
+  const n = String(match ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  return n === "exact" || n === "asinsameas" || n.endsWith("exact");
+}
+
 export function productTargetHeading(item: {
   title?: string | null;
   campaign_name?: string | null;
@@ -171,13 +220,22 @@ export function productTargetHeading(item: {
   resolved_expression?: unknown;
 }): string {
   const described = describeProductTarget(item.expression, item.expression_type, item.resolved_expression);
-  const named = described.name || item.title?.trim() || item.campaign_name?.trim() || "";
+  const titled = String(item.title ?? "").trim();
+  const categoryName = String(described.name ?? "").trim();
+  const named = categoryName || String(item.campaign_name ?? "").trim() || "";
+
+  // Auto / Close-Loose-Complements-Substitutes: label only — no book subtitle.
   if (described.isAuto) {
-    if (named && named.toLowerCase() !== described.label.toLowerCase()) return `${described.label} · ${named}`;
     return described.label;
   }
+  // Category: expression category name only — never campaign/book title.
   if (isCategoryTarget(item.expression, item.expression_type) || described.label === "Category") {
-    return named || described.label;
+    if (isUsableBookTitle(categoryName)) return categoryName;
+    return described.label;
   }
-  return item.title?.trim() || named || described.asin || described.label;
+  // ASIN / Exact product targets: never paint the raw ASIN as the headline.
+  if (isUsableBookTitle(titled)) return titled;
+  if (isUsableBookTitle(named) && named !== described.asin) return named;
+  if (described.asin) return "Title unavailable";
+  return described.label;
 }

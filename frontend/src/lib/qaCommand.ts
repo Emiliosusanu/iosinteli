@@ -24,11 +24,23 @@ export type QaRoute =
   | "/more/kdp-source"
   | "/more/sync"
   | "/more/ad-groups"
-  | "/more/search-terms";
+  | "/more/search-terms"
+  | "/campaign/create"
+  | "/campaign/ad-group-create"
+  | "/adgroup/add-targets";
 
 export type QaCommand = {
   id?: string;
   route?: QaRoute;
+  /** Create campaign deep-link: ASIN / targeting / Ads profile. */
+  createAsin?: string;
+  createTargeting?: "auto" | "keywords" | "products";
+  createProfileId?: string;
+  /** Existing campaign for new ad-group / add-targets. */
+  createCampaignId?: string;
+  /** Existing ad group for add-targets. */
+  createAdGroupId?: string;
+  createAdGroupName?: string;
   /** Exact TopBar preset label, e.g. "Last 7 days". */
   dateLabel?: string;
   /** Overview Month/Week. Applied by setting dateRange to the matching shape. */
@@ -37,6 +49,8 @@ export type QaCommand = {
   periodShift?: number;
   campaignsState?: "all" | "enabled" | "paused";
   campaignsSort?: "top" | "spend" | "orders" | "acos";
+  campaignsSearch?: string;
+  campaignsBookAsins?: string[];
   targetsSegment?: "keywords" | "asins" | "auto" | "category" | "placement";
   targetsPerf?:
     | "all"

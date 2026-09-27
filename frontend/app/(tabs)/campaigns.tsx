@@ -12,12 +12,13 @@ import {
   UIManager,
   Modal,
   Pressable,
+  ScrollView,
 } from "react-native";
 import { AppScreen } from "@/src/components/ScreenAmbient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { fetchTopCampaignsRange, type TopCampaignRow } from "@/src/lib/queries";
+import { fetchTargetingBookOptions, fetchTopCampaignsRange, type TopCampaignRow, type TargetingBookOption } from "@/src/lib/queries";
 import {
   BIDDING_STRATEGY_OPTIONS,
   biddingStrategyLabel,
@@ -28,7 +29,7 @@ import {
   statusLabel,
   type BiddingStrategyCode,
 } from "@/src/lib/campaigns";
-import { getCampaignSettingsCooldown } from "@/src/lib/bidCooldown";
+import { getCampaignStrategyCooldown, getPlacementAdjCooldown } from "@/src/lib/bidCooldown";
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useTheme, acosTone, toneColor, useReduceMotion, dashboard, spacing, layout } from "@/src/lib/theme";
@@ -56,7 +57,7 @@ import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/io
 import { withQueryTimeout } from "@/src/lib/queryTimeout";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
-import { loadCampaignsFilterMemory, saveCampaignsFilterMemory } from "@/src/lib/filterMemory";
+import { loadCampaignsFilterMemory, normalizeBookAsinList, saveCampaignsFilterMemory } from "@/src/lib/filterMemory";
 import {
   LIST_PERIOD_QUERY_CACHE,
   sortedProfileIds,
@@ -64,6 +65,8 @@ import {
 import { countriesForSponsoredCampaign, marketplaceFlagsA11y } from "@/src/lib/bookMarketplaces";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { CampaignMarketplaceFlags } from "@/src/components/MarketplaceFlags";
+import { rowCurrencyOfProfile } from "@/src/lib/accountsUi";
+import { filterTargetingBookOptions, unionCampaignIdsForBookAsins } from "@/src/lib/targetingBookFilter";
 
 type PlacementField = keyof PlacementAdjustments;
 
@@ -84,8 +87,9 @@ function campaignVerdict(item: any): { label: string; tone: "good" | "warning" |
   return { label: "No spend yet", tone: "inactive", direction: "flat" };
 }
 
-function emptyCopy(search: string, stateFilter: StateFilter) {
+function emptyCopy(search: string, stateFilter: StateFilter, bookFilterActive = false) {
   if (search.trim()) return { title: "No matching campaigns", subtitle: undefined as string | undefined };
+  if (bookFilterActive) return { title: "No campaigns for selected books", subtitle: undefined as string | undefined };
   if (stateFilter === "enabled") return { title: "No active campaigns", subtitle: undefined as string | undefined };
   if (stateFilter === "paused") return { title: "No paused campaigns", subtitle: undefined as string | undefined };
   return { title: "No campaigns", subtitle: undefined as string | undefined };
@@ -125,7 +129,7 @@ export default function CampaignsScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const reduceMotion = useReduceMotion();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles } = useApp();
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const { user, guestMode } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
@@ -134,8 +138,12 @@ export default function CampaignsScreen() {
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("enabled");
   const [sortKey, setSortKey] = useState<SortKey>("acos");
+  const [bookAsins, setBookAsins] = useState<string[]>([]);
+  const [filterMemoryReady, setFilterMemoryReady] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [topChromeVisible, setTopChromeVisible] = useState(true);
+  const topChromeVisibleRef = useRef(true);
   const [budgetEdit, setBudgetEdit] = useState<{ id: string; value: number } | null>(null);
   const [placementAdj, setPlacementAdj] = useState<Record<string, PlacementAdjustments>>({});
   const [placementEdit, setPlacementEdit] = useState<{
@@ -151,30 +159,44 @@ export default function CampaignsScreen() {
   } | null>(null);
 
   useEffect(() => {
+    let active = true;
     const qa = takePendingQaFilters();
     if (qa) {
       if (qa.campaignsState) setStateFilter(qa.campaignsState);
       if (qa.campaignsSort) setSortKey(qa.campaignsSort);
-      if (qa.campaignsState || qa.campaignsSort) {
+      if (typeof qa.campaignsSearch === "string") setSearch(qa.campaignsSearch);
+      if (qa.campaignsBookAsins) setBookAsins(normalizeBookAsinList(qa.campaignsBookAsins));
+      if (qa.campaignsState || qa.campaignsSort || qa.campaignsSearch || qa.campaignsBookAsins) {
         console.log(
           `[inteliads:qa] campaigns filters state=${qa.campaignsState ?? "-"} sort=${qa.campaignsSort ?? "-"}`,
         );
       }
+      setFilterMemoryReady(true);
       return;
     }
-    void loadCampaignsFilterMemory().then((mem) => {
-      if (mem.stateFilter === "all" || mem.stateFilter === "enabled" || mem.stateFilter === "paused") {
-        setStateFilter(mem.stateFilter);
-      }
-      if (mem.sortKey && SORT_CONFIG.some((s) => s.key === mem.sortKey)) {
-        setSortKey(mem.sortKey as SortKey);
-      }
-    });
+    void loadCampaignsFilterMemory()
+      .then((mem) => {
+        if (!active) return;
+        if (mem.stateFilter === "all" || mem.stateFilter === "enabled" || mem.stateFilter === "paused") {
+          setStateFilter(mem.stateFilter);
+        }
+        if (mem.sortKey && SORT_CONFIG.some((s) => s.key === mem.sortKey)) {
+          setSortKey(mem.sortKey as SortKey);
+        }
+        setBookAsins(normalizeBookAsinList(mem.bookAsins));
+      })
+      .finally(() => {
+        if (active) setFilterMemoryReady(true);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
-    void saveCampaignsFilterMemory({ sortKey, stateFilter });
-  }, [sortKey, stateFilter]);
+    if (!filterMemoryReady) return;
+    void saveCampaignsFilterMemory({ sortKey, stateFilter, bookAsins });
+  }, [filterMemoryReady, sortKey, stateFilter, bookAsins]);
 
   const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
   const campaignsListKey = [
@@ -217,11 +239,31 @@ export default function CampaignsScreen() {
 
   const showBlockingSpinner = (isPending || !!isPlaceholderData) && campaigns.length === 0;
   const listUpdating = (isFetching || !!isPlaceholderData) && campaigns.length > 0 && !isError;
+  const booksQ = useQuery({
+    queryKey: ["campaign-filter-books", adminFilterUserId ?? "self", scopeProfiles],
+    queryFn: () => fetchTargetingBookOptions(scopeProfiles, { filterUserId: adminFilterUserId }),
+    enabled: scopeProfiles.length > 0 && (filterOpen || bookAsins.length > 0),
+    staleTime: 60_000,
+  });
+  const bookOptions = booksQ.data ?? [];
+  const bookFilterActive = bookAsins.length > 0;
+  const selectedBooks = useMemo(() => {
+    const selected = new Set(bookAsins);
+    return bookOptions.filter((book) => selected.has(String(book.asin).toUpperCase()));
+  }, [bookAsins, bookOptions]);
+  const bookCampaignIds = useMemo(
+    () => new Set(unionCampaignIdsForBookAsins(bookOptions, bookAsins)),
+    [bookAsins, bookOptions],
+  );
 
   const filtered = useMemo(() => {
+    // Wait for book options before applying book filter — empty bookCampaignIds
+    // while booksQ is loading would hide every campaign (false empty state).
+    const bookReady = !bookFilterActive || booksQ.isSuccess;
     let arr = campaigns.filter((c) => {
       if (!shouldShowActiveOrPausedWithData(c as any, c.state)) return false;
       if (stateFilter !== "all" && !matchesEntityStateFilter(c.state, stateFilter)) return false;
+      if (bookFilterActive && bookReady && !bookCampaignIds.has(String(c.id))) return false;
       if (search) return c.name.toLowerCase().includes(search.toLowerCase());
       return true;
     });
@@ -232,7 +274,7 @@ export default function CampaignsScreen() {
         case "orders":
           return b.orders - a.orders;
         case "top":
-          return b.roas - a.roas;
+          return (b.roas ?? 0) - (a.roas ?? 0);
         case "acos":
         default:
           return compareByAcosSpendImpressionsSync(
@@ -255,7 +297,7 @@ export default function CampaignsScreen() {
           );
       }
     });
-  }, [campaigns, search, stateFilter, sortKey]);
+  }, [campaigns, search, stateFilter, sortKey, bookFilterActive, bookCampaignIds, booksQ.isSuccess]);
 
   useEffect(() => {
     if (!filtered.length) return;
@@ -303,6 +345,15 @@ export default function CampaignsScreen() {
     setRefreshing(false);
   };
 
+  const onListScroll = (event: { nativeEvent: { contentOffset: { y: number } } }) => {
+    const y = event.nativeEvent.contentOffset.y;
+    const nextVisible = topChromeVisibleRef.current ? y < 104 : y <= 28;
+    if (nextVisible === topChromeVisibleRef.current) return;
+    topChromeVisibleRef.current = nextVisible;
+    if (!reduceMotion) LayoutAnimation.configureNext({ duration: 180, update: { type: LayoutAnimation.Types.easeInEaseOut } });
+    setTopChromeVisible(nextVisible);
+  };
+
   const openPlacementEditor = async (item: TopCampaignRow, field: PlacementField) => {
     if (blockIfCannotWriteAmazon(writeGuard)) return;
     try {
@@ -327,13 +378,21 @@ export default function CampaignsScreen() {
 
   const sortLabel = SORT_CONFIG.find((entry) => entry.key === sortKey)?.label ?? "ACoS";
   const sortActive = sortKey !== "acos";
-  const empty = emptyCopy(search, stateFilter);
-  const showCount = search.trim().length > 0 || stateFilter !== "enabled" || sortActive;
+  const bookFilterLabel = selectedBooks.length === 1 ? selectedBooks[0].title : bookAsins.length ? `${bookAsins.length} books` : null;
+  const filtersActive = sortActive || bookFilterActive;
+  const empty = emptyCopy(search, stateFilter, bookFilterActive);
+  const showCount = search.trim().length > 0 || stateFilter !== "enabled" || filtersActive;
 
   if (selectedProfileIds.length === 0) {
     return (
       <AppScreen>
-        <TopBar title="Campaigns" />
+        <TopBar
+          rightAction={{
+            icon: "add",
+            testID: "campaign-create",
+            onPress: () => router.push("/campaign/create"),
+          }}
+        />
         <EmptyState
           icon="business-outline"
           title={isAdminViewer ? "No Amazon account" : "No account connected"}
@@ -346,9 +405,15 @@ export default function CampaignsScreen() {
 
   return (
     <AppScreen>
-      <TopBar title="Campaigns" />
+      {topChromeVisible ? <TopBar
+        rightAction={{
+          icon: "add",
+          testID: "campaign-create",
+          onPress: () => router.push("/campaign/create"),
+        }}
+      /> : null}
 
-      <FilterChrome>
+      {topChromeVisible ? <FilterChrome>
         <FilterSearchRow>
           <View style={{ flex: 1, minWidth: 0 }}>
             <IOSSearchBar
@@ -360,9 +425,9 @@ export default function CampaignsScreen() {
           </View>
           <FilterIconButton
             testID="campaigns-filter-btn"
-            active={sortActive}
-            accessibilityLabel={sortActive ? `Sort: ${sortLabel}` : "Sort campaigns"}
-            accessibilityHint="Opens sort options"
+            active={filtersActive}
+            accessibilityLabel={filtersActive ? [bookFilterLabel, sortActive ? sortLabel : null].filter(Boolean).join(", ") : "Filter campaigns"}
+            accessibilityHint="Opens book filters and sort options"
             onPress={() => setFilterOpen(true)}
           />
         </FilterSearchRow>
@@ -376,14 +441,24 @@ export default function CampaignsScreen() {
             { key: "all", label: "All", testID: "filter-state-all" },
           ]}
         />
-        {sortActive ? (
+        {filtersActive ? (
           <ActiveFilterRow>
+            {bookFilterLabel ? (
+              <ActiveFilterChip
+                testID="campaigns-filter-chip-book"
+                label={`Book: ${bookFilterLabel}`}
+                accessibilityLabel={`Clear book filter. Currently ${bookFilterLabel}`}
+                onPress={() => setBookAsins([])}
+              />
+            ) : null}
+            {sortActive ? (
             <ActiveFilterChip
               testID="campaigns-filter-chip-sort"
               label={`Sort: ${sortLabel}`}
               accessibilityLabel={`Clear sort. Currently ${sortLabel}`}
               onPress={() => applySort("acos")}
             />
+            ) : null}
           </ActiveFilterRow>
         ) : null}
         {showCount && !showBlockingSpinner && !isError ? (
@@ -392,7 +467,7 @@ export default function CampaignsScreen() {
             {listUpdating ? " · updating" : ""}
           </Text>
         ) : null}
-      </FilterChrome>
+      </FilterChrome> : null}
 
       {showBlockingSpinner ? (
         <ScreenSpinner />
@@ -412,6 +487,8 @@ export default function CampaignsScreen() {
           maxToRenderPerBatch={20}
           windowSize={7}
           removeClippedSubviews={Platform.OS !== "ios"}
+          onScroll={onListScroll}
+          scrollEventThrottle={16}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />
           }
@@ -424,14 +501,16 @@ export default function CampaignsScreen() {
             const campaignColor = colorKey ? fallbackBookColor(colorKey) : t.colors.tone_primary;
             const verdict = campaignVerdict(item);
             const strategy = biddingStrategyLabel(item.bidding_strategy);
-            const settingsCooldown = getCampaignSettingsCooldown(item, entityCooldownHours);
+            const settingsCooldown = getCampaignStrategyCooldown(item, entityCooldownHours);
+            const placementCooldown = getPlacementAdjCooldown(item, entityCooldownHours);
             const marketplaceCountries = countriesForSponsoredCampaign(marketplaceIndex, item);
+            const rowCurrency = rowCurrencyOfProfile(profiles, item.amazon_profile_id, primaryCurrency);
             return (
               <AnimatedCard
                 key={item.id}
                 onPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  router.push(`/campaign/${item.id}`);
+                  router.push({ pathname: "/campaign/[id]", params: { id: item.id, childState: "enabled" } });
                 }}
                 onLongPress={() => {
                   if (blockIfCannotWriteAmazon(writeGuard)) return;
@@ -447,7 +526,7 @@ export default function CampaignsScreen() {
                 accessibilityLabel={campaignA11yLabel(
                   item,
                   verdict,
-                  primaryCurrency,
+                  rowCurrency,
                   marketplaceFlagsA11y(marketplaceCountries),
                 )}
                 accessibilityHint="Long press to change bidding strategy"
@@ -482,6 +561,7 @@ export default function CampaignsScreen() {
                         </Text>
                         <CampaignMarketplaceFlags
                           index={marketplaceIndex}
+                          profiles={profiles}
                           campaign={item}
                           style={[t.typography.callout, { flexShrink: 0 }]}
                         />
@@ -491,7 +571,7 @@ export default function CampaignsScreen() {
                             accessibilityRole="button"
                             accessibilityLabel={
                               item.budget != null
-                                ? `Daily budget ${formatCurrency(Number(item.budget), primaryCurrency)}. Double tap to edit.`
+                                ? `Daily budget ${formatCurrency(Number(item.budget), rowCurrency)}. Double tap to edit.`
                                 : "No budget set. Double tap to edit."
                             }
                             accessibilityHint="Opens the budget editor. Saving writes Amazon Ads."
@@ -509,15 +589,10 @@ export default function CampaignsScreen() {
                               },
                             ]}
                           >
-                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                              <Text style={[t.typography.caption2, { color: t.colors.tone_primary, fontWeight: "600" }]}>
-                                Budget
-                              </Text>
-                              <SFSymbol name="pencil" size={11} color={t.colors.tone_primary} />
-                            </View>
+                            <SFSymbol name="pencil" size={11} color={t.colors.tone_primary} />
                             <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "700" }]}>
                               {item.budget != null
-                                ? `${formatCurrency(Number(item.budget), primaryCurrency, { compact: true })}/d`
+                                ? `${formatCurrency(Number(item.budget), rowCurrency, { compact: true })}/d`
                                 : "Set…"}
                             </Text>
                           </TouchableOpacity>
@@ -560,10 +635,10 @@ export default function CampaignsScreen() {
                         items={[
                           {
                             label: "ACoS",
-                            value: item.sales > 0 ? formatPercent(item.acos) : "—",
-                            color: toneColor(acosTone(item.acos), t.colors),
+                            value: item.sales > 0 ? formatPercent(item.acos ?? 0) : "—",
+                            color: toneColor(acosTone(item.acos ?? 0), t.colors),
                           },
-                          { label: "Spend", value: formatCurrency(item.spend, primaryCurrency, { compact: true }) },
+                          { label: "Spend", value: formatCurrency(item.spend, rowCurrency, { compact: true }) },
                           { label: "Impr", value: formatInt(Number(item.impressions) || 0) },
                           { label: "Clicks", value: formatInt(Number(item.clicks) || 0) },
                           { label: "Ord", value: formatInt(item.orders) },
@@ -572,7 +647,8 @@ export default function CampaignsScreen() {
                       <PlacementSharePills
                         item={item}
                         adjustments={placementAdj[item.id]}
-                        cooldown={settingsCooldown}
+                        cooldown={placementCooldown}
+                        cooldownHours={entityCooldownHours}
                         onEdit={(field) => void openPlacementEditor(item, field)}
                       />
                     </View>
@@ -691,7 +767,7 @@ export default function CampaignsScreen() {
       >
         {Platform.OS === "ios" ? (
           <View style={[styles.filterSheet, { backgroundColor: t.colors.background_secondary }]}>
-            <SortSheetBody t={t} sortKey={sortKey} onSort={applySort} onDone={() => setFilterOpen(false)} />
+            <SortSheetBody t={t} sortKey={sortKey} bookAsins={bookAsins} bookOptions={bookOptions} booksLoading={booksQ.isLoading} onBookAsins={setBookAsins} onSort={applySort} onDone={() => setFilterOpen(false)} />
           </View>
         ) : (
           <Pressable style={[styles.filterOverlay, { backgroundColor: t.colors.overlay }]} onPress={() => setFilterOpen(false)}>
@@ -699,7 +775,7 @@ export default function CampaignsScreen() {
               style={[styles.filterSheetAndroid, { backgroundColor: t.colors.background_secondary }]}
               onPress={(event) => event.stopPropagation()}
             >
-              <SortSheetBody t={t} sortKey={sortKey} onSort={applySort} onDone={() => setFilterOpen(false)} />
+              <SortSheetBody t={t} sortKey={sortKey} bookAsins={bookAsins} bookOptions={bookOptions} booksLoading={booksQ.isLoading} onBookAsins={setBookAsins} onSort={applySort} onDone={() => setFilterOpen(false)} />
             </Pressable>
           </Pressable>
         )}
@@ -711,18 +787,33 @@ export default function CampaignsScreen() {
 function SortSheetBody({
   t,
   sortKey,
+  bookAsins,
+  bookOptions,
+  booksLoading,
+  onBookAsins,
   onSort,
   onDone,
 }: {
   t: any;
   sortKey: SortKey;
+  bookAsins: string[];
+  bookOptions: TargetingBookOption[];
+  booksLoading: boolean;
+  onBookAsins: (asins: string[]) => void;
   onSort: (key: SortKey) => void;
   onDone: () => void;
 }) {
+  const [bookQuery, setBookQuery] = useState("");
+  const shownBooks = useMemo(() => filterTargetingBookOptions(bookOptions, bookQuery), [bookOptions, bookQuery]);
+  const selected = useMemo(() => new Set(bookAsins), [bookAsins]);
+  const toggleBook = (asin: string) => {
+    const id = asin.toUpperCase();
+    onBookAsins(selected.has(id) ? bookAsins.filter((value) => value !== id) : normalizeBookAsinList([...bookAsins, id]));
+  };
   return (
     <>
       <View style={styles.filterSheetHeader}>
-        <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>Sort</Text>
+        <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>Filter</Text>
         <TouchableOpacity
           testID="campaigns-filter-done"
           accessibilityRole="button"
@@ -734,14 +825,44 @@ function SortSheetBody({
           <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Done</Text>
         </TouchableOpacity>
       </View>
-      <View style={styles.filterSheetBody}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.filterSheetBody, { gap: spacing.sm }]} keyboardShouldPersistTaps="handled">
+        <Text style={[t.typography.footnote, { color: t.colors.text_secondary }]}>Books</Text>
+        <IOSSearchBar placeholder="Search books or ASIN" value={bookQuery} onChangeText={setBookQuery} />
+        <TouchableOpacity
+          accessibilityRole="button"
+          onPress={() => onBookAsins([])}
+          style={[styles.bookFilterRow, { borderColor: !bookAsins.length ? t.colors.tone_primary : t.colors.separator, backgroundColor: !bookAsins.length ? `${t.colors.tone_primary}14` : t.colors.background_tertiary }]}
+        >
+          <Text style={[t.typography.callout, { color: !bookAsins.length ? t.colors.tone_primary : t.colors.text_primary, fontWeight: "700" }]}>All books</Text>
+          <SFSymbol name={!bookAsins.length ? "checkmark.circle.fill" : "circle"} size={20} color={!bookAsins.length ? t.colors.tone_primary : t.colors.text_tertiary} />
+        </TouchableOpacity>
+        {shownBooks.map((book) => {
+          const active = selected.has(book.asin.toUpperCase());
+          return (
+            <TouchableOpacity
+              key={book.asin}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: active }}
+              onPress={() => toggleBook(book.asin)}
+              style={[styles.bookFilterRow, { borderColor: active ? t.colors.tone_primary : t.colors.separator, backgroundColor: active ? `${t.colors.tone_primary}14` : t.colors.background_tertiary }]}
+            >
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text numberOfLines={2} style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600" }]}>{book.title}</Text>
+                <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>{book.asin} · {book.campaignCount ?? book.campaignIds.length} camp.</Text>
+              </View>
+              <SFSymbol name={active ? "checkmark.square.fill" : "square"} size={20} color={active ? t.colors.tone_primary : t.colors.text_tertiary} />
+            </TouchableOpacity>
+          );
+        })}
+        {booksLoading ? <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>Loading books…</Text> : null}
+        <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: spacing.md }]}>Sort</Text>
         <IOSSegmentedControl
           testID="campaigns-sort-segments"
           value={sortKey}
           onChange={onSort}
           options={SORT_CONFIG.map((sc) => ({ key: sc.key, label: sc.label, testID: `filter-sort-${sc.key}` }))}
         />
-      </View>
+      </ScrollView>
     </>
   );
 }
@@ -903,11 +1024,14 @@ function PlacementSharePills({
   item,
   adjustments,
   cooldown,
+  cooldownHours,
   onEdit,
 }: {
   item: any;
   adjustments?: PlacementAdjustments;
-  cooldown?: ReturnType<typeof getCampaignSettingsCooldown> | null;
+  cooldown?: ReturnType<typeof getPlacementAdjCooldown> | null;
+  /** Settings-backed entity cooldown hours — required for per-slot recompute. */
+  cooldownHours?: number;
   onEdit: (field: PlacementField) => void;
 }) {
   return (
@@ -925,7 +1049,12 @@ function PlacementSharePills({
                 : formatPercent(Number(adjustments[field.key]), 0)
               : "…"
           }
-          cooldown={cooldown ?? undefined}
+          cooldown={
+            // Per-slot stamp with settings hours — never default hours via undefined.
+            getPlacementAdjCooldown(item, cooldownHours, Date.now(), field.key) ??
+            cooldown ??
+            undefined
+          }
           onPress={() => onEdit(field.key)}
         />
       ))}
@@ -959,6 +1088,16 @@ const styles = StyleSheet.create({
   filterSheetBody: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.lg,
+  },
+  bookFilterRow: {
+    minHeight: layout.minTap,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   cardHeader: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
   leadRow: { flexDirection: "row", alignItems: "center", gap: 8 },

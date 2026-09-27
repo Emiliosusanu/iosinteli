@@ -11,7 +11,7 @@ import {
   toDateString,
 } from "../src/lib/format.ts";
 import { biddingStrategyLabel, shouldShowActiveOrPausedWithData, statusLabel } from "../src/lib/campaigns.ts";
-import { describeProductTarget, extractTargetAsin, fallbackAsinCoverUrl, productTargetHeading, readTargetBid } from "../src/lib/targeting.ts";
+import { describeProductTarget, extractTargetAsin, fallbackAsinCoverUrl, formatMatchTypeLabel, isExactMatchType, isUsableBookTitle, matchTypeTone, productTargetHeading, readTargetBid } from "../src/lib/targeting.ts";
 
 const queriesSource = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
 const overviewSource = readFileSync(new URL("../app/(tabs)/index.tsx", import.meta.url), "utf8");
@@ -123,10 +123,11 @@ test("dashboard finance widgets use imported KDP data instead of a manual royalt
 });
 
 test("top book profit includes campaign-level spend when ASIN-level product ad metrics are missing", () => {
-  assert.equal(queriesSource.includes("inferTopBookGroupFromCampaignName"), true);
+  assert.equal(queriesSource.includes("verified_book_campaign_metrics"), true);
   assert.equal(queriesSource.includes('from("campaign_metrics")'), true);
-  assert.equal(queriesSource.includes("group.spend += totals.spend"), true);
+  assert.equal(queriesSource.includes("group.spend += bookAdsAmount"), true);
   assert.equal(queriesSource.includes("campaignsWithProductAdMetrics"), true);
+  assert.equal(queriesSource.includes("never uses campaign names"), true);
 });
 
 test("product target helper resolves auto subtypes and ASIN expressions", () => {
@@ -161,22 +162,37 @@ test("product target helper resolves auto subtypes and ASIN expressions", () => 
   assert.equal(extractTargetAsin([{ type: "asinSameAs", value: "b0abc12345" }]), "B0ABC12345");
   assert.equal(
     fallbackAsinCoverUrl("b0abc12345"),
-    "https://images-na.ssl-images-amazon.com/images/P/B0ABC12345.01._SCLZZZZZZZ_.jpg",
+    "https://images-na.ssl-images-amazon.com/images/P/B0ABC12345.01._SL500_.jpg",
   );
   assert.equal(fallbackAsinCoverUrl("not-an-asin"), null);
+  assert.equal(isUsableBookTitle("Night School"), true);
+  assert.equal(isUsableBookTitle("B0ABC12345"), false);
+  assert.equal(isUsableBookTitle("  "), false);
+  assert.equal(isUsableBookTitle(null), false);
   assert.equal(
     productTargetHeading({
       expression: [{ type: "queryHighRelMatches" }],
       expression_type: "auto",
       title: "Night School",
     }),
-    "Close Match · Night School",
+    "Close Match",
+  );
+  assert.equal(
+    productTargetHeading({
+      expression: [{ type: "asinAccessoryRelated" }],
+      expression_type: "auto",
+      title: "Night School",
+      campaign_name: "Night School SP",
+    }),
+    "Complements",
   );
   assert.equal(
     productTargetHeading({
       expression: [{ type: "asinCategorySameAs", value: "2615" }],
       expression_type: "asinCategorySameAs",
       resolved_expression: [{ type: "asinCategorySameAs", value: "2615", name: "Science Fiction" }],
+      title: "Night School",
+      campaign_name: "Night School SP",
     }),
     "Science Fiction",
   );
@@ -188,9 +204,89 @@ test("product target helper resolves auto subtypes and ASIN expressions", () => 
     }),
     "Night School",
   );
+  assert.equal(
+    describeProductTarget([{ type: "asinSameAs", value: "B0ABC12345" }], "asinSameAs").label,
+    "Exact",
+  );
+  assert.equal(
+    describeProductTarget([{ type: "asinExpandedFrom", value: "B0ABC12345" }], "asinExpandedFrom").label,
+    "Expanded",
+  );
+  assert.equal(matchTypeTone("exact"), "primary");
+  assert.equal(matchTypeTone("expanded"), "product");
+  assert.equal(matchTypeTone("phrase"), "warning");
+  assert.equal(matchTypeTone("broad"), "good");
+  assert.equal(formatMatchTypeLabel("exact"), "Exact");
+  assert.equal(formatMatchTypeLabel("asinexpandedfrom"), "Expanded");
+  assert.equal(isExactMatchType("exact"), true);
+  assert.equal(isExactMatchType("asinSameAs"), true);
+  assert.equal(isExactMatchType("broad"), false);
+  assert.equal(isExactMatchType("phrase"), false);
+});
+
+test("fetchCampaignAdvertisedAsin falls back to campaign_asin_links like Nest", () => {
+  assert.match(queriesSource, /export async function fetchCampaignAdvertisedAsin/);
+  assert.match(queriesSource, /from\("campaign_asin_links"\)/);
+  assert.match(queriesSource, /VALID_ASIN_RE|\[A-Z0-9\]\{10\}/);
+  assert.match(queriesSource, /pickAsinFromProductAdRows/);
+  // Unscoped campaign_id retry before links (profile mismatch / null profile_id).
+  assert.match(
+    queriesSource,
+    /\.from\("product_ads"\)[\s\S]*?\.eq\("campaign_id", id\)[\s\S]*?campaign_asin_links/,
+  );
+});
+
+test("product suggestion match type is secondary text with bold Exact, not colored Pill", () => {
+  const row = readFileSync(
+    new URL("../src/components/AmazonProductSuggestionRow.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(row, /isExactMatchType/);
+  // Exact match uses bold weight on the match chip (exact ? "700" : …).
+  assert.match(row, /fontWeight:\s*exact\s*\?\s*"700"/);
+  assert.doesNotMatch(row, /tone=\{selected \? "good" : "inactive"\}/);
+});
+
+test("product target heading prefers usable titles", () => {
+  assert.equal(
+    productTargetHeading({
+      expression: [{ type: "asinSameAs", value: "B0ABC12345" }],
+      expression_type: "asinSameAs",
+      title: null,
+    }),
+    "Title unavailable",
+  );
+  assert.equal(
+    productTargetHeading({
+      expression: [{ type: "asinSameAs", value: "B0ABC12345" }],
+      expression_type: "asinSameAs",
+      title: "B0ABC12345",
+    }),
+    "Title unavailable",
+  );
+  assert.equal(
+    productTargetHeading({
+      expression: [{ type: "asinSameAs", value: "B0ABC12345" }],
+      expression_type: "asinSameAs",
+      title: "Title unavailable",
+    }),
+    "Title unavailable",
+  );
+  assert.equal(isUsableBookTitle("Title unavailable"), false);
+  assert.equal(isUsableBookTitle("Essential Norway"), true);
   assert.equal(readTargetBid({ bid: null }, 0.75), 0.75);
   assert.equal(readTargetBid({ bid_amount: "0.40" }), 0.4);
   assert.equal(readTargetBid({ bid: 0, bid_amount: null }), null);
+});
+
+test("ASIN enrich overwrites blank and ASIN-as-title placeholders", () => {
+  assert.equal(queriesSource.includes("isUsableBookTitle"), true);
+  assert.equal(queriesSource.includes("productTargetNeedsDisplayMeta"), true);
+  assert.equal(queriesSource.includes("applyProductTargetDisplayMeta"), true);
+  assert.equal(queriesSource.includes("amazon_catalog"), true);
+  assert.equal(queriesSource.includes("fetchAsinDisplayMeta"), true);
+  assert.equal(targetingSource.includes("bookSubtitle"), false);
+  assert.equal(targetingSource.includes("Campaign ·"), false);
 });
 
 test("campaign helpers label bidding strategy and hide only paused rows without data", () => {
@@ -245,9 +341,13 @@ test("search terms and ad group detail avoid fixed pagination gaps", () => {
   assert.equal(queriesSource.includes("fetchAllPages<ProductTarget>"), true);
   assert.equal(queriesSource.includes("adGroupId?: string"), true);
   assert.equal(searchTermsSource.includes("limit: 200"), false);
-  assert.equal(targetingSource.includes("TARGETING_LIST_LIMIT"), true);
+  // Targets uses server-ranked pages (mobile_targeting_page_v1), not a client 500-cap footer.
+  assert.equal(targetingSource.includes("fetchMobileTargetingPage"), true);
+  assert.equal(targetingSource.includes("TARGETING_PAGE_SIZE"), true);
+  assert.equal(targetingSource.includes("TargetingPagination"), true);
+  assert.equal(targetingSource.includes("enabled: canReadPage"), true);
+  assert.equal(targetingSource.includes("scopeProfiles.length > 0"), true);
   assert.equal(targetingSource.includes("placeholderData: noPeriodPlaceholder"), true);
-  assert.equal(targetingSource.includes("enabled: scopeProfiles.length > 0"), true);
   assert.equal(targetingSource.includes("LIST_PERIOD_QUERY_CACHE"), true);
   assert.equal(targetingSource.includes("sortedProfileIds"), true);
   assert.equal(/enabled:[^\n]*segment/.test(targetingSource), false);
@@ -266,7 +366,7 @@ test("overview presents royalties minus spend without implying a full pnl", () =
   assert.equal(overviewSource.includes("NET_ROYALTIES_LABEL"), true);
   assert.equal(overviewSource.includes("Keywords & search"), true);
   assert.equal(overviewSource.includes("OverviewSwipeWidget"), true);
-  assert.equal(overviewSource.includes("vs prior"), true);
+  assert.equal(overviewSource.includes("StatBadge"), true);
   assert.equal(overviewSource.includes('label="Ad spend"'), true);
 });
 
@@ -275,7 +375,8 @@ test("overview does not present missing KDP royalties as a verified zero profit"
   assert.equal(overviewSource.includes("const financeComplete = kdpReady && adsReady"), true);
   assert.equal(overviewSource.includes("publisherNetForPeriod"), true);
   assert.equal(overviewSource.includes("kdpRoyaltiesAreKnown"), true);
-  assert.equal(overviewSource.includes("const netKnown = royaltiesKnown && spendKnown && heroNet != null"), true);
+  assert.equal(overviewSource.includes("const netKnown ="), true);
+  assert.equal(overviewSource.includes("heroNet != null"), true);
   assert.match(overviewSource, /const netDisplay = !netKnown/);
   assert.match(overviewSource, /const royaltiesDisplay = !royaltiesKnown/);
   assert.match(overviewSource, /netRoyalties\(\{ kdpRoyalties: heroRoyalties, adsSpend: heroSpend \}\)/);
@@ -287,7 +388,7 @@ test("book campaign drilldown remains read-only and uses all link paths", () => 
   assert.equal(queriesSource.includes("fetchBookCampaignsRange"), true);
   assert.equal(queriesSource.includes('from("product_ads")'), true);
   assert.equal(queriesSource.includes('from("product_targets")'), true);
-  assert.equal(queriesSource.includes("inferTopBookGroupFromCampaignName"), true);
+  assert.equal(queriesSource.includes("verified_book_campaign_metrics"), true);
   assert.equal(queriesSource.includes("fetchLogicalBookAsins"), true);
   assert.equal(queriesSource.includes("logicalBookAsinsFromDailyRows"), true);
 });

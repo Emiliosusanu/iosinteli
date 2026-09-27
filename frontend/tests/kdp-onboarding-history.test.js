@@ -118,8 +118,9 @@ test("KDP helper keeps 30→90 milestones and deferred wakes (settings UI stays 
 test("closed-app wakes resume last-90 leftover instead of staying recent-only", () => {
   assert.match(planner, /90-day leftover always wins/);
   assert.match(helper, /startedAfterLogin/);
-  assert.match(helper, /last 90 days/);
-  assert.match(helper, /close the app/);
+  assert.match(helper, /KDP_HELPER_FOOTER_ENABLED/);
+  assert.match(settings, /last 90 days/);
+  assert.match(settings, /close the app/);
   assert.match(wake, /resolveBackgroundKdpWakeMode/);
   assert.doesNotMatch(wake, /Silent push is always a short recent wake/);
   assert.match(notifications, /resolveLockedPhoneKdpWakeMode\("push"\)/);

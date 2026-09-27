@@ -1,5 +1,8 @@
 export const HOME_QUERY_TIMEOUT_MS = 20_000;
 export const TARGETING_QUERY_TIMEOUT_MS = 60_000;
+/** Nest targeting lists and their local metric enrichment share one page budget. */
+export const NEST_TARGETING_LIST_BUDGET_MS = TARGETING_QUERY_TIMEOUT_MS;
+export const TARGETING_PAGE_METRICS_BUDGET_MS = TARGETING_QUERY_TIMEOUT_MS;
 /** Keyword / search-term funnel reads many entity pages — longer than a Home KPI. */
 export const ADS_ENGINE_FUNNEL_TIMEOUT_MS = 45_000;
 export const HOME_QUERY_TIMEOUT_MESSAGE = "HOME_QUERY_TIMEOUT";

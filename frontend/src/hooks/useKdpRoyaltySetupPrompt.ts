@@ -20,6 +20,7 @@ import {
   loadRoyaltySetupMemory,
   rememberRoyaltySetupAsked,
 } from "@/src/lib/kdpRoyaltySetupStore";
+import type { KnownFlag } from "@/src/lib/setupState";
 
 export function useKdpRoyaltySetupPrompt(opts: {
   enabled: boolean;
@@ -174,6 +175,20 @@ export function useKdpRoyaltySetupPrompt(opts: {
   }, [nav, onAction, plan, shortcut.dest]);
 
   const ask = plan.kind === "none" ? null : (plan as RoyaltySetupAsk);
+  const kdpAccountLinked: KnownFlag =
+    accountsQ.data !== undefined
+      ? accountsQ.data.length > 0
+      : accountsQ.isPending || accountsQ.isError
+        ? "unknown"
+        : false;
+  const kdpImporterActive: KnownFlag =
+    opts.latestImportedYmd != null ||
+    helperRun.lastHelperRunAtMs > 0 ||
+    helperLive.running
+      ? true
+      : memoryReady
+        ? false
+        : "unknown";
   return {
     plan,
     ask,
@@ -181,5 +196,7 @@ export function useKdpRoyaltySetupPrompt(opts: {
     openCollection,
     collectionLabel: shortcut.label,
     refetchAccounts: accountsQ.refetch,
+    kdpAccountLinked,
+    kdpImporterActive,
   };
 }
