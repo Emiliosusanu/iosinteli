@@ -135,7 +135,10 @@ test("entity metric totals paginate and chunk .in() filters", () => {
     queriesSrc.indexOf("async function fetchMetricTotalsByEntity"),
     queriesSrc.indexOf("function applyMetricTotals"),
   );
-  assert.match(fn, /chunkArray\(ids, 150\)/);
+  assert.match(fn, /chunkArray\(ids, 80\)/);
+  assert.match(fn, /const concurrency = 2/);
+  assert.match(fn, /runMetricRead/);
+  assert.match(fn, /\.abortSignal\(signal\)/);
   assert.match(fn, /POSTGREST_PAGE_SIZE/);
   assert.match(fn, /\.range\(from, from \+ POSTGREST_PAGE_SIZE - 1\)/);
   assert.doesNotMatch(fn, /fetchAllPages/);

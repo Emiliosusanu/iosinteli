@@ -477,6 +477,7 @@ export default function TargetingScreen() {
   const [outboxFailed, setOutboxFailed] = useState(0);
   const [pageNumber, setPageNumber] = useState(1);
   const [pageSnapshot, setPageSnapshot] = useState<string | null>(null);
+  const [pageSnapshotScope, setPageSnapshotScope] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
 
   useEffect(() => {
@@ -609,6 +610,7 @@ export default function TargetingScreen() {
   useEffect(() => {
     setPageNumber(1);
     setPageSnapshot(null);
+    setPageSnapshotScope(null);
   }, [
     periodKey,
     profileScopeKey,
@@ -633,6 +635,22 @@ export default function TargetingScreen() {
       ? effectiveSortKey
       : "acos";
 
+  const pageScopeKey = JSON.stringify([
+    viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+    periodKey,
+    profileScopeKey,
+    bookAsin ?? "all",
+    bookCampaignIdList,
+    segment,
+    stateFilter,
+    searchNeedle,
+    perf,
+    serverSort,
+    advancedForRpc,
+  ]);
+  const pageSnapshotIsCurrent =
+    Boolean(pageSnapshot) && pageSnapshotScope === pageScopeKey;
+
   const mobilePageQueryKey = [
     "mobile-targeting-page-v1",
     adminFilterUserId ?? "self",
@@ -649,7 +667,11 @@ export default function TargetingScreen() {
     serverSort,
     advancedScopeKey,
     pageNumber,
-    pageNumber === 1 ? "page-1" : pageSnapshot ?? "waiting-snapshot",
+    pageNumber === 1
+      ? "page-1"
+      : pageSnapshotIsCurrent
+        ? pageSnapshot
+        : "waiting-snapshot",
   ] as const;
 
   // Don't apply book filter until options are fetched — otherwise a remembered
@@ -658,7 +680,7 @@ export default function TargetingScreen() {
   const canReadPage =
     scopeProfiles.length > 0 &&
     (!bookFilterActive || booksQ.isSuccess) &&
-    (pageNumber === 1 || Boolean(pageSnapshot));
+    (pageNumber === 1 || pageSnapshotIsCurrent);
 
   const mobilePageQ = useQuery({
     queryKey: mobilePageQueryKey,
@@ -686,7 +708,7 @@ export default function TargetingScreen() {
             search: searchNeedle,
             perf,
             advanced: advancedForRpc,
-            snapshot: pageNumber > 1 ? pageSnapshot : null,
+            snapshot: pageNumber > 1 && pageSnapshotIsCurrent ? pageSnapshot : null,
             signal,
           }),
           TARGETING_QUERY_TIMEOUT_MS,
@@ -698,6 +720,8 @@ export default function TargetingScreen() {
     },
     enabled: canReadPage,
     ...targetingListCache,
+    retry: (failureCount, error) =>
+      !isMobileTargetingSnapshotChanged(error) && failureCount < 1,
   });
 
   useEffect(() => {
@@ -705,13 +729,15 @@ export default function TargetingScreen() {
     const snap = mobilePageQ.data?.snapshot;
     if (typeof snap === "string" && snap.length > 0 && snap !== pageSnapshot) {
       setPageSnapshot(snap);
+      setPageSnapshotScope(pageScopeKey);
     }
-  }, [mobilePageQ.data?.snapshot, pageNumber, pageSnapshot]);
+  }, [mobilePageQ.data?.snapshot, pageNumber, pageScopeKey, pageSnapshot]);
 
   useEffect(() => {
     if (!isMobileTargetingSnapshotChanged(mobilePageQ.error)) return;
     setPageNumber(1);
     setPageSnapshot(null);
+    setPageSnapshotScope(null);
   }, [mobilePageQ.error]);
 
   // Display-only enrichment — do not re-filter or re-sort a server page.

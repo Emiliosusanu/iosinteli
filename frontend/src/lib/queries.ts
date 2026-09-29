@@ -20,6 +20,7 @@ import {
   TARGETING_PAGE_METRICS_BUDGET_MS,
   withQueryTimeout,
 } from "./queryTimeout";
+import { createReadQueue } from "./readRequest";
 import {
   campaignPlacementSharesFromBuckets,
   emptyCampaignPlacementShares,
@@ -144,6 +145,14 @@ function chunkArray<T>(values: T[], size: number): T[][] {
 export const POSTGREST_PAGE_SIZE = 1000;
 /** Defensive cap so a stuck page cannot loop forever. 2500 × 1000 = 2.5M rows. */
 export const POSTGREST_MAX_PAGES = 2500;
+
+/**
+ * Metric hydration is shared by Campaigns, Ad groups, Products and detail
+ * screens. A per-call limit still let several mounted screens issue 5–8 large
+ * metric reads together. Keep the database pressure bounded across the whole
+ * app; queued work remains complete and keeps the same date/entity scope.
+ */
+const runMetricRead = createReadQueue(2);
 
 export type MobileTargetingSegment = "keywords" | "asins" | "auto" | "category" | "placement";
 export type MobileTargetingSort = "acos" | "spend" | "orders" | "clicks" | "impressions" | "bid";
@@ -573,40 +582,44 @@ async function fetchMetricTotalsByEntity(
   const totals = new Map<string, MetricsTotals>();
   if (!ids.length || !start || !end) return totals;
   const selectColumns = [entityColumn, "impressions", "clicks", "orders", "spend", "sales"].join(",");
-  // Larger chunks + bounded parallelism — full Active keyword exhaust (~9k ids) must finish
-  // inside TARGETING_EXHAUST_TIMEOUT_MS without re-fetching the whole id set each growth step.
-  const idChunks = chunkArray(ids, 150);
-  const concurrency = 4;
+  // Keep each indexed IN read small enough to avoid spilling Supabase Micro's
+  // I/O budget. The module-wide queue bounds overlap from independently
+  // mounted screens, while every chunk and every metrics row is still read.
+  const idChunks = chunkArray(ids, 80);
+  const concurrency = 2;
 
   async function enrichChunk(chunk: string[]) {
     try {
-      let from = 0;
-      for (;;) {
-        const { data, error } = await supabase
-          .from(table)
-          .select(selectColumns)
-          .in(entityColumn, chunk)
-          .gte("date", start)
-          .lte("date", end)
-          .order(entityColumn, { ascending: true })
-          .order("date", { ascending: true })
-          .range(from, from + POSTGREST_PAGE_SIZE - 1);
-        if (error) throw error;
-        const pageRows = data ?? [];
-        for (const row of pageRows) {
-          const candidate: unknown = row;
-          if (!isUnknownRecord(candidate)) continue;
-          const record = candidate;
-          const id = record[entityColumn];
-          if (!id) continue;
-          const key = String(id);
-          const current = totals.get(key) ?? emptyTotals();
-          addMetricRow(current, record);
-          totals.set(key, current);
+      await runMetricRead(async (signal) => {
+        let from = 0;
+        for (;;) {
+          const { data, error } = await supabase
+            .from(table)
+            .select(selectColumns)
+            .in(entityColumn, chunk)
+            .gte("date", start)
+            .lte("date", end)
+            .order(entityColumn, { ascending: true })
+            .order("date", { ascending: true })
+            .range(from, from + POSTGREST_PAGE_SIZE - 1)
+            .abortSignal(signal);
+          if (error) throw error;
+          const pageRows = data ?? [];
+          for (const row of pageRows) {
+            const candidate: unknown = row;
+            if (!isUnknownRecord(candidate)) continue;
+            const record = candidate;
+            const id = record[entityColumn];
+            if (!id) continue;
+            const key = String(id);
+            const current = totals.get(key) ?? emptyTotals();
+            addMetricRow(current, record);
+            totals.set(key, current);
+          }
+          if (pageRows.length < POSTGREST_PAGE_SIZE) break;
+          from += POSTGREST_PAGE_SIZE;
         }
-        if (pageRows.length < POSTGREST_PAGE_SIZE) break;
-        from += POSTGREST_PAGE_SIZE;
-      }
+      }, undefined, TARGETING_PAGE_METRICS_BUDGET_MS);
     } catch (error) {
       // One metrics chunk must not fail the whole catalog enrich (append grow / exhaust).
       // eslint-disable-next-line no-console
