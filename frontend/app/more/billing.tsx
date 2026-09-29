@@ -322,7 +322,7 @@ export default function BillingScreen() {
           ) : plansQ.isError ? (
             <View style={styles.loading} testID="billing-plans-error">
               <Text style={[t.typography.footnote, { color: t.colors.text_secondary }]}>
-                Couldn't load plans.
+                Could not load plans.
               </Text>
               <Pressable onPress={() => void plansQ.refetch()}>
                 <Text style={[t.typography.body, { color: t.colors.tone_primary, marginTop: 8 }]}>
