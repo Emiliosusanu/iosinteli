@@ -707,6 +707,7 @@ export async function fetchNestProductTargets(params: NestEntityListOpts): Promi
         sortOrder: "desc",
         per_page: pageSize,
         page,
+        // false skips bid-safety/sparklines only — Nest still fills cover/title.
         includeEnrichments: "false",
         campaignId: params.campaignId,
         adGroupId: params.adGroupId,

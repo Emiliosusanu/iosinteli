@@ -1477,8 +1477,20 @@ export function normalizeCampaignCreationPreview(raw: unknown): {
     })),
   );
 
+  // Nest `/ad-groups/suggestions` returns top-level asin/profileId (no nested
+  // book{} / profile{}). Map those so Groq relevance gets a real advertised ASIN.
+  const topLevelAsin = readString(body, ["asin", "advertisedAsin", "advertised_asin"]);
+  const topLevelProfileId = readString(body, [
+    "profileId",
+    "profile_id",
+    "amazonProfileId",
+    "amazon_profile_id",
+  ]);
   const profileId =
-    readString(profileRaw, ["profileId", "profile_id", "id"]) || "";
+    readString(profileRaw, ["profileId", "profile_id", "id"]) ||
+    topLevelProfileId ||
+    "";
+  const bookAsin = readString(bookRaw, ["asin"]) || topLevelAsin || "";
   return {
     source: "amazon_ads",
     fetchedAt: readString(body, ["fetchedAt", "fetched_at"]) || new Date().toISOString(),
@@ -1493,7 +1505,7 @@ export function normalizeCampaignCreationPreview(raw: unknown): {
       marketplaceId: readString(profileRaw, ["marketplaceId", "marketplace_id"]) || null,
     },
     book: {
-      asin: readString(bookRaw, ["asin"]) || "",
+      asin: bookAsin,
       title: readString(bookRaw, ["title"]) || "",
       subtitle:
         readString(bookRaw, ["subtitle", "bookSubtitle", "book_subtitle"]) ||

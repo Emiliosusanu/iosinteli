@@ -79,15 +79,30 @@ export function fallbackAsinCoverUrl(asin: string | null | undefined): string | 
   return `https://images-na.ssl-images-amazon.com/images/P/${asin.toUpperCase()}.01._SL500_.jpg`;
 }
 
+function firstAsinCandidate(value: unknown): string {
+  if (isAsin(value)) return value.toUpperCase();
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const hit = firstAsinCandidate(entry);
+      if (hit) return hit;
+    }
+    return "";
+  }
+  if (value && typeof value === "object") {
+    for (const key of ["value", "asin", "targetAsin", "target_asin"]) {
+      const hit = firstAsinCandidate((value as Record<string, unknown>)[key]);
+      if (hit) return hit;
+    }
+  }
+  return "";
+}
+
 export function extractTargetAsin(expression: unknown): string {
   if (isAsin(expression)) return expression.toUpperCase();
 
   for (const item of parseExpressionItems(expression)) {
-    if (isAsin(item)) return item.toUpperCase();
-    for (const key of ["value", "asin", "targetAsin", "target_asin"]) {
-      const value = item?.[key];
-      if (isAsin(value)) return value.toUpperCase();
-    }
+    const hit = firstAsinCandidate(item);
+    if (hit) return hit;
   }
 
   return "";

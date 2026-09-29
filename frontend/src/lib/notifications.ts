@@ -43,7 +43,10 @@ import {
   activatedProfileIds,
   countFreshCompletedProfiles,
   digestCoverageLine,
-  groupActivatedProfilesByCurrency,
+  digestFetchGroupsForMoney,
+  digestMoneyAdsProfileIds,
+  digestNativeCurrencyFetchGroups,
+  nestMoneyHiddenForDigest,
 } from "./notificationAuthority";
 import { adsProfileIdsForSelection, filterToEnabledProfileSelection, uniqueProfileIds } from "./notificationScope";
 import { nestApiJson } from "./rulesApi";
@@ -190,12 +193,18 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       "./kdpRoyaltyScope"
     );
     const profiles = await fetchAmazonProfiles(userId, scope.viewAs).catch(() => []);
+    // No profile metadata → refuse digests (avoids one Nest call with mixed ids
+    // and a guessed currency — frankensum Spend/ACoS).
+    if (!profiles.length) return 0;
 
-    // Digest/alert authority = activated profiles (is_enabled === true), not Overview alone.
-    let queryIds = activatedAdsProfileIds(profiles);
+    // Spend/orders/ACoS = Overview selection ∩ activated (same money set as Home).
+    // Empty selection → all activated. Never mix disabled profiles into digests.
+    let queryIds = digestMoneyAdsProfileIds(scope.profileIds, profiles);
     if (!queryIds.length) {
-      // Soft fallback: Overview-enabled selection only — never all profiles (incl. disabled).
       queryIds = adsProfileIdsForSelection(scope.profileIds, profiles);
+    }
+    if (!queryIds.length) {
+      queryIds = activatedAdsProfileIds(profiles);
     }
     if (!queryIds.length) return 0;
 
@@ -206,6 +215,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const localHour = new Date().getHours();
     const morningDigest = isMorningDigestHour(localHour);
+    const displayCurrency = String(scope.currency || "USD").toUpperCase() || "USD";
 
     type CurrencyGroupFetch = {
       currency: string;
@@ -213,22 +223,23 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       selectionIds: string[];
     };
 
-    const activatedGroups = groupActivatedProfilesByCurrency(profiles);
-    const fetchGroups: CurrencyGroupFetch[] = activatedGroups.length
-      ? activatedGroups.map((group) => ({
-          currency: group.currency,
-          adsIds: uniqueProfileIds(group.profiles.map((p) => p.profile_id || p.id)),
-          selectionIds: uniqueProfileIds(
-            group.profiles.flatMap((p) => [p.id, p.profile_id].filter(Boolean) as string[]),
-          ),
-        }))
-      : [
-          {
-            currency: String(scope.currency || "USD").toUpperCase() || "USD",
-            adsIds: queryIds,
-            selectionIds: uniqueProfileIds([...scope.profileIds, ...queryIds]),
-          },
-        ];
+    // Multi-market USD: one Nest /dashboard/mobile call (Frankfurter FX) so
+    // Spend / orders / ACoS match the Home chip — not separate CAD+USD lines
+    // that looked "wrong" vs Overview.
+    let fetchGroups: CurrencyGroupFetch[] = digestFetchGroupsForMoney(
+      profiles,
+      queryIds,
+      displayCurrency,
+    );
+    if (!fetchGroups.length) {
+      fetchGroups = [
+        {
+          currency: displayCurrency,
+          adsIds: queryIds,
+          selectionIds: uniqueProfileIds([...scope.profileIds, ...queryIds]),
+        },
+      ];
+    }
 
     const todayLines: HonestDigestTotals[] = [];
     const digestLines: HonestDigestTotals[] = [];
@@ -240,13 +251,43 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       line: HonestDigestTotals;
     }[] = [];
 
+    // Prefer one USD FX Nest call when multi-market; if Nest fail-closes
+    // (currency null / state missing), fall back to native per-currency lines
+    // so Spend/orders/ACoS are not all n/a while Overview still paints.
+    if (
+      fetchGroups.length === 1 &&
+      fetchGroups[0].currency === "USD" &&
+      displayCurrency === "USD"
+    ) {
+      try {
+        const probe = await fetchMobileOverview({
+          profileIds: fetchGroups[0].adsIds,
+          filterUserId: scope.viewAs,
+          timeZone,
+        });
+        if (nestMoneyHiddenForDigest(probe)) {
+          const native = digestNativeCurrencyFetchGroups(profiles, queryIds);
+          if (native.length) fetchGroups = native;
+        } else {
+          // Reuse probe as the only group fetch below via stash.
+          (fetchGroups[0] as CurrencyGroupFetch & { _probe?: typeof probe })._probe = probe;
+        }
+      } catch {
+        const native = digestNativeCurrencyFetchGroups(profiles, queryIds);
+        if (native.length) fetchGroups = native;
+      }
+    }
+
     for (const group of fetchGroups) {
       if (!group.adsIds.length) continue;
-      const snapshot = await fetchMobileOverview({
-        profileIds: group.adsIds,
-        filterUserId: scope.viewAs,
-        timeZone,
-      });
+      const snapshot =
+        (group as CurrencyGroupFetch & { _probe?: Awaited<ReturnType<typeof fetchMobileOverview>> })
+          ._probe ??
+        (await fetchMobileOverview({
+          profileIds: group.adsIds,
+          filterUserId: scope.viewAs,
+          timeZone,
+        }));
       const currency = String(snapshot.scope.currency || group.currency || "USD").toUpperCase() || "USD";
 
       let todayHonest = honestTotalsFromDayPoint(snapshot.today, currency);

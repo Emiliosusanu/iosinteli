@@ -74,6 +74,11 @@ import {
 } from "@/src/lib/bookMarketplaces";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { BookMarketplaceFlags, CampaignMarketplaceFlags } from "@/src/components/MarketplaceFlags";
+import {
+  BOOK_CAMPAIGNS_TIMEOUT_MS,
+  isHomeQueryTimeout,
+  withQueryTimeout,
+} from "@/src/lib/queryTimeout";
 
 function paramValue(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] ?? "";
@@ -178,18 +183,32 @@ export default function ProductCampaignsScreen() {
   });
 
   const campaignsQ = useQuery({
-    queryKey: ["product-campaigns", adminFilterUserId ?? "self", moneyProfileIds, asin, paramTitle, dateRange.start, dateRange.end, primaryCurrency],
-    queryFn: () =>
-      fetchBookCampaignsRange({
-        profileIds: moneyProfileIds,
-        asin,
-        title: paramTitle,
-        start: dateRange.start,
-        end: dateRange.end,
-        displayCurrency: primaryCurrency,
-        filterUserId: adminFilterUserId,
-      }),
+    queryKey: [
+      "product-campaigns",
+      adminFilterUserId ?? "self",
+      moneyProfileIds,
+      asin,
+      dateRange.start,
+      dateRange.end,
+      primaryCurrency,
+    ],
+    queryFn: ({ signal }) =>
+      withQueryTimeout(
+        fetchBookCampaignsRange({
+          profileIds: moneyProfileIds,
+          asin,
+          title: paramTitle,
+          start: dateRange.start,
+          end: dateRange.end,
+          displayCurrency: primaryCurrency,
+          filterUserId: adminFilterUserId,
+        }),
+        BOOK_CAMPAIGNS_TIMEOUT_MS,
+        signal,
+      ),
     enabled: moneyProfileIds.length > 0 && asin.length > 0,
+    // Timeout / currency errors must surface RetryState — not 3× silent re-spins.
+    retry: false,
   });
 
   const identityQ = useQuery({
@@ -282,8 +301,11 @@ export default function ProductCampaignsScreen() {
     );
   }
 
-  const campaignsLoading = campaignsQ.isLoading && campaigns.length === 0;
+  const campaignsLoading = campaignsQ.isPending && campaigns.length === 0 && !campaignsQ.isError;
   const campaignsFailed = campaignsQ.isError && campaigns.length === 0;
+  const campaignsFailedSubtitle = isHomeQueryTimeout(campaignsQ.error)
+    ? "Timed out loading linked campaigns. Retry — long date ranges can take a moment."
+    : "Book identity is still available. Retry to load linked campaigns.";
 
   return (
     <SubScreen title="Book" showDateRange>
@@ -309,6 +331,7 @@ export default function ProductCampaignsScreen() {
             campaignsCount={campaigns.length}
             campaignsLoading={campaignsLoading}
             campaignsFailed={campaignsFailed}
+            campaignsFailedSubtitle={campaignsFailedSubtitle}
             campaignsRetrying={campaignsQ.isRefetching}
             onRetryCampaigns={() => void campaignsQ.refetch()}
             currency={primaryCurrency}
@@ -358,6 +381,7 @@ function BookHeader({
   campaignsCount,
   campaignsLoading,
   campaignsFailed,
+  campaignsFailedSubtitle,
   campaignsRetrying,
   onRetryCampaigns,
   currency,
@@ -377,6 +401,7 @@ function BookHeader({
   campaignsCount: number;
   campaignsLoading: boolean;
   campaignsFailed: boolean;
+  campaignsFailedSubtitle: string;
   campaignsRetrying: boolean;
   onRetryCampaigns: () => void;
   currency: string;
@@ -622,7 +647,7 @@ function BookHeader({
       {campaignsFailed ? (
         <RetryState
           title="Couldn't load campaigns"
-          subtitle="Book identity is still available. Retry to load linked campaigns."
+          subtitle={campaignsFailedSubtitle}
           onRetry={onRetryCampaigns}
           retrying={campaignsRetrying}
         />

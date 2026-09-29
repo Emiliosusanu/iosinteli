@@ -11,7 +11,6 @@ import { anyNotificationPrefEnabled } from "@/src/lib/notificationContract";
 import { loadScopedKdpFreshness } from "@/src/lib/kdpIngestMonitor";
 import { formatIngestAge, kdpIngestStatusLabel } from "@/src/lib/kdpIngestFreshness";
 import {
-  DAILY_DIGEST_FOOTER,
   DAILY_DIGEST_LABEL,
   GUEST_SETTINGS_NOTE,
   IPHONE_ALERTS_LABEL,
@@ -135,7 +134,6 @@ export default function NotificationsScreen() {
               DAILY_DIGEST_LABEL,
               notifications.dailyDigest,
             )}
-            accessibilityHint={DAILY_DIGEST_FOOTER}
           />
           <SettingsToggleRow
             label="Include KDP net"

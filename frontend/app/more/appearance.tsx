@@ -6,11 +6,9 @@ import {
   SettingsSection,
 } from "@/src/components/settings/SettingsPrimitives";
 import {
-  APPEARANCE_PICKER_FOOTER,
   APPEARANCE_PICKER_TITLE,
   THEME_PREFERENCE_OPTIONS,
   appearancePreferenceLabel,
-  appearancePreferenceSubtitle,
 } from "@/src/lib/settingsContract";
 import {
   useTheme,
@@ -28,7 +26,7 @@ export default function AppearanceScreen() {
         contentContainerStyle={{ paddingBottom: 48 }}
         contentInsetAdjustmentBehavior="automatic"
       >
-        <SettingsSection footer={APPEARANCE_PICKER_FOOTER}>
+        <SettingsSection>
           {THEME_PREFERENCE_OPTIONS.map((option, index) => {
             const selected = preference === option;
             const last = index === THEME_PREFERENCE_OPTIONS.length - 1;
@@ -55,14 +53,6 @@ export default function AppearanceScreen() {
                   <Text style={[t.typography.body, { color: t.colors.text_primary }]}>
                     {title}
                   </Text>
-                  <Text
-                    style={[
-                      t.typography.footnote,
-                      { color: t.colors.text_secondary, marginTop: 3 },
-                    ]}
-                  >
-                    {appearancePreferenceSubtitle(option)}
-                  </Text>
                 </View>
                 <View
                   style={styles.check}
@@ -85,12 +75,12 @@ export default function AppearanceScreen() {
 const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     paddingVertical: 12,
     paddingHorizontal: 16,
     gap: 12,
     minHeight: 44,
   },
   copy: { flex: 1 },
-  check: { width: 22, alignItems: "center", paddingTop: 2 },
+  check: { width: 22, alignItems: "center" },
 });

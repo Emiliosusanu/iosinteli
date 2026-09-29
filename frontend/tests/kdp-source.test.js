@@ -34,8 +34,8 @@ test("labels distinguish the two sources", () => {
   assert.equal(kdpRoyaltySourceValueLabel("extension"), "Chrome extension");
   assert.equal(kdpRoyaltySourceValueLabel("extension_ios"), "Chrome + iPhone");
   assert.match(kdpRoyaltySourceOptionTitle("extension_ios"), /iPhone/);
-  assert.match(kdpRoyaltySourceOptionSubtitle("extension_ios"), /Chrome \+ this iPhone/);
-  assert.match(kdpRoyaltySourceOptionSubtitle("extension"), /Chrome helper/);
+  assert.match(kdpRoyaltySourceOptionSubtitle("extension_ios"), /Chrome and this iPhone/);
+  assert.match(kdpRoyaltySourceOptionSubtitle("extension"), /Chrome only/);
 });
 
 test("settings picker can open the iPhone helper", () => {

@@ -1,13 +1,11 @@
-import React, { useState } from "react";
-import { ScrollView, Linking, Alert } from "react-native";
+import React from "react";
+import { ScrollView, Linking } from "react-native";
 import { type Href, useRouter } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
 import Constants from "expo-constants";
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useTheme, useThemePreference } from "@/src/lib/theme";
 import {
-  ACCOUNT_BILLING_URL,
   accountSubscriptionPresentation,
   amazonProfileViewSummary,
 } from "@/src/lib/accountContract";
@@ -92,8 +90,6 @@ export default function SettingsScreenRoute() {
     userMetadata: user?.user_metadata,
     appMetadata: user?.app_metadata,
   });
-  const [billingBusy, setBillingBusy] = useState(false);
-
   const viewingCustomer = !!adminFilterUserId;
   const anyAlertOn = anyNotificationPrefEnabled(notifications);
   const permissionDenied = notificationRuntime.permission === "denied";
@@ -108,18 +104,6 @@ export default function SettingsScreenRoute() {
     : anyAlertOn
       ? "On"
       : "Off";
-
-  const openBilling = async () => {
-    if (guestMode || billingBusy) return;
-    setBillingBusy(true);
-    try {
-      await WebBrowser.openBrowserAsync(ACCOUNT_BILLING_URL);
-    } catch {
-      Alert.alert("Couldn't open billing", "Open dashboard.inteliads.io/billing in your browser.");
-    } finally {
-      setBillingBusy(false);
-    }
-  };
 
   return (
     <SettingsScreen title="Settings">
@@ -170,7 +154,14 @@ export default function SettingsScreenRoute() {
         </SettingsSection>
 
         {!guestMode ? (
-          <SettingsSection title={ACCOUNT_SECTION_TITLE} footer={subscriptionFooter}>
+          <SettingsSection
+            title={ACCOUNT_SECTION_TITLE}
+            footer={
+              subscription.truth === "NEST" || subscription.truth === "LOADING"
+                ? undefined
+                : subscriptionFooter || undefined
+            }
+          >
             <SettingsNavigationRow
               testID="settings-my-account"
               label={MY_ACCOUNT_ROW_LABEL}
@@ -186,8 +177,8 @@ export default function SettingsScreenRoute() {
               subtitle={subscription.planSubtitle}
               value={subscription.planLabel}
               symbol="creditcard.fill"
-              symbolColor={t.colors.tone_good}
-              onPress={() => router.push("/more/account" as Href)}
+              symbolColor={t.colors.tone_primary}
+              onPress={() => router.push("/more/billing" as Href)}
               accessibilityLabel={`${PLAN_ROW_LABEL}. ${subscription.planLabel}`}
             />
             <SettingsNavigationRow
@@ -196,17 +187,17 @@ export default function SettingsScreenRoute() {
               value={subscription.statusLabel}
               symbol="checkmark.seal.fill"
               symbolColor={t.colors.tone_primary}
-              onPress={() => router.push("/more/account" as Href)}
+              onPress={() => router.push("/more/billing" as Href)}
               accessibilityLabel={`${SUBSCRIPTION_ROW_LABEL}. ${subscription.statusLabel}`}
             />
             <SettingsNavigationRow
               testID="settings-manage-billing"
-              label={billingBusy ? "Opening billing…" : MANAGE_BILLING_ROW_LABEL}
-              symbol="arrow.up.right.square"
+              label={MANAGE_BILLING_ROW_LABEL}
+              symbol="creditcard.fill"
               symbolColor={t.colors.tone_primary}
               last
-              onPress={() => void openBilling()}
-              accessibilityHint="Opens InteliAds billing in the browser."
+              onPress={() => router.push("/more/billing" as Href)}
+              accessibilityHint="Opens in-app plans and Stripe checkout."
             />
           </SettingsSection>
         ) : null}
@@ -217,7 +208,7 @@ export default function SettingsScreenRoute() {
             label={AMAZON_ACCOUNTS_ROW_LABEL}
             value={guestMode ? undefined : profileValue}
             symbol="building.2.fill"
-            symbolColor={t.colors.tone_product}
+            symbolColor={t.colors.tone_primary}
             onPress={() => router.push("/more/accounts" as Href)}
             accessibilityLabel={
               guestMode ? AMAZON_ACCOUNTS_ROW_LABEL : `${AMAZON_ACCOUNTS_ROW_LABEL}. ${profileValue}`
@@ -241,7 +232,7 @@ export default function SettingsScreenRoute() {
             label={KDP_PROFIT_LABEL}
             value={kdpSourceValue}
             symbol="book.fill"
-            symbolColor={t.colors.tone_warning}
+            symbolColor={t.colors.tone_primary}
             onPress={() => router.push("/more/kdp-source" as Href)}
             accessibilityLabel={`${KDP_PROFIT_LABEL}. ${kdpSourceValue}`}
           />
@@ -250,7 +241,7 @@ export default function SettingsScreenRoute() {
             label={KDP_ACCOUNTS_ROW_LABEL}
             subtitle={KDP_ACCOUNTS_ROW_SUBTITLE || undefined}
             symbol="link"
-            symbolColor={t.colors.tone_product}
+            symbolColor={t.colors.tone_primary}
             onPress={() => router.push("/more/accounts" as Href)}
             accessibilityLabel={KDP_ACCOUNTS_ROW_LABEL}
             accessibilityHint="Opens Amazon Accounts to link KDP."
@@ -273,7 +264,7 @@ export default function SettingsScreenRoute() {
             testID="settings-sync"
             label={SYNC_ROW_LABEL}
             symbol="arrow.triangle.2.circlepath"
-            symbolColor={t.colors.tone_good}
+            symbolColor={t.colors.tone_primary}
             onPress={() => router.push("/more/sync" as Href)}
             accessibilityLabel={SYNC_ROW_LABEL}
           />

@@ -17,6 +17,11 @@ test("Book Detail converts campaign money for the enabled portfolio", () => {
   assert.match(detail, /fetchBookCampaignsRange\([\s\S]*?profileIds: moneyProfileIds/);
   assert.match(detail, /displayCurrency: primaryCurrency/);
   assert.match(detail, /fetchTopBooksRange\([\s\S]*?profileIds: moneyProfileIds/);
+  // Never spin forever — hard timeout + no retries; placement is soft-degraded in fetch.
+  assert.match(detail, /BOOK_CAMPAIGNS_TIMEOUT_MS/);
+  assert.match(detail, /withQueryTimeout/);
+  assert.match(detail, /retry:\s*false/);
+  assert.match(detail, /isPending && campaigns\.length === 0 && !campaignsQ\.isError/);
 });
 
 test("Overview Top Books and catalog use only the displayed currency profiles", () => {

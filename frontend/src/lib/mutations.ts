@@ -3,7 +3,13 @@
 
 import { nestApiFetch, nestApiJson, nestLogout, parseNestError, NestApiError } from "./rulesApi";
 import { supabase } from "./supabase";
-import { normalizeNestUserPlanPayload, type NestUserPlan } from "./accountContract";
+import {
+  normalizeNestPricingPlansPayload,
+  normalizeNestUserPlanPayload,
+  unwrapNestUrlPayload,
+  type NestPricingPlan,
+  type NestUserPlan,
+} from "./accountContract";
 import { isTransientEnableProfileError } from "./accountsUi";
 import { amazonManualWrite } from "./bulkOutboxContract";
 import type { AmazonProfile } from "./types";
@@ -16,6 +22,7 @@ import {
   filterSuggestionsForBookRelevance,
   buildKeywordSuggestionCountStats,
   buildProductSuggestionCountStats,
+  productTitleNeedsEnrichment,
   type KeywordMatchType,
   type KeywordSuggestionCountStats,
   type ProductMatchType,
@@ -403,6 +410,10 @@ export async function previewCampaignCreation(input: {
         productTargets: amazonProductRows,
         keywordCounts: preGrokCounts,
       });
+      // Full Amazon payload → AI (UI SUGGESTION_PAGE_SIZE=50 is display-only).
+      console.log(
+        `[inteliads:create-preview] AI filter input keywords=${amazonKeywordRows.length} products=${amazonProductRows.length} targeting=${input.targeting}`,
+      );
       const filtered = await filterSuggestionsForBookRelevance(
         {
           keywords: amazonKeywordRows,
@@ -413,10 +424,17 @@ export async function previewCampaignCreation(input: {
           bookSubtitle: preview.book?.subtitle,
           bookAuthor: preview.book?.author,
           bookTopic: preview.book?.topic,
-          advertisedAsin: preview.book?.asin ?? input.advertisedAsin,
+          // Prefer || — Nest/normalize may leave book.asin as "" which blocks ??.
+          advertisedAsin:
+            String(preview.book?.asin ?? "").trim() ||
+            String(input.advertisedAsin ?? "").trim() ||
+            undefined,
           countryCode: preview.profile?.countryCode,
           currencyCode: preview.profile?.currencyCode,
         },
+      );
+      console.log(
+        `[inteliads:create-preview] AI filter done keywords=${filtered.keywords.length} products=${filtered.productTargets.length} outcome=${filtered.relevanceOutcome ?? "n/a"}`,
       );
       const keywordCounts = productOnly
         ? buildProductSuggestionCountStats({
@@ -573,6 +591,8 @@ export async function fetchAdGroupSuggestions(input: {
   campaignId: string;
   targeting: "keywords" | "products";
   asin?: string;
+  /** Ads profile — used to upgrade thin Nest suggestions via creation preview. */
+  profileId?: string;
   /**
    * Fires after Amazon normalize + companions, BEFORE Grok — so Add keywords
    * can show live Amazon phrase/row totals (from this fetch) immediately.
@@ -606,32 +626,167 @@ export async function fetchAdGroupSuggestions(input: {
         }
       };
 
-      let requestBody: {
-        campaignId: string;
-        targeting: "keywords" | "products";
-        asin?: string;
-      } = {
-        campaignId: input.campaignId,
-        targeting: input.targeting,
-        ...(input.asin ? { asin: input.asin } : {}),
-      };
-      let raw = await loadRaw(requestBody);
-      let preview = normalizeCampaignCreationPreview(raw);
+      const asinHint = String(input.asin ?? "").trim();
+      const profileHint = String(input.profileId ?? "").trim();
 
-      // Wrong/stale B0 ASIN override can empty US keyword suggestions (New England
-      // cert: B0HJ3N6PQK → 0 rows; omit asin → Nest resolves ISBN → ~166×3).
-      if (
-        input.targeting === "keywords" &&
-        input.asin &&
-        preview.keywords.length === 0 &&
-        !preview.recommendationsAvailable
-      ) {
-        requestBody = {
+      // Prefer Create preview when we already know profile + ASIN: one Nest hop
+      // with book{title…} + enriched product titles (KW + ASINs). Avoids thin
+      // `/ad-groups/suggestions` → empty Groq keep, and avoids double Nest.
+      const loadCreationPreviewRaw = async (
+        targeting: "keywords" | "products",
+        profileId: string,
+        advertisedAsin: string,
+      ) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 45_000);
+        try {
+          return await nestApiJson<unknown>(
+            "/campaigns/creation/preview",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                profileId,
+                advertisedAsin,
+                targeting,
+              }),
+              signal: controller.signal,
+            },
+            "Couldn't load Amazon suggestions.",
+          );
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+
+      let raw: unknown | null = null;
+      let preview = normalizeCampaignCreationPreview({});
+      let usedCreationPreview = false;
+
+      if (asinHint && profileHint) {
+        try {
+          raw = await loadCreationPreviewRaw(
+            input.targeting,
+            profileHint,
+            asinHint,
+          );
+          preview = normalizeCampaignCreationPreview(raw);
+          usedCreationPreview = true;
+        } catch {
+          usedCreationPreview = false;
+        }
+      }
+
+      if (!usedCreationPreview) {
+        let requestBody: {
+          campaignId: string;
+          targeting: "keywords" | "products";
+          asin?: string;
+        } = {
           campaignId: input.campaignId,
           targeting: input.targeting,
+          ...(asinHint ? { asin: asinHint } : {}),
         };
         raw = await loadRaw(requestBody);
         preview = normalizeCampaignCreationPreview(raw);
+
+        // Wrong/stale B0 ASIN override can empty US keyword suggestions (New England
+        // cert: B0HJ3N6PQK → 0 rows; omit asin → Nest resolves ISBN → ~166×3).
+        if (
+          input.targeting === "keywords" &&
+          asinHint &&
+          preview.keywords.length === 0 &&
+          !preview.recommendationsAvailable
+        ) {
+          requestBody = {
+            campaignId: input.campaignId,
+            targeting: input.targeting,
+          };
+          raw = await loadRaw(requestBody);
+          preview = normalizeCampaignCreationPreview(raw);
+        }
+
+        // Thin Nest suggestions (no book.title / product titles) → one upgrade
+        // hop via creation preview when we can resolve profile + asin.
+        const asin =
+          String(preview.book?.asin ?? "").trim() || asinHint;
+        const profileId = String(
+          preview.profile?.profileId ||
+            preview.profile?.id ||
+            profileHint ||
+            "",
+        ).trim();
+        const bookTitle = String(preview.book?.title ?? "").trim();
+        const rows =
+          input.targeting === "products"
+            ? preview.productTargets
+            : preview.keywords;
+        const missingProductTitles =
+          input.targeting === "products"
+            ? preview.productTargets.filter((row) =>
+                productTitleNeedsEnrichment(row.title, row.asin),
+              ).length
+            : 0;
+        const thinMeta =
+          rows.length > 0 &&
+          (!bookTitle ||
+            (input.targeting === "products" &&
+              missingProductTitles /
+                Math.max(1, preview.productTargets.length) >
+                0.3));
+        if (asin && profileId && thinMeta) {
+          try {
+            const upgradeRaw = await loadCreationPreviewRaw(
+              input.targeting,
+              profileId,
+              asin,
+            );
+            const upgraded = normalizeCampaignCreationPreview(upgradeRaw);
+            const upgradedRows =
+              input.targeting === "products"
+                ? upgraded.productTargets
+                : upgraded.keywords;
+            if (upgradedRows.length > 0) {
+              preview = upgraded;
+            }
+          } catch {
+            // Keep Nest ad-group suggestions; Groq may still use asin fallback.
+          }
+        }
+      }
+
+      // Creation preview can return 0 keywords for some ASINs while campaign-scoped
+      // /ad-groups/suggestions still has Amazon rows — fall through + ASIN-omit.
+      if (
+        usedCreationPreview &&
+        input.targeting === "keywords" &&
+        preview.keywords.length === 0
+      ) {
+        try {
+          let requestBody: {
+            campaignId: string;
+            targeting: "keywords" | "products";
+            asin?: string;
+          } = {
+            campaignId: input.campaignId,
+            targeting: "keywords",
+            ...(asinHint ? { asin: asinHint } : {}),
+          };
+          raw = await loadRaw(requestBody);
+          preview = normalizeCampaignCreationPreview(raw);
+          if (
+            asinHint &&
+            preview.keywords.length === 0 &&
+            !preview.recommendationsAvailable
+          ) {
+            raw = await loadRaw({
+              campaignId: input.campaignId,
+              targeting: "keywords",
+            });
+            preview = normalizeCampaignCreationPreview(raw);
+          }
+        } catch {
+          // Keep empty creation-preview keywords.
+        }
       }
 
       const amazonKeywordRows = preview.keywords;
@@ -676,7 +831,10 @@ export async function fetchAdGroupSuggestions(input: {
           bookSubtitle: preview.book?.subtitle,
           bookAuthor: preview.book?.author,
           bookTopic: preview.book?.topic,
-          advertisedAsin: preview.book?.asin ?? input.asin,
+          advertisedAsin:
+            String(preview.book?.asin ?? "").trim() ||
+            String(input.asin ?? "").trim() ||
+            undefined,
           countryCode: preview.profile?.countryCode,
           currencyCode: preview.profile?.currencyCode,
         },
@@ -983,6 +1141,87 @@ export async function fetchCurrentUserPlan(): Promise<NestUserPlan | null> {
     if (error instanceof NestApiError && error.status === 404) return null;
     throw error;
   }
+}
+
+/** Nest product catalog — same rows the web Pricing page uses (do not invent plans). */
+export async function fetchPricingPlans(): Promise<NestPricingPlan[]> {
+  const data = await nestApiJson<unknown>(
+    "/pricing-plans",
+    { method: "GET" },
+    "Couldn't load plans.",
+  );
+  return normalizeNestPricingPlansPayload(data);
+}
+
+/**
+ * Stripe Checkout session for a Nest catalog `stripePriceId`.
+ * Opens in Safari (Apple Pay). Matches web `POST /stripe/create-checkout-session`.
+ */
+export async function createStripeCheckoutSession(
+  priceId: string,
+  opts?: { source?: string },
+): Promise<{ url: string; sessionId?: string }> {
+  const raw = await nestApiJson<unknown>(
+    "/stripe/create-checkout-session",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        priceId,
+        source: opts?.source ?? "ios",
+      }),
+    },
+    "Couldn't start checkout.",
+  );
+  const parsed = unwrapNestUrlPayload(raw);
+  if (!parsed) throw new NestApiError("Checkout URL missing from server.", 502);
+  return parsed;
+}
+
+/** Stripe Customer Portal — manage payment method / cancel (web Billing "Manage"). */
+export async function createStripeBillingPortalSession(): Promise<{ url: string }> {
+  const raw = await nestApiJson<unknown>(
+    "/stripe/billing-portal",
+    { method: "GET" },
+    "Couldn't open billing portal.",
+  );
+  const parsed = unwrapNestUrlPayload(raw);
+  if (!parsed) throw new NestApiError("Billing portal URL missing from server.", 502);
+  return { url: parsed.url };
+}
+
+/**
+ * Switch plan when a Stripe subscription already exists.
+ * May return `requiresCheckout` + `url` when payment is needed first.
+ */
+export async function updateStripeSubscription(
+  priceId: string,
+): Promise<{
+  success: boolean;
+  message?: string;
+  requiresCheckout?: boolean;
+  url?: string;
+  sessionId?: string;
+}> {
+  const raw = await nestApiJson<Record<string, unknown>>(
+    "/stripe/update-subscription",
+    {
+      method: "POST",
+      body: JSON.stringify({ priceId, source: "ios" }),
+    },
+    "Couldn't change plan.",
+  );
+  const body =
+    raw && typeof raw === "object" && raw.data && typeof raw.data === "object"
+      ? (raw.data as Record<string, unknown>)
+      : raw;
+  const url = typeof body?.url === "string" ? body.url : undefined;
+  return {
+    success: body?.success !== false,
+    message: typeof body?.message === "string" ? body.message : undefined,
+    requiresCheckout: Boolean(body?.requiresCheckout),
+    url,
+    sessionId: typeof body?.sessionId === "string" ? body.sessionId : undefined,
+  };
 }
 
 export async function fetchNestUsers(): Promise<NestUser[]> {

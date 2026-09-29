@@ -39,7 +39,7 @@ test("snapshot bid is not labeled current, and currency is not inferred", () => 
   assert.equal(SNAPSHOT_BID_LABEL, "Bid when analyzed");
   assert.equal(formatBidAmount(0.79), "0.79");
   assert.doesNotMatch(formatBidAmount(0.79), /\$|£|€/);
-  assert.match(CURRENCY_GAP_CAPTION, /not included/);
+  assert.match(CURRENCY_GAP_CAPTION, /currency not shown/);
   assert.match(screen, /SNAPSHOT_BID_LABEL/);
   assert.doesNotMatch(screen, /primaryCurrency/);
   assert.doesNotMatch(screen, /Current bid/);
@@ -80,8 +80,11 @@ test("Aggressive and Run-while-auto warn without calling the other mode safe", (
 });
 
 test("view-as lock and account-wide scope stay explicit", () => {
-  assert.equal(VIEWING_CUSTOMER_BANNER, "Viewing a customer. Apply, Run, Revert, and auto mode stay off.");
-  assert.match(BIDBOT_SCOPE_HELPER, /header profile filter does not limit/);
+  assert.equal(
+    VIEWING_CUSTOMER_BANNER,
+    "Viewing a customer — Apply, Run, Revert, and auto mode stay off.",
+  );
+  assert.match(BIDBOT_SCOPE_HELPER, /Header profile filter does not limit/);
   assert.match(screen, /VIEWING_CUSTOMER_BANNER/);
   assert.match(screen, /BIDBOT_SCOPE_HELPER/);
   assert.doesNotMatch(screen, /Showing selected profiles/);

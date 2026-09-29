@@ -66,7 +66,9 @@ export const HOME_PERIOD_LIVE_CACHE = {
  * but remount always revalidates so overnight / filter changes stay honest.
  */
 export const LIST_PERIOD_QUERY_CACHE = {
-  staleTime: 45_000,
+  // Short stale so AppState resume invalidate + remount revalidate stay honest
+  // (overnight Campaigns / Targets / Books must not look "fresh" for 45s).
+  staleTime: 20_000,
   gcTime: 12 * 60 * 60_000,
   placeholderData: noPeriodPlaceholder,
   refetchOnMount: "always" as const,

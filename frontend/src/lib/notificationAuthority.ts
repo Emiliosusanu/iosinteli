@@ -1,10 +1,13 @@
 /**
- * Notification / digest authority is activated profiles — not the Overview filter.
- * Header selection still owns on-screen totals.
+ * Digest money scope: Overview selection ∩ activated profiles (match Home).
+ * Fall back to all activated only when the header selection is empty.
  */
 
 import { profileEnabled } from "./accountsUi.ts";
-import { uniqueProfileIds } from "./notificationScope.ts";
+import {
+  adsProfileIdsForSelection,
+  uniqueProfileIds,
+} from "./notificationScope.ts";
 
 export type AuthorityProfile = {
   id: string;
@@ -50,6 +53,80 @@ export function groupActivatedProfilesByCurrency<T extends AuthorityProfile>(
     groups.get(currency)!.push(profile);
   }
   return order.map((currency) => ({ currency, profiles: groups.get(currency)! }));
+}
+
+/**
+ * Ads profile ids for digest spend/orders/ACoS — same money set as Home when
+ * the header has a selection; otherwise all activated.
+ */
+export function digestMoneyAdsProfileIds(
+  selectedIds: readonly string[],
+  profiles: readonly AuthorityProfile[],
+): string[] {
+  const activated = new Set(activatedAdsProfileIds(profiles));
+  const selectedAds = adsProfileIdsForSelection(selectedIds, profiles as any);
+  const scoped = selectedAds.filter((id) => activated.has(id));
+  return scoped.length ? scoped : [...activated];
+}
+
+/**
+ * Nest fetch groups for digests.
+ * Multi-market USD chip → one Nest call (server FX rollup, same as Home).
+ * Otherwise native per-currency groups among moneyAdsIds only.
+ */
+export function digestFetchGroupsForMoney(
+  profiles: readonly AuthorityProfile[],
+  moneyAdsIds: readonly string[],
+  displayCurrency: string,
+): { currency: string; adsIds: string[]; selectionIds: string[] }[] {
+  const money = new Set(uniqueProfileIds(moneyAdsIds));
+  if (!money.size) return [];
+  const inMoney = profiles.filter((p) => {
+    if (!profileEnabled(p)) return false;
+    const ads = String(p.profile_id || p.id || "").trim();
+    return ads && money.has(ads);
+  });
+  if (!inMoney.length) {
+    return [
+      {
+        currency: String(displayCurrency || "USD").trim().toUpperCase() || "USD",
+        adsIds: [...money],
+        selectionIds: [...money],
+      },
+    ];
+  }
+  const currencies = new Set(inMoney.map((p) => currencyCodeOfProfile(p)));
+  const display = String(displayCurrency || "USD").trim().toUpperCase() || "USD";
+  // Home USD chip converts CAD/EUR… via Nest Frankfurter — digests must too.
+  if (display === "USD" && currencies.size > 1) {
+    const selectionIds = uniqueProfileIds(
+      inMoney.flatMap((p) => [p.id, p.profile_id].filter(Boolean) as string[]),
+    );
+    return [{ currency: "USD", adsIds: [...money], selectionIds }];
+  }
+  return groupActivatedProfilesByCurrency(inMoney).map((group) => ({
+    currency: group.currency,
+    adsIds: uniqueProfileIds(group.profiles.map((p) => p.profile_id || p.id)),
+    selectionIds: uniqueProfileIds(
+      group.profiles.flatMap((p) => [p.id, p.profile_id].filter(Boolean) as string[]),
+    ),
+  }));
+}
+
+/** Native per-currency Nest groups (no USD FX rollup) for moneyAdsIds. */
+export function digestNativeCurrencyFetchGroups(
+  profiles: readonly AuthorityProfile[],
+  moneyAdsIds: readonly string[],
+): { currency: string; adsIds: string[]; selectionIds: string[] }[] {
+  return digestFetchGroupsForMoney(profiles, moneyAdsIds, "___NATIVE___");
+}
+
+/** Nest hid money (FX fail-closed): mixed markets + null currency. */
+export function nestMoneyHiddenForDigest(snapshot: {
+  scope?: { currency?: string | null; mixedCurrency?: boolean | null } | null;
+}): boolean {
+  const currency = String(snapshot.scope?.currency || "").trim();
+  return !!snapshot.scope?.mixedCurrency && !currency;
 }
 
 export const DIGEST_PROFILE_FRESH_MS = 36 * 60 * 60 * 1000;

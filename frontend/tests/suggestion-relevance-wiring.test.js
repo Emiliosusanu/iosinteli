@@ -68,13 +68,21 @@ test("mutations.ts wires filterSuggestionsForBookRelevance in preview + ad group
     mutations,
     /export async function fetchAdGroupSuggestions[\s\S]*?filterSuggestionsForBookRelevance[\s\S]*?book: preview\.book[\s\S]*?profile: preview\.profile/,
   );
+  // Empty Nest book.asin ("") must not block input fallback — use || not ??.
   assert.match(
     mutations,
-    /advertisedAsin: preview\.book\?\.asin \?\? input\.advertisedAsin/,
+    /advertisedAsin:\s*\n?\s*String\(preview\.book\?\.asin \?\? ""\)\.trim\(\)\s*\|\|/,
+  );
+  assert.match(mutations, /String\(input\.advertisedAsin \?\? ""\)\.trim\(\)/);
+  assert.match(mutations, /String\(input\.asin \?\? ""\)\.trim\(\)/);
+  // AGC / add-targets: prefer creation preview (book + titles) when asin+profile known.
+  assert.match(
+    mutations,
+    /Prefer Create preview when we already know profile \+ ASIN/,
   );
   assert.match(
     mutations,
-    /advertisedAsin: preview\.book\?\.asin \?\? input\.asin/,
+    /loadCreationPreviewRaw/,
   );
   assert.match(mutations, /countryCode: preview\.profile\?\.countryCode/);
   assert.match(mutations, /currencyCode: preview\.profile\?\.currencyCode/);
@@ -113,7 +121,8 @@ test("create + ad-group flows block submit while AI filter pending", () => {
   assert.match(create, /aiFilterPending/);
   assert.match(create, /aiFilterNeedsConfirm|suggestionRelevanceNeedsUserConfirm/);
   assert.match(create, /setSelectedKeywords\(new Set\(\)\)/);
-  assert.match(create, /in-stock, currently published/);
+  assert.match(create, /in-stock, currently published|eligibility check can flake/);
+  assert.match(create, /usingFallbackMarketplaces|softLinked/);
   assert.match(create, /!aiFilterPending/);
   assert.match(create, /!aiFilterNeedsConfirm/);
   assert.match(adGroupCreate, /SuggestionAiFilterChrome/);
@@ -125,7 +134,79 @@ test("create + ad-group flows block submit while AI filter pending", () => {
 test("mutations pass relevanceOutcome into keywordCounts", () => {
   assert.match(mutations, /relevanceOutcome:\s*filtered\.relevanceOutcome/);
   assert.match(mutations, /relevanceError:\s*filtered\.relevanceError/);
+  assert.match(mutations, /AI filter done keywords=/);
   assert.match(suggestions, /failed_unfiltered/);
   assert.match(suggestions, /restored_empty/);
   assert.match(suggestions, /suggestionRelevanceNeedsUserConfirm/);
+});
+
+test("Create / ad-group / add-targets soft-recover failed_unfiltered without waiting for tap", () => {
+  const create = readFileSync(join(root, "app/campaign/create.tsx"), "utf8");
+  const adGroupCreate = readFileSync(
+    join(root, "app/campaign/ad-group-create.tsx"),
+    "utf8",
+  );
+  assert.match(create, /aiFailedSoftRecoverAttemptRef/);
+  assert.match(create, /AI_FAILED_SOFT_RECOVER_DELAYS_MS/);
+  assert.match(create, /AI_FAILED_SOFT_RECOVER_MAX/);
+  assert.match(create, /acceptAmazonUnfiltered/);
+  assert.match(create, /relevanceOutcome !== "failed_unfiltered"/);
+  assert.match(create, /grokPending:\s*true/);
+  assert.match(adGroupCreate, /aiFailedSoftRecoverAttemptRef/);
+  assert.match(adGroupCreate, /AI_FAILED_SOFT_RECOVER_DELAYS_MS/);
+  assert.match(addTargets, /aiFailedSoftRecoverAttemptRef/);
+  assert.match(addTargets, /AI_FAILED_SOFT_RECOVER_MAX/);
+  // Must not gate recover on isFetching (that cancelled timers mid-flight).
+  assert.doesNotMatch(
+    adGroupCreate,
+    /failed_unfiltered[\s\S]{0,200}if \(suggestionsQ\.isFetching\) return/,
+  );
+});
+
+test("filterSuggestionsForBookRelevance soft-retries transient relevance errors", () => {
+  assert.match(suggestions, /isTransientRelevanceError/);
+  assert.match(suggestions, /withRelevanceSoftRetry|RELEVANCE_SOFT_RETRY_GAPS_MS/);
+  assert.match(suggestions, /AI_FAILED_SOFT_RECOVER_DELAYS_MS/);
+  assert.match(suggestions, /soft-retry up to 3/);
+});
+
+test("ad-group suggestions fall through when creation preview returns 0 keywords", () => {
+  assert.match(
+    mutations,
+    /Creation preview can return 0 keywords[\s\S]*?\/ad-groups\/suggestions|fall through \+ ASIN-omit/,
+  );
+  assert.match(
+    mutations,
+    /usedCreationPreview &&\s*\n?\s*input\.targeting === "keywords"/,
+  );
+});
+
+test("Nest-first product chunks stay serial unless preferGroq", () => {
+  const grok = readFileSync(
+    join(root, "src/lib/suggestionRelevanceGrok.ts"),
+    "utf8",
+  );
+  assert.match(grok, /Boolean\(opts\?\.preferGroq\) &&/);
+  assert.doesNotMatch(
+    grok,
+    /Boolean\(opts\?\.preferGroq \|\| keys\.length > 0\)/,
+  );
+  assert.match(grok, /product chunk \$\{index\} soft-failed after retry|soft-failed after retry/);
+});
+
+test("Groq chunk failures rethrow (no silent keep-all → AI kept all)", () => {
+  const grok = readFileSync(
+    join(root, "src/lib/suggestionRelevanceGrok.ts"),
+    "utf8",
+  );
+  assert.match(grok, /Never silent keep-all|must surface — silent keep-all/);
+  assert.match(grok, /Groq product relevance filter unavailable/);
+  assert.match(grok, /Groq keyword relevance filter unavailable/);
+  assert.match(grok, /planRelevanceChunks|relevanceChunksCoverAll/);
+  assert.match(grok, /analyzing ALL \(not UI page size\)/);
+  // Old bug: catch returned every index with source "groq".
+  assert.doesNotMatch(
+    grok,
+    /indexes:\s*entry\.slice\.map\(\(_,\s*i\)\s*=>\s*entry\.offset\s*\+\s*i\)/,
+  );
 });

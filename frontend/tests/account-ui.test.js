@@ -15,18 +15,27 @@ import {
   ACCOUNT_STATUS_UNAVAILABLE,
   ACCOUNT_SUBSCRIPTION_LOAD_FAILED_FOOTER,
   ACCOUNT_VIEW_AS_NOTE,
+  BILLING_SCREEN_TITLE,
   accountPlanPresentation,
   accountSubscriptionPresentation,
   amazonProfileViewSummary,
+  buildAccountBillingUrl,
+  formatNestPricingPlanPrice,
+  groupNestPricingPlans,
+  isNestPricingPlanCurrent,
   nestPlanDisplayName,
   nestSubscriptionStatusLabel,
+  normalizeNestPricingPlansPayload,
   normalizeNestUserPlanPayload,
   signOutConfirmMessage,
+  unwrapNestUrlPayload,
 } from "../src/lib/accountContract.ts";
 import { MORE_GROUPS } from "../src/lib/moreRoot.ts";
 
 const account = readFileSync(new URL("../app/more/account.tsx", import.meta.url), "utf8");
 const settings = readFileSync(new URL("../app/more/settings.tsx", import.meta.url), "utf8");
+const billing = readFileSync(new URL("../app/more/billing.tsx", import.meta.url), "utf8");
+const rootLayout = readFileSync(new URL("../app/_layout.tsx", import.meta.url), "utf8");
 const auth = readFileSync(new URL("../src/contexts/AuthContext.tsx", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src/contexts/AppContext.tsx", import.meta.url), "utf8");
 const persistence = readFileSync(new URL("../src/lib/queryPersist.ts", import.meta.url), "utf8");
@@ -125,7 +134,7 @@ test("Nest current plan maps plan name and subscription status", () => {
     {
       planLabel: ACCOUNT_STATUS_CHECKING,
       statusLabel: ACCOUNT_STATUS_CHECKING,
-      footer: ACCOUNT_BILLING_FOOTER,
+      footer: "",
       truth: "LOADING",
     },
   );
@@ -163,7 +172,11 @@ test("account metadata is fallback only when Nest fails — never claims Nest au
   assert.doesNotMatch(settings, /accountPlanPresentation|ACCOUNT_STATUS_UNAVAILABLE/);
   assert.match(mutations, /\/pricing-plans\/current/);
   assert.match(mutations, /normalizeNestUserPlanPayload/);
-  assert.match(ACCOUNT_NEST_SUBSCRIPTION_FOOTER, /Plan from your InteliAds account/);
+  assert.match(mutations, /\/pricing-plans"/);
+  assert.match(mutations, /fetchPricingPlans/);
+  assert.match(mutations, /\/stripe\/create-checkout-session/);
+  assert.match(mutations, /\/stripe\/billing-portal/);
+  assert.equal(ACCOUNT_NEST_SUBSCRIPTION_FOOTER, "");
   assert.match(ACCOUNT_BILLING_FOOTER, /Billing is managed on the web/);
   assert.doesNotMatch(ACCOUNT_BILLING_FOOTER, /does not receive authoritative/);
   assert.doesNotMatch(settings, /does not receive authoritative/);
@@ -201,7 +214,7 @@ test("disabled/idle Nest plan stays Checking, not Unavailable", () => {
   assert.deepEqual(accountSubscriptionPresentation({ nestStatus: "idle" }), {
     planLabel: ACCOUNT_STATUS_CHECKING,
     statusLabel: ACCOUNT_STATUS_CHECKING,
-    footer: ACCOUNT_BILLING_FOOTER,
+    footer: "",
     truth: "LOADING",
   });
 });
@@ -209,7 +222,7 @@ test("disabled/idle Nest plan stays Checking, not Unavailable", () => {
 test("view-as cannot replace the signed-in InteliAds identity", () => {
   assert.match(account, /user\?\.email/);
   assert.match(account, /ACCOUNT_VIEW_AS_NOTE/);
-  assert.match(ACCOUNT_VIEW_AS_NOTE, /still shows your InteliAds account/);
+  assert.match(ACCOUNT_VIEW_AS_NOTE, /still your InteliAds account/);
   assert.doesNotMatch(account, /adminUsers|customer.*email/i);
 });
 
@@ -217,12 +230,11 @@ test("Amazon profile summary says current view, not active accounts", () => {
   assert.equal(amazonProfileViewSummary(3, 12), "3 of 12");
   assert.equal(amazonProfileViewSummary(0, 0), "No profiles");
   assert.equal(amazonProfileViewSummary(20, 4), "4 of 4");
-  assert.match(account, /Amazon profiles/);
+  assert.match(account, /Amazon accounts/);
   assert.doesNotMatch(account, /Amazon profiles in current view/);
   assert.match(account, /profilesLoading[\s\S]*"Checking…"/);
   assert.match(account, /profilesError[\s\S]*"Unavailable"/);
-  assert.match(account, /Viewed customer data/);
-  assert.match(account, /Customer view/);
+  assert.match(account, /Customer data/);
   assert.doesNotMatch(account, /These profile counts belong to the customer/);
   assert.doesNotMatch(account, /Active accounts/);
 });
@@ -235,11 +247,85 @@ test("guest state has auth actions and no real-account subscription UI", () => {
   assert.match(account, /guestMode \? \(/);
 });
 
-test("billing is an explicit web handoff", () => {
+test("billing opens in-app plans then Stripe Checkout / portal in Safari", () => {
   assert.equal(ACCOUNT_BILLING_URL, "https://dashboard.inteliads.io/billing");
-  assert.match(account, /Manage subscription on the web/);
-  assert.match(account, /openBrowserAsync\(ACCOUNT_BILLING_URL\)/);
-  assert.match(account, /Opens InteliAds billing in the browser/);
+  assert.equal(
+    buildAccountBillingUrl({ planSlug: "pro-month", source: "ios" }),
+    "https://dashboard.inteliads.io/billing?planSlug=pro-month&source=ios",
+  );
+  assert.equal(BILLING_SCREEN_TITLE, "Plans & billing");
+  assert.match(account, /Plans & billing/);
+  assert.match(account, /more\/billing/);
+  assert.doesNotMatch(account, /openBrowserAsync\(ACCOUNT_BILLING_URL\)/);
+  assert.match(settings, /more\/billing/);
+  assert.match(settings, /settings-manage-billing/);
+  assert.doesNotMatch(settings, /openBrowserAsync\(ACCOUNT_BILLING_URL\)/);
+  assert.match(rootLayout, /more\/billing/);
+  assert.match(billing, /fetchPricingPlans/);
+  assert.match(billing, /createStripeCheckoutSession/);
+  assert.match(billing, /createStripeBillingPortalSession/);
+  assert.match(billing, /openBrowserAsync/);
+  assert.match(billing, /source:\s*"ios"|source=ios/);
+  assert.match(billing, /invalidateQueries\(\{\s*queryKey:\s*\["pricing-plans"\]/);
+  assert.match(billing, /AppState\.addEventListener/);
+  assert.match(billing, /useFocusEffect/);
+
+  const plans = normalizeNestPricingPlansPayload({
+    data: [
+      {
+        id: "1",
+        name: "Pro Monthly",
+        slug: "pro-month",
+        priceMonthly: 79,
+        priceYearly: 790,
+        billingCycle: "month",
+        stripePriceId: "price_pro_m",
+        isActive: true,
+        sortOrder: 2,
+      },
+      {
+        id: "2",
+        name: "Pro Annual",
+        slug: "pro-year",
+        priceMonthly: 79,
+        priceYearly: 790,
+        billingCycle: "year",
+        stripePriceId: "price_pro_y",
+        isActive: true,
+        sortOrder: 2,
+      },
+      {
+        id: "3",
+        name: "Starter Monthly",
+        slug: "starter-month",
+        priceMonthly: 39,
+        priceYearly: 390,
+        billingCycle: "month",
+        stripePriceId: "price_starter_m",
+        isActive: true,
+        sortOrder: 1,
+      },
+    ],
+  });
+  assert.equal(plans.length, 3);
+  const groups = groupNestPricingPlans(plans);
+  assert.equal(groups[0].baseSlug, "starter");
+  assert.equal(formatNestPricingPlanPrice(plans[0], "month"), "$79/mo");
+  assert.equal(
+    isNestPricingPlanCurrent(plans[0], {
+      planId: "1",
+      planName: "Pro",
+      planSlug: "pro-month",
+      price: 79,
+      isActive: true,
+      stripePriceId: "price_pro_m",
+    }),
+    true,
+  );
+  assert.deepEqual(unwrapNestUrlPayload({ url: "https://checkout.stripe.com/c/pay/cs_test" }), {
+    url: "https://checkout.stripe.com/c/pay/cs_test",
+    sessionId: undefined,
+  });
 });
 
 test("sign-out names the consequence and clears scoped state", () => {
@@ -248,7 +334,7 @@ test("sign-out names the consequence and clears scoped state", () => {
     "person@example.test\n\nReturns to Sign in.",
   );
   assert.match(account, /Sign out of InteliAds\?/);
-  assert.match(account, /Clears this session/);
+  assert.match(account, /Signs out and returns to Sign in/);
   assert.doesNotMatch(account, /It does not disconnect Amazon Ads or delete your account/);
   assert.match(auth, /storage\.setItem\(GUEST_KEY, false\)/);
   assert.match(auth, /storage\.removeItem\(ADMIN_FILTER_KEY\)/);

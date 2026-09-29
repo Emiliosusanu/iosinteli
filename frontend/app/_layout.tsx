@@ -55,18 +55,15 @@ function FinancialForegroundRefetch() {
       const wasBackground = appState === "background" || appState === "inactive";
       appState = next;
       if (!wasBackground || next !== "active") return;
-      void queryClient.invalidateQueries({
-        predicate: (query) => {
-          const root = query.queryKey?.[0];
-          return typeof root === "string" && (
-            root.startsWith("kdp-royalties")
-            || root.startsWith("campaign-metrics")
-            || root.startsWith("mobile-overview")
-            || root.startsWith("products-range")
-            || root.startsWith("top-books")
-            || root.startsWith("placement-mix")
-          );
-        },
+      void import("@/src/lib/backgroundFinancialSync").then(({ backgroundFinancialQueryRoots }) => {
+        const roots = backgroundFinancialQueryRoots();
+        void queryClient.invalidateQueries({
+          predicate: (query) => {
+            const root = query.queryKey?.[0];
+            return typeof root === "string" && roots.includes(root);
+          },
+          refetchType: "active",
+        });
       });
     });
     return () => sub.remove();
@@ -267,6 +264,7 @@ export default function RootLayout() {
                     <Stack.Screen name="more/sync" />
                     <Stack.Screen name="more/data-map" />
                     <Stack.Screen name="more/account" />
+                    <Stack.Screen name="more/billing" />
                     <Stack.Screen name="more/bid-bot" />
                     <Stack.Screen name="more/kdp-source" />
                     <Stack.Screen name="more/kdp-helper" />

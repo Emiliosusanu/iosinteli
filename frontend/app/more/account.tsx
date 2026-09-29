@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { View, StyleSheet, ScrollView, Alert, Platform } from "react-native";
-import { useRouter } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
+import { type Href, useRouter } from "expo-router";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useApp } from "@/src/contexts/AppContext";
 import { useTheme } from "@/src/lib/theme";
@@ -14,7 +13,6 @@ import {
   SettingsSection,
 } from "@/src/components/settings/SettingsPrimitives";
 import {
-  ACCOUNT_BILLING_URL,
   ACCOUNT_GUEST_NOTE,
   ACCOUNT_VIEW_AS_NOTE,
   accountSubscriptionPresentation,
@@ -36,7 +34,6 @@ export default function AccountScreen() {
   } = useApp();
   const currentPlanQ = useCurrentUserPlan();
   const [signingOut, setSigningOut] = useState(false);
-  const [billingBusy, setBillingBusy] = useState(false);
 
   const doSignOut = async () => {
     if (signingOut) return;
@@ -78,21 +75,6 @@ export default function AccountScreen() {
     }
   };
 
-  const openBilling = async () => {
-    if (billingBusy) return;
-    setBillingBusy(true);
-    try {
-      await WebBrowser.openBrowserAsync(ACCOUNT_BILLING_URL);
-    } catch {
-      Alert.alert(
-        "Couldn't open billing",
-        "Open dashboard.inteliads.io/billing in your browser.",
-      );
-    } finally {
-      setBillingBusy(false);
-    }
-  };
-
   const subscription = accountSubscriptionPresentation({
     nestPlan: currentPlanQ.nestPlan,
     nestStatus: currentPlanQ.nestStatus,
@@ -107,8 +89,11 @@ export default function AccountScreen() {
         ? "Unavailable"
         : amazonProfileViewSummary(selectedProfileIds.length, profiles.length);
   const identityTitle = guestMode ? "Preview demo" : (user?.email ?? "Account unavailable");
-  const identitySubtitle = guestMode ? "No InteliAds account is signed in" : "Signed-in InteliAds account";
-  const subscriptionFooter = subscription.footer;
+  const identitySubtitle = guestMode ? "Not signed in" : undefined;
+  const subscriptionFooter =
+    subscription.truth === "NEST" || subscription.truth === "LOADING"
+      ? undefined
+      : subscription.footer || undefined;
 
   return (
     <SettingsScreen title="My Account">
@@ -128,7 +113,7 @@ export default function AccountScreen() {
             symbol="person.crop.circle.fill"
             symbolColor={t.colors.tone_primary}
             last
-            accessibilityLabel={`${identityTitle}. ${identitySubtitle}`}
+            accessibilityLabel={identitySubtitle ? `${identityTitle}. ${identitySubtitle}` : identityTitle}
           />
         </SettingsSection>
 
@@ -175,38 +160,34 @@ export default function AccountScreen() {
               />
               <SettingsRow
                 testID="my-account-subscription-status"
-                label="Subscription status"
+                label="Status"
                 value={subscription.statusLabel}
               />
               <SettingsNavigationRow
                 testID="my-account-billing"
-                label={billingBusy ? "Opening billing…" : "Manage subscription on the web"}
-                symbol="arrow.up.right.square"
+                label="Plans & billing"
+                symbol="creditcard.fill"
                 symbolColor={t.colors.tone_primary}
-                onPress={() => void openBilling()}
-                accessibilityHint="Opens InteliAds billing in the browser."
+                onPress={() => router.push("/more/billing" as Href)}
+                accessibilityHint="Opens in-app plans and Stripe checkout."
                 last
               />
             </SettingsSection>
 
-            <SettingsSection
-              title={viewingCustomer ? "Viewed customer data" : "Amazon data"}
-              footer={viewingCustomer ? "Customer view" : undefined}
-            >
+            <SettingsSection title={viewingCustomer ? "Customer data" : "Amazon Ads"}>
               <SettingsNavigationRow
                 testID="my-account-amazon-profiles"
-                label="Amazon profiles"
-                subtitle={viewingCustomer ? "Customer view" : undefined}
+                label="Amazon accounts"
                 value={profileSummary}
                 symbol="building.2.fill"
-                symbolColor={t.colors.tone_product}
+                symbolColor={t.colors.tone_primary}
                 onPress={() => router.push("/more/accounts")}
                 accessibilityHint="Opens Amazon Accounts."
                 last
               />
             </SettingsSection>
 
-            <SettingsSection title="Session" footer="Clears this session">
+            <SettingsSection title="Session">
               <View style={styles.sessionAction}>
                 <IOSButton
                   testID="sign-out-btn"
@@ -217,7 +198,7 @@ export default function AccountScreen() {
                   tintColor={t.colors.tone_danger}
                   systemImage="rectangle.portrait.and.arrow.right"
                   onPress={onSignOut}
-                  accessibilityHint="Clears this iPhone's InteliAds session and returns to Sign in."
+                  accessibilityHint="Signs out and returns to Sign in."
                   full
                 />
               </View>

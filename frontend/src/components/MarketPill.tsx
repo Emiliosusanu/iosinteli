@@ -63,7 +63,7 @@ type MarketPillProps = {
 };
 
 /**
- * Frosted glass market pill — overlapping circular flags + `US + Canada • USD` + chevron.
+ * Frosted glass market pill — overlapping circular flags + `US + CA • USD` + chevron.
  * Shared by OverviewHeaderV3 and TopBar (Campaigns / Targets / Books).
  * Wash / tint / label colors follow the active light/dark scheme.
  */
@@ -151,8 +151,8 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexShrink: 1,
     flexBasis: 0,
-    minWidth: 148,
-    maxWidth: "84%",
+    minWidth: 0,
+    maxWidth: "100%",
   },
   marketPill: {
     minHeight: 40,
@@ -161,16 +161,19 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     overflow: "hidden",
     justifyContent: "center",
+    width: "100%",
   },
   marketPillInner: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 7,
     position: "relative",
+    minWidth: 0,
   },
   marketPillText: {
+    flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,
     fontWeight: "600",

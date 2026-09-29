@@ -24,7 +24,7 @@ test("book filter keeps distinct ASINs even when titles match", () => {
     { asin: "B0FSKDQ27V", title: "Alaska Travel Guide 2026", campaignIds: ["c2"] },
   ]);
   assert.equal(rows.length, 2);
-  assert.match(targeting, /Each row is one ASIN/);
+  assert.match(targeting, /One ASIN per row/);
 });
 
 test("dedupeTargetingBookOptions collapses identical ASINs and merges campaigns", () => {
@@ -424,10 +424,12 @@ test("mergeTargetingBookOptionSources defaults to targets (campaigns only)", () 
 
 test("targeting filter sheet wires search, list rows, and context eligibility", () => {
   assert.match(targeting, /targeting-book-search/);
-  assert.match(targeting, /styles\.bookList/);
+  assert.match(targeting, /styles\.bookListRow/);
+  assert.match(targeting, /targeting-ranges-toggle/);
+  assert.match(targeting, /FilterCheckRow/);
   assert.match(targeting, /filterTargetingBookOptions/);
   assert.match(targeting, /book\.asin/);
-  assert.match(targeting, /checkmark\.circle\.fill/);
+  assert.match(targeting, /name="checkmark"/);
   assert.match(queries, /dedupeTargetingBookOptions/);
   assert.match(queries, /selectEligibleTargetingBookOptions\(books, purpose\)/);
   assert.match(queries, /fetchKdpBooksForTargetingFilter/);

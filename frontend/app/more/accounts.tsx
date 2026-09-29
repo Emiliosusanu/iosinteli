@@ -750,7 +750,7 @@ export default function AmazonAccountsScreen() {
             <View style={{ padding: 16 }}>
               <RetryState
                 title="Couldn't load KDP accounts"
-                subtitle="Check your connection, then retry. You can also open Settings → Royalty source."
+                subtitle="Retry, or open Royalty source."
                 onRetry={() => void kdpQ.refetch()}
                 retrying={kdpQ.isFetching}
               />

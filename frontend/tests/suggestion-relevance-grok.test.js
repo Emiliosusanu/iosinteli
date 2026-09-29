@@ -12,8 +12,11 @@ import {
   expandGrokAsinIndexesToOriginal,
   expandGrokPhraseIndexesToOriginal,
   parseGrokRelevanceJson,
+  planRelevanceChunks,
+  relevanceChunksCoverAll,
   relevancePromptNeedsChunking,
   GROK_RELEVANCE_KEYWORD_CHUNK,
+  GROK_RELEVANCE_PRODUCT_CHUNK,
 } from "../src/lib/suggestionRelevanceGrokLogic.ts";
 import {
   GROK_RELEVANCE_SYSTEM_PROMPT,
@@ -297,6 +300,65 @@ test("grok mode uses injected filter and falls back to heuristic on throw", asyn
   assert.ok(fellBack.productTargets.some((p) => p.asin === "B0ICE00001"));
 });
 
+test("grok soft-retries on transient timeout then recovers (no AI unavailable latch)", async () => {
+  const keywords = Array.from({ length: 12 }, (_, i) => ({
+    keyword: i === 0 ? "iceland roads" : `filler kw ${i}`,
+    matchType: "broad",
+  }));
+  let calls = 0;
+  const out = await filterSuggestionsForBookRelevance(
+    { keywords, productTargets: [] },
+    {
+      bookTitle: "Iceland Road Trip Guide",
+      advertisedAsin: "B0ICE00001",
+    },
+    {
+      mode: "grok",
+      grokFilter: async (rows) => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error("Nest relevance filter timed out");
+        }
+        return applyGrokRelevanceSelection(rows, {
+          keywordIndexes: [0, 1, 2],
+          productIndexes: [],
+        });
+      },
+    },
+  );
+  assert.equal(calls, 2);
+  assert.equal(out.relevanceOutcome, "filtered");
+  assert.equal(out.keywords.length, 3);
+  assert.equal(out.keywords[0].keyword, "iceland roads");
+});
+
+test("RELEVANCE_SOFT_RETRY_GAPS_MS exports multi-shot backoff", async () => {
+  const { RELEVANCE_SOFT_RETRY_GAPS_MS, AI_FAILED_SOFT_RECOVER_DELAYS_MS } =
+    await import("../src/lib/amazonCampaignSuggestions.ts");
+  assert.equal(RELEVANCE_SOFT_RETRY_GAPS_MS.length, 3);
+  assert.ok(RELEVANCE_SOFT_RETRY_GAPS_MS[0] < RELEVANCE_SOFT_RETRY_GAPS_MS[2]);
+  assert.equal(AI_FAILED_SOFT_RECOVER_DELAYS_MS.length, 3);
+});
+
+test("isTransientRelevanceError treats timeouts/429/TPM as retryable", async () => {
+  const { isTransientRelevanceError } = await import(
+    "../src/lib/amazonCampaignSuggestions.ts"
+  );
+  assert.equal(
+    isTransientRelevanceError(new Error("Nest relevance filter timed out")),
+    true,
+  );
+  assert.equal(
+    isTransientRelevanceError(new Error("429 tokens per minute TPM")),
+    true,
+  );
+  assert.equal(isTransientRelevanceError(new Error("boom")), false);
+  assert.equal(
+    isTransientRelevanceError(new Error("EXPO_PUBLIC_GROQ_API_KEY is not set")),
+    false,
+  );
+});
+
 test("grok mode keeps curated shortlist (does not restore full Amazon dump)", async () => {
   const keywords = Array.from({ length: 12 }, (_, i) => ({
     keyword: i === 0 ? "iceland roads" : `filler kw ${i}`,
@@ -421,4 +483,41 @@ test("relevancePromptNeedsChunking triggers above keyword/char thresholds", () =
     true,
   );
   assert.equal(relevancePromptNeedsChunking(5, 20_000), true);
+});
+
+test("relevance chunks cover the FULL list — never truncate at UI page size 50", () => {
+  for (const total of [0, 1, 49, 50, 51, 80, 120, 121, 200, 250, 1000]) {
+    const items = Array.from({ length: total }, (_, i) => i);
+    const kw = planRelevanceChunks(items, GROK_RELEVANCE_KEYWORD_CHUNK);
+    const pr = planRelevanceChunks(items, GROK_RELEVANCE_PRODUCT_CHUNK);
+    assert.equal(relevanceChunksCoverAll(kw, total), true, `kw cover ${total}`);
+    assert.equal(relevanceChunksCoverAll(pr, total), true, `pr cover ${total}`);
+    const kwSum = kw.reduce((n, s) => n + s.slice.length, 0);
+    const prSum = pr.reduce((n, s) => n + s.slice.length, 0);
+    assert.equal(kwSum, total);
+    assert.equal(prSum, total);
+    // No slice may start at an offset that skips prior rows.
+    if (total > 0) {
+      assert.equal(kw[0]?.offset, 0);
+      assert.equal(pr[0]?.offset, 0);
+    }
+  }
+  // Explicit: UI SUGGESTION_PAGE_SIZE=50 is NOT a filter chunk size.
+  const overPage = planRelevanceChunks(
+    Array.from({ length: 137 }, (_, i) => `asin-${i}`),
+    GROK_RELEVANCE_PRODUCT_CHUNK,
+  );
+  assert.ok(overPage.length >= 2);
+  assert.equal(
+    overPage.reduce((n, s) => n + s.slice.length, 0),
+    137,
+  );
+  assert.doesNotMatch(
+    readFileSync(join(root, "src/lib/mutations.ts"), "utf8"),
+    /filterSuggestionsForBookRelevance[\s\S]{0,200}slice\(0,\s*50\)/,
+  );
+  assert.match(
+    readFileSync(join(root, "src/lib/mutations.ts"), "utf8"),
+    /AI filter input keywords=/,
+  );
 });

@@ -34,7 +34,7 @@ test("period query cache blocks cross-key placeholders", () => {
   assert.equal(HOME_PERIOD_QUERY_CACHE.refetchOnMount, "always");
   assert.equal(HOME_PERIOD_QUERY_CACHE.staleTime, 30_000);
   assert.equal(LIST_PERIOD_QUERY_CACHE.refetchOnMount, "always");
-  assert.equal(LIST_PERIOD_QUERY_CACHE.staleTime, 45_000);
+  assert.equal(LIST_PERIOD_QUERY_CACHE.staleTime, 20_000);
   assert.equal(STABLE_SCOPED_CACHE.placeholderData, noPeriodPlaceholder);
 });
 
@@ -115,11 +115,41 @@ test("Campaigns and Books never reuse a previous period's list", () => {
   assert.doesNotMatch(campaigns, /placeholderData:\s*\(previous\)/);
   assert.match(campaigns, /campaigns-list-range-v3/);
   assert.match(campaigns, /limit: 0/);
+  assert.match(campaigns, /CAMPAIGNS_LIST_TIMEOUT_MS/);
+  assert.doesNotMatch(campaigns, /withQueryTimeout\([\s\S]{0,400}?,\s*undefined\s*,\s*signal/);
   assert.doesNotMatch(campaigns, /sameScopeWarmPlaceholder/);
   assert.match(campaigns, /LIST_PERIOD_QUERY_CACHE/);
   assert.match(products, /sameScopeWarmPlaceholder/);
   assert.match(products, /LIST_PERIOD_QUERY_CACHE/);
   assert.match(products, /sortedProfileIds/);
+});
+
+test("Home campaigns warm-prefetch shares the 60s list timeout", () => {
+  assert.match(home, /campaigns-list-range-v3/);
+  assert.match(home, /CAMPAIGNS_LIST_TIMEOUT_MS/);
+  assert.match(home, /prefetchQuery/);
+});
+
+test("multi-profile campaigns skip nested placement enrichment", () => {
+  const queries = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
+  assert.match(queries, /skipPlacementShares/);
+  assert.match(queries, /skipPlacementShares:\s*true/);
+});
+
+test("multi-profile campaign reads use a bounded three-wide pool", () => {
+  const queries = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
+  const start = queries.indexOf("export async function fetchTopCampaignsRange");
+  const campaignRange = queries.slice(
+    start,
+    start + 7_000,
+  );
+  assert.match(campaignRange, /mapPoolLimited\(profileIds, 3,/);
+  assert.doesNotMatch(campaignRange, /profileIds\.slice\(i, i \+ 2\)/);
+});
+
+test("target display enrichment cannot block first paint for twelve seconds", () => {
+  const timeoutSource = readFileSync(new URL("../src/lib/queryTimeout.ts", import.meta.url), "utf8");
+  assert.match(timeoutSource, /TARGETING_PAGE_DISPLAY_ENRICH_MS = 2_500/);
 });
 
 test("Home wires period isolation, motion, and live refetch", () => {

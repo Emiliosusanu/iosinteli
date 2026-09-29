@@ -71,6 +71,7 @@ export function QaBootstrap() {
         targetsPerf: cmd.targetsPerf,
         targetsSort: cmd.targetsSort,
         targetsAdvanced: cmd.targetsAdvanced,
+        targetsOpenFilter: cmd.targetsOpenFilter,
         booksSort: cmd.booksSort,
       };
       stashPendingQaFilters(filterSeed);

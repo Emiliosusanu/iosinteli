@@ -10,6 +10,7 @@ import { useTheme, toneColor } from "../lib/theme";
 import { formatCompact, formatInt, formatPercent, safeDivide, formatCurrency } from "../lib/format";
 import { hasAuthoritativeBreakEven } from "../lib/kdpTitlePresentation";
 import { dayBarStep, dayXLayout } from "../lib/chartLayout";
+import { resolveChartDayFinance } from "../lib/chartDayFinance";
 import { useOverviewPeriodSwipeGesture } from "./OverviewPeriodSwipe";
 import { useOverviewWidgetPageSwipeGesture } from "./OverviewWidgetPageSwipe";
 
@@ -100,15 +101,20 @@ function buildChartDaySelection(
   royaltiesData?: ChartPoint[],
   spendData?: ChartPoint[],
 ): NonNullable<ChartDaySelection> {
-  const point = data[index];
-  return {
+  const resolved = resolveChartDayFinance({
     index,
-    label: point?.label,
-    date: point?.date,
-    net: point?.value ?? 0,
-    royalties: royaltiesData?.[index]?.value ?? null,
-    spend: spendData?.[index]?.value ?? 0,
-    sales: point?.sales ?? 0,
+    netPoint: data[index],
+    royaltiesSeries: royaltiesData,
+    spendSeries: spendData,
+  });
+  return {
+    index: resolved.index,
+    label: resolved.label,
+    date: resolved.date,
+    net: resolved.net,
+    royalties: resolved.royalties,
+    spend: resolved.spend,
+    sales: resolved.sales,
   };
 }
 
@@ -666,10 +672,10 @@ export type ChartDaySelection = {
   index: number;
   label?: string;
   date?: string;
-  net: number;
+  net: number | null;
   royalties: number | null;
-  spend: number;
-  sales: number;
+  spend: number | null;
+  sales: number | null;
 } | null;
 
 interface NetProfitChartProps {

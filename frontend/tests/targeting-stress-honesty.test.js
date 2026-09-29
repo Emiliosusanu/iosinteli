@@ -46,10 +46,11 @@ test("all five targeting segments are always wired (kw / asin / auto / cat / pla
   }
   assert.match(targeting, /TargetingModePills/);
   assert.match(targeting, /from "@\/src\/components\/TargetingModePills"/);
-  // Server-ranked pages own segment routing — no client asins/auto/category buckets.
+  // Server-ranked catalog owns segment routing — no client asins/auto/category buckets.
   assert.match(targeting, /fetchMobileTargetingPage/);
+  assert.match(targeting, /fetchMobileTargetingCatalogTail/);
   assert.match(targeting, /segment,/);
-  assert.match(targeting, /TargetingPagination/);
+  assert.doesNotMatch(targeting, /TargetingPagination/);
   assert.doesNotMatch(targeting, /buckets\.auto\.push/);
   assert.match(targeting, /__targetingIsCategory/);
 });
@@ -82,7 +83,7 @@ test("book filter: campaign-activity books + searchable cover rows", () => {
   assert.match(targeting, /filterTargetingBookOptions/);
   assert.match(targeting, /fetchTargetingBookOptions\(scopeProfiles/);
   assert.match(targeting, /Don't apply book filter until options are fetched/);
-  assert.match(targeting, /bookCampaignIds/);
+  assert.match(targeting, /bookCampaignIdList/);
   assert.doesNotMatch(targeting, /No advertised books on these profiles yet\./);
   assert.match(targeting, /No books with active campaigns on these profiles yet\./);
   assert.doesNotMatch(targeting, /No in-stock, campaign, or KDP books/);
@@ -204,6 +205,12 @@ test("default Active filter requires entity + ad group + campaign across segment
   assert.match(targeting, /useState<EntityStateFilter>\(DEFAULT_TARGETING_STATE_FILTER\)/);
   assert.match(targeting, /testID="targeting-state-filter"/);
   assert.match(targeting, /key: "enabled", label: "Active"/);
+  // Status lives in FilterSheetFields (Active/Paused/All); chrome shows a clear chip when not Active.
+  const sheetIdx = targeting.indexOf("function FilterSheetFields");
+  assert.ok(sheetIdx > 0);
+  assert.doesNotMatch(targeting.slice(0, sheetIdx), /testID="targeting-state-filter"/);
+  assert.match(targeting.slice(sheetIdx), /testID="targeting-state-filter"/);
+  assert.match(targeting, /targeting-filter-chip-state/);
   // Active parent-chain is fail-closed in RPC params/comments (not client matchesLiveTargetingRow).
   assert.match(targeting, /fetchMobileTargetingPage/);
   assert.match(targeting, /state: stateFilter/);
@@ -233,12 +240,45 @@ test("mobile targeting pages enrich titles/covers without dropping ranked rows",
   assert.match(targeting, /fallbackAsinCoverUrl\(coverAsin\)/);
   assert.match(targetingLib, /Title unavailable/);
   assert.match(targetingLib, /isUsableBookTitle/);
+  // Retail gap-fill must chunk — never skip when stillGap > 40 (Title unavailable).
+  assert.match(queries, /RETAIL_CHUNK/);
+  assert.doesNotMatch(
+    queries,
+    /stillGap\.length\s*>\s*0\s*&&\s*stillGap\.length\s*<=\s*40/,
+  );
+  // Page path skips retail (spinner); post-paint fill restores competitor titles.
+  assert.match(queries, /skipRetail:\s*true/);
+  assert.match(queries, /fillMissingProductTargetTitlesFromRetail/);
+  assert.match(targeting, /fillMissingProductTargetTitlesFromRetail/);
+  // Remount / isFetching flicker must not abort or one-shot blacklist (Title unavailable forever).
+  assert.match(targeting, /retailTitleInFlightRef/);
+  assert.match(targeting, /retailFillBusyRef/);
+  assert.match(targeting, /retailTitleDoneRef/);
+  assert.match(targeting, /retailTitleAttemptsRef/);
+  assert.match(targeting, /RETAIL_MAX_ATTEMPTS/);
+  assert.match(targeting, /resetRetailTitleFill/);
+  assert.match(targeting, /titleByAsin/);
+  assert.match(targeting, /patchTitles/);
+  // Prefer ASIN over a loading placeholder so list rows stay stable during retail fill.
+  assert.match(targeting, /Prefer ASIN over a loading placeholder/);
+  assert.doesNotMatch(targeting, /Loading title…/);
+  // UI merge + retail fill must share the same ASIN key helper.
+  assert.match(targeting, /productTargetDisplayAsin/);
+  assert.match(queries, /export function productTargetDisplayAsin/);
+  assert.doesNotMatch(targeting, /retailTitleTriedRef/);
+  assert.doesNotMatch(
+    targeting,
+    /for \(const asin of wave\) retailTitleTriedRef\.current\.add\(asin\);\s*\n\s*const \{ rows: nextRows/,
+  );
+  assert.doesNotMatch(targeting, /ac\?\.abort\(\)/);
+  // Never wholesale-replace head from a stale wave closure (clobbers concurrent fills).
+  assert.doesNotMatch(targeting, /rows: nextRows\.slice\(0, headLen\)/);
   // Auto/Category: label only — no book title suffix on productTargetHeading.
   assert.doesNotMatch(targetingLib, /\$\{described\.label\} · \$\{bookName\}/);
   // Placement: placement label + campaign name only — no book title subtitle.
   assert.doesNotMatch(targeting, /bookSubtitle/);
   assert.doesNotMatch(targeting, /\$\{bookSubtitle\}/);
-  assert.match(targeting, /size="sm"/);
+  assert.match(targeting, /size="xs"/);
 });
 
 test("bulk bid stress: visible Bid ±, outbox drain, cooldown names, Placement gated", () => {
@@ -294,11 +334,23 @@ test("period metrics honesty — fail closed, Nest null shares, no Sales labels"
 test("list cap 500 is fetch-only — not Amazon write ceiling; entities not silently invented", () => {
   assert.match(queries, /TARGETING_LIST_LIMIT = 500/);
   assert.match(queries, /Not an Amazon write limit/);
-  // Honesty: numbered pages + server totals — no fabricated 500-cap footer on Targets.
+  // Honesty: progressive full catalog + server totals — no fabricated 500-cap footer / page chrome.
   assert.match(targeting, /TARGETING_PAGE_SIZE/);
-  assert.match(targeting, /TargetingPagination/);
-  assert.match(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
-  assert.match(targeting, /prefer page total over client 500-cap/);
+  assert.match(targeting, /fetchMobileTargetingCatalogTail/);
+  assert.match(targeting, /catalogTailLoading/);
+  // Title patches must not restart catalog-tail (stable snapshot/total/len deps).
+  assert.match(targeting, /catalogHeadSnapshot/);
+  assert.match(targeting, /catalogHeadTotal/);
+  assert.match(targeting, /catalogHeadLen/);
+  assert.match(targeting, /catalogHeadRef/);
+  assert.doesNotMatch(
+    targeting,
+    /return \(\) => \{\s*cancelled = true;\s*\};\s*\}, \[\s*mobilePageQ\.data,/,
+  );
+  assert.match(targeting, /of \$\{serverTotal\} loaded/);
+  assert.match(targeting, /never invent a 500-cap story/);
+  assert.doesNotMatch(targeting, /TargetingPagination/);
+  assert.doesNotMatch(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
   assert.doesNotMatch(targeting, /Showing \{TARGETING_LIST_LIMIT\}/);
   assert.doesNotMatch(targeting, /List capped at \{TARGETING_LIST_LIMIT\}/);
   // Empty states distinguish load error vs filter miss vs no data

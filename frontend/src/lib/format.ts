@@ -241,7 +241,23 @@ export function formatDateRangeLabel(range: Pick<DateRange, "start" | "end">) {
 
   const startLabel = start.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   const endLabel = end.toLocaleDateString(undefined, { month: "short", day: "numeric", year: sameYear ? undefined : "numeric" });
-  return sameYear ? `${startLabel} - ${endLabel}, ${end.getFullYear()}` : `${startLabel}, ${start.getFullYear()} - ${endLabel}`;
+  return sameYear ? `${startLabel} – ${endLabel}, ${end.getFullYear()}` : `${startLabel}, ${start.getFullYear()} – ${endLabel}`;
+}
+
+/**
+ * Short TopBar / context label — prefers named presets ("This month") so the
+ * active period is knowable without opening the sheet.
+ */
+export function shortDateRangeContextLabel(
+  range: Pick<DateRange, "start" | "end" | "label">,
+  now = new Date(),
+): string {
+  if (isDynamicRangeLabel(range.label)) return String(range.label);
+  const presets = rangePresets(now);
+  for (const preset of Object.values(presets)) {
+    if (preset.start === range.start && preset.end === range.end) return preset.label;
+  }
+  return formatDateRangeLabel(range);
 }
 
 export function previousRange(start: string, end: string) {

@@ -8,24 +8,28 @@ export const ACCOUNT_STATUS_NONE = "No plan";
 export const ACCOUNT_STATUS_CHECKING = "Checking…";
 
 export const ACCOUNT_VIEW_AS_NOTE =
-  "Viewing a customer. This page still shows your InteliAds account.";
+  "Viewing a customer — still your InteliAds account.";
 
-/** Shared web handoff — never claim App Store / Amazon billing. */
+/** Shared web handoff — never claim App Store / Amazon billing. Kept for tests / rare footers. */
 export const ACCOUNT_BILLING_FOOTER = "Billing is managed on the web.";
 
-export const ACCOUNT_NEST_SUBSCRIPTION_FOOTER =
-  `Plan from your InteliAds account. ${ACCOUNT_BILLING_FOOTER}`;
+/** Nest plan already shows on the row — no permanent footer. */
+export const ACCOUNT_NEST_SUBSCRIPTION_FOOTER = "";
 
-export const ACCOUNT_NO_PLAN_FOOTER =
-  `No active plan. ${ACCOUNT_BILLING_FOOTER}`;
+export const ACCOUNT_NO_PLAN_FOOTER = "No active plan. Choose a plan below or open web billing.";
 
-export const ACCOUNT_METADATA_PLAN_FOOTER =
-  `From account metadata only. ${ACCOUNT_BILLING_FOOTER}`;
+export const ACCOUNT_METADATA_PLAN_FOOTER = "From account metadata. Billing is on the web.";
 
-export const ACCOUNT_SUBSCRIPTION_LOAD_FAILED_FOOTER =
-  `Couldn't load plan. ${ACCOUNT_BILLING_FOOTER}`;
+export const ACCOUNT_SUBSCRIPTION_LOAD_FAILED_FOOTER = "Couldn't load plan. Billing is on the web.";
 
-export const ACCOUNT_GUEST_NOTE = "Preview demo — not signed in.";
+export const ACCOUNT_GUEST_NOTE = "Preview — not signed in.";
+
+export const BILLING_SCREEN_TITLE = "Plans & billing";
+export const BILLING_SCREEN_FOOTER =
+  "Checkout opens in Safari so Apple Pay works. Not an App Store purchase.";
+export const BILLING_CURRENT_PLAN_BADGE = "Current";
+export const BILLING_MANAGE_PORTAL_LABEL = "Manage in Stripe";
+export const BILLING_OPEN_WEB_LABEL = "Open web billing";
 
 type Metadata = Record<string, unknown> | null | undefined;
 
@@ -58,6 +62,194 @@ export type NestUserPlan = {
     expiresAt: string;
   } | null;
 };
+
+/** Mirrors Nest catalog row from `GET /pricing-plans` (web `PricingPlan`). */
+export type NestPricingPlan = {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  priceMonthly: number;
+  priceYearly: number;
+  billingCycle?: string;
+  features?: string[];
+  isPopular?: boolean;
+  isActive?: boolean;
+  sortOrder?: number;
+  trialDays?: number;
+  stripeProductId?: string;
+  stripePriceId?: string;
+};
+
+export type BillingCyclePreference = "month" | "year";
+
+export type NestPricingPlanGroup = {
+  baseSlug: string;
+  name: string;
+  description?: string;
+  isPopular: boolean;
+  sortOrder: number;
+  trialDays: number;
+  monthlyPlan?: NestPricingPlan;
+  yearlyPlan?: NestPricingPlan;
+};
+
+/** Dashboard billing URL with optional plan slug for iOS Safari handoff. */
+export function buildAccountBillingUrl(opts?: {
+  planSlug?: string | null;
+  source?: string;
+}): string {
+  const url = new URL(ACCOUNT_BILLING_URL);
+  const slug = opts?.planSlug?.trim();
+  if (slug) url.searchParams.set("planSlug", slug);
+  url.searchParams.set("source", opts?.source?.trim() || "ios");
+  return url.toString();
+}
+
+export function nestPricingPlanCycle(plan: NestPricingPlan): BillingCyclePreference | null {
+  const slug = plan.slug.toLowerCase();
+  const cycle = (plan.billingCycle ?? "").toLowerCase();
+  if (slug.endsWith("-year") || slug.endsWith("-annual") || cycle === "year" || cycle === "annual") {
+    return "year";
+  }
+  if (slug.endsWith("-month") || slug.endsWith("-monthly") || cycle === "month" || cycle === "monthly") {
+    return "month";
+  }
+  return null;
+}
+
+export function nestPricingPlanBaseSlug(slug: string): string {
+  return slug.replace(/-(month|year|monthly|annual)$/i, "");
+}
+
+export function formatNestPricingPlanPrice(
+  plan: NestPricingPlan,
+  cycle: BillingCyclePreference,
+): string {
+  const amount = cycle === "year" ? plan.priceYearly : plan.priceMonthly;
+  if (!Number.isFinite(amount) || amount < 0) return "—";
+  // Nest catalog stores dollar amounts (same as web Pricing), not Stripe cents.
+  const formatted = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
+  }).format(amount);
+  return cycle === "year" ? `${formatted}/yr` : `${formatted}/mo`;
+}
+
+export function groupNestPricingPlans(plans: NestPricingPlan[]): NestPricingPlanGroup[] {
+  const grouped = new Map<string, NestPricingPlanGroup>();
+  for (const plan of plans) {
+    if (plan.isActive === false) continue;
+    const baseSlug = nestPricingPlanBaseSlug(plan.slug);
+    let group = grouped.get(baseSlug);
+    if (!group) {
+      group = {
+        baseSlug,
+        name: plan.name.replace(/\s*(Monthly|Annual|Yearly)\s*$/i, "").trim() || plan.name,
+        description: plan.description,
+        isPopular: Boolean(plan.isPopular),
+        sortOrder: Number(plan.sortOrder ?? 0),
+        trialDays: Number(plan.trialDays ?? 0),
+      };
+      grouped.set(baseSlug, group);
+    }
+    const cycle = nestPricingPlanCycle(plan);
+    if (cycle === "year") group.yearlyPlan = plan;
+    else if (cycle === "month") group.monthlyPlan = plan;
+    else if (!group.monthlyPlan) group.monthlyPlan = plan;
+    if (plan.isPopular) group.isPopular = true;
+    if (typeof plan.sortOrder === "number") {
+      group.sortOrder = Math.min(group.sortOrder, plan.sortOrder);
+    }
+    if (typeof plan.trialDays === "number" && plan.trialDays > group.trialDays) {
+      group.trialDays = plan.trialDays;
+    }
+  }
+  return Array.from(grouped.values()).sort((a, b) => {
+    if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    const aPrice = a.monthlyPlan?.priceMonthly ?? a.yearlyPlan?.priceMonthly ?? 0;
+    const bPrice = b.monthlyPlan?.priceMonthly ?? b.yearlyPlan?.priceMonthly ?? 0;
+    return aPrice - bPrice;
+  });
+}
+
+export function pickNestPricingPlanForCycle(
+  group: NestPricingPlanGroup,
+  cycle: BillingCyclePreference,
+): NestPricingPlan | null {
+  const preferred = cycle === "year" ? group.yearlyPlan : group.monthlyPlan;
+  return preferred ?? group.monthlyPlan ?? group.yearlyPlan ?? null;
+}
+
+export function isNestPricingPlanCurrent(
+  plan: NestPricingPlan,
+  current: NestUserPlan | null | undefined,
+): boolean {
+  if (!current) return false;
+  const currentSlug = (current.effectivePlanSlug || current.planSlug || "").trim();
+  const currentPrice = (current.stripePriceId || "").trim();
+  if (currentPrice && plan.stripePriceId && currentPrice === plan.stripePriceId) return true;
+  if (currentSlug && currentSlug === plan.slug) return true;
+  if (currentSlug && nestPricingPlanBaseSlug(currentSlug) === nestPricingPlanBaseSlug(plan.slug)) {
+    return true;
+  }
+  return false;
+}
+
+/** Accept raw array or `{ data: [...] }` Nest success envelopes. */
+export function normalizeNestPricingPlansPayload(raw: unknown): NestPricingPlan[] {
+  if (raw == null) return [];
+  const list = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object" && Array.isArray((raw as { data?: unknown }).data)
+      ? ((raw as { data: unknown[] }).data)
+      : [];
+  const out: NestPricingPlan[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const id = typeof row.id === "string" ? row.id : null;
+    const name = typeof row.name === "string" ? row.name : null;
+    const slug = typeof row.slug === "string" ? row.slug : null;
+    if (!id || !name || !slug) continue;
+    out.push({
+      id,
+      name,
+      slug,
+      description: typeof row.description === "string" ? row.description : undefined,
+      priceMonthly: Number(row.priceMonthly ?? 0),
+      priceYearly: Number(row.priceYearly ?? 0),
+      billingCycle: typeof row.billingCycle === "string" ? row.billingCycle : undefined,
+      features: Array.isArray(row.features)
+        ? row.features.filter((f): f is string => typeof f === "string")
+        : undefined,
+      isPopular: Boolean(row.isPopular),
+      isActive: row.isActive === undefined ? true : Boolean(row.isActive),
+      sortOrder: typeof row.sortOrder === "number" ? row.sortOrder : undefined,
+      trialDays: typeof row.trialDays === "number" ? row.trialDays : undefined,
+      stripeProductId: typeof row.stripeProductId === "string" ? row.stripeProductId : undefined,
+      stripePriceId: typeof row.stripePriceId === "string" ? row.stripePriceId : undefined,
+    });
+  }
+  return out;
+}
+
+export function unwrapNestUrlPayload(raw: unknown): { url: string; sessionId?: string } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const candidate =
+    typeof obj.url === "string"
+      ? obj
+      : obj.data && typeof obj.data === "object"
+        ? (obj.data as Record<string, unknown>)
+        : null;
+  if (!candidate || typeof candidate.url !== "string" || !candidate.url.trim()) return null;
+  return {
+    url: candidate.url.trim(),
+    sessionId: typeof candidate.sessionId === "string" ? candidate.sessionId : undefined,
+  };
+}
 
 /** Accept raw DTO or `{ data: DTO | null }` from Nest success envelopes. */
 export function normalizeNestUserPlanPayload(raw: unknown): NestUserPlan | null {
@@ -168,7 +360,7 @@ export function accountSubscriptionPresentation(params: {
     return {
       planLabel: ACCOUNT_STATUS_CHECKING,
       statusLabel: ACCOUNT_STATUS_CHECKING,
-      footer: ACCOUNT_BILLING_FOOTER,
+      footer: "",
       truth: "LOADING",
     };
   }

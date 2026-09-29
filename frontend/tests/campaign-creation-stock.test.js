@@ -129,6 +129,23 @@ test("normalizes nested or snake_case marketplace payloads", () => {
   assert.equal(nested.marketplaces[0].countryCode, "US");
 });
 
+test("maps Nest ad-groups/suggestions top-level asin + profileId into book/profile", () => {
+  const preview = normalizeCampaignCreationPreview({
+    asin: "1807973751",
+    profileId: "4138300112469957",
+    productTargets: [
+      {
+        asin: "0241618606",
+        themes: ["Similar items (frequently viewed together)"],
+      },
+    ],
+  });
+  assert.equal(preview.book.asin, "1807973751");
+  assert.equal(preview.profile.profileId, "4138300112469957");
+  assert.equal(preview.profile.id, "4138300112469957");
+  assert.equal(preview.productTargets[0].asin, "0241618606");
+});
+
 test("normalizes preview keywords and product targets", () => {
   const preview = normalizeCampaignCreationPreview({
     recommendations_available: true,

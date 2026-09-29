@@ -195,21 +195,22 @@ export function assertRevertSucceeded(result: unknown): void {
 /** Presentation helpers below. They do not change engine, apply, or view-as contracts. */
 
 export const BIDBOT_SCOPE_HELPER =
-  "Recommendations are for this InteliAds account. The header profile filter does not limit them.";
+  "For this InteliAds account. Header profile filter does not limit them.";
 
 export const SNAPSHOT_BID_LABEL = "Bid when analyzed";
 export const PROPOSED_BID_LABEL = "Recommended bid";
 
 export const CURRENCY_GAP_CAPTION =
-  "Amounts are bid values. Marketplace currency is not included on these recommendations.";
+  "Bid amounts only — marketplace currency not shown.";
 
 export const MIN_MAX_DISPLAY_CAPTION =
-  "Account min/max from web are display-only. They are not BidBot caps saved here, and they are not the iPhone Settings guardrails.";
+  "Web min/max are display-only — not BidBot caps or iPhone guardrails.";
 
 export const TARGET_ACOS_CAPTION =
-  "Target ACoS is a BidBot setting for this InteliAds account. It is a percent and is saved with auto mode.";
+  "Percent target for this account. Saved with auto mode.";
 
-export const VIEWING_CUSTOMER_BANNER = "Viewing a customer. Apply, Run, Revert, and auto mode stay off.";
+export const VIEWING_CUSTOMER_BANNER =
+  "Viewing a customer — Apply, Run, Revert, and auto mode stay off.";
 
 export const AGGRESSIVE_CONFIRM_TITLE = "Turn on Aggressive?";
 export const AGGRESSIVE_CONFIRM_MESSAGE =
@@ -351,6 +352,15 @@ export function autoModeDescription(mode: BidBotAutoMode): string {
   return "Off generates only. Run does not apply.";
 }
 
+/** Settings tab footer — shorter than Working status copy. */
+export function autoModeSettingsFooter(mode: BidBotAutoMode): string {
+  if (mode === "off") return "Run generates recommendations only.";
+  if (mode === "high_confidence") {
+    return "Run may auto-apply high-confidence bids. Off stops future auto-apply without reverting.";
+  }
+  return "Run may auto-apply high- and medium-confidence bids. Off stops future auto-apply without reverting.";
+}
+
 export function confidenceCategoryLabel(value?: string | null): string | undefined {
   if (!value?.trim()) return undefined;
   const trimmed = value.trim();
@@ -415,13 +425,13 @@ export function revertConfirmMessage(entityType?: string | null): string {
 }
 
 export const ABOUT_BIDBOT_COPY = [
-  "BidBot recommends Amazon Ads bid and placement changes from your target ACoS.",
-  "Recommendations are for this InteliAds account. The header profile filter does not limit them.",
-  "Bid when analyzed is the bid BidBot used when it generated the recommendation. It may not match Amazon right now. Apply still checks Amazon before writing.",
-  "Placement confidence is a category (High, Medium, Low), not a probability.",
+  "Recommends bid and placement changes from your target ACoS.",
+  "For this InteliAds account. Header profile filter does not limit them.",
+  "Bid when analyzed may differ from Amazon now. Apply rechecks before writing.",
+  "Placement confidence is High / Medium / Low — not a probability.",
   "Off: Run only generates recommendations.",
-  "Careful: Run may automatically apply high-confidence recommendations.",
-  "Aggressive: Run may automatically apply high- and medium-confidence recommendations.",
-  "Automatic apply happens on Run. A server schedule only runs if it was already enabled elsewhere. This screen does not turn on a schedule.",
-  "Applied changes appear under Activity. Revert writes the previous value back to Amazon Ads if Amazon is still at the applied value.",
+  "Careful: Run may auto-apply high-confidence recommendations.",
+  "Aggressive: Run may auto-apply high- and medium-confidence recommendations.",
+  "Auto-apply happens on Run. This screen does not turn on a schedule.",
+  "Activity lists applied changes. Revert writes the previous Amazon value when still current.",
 ].join("\n\n");

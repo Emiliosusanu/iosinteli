@@ -1,10 +1,10 @@
 import React from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import { PressableScale } from "@/src/components/Motion";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { playHaptic } from "@/src/lib/hapticPolicy";
-import { layout, useReduceMotion, useTheme } from "@/src/lib/theme";
+import { useReduceMotion, useTheme } from "@/src/lib/theme";
 
 export type TargetingModeKey =
   | "keywords"
@@ -14,21 +14,22 @@ export type TargetingModeKey =
   | "placement";
 
 /**
- * Targets mode pills — 1:1 light sample:
- * single horizontal row; active = wide blue stadium with SF Symbol + white label;
- * idle = compact soft-gray icon-only pills (no text tray wrap).
+ * Targeting mode control — Amazon-style capsules:
+ * selected = solid brand-blue pill with white icon+label;
+ * inactive = gray pill, icon only. Five equal slots fill the row.
  */
 export const TARGETING_MODE_OPTIONS: {
   key: TargetingModeKey;
   label: string;
+  shortLabel: string;
   testID: string;
   symbol: SFSymbolName;
 }[] = [
-  { key: "keywords", label: "Keywords", testID: "segment-keywords", symbol: "key.fill" },
-  { key: "asins", label: "ASINs", testID: "segment-asins", symbol: "cube" },
-  { key: "auto", label: "Auto", testID: "segment-auto", symbol: "wand.and.stars" },
-  { key: "category", label: "Category", testID: "segment-category", symbol: "tag" },
-  { key: "placement", label: "Placement", testID: "segment-placement", symbol: "square.grid.2x2" },
+  { key: "keywords", label: "Keywords", shortLabel: "Keys", testID: "segment-keywords", symbol: "key.fill" },
+  { key: "asins", label: "ASINs", shortLabel: "ASINs", testID: "segment-asins", symbol: "cube.fill" },
+  { key: "auto", label: "Auto", shortLabel: "Auto", testID: "segment-auto", symbol: "wand.and.stars" },
+  { key: "category", label: "Category", shortLabel: "Cat", testID: "segment-category", symbol: "tag.fill" },
+  { key: "placement", label: "Placement", shortLabel: "Place", testID: "segment-placement", symbol: "square.grid.2x2.fill" },
 ];
 
 type Props = {
@@ -39,105 +40,100 @@ type Props = {
 export function TargetingModePills({ value, onChange }: Props) {
   const t = useTheme();
   const reduceMotion = useReduceMotion();
-  const dark = t.scheme === "dark";
   const blue = t.colors.tone_primary;
-
-  // Light: soft gray idle; dark: elevated soft idle. Active always solid primary blue.
-  const idleBg = dark ? t.colors.background_elevated : "rgba(120,120,128,0.12)";
-  const idleFg = dark ? "rgba(235,235,245,0.55)" : "rgba(60,60,67,0.55)";
-  const activeBg = blue;
-  const activeFg = "#FFFFFF";
-
-  const pillH = Math.max(36, layout.minTap - 8);
+  const idleBg = t.colors.background_tertiary;
+  const idleFg = t.colors.text_secondary;
 
   return (
-    <ScrollView
+    <View
       testID="targeting-segments"
-      horizontal
-      showsHorizontalScrollIndicator={false}
       accessibilityRole="tablist"
       accessibilityLabel="Targeting mode"
-      contentContainerStyle={styles.row}
+      style={styles.track}
     >
       {TARGETING_MODE_OPTIONS.map((option) => {
         const active = option.key === value;
         return (
-          <PressableScale
-            key={option.key}
-            testID={option.testID}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
-            accessibilityLabel={option.label}
-            hitSlop={4}
-            onPress={() => {
-              if (active) return;
-              void playHaptic("select", reduceMotion);
-              onChange(option.key);
-            }}
-            style={[
-              styles.pill,
-              active ? styles.pillActive : styles.pillIdle,
-              {
-                minHeight: pillH,
-                backgroundColor: active ? activeBg : idleBg,
-              },
-            ]}
-          >
-            <SFSymbol
-              name={option.symbol}
-              size={active ? 15 : 16}
-              color={active ? activeFg : idleFg}
-              weight={active ? "semibold" : "regular"}
-            />
-            {active ? (
-              <Text
-                accessible={false}
-                importantForAccessibility="no-hide-descendants"
-                numberOfLines={1}
-                style={[
-                  t.typography.footnote,
-                  styles.label,
-                  { color: activeFg },
-                ]}
-              >
-                {option.label}
-              </Text>
-            ) : null}
-          </PressableScale>
+          // flex must live outside PressableScale — layout styles sit on an inner Animated.View.
+          <View key={option.key} style={styles.slot}>
+            <PressableScale
+              testID={option.testID}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={option.label}
+              hitSlop={4}
+              onPress={() => {
+                if (active) return;
+                void playHaptic("select", reduceMotion);
+                onChange(option.key);
+              }}
+              style={[
+                styles.segment,
+                {
+                  backgroundColor: active ? blue : idleBg,
+                },
+              ]}
+            >
+              <SFSymbol
+                name={option.symbol}
+                size={active ? 15 : 16}
+                color={active ? "#FFFFFF" : idleFg}
+                weight={active ? "semibold" : "regular"}
+              />
+              {active ? (
+                <Text
+                  accessible={false}
+                  importantForAccessibility="no-hide-descendants"
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.75}
+                  style={styles.label}
+                >
+                  {option.shortLabel}
+                </Text>
+              ) : null}
+            </PressableScale>
+          </View>
         );
       })}
-    </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row: {
+  track: {
     flexDirection: "row",
     flexWrap: "nowrap",
-    alignItems: "center",
-    gap: 8,
-    paddingVertical: 2,
+    alignItems: "stretch",
+    alignSelf: "stretch",
+    width: "100%",
+    gap: 6,
+    backgroundColor: "transparent",
+    minHeight: 40,
   },
-  pill: {
+  slot: {
+    flex: 1,
+    minWidth: 0,
+  },
+  segment: {
+    width: "100%",
+    minHeight: 40,
     borderRadius: 999,
     borderCurve: "continuous",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    flexShrink: 0,
-    gap: 6,
-  },
-  pillActive: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-  },
-  pillIdle: {
-    width: 40,
-    paddingHorizontal: 0,
-    paddingVertical: 9,
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 8,
   },
   label: {
-    fontWeight: "600",
+    fontSize: 12,
+    lineHeight: 14,
     letterSpacing: -0.2,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    flexShrink: 1,
+    minWidth: 0,
   },
 });

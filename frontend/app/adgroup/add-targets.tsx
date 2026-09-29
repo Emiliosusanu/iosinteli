@@ -56,6 +56,8 @@ import {
   suggestionRelevanceNeedsUserConfirm,
   uniqueKeywordMatchTypes,
   uniqueProductMatchTypes,
+  AI_FAILED_SOFT_RECOVER_DELAYS_MS,
+  AI_FAILED_SOFT_RECOVER_MAX,
   type BidMode,
 } from "@/src/lib/amazonCampaignSuggestions";
 import { SuggestionAiFilterChrome } from "@/src/components/SuggestionAiFilterChrome";
@@ -185,11 +187,18 @@ export default function AddAdGroupTargetsScreen() {
   const [suggestionMatch, setSuggestionMatch] = useState("all");
   const [visibleSuggestionCount, setVisibleSuggestionCount] = useState(50);
 
+  const suggestionsProfileId = String(
+    campaignQ.data?.amazon_profile_id ||
+      group?.amazon_profile_id ||
+      selectedProfileIds[0] ||
+      "",
+  ).trim();
   const suggestionsQueryKey = [
     "ad-group-suggestions",
     campaignId,
     mode,
     primaryAsin ?? "",
+    suggestionsProfileId,
   ] as const;
   const suggestionsQ = useQuery({
     queryKey: suggestionsQueryKey,
@@ -198,6 +207,7 @@ export default function AddAdGroupTargetsScreen() {
         campaignId,
         targeting: mode,
         asin: primaryAsin || undefined,
+        profileId: suggestionsProfileId || undefined,
         onAmazonReady: (partial) => {
           // Paint live Amazon phrase/row totals before Grok finishes.
           queryClient.setQueryData(suggestionsQueryKey, partial);
@@ -472,6 +482,9 @@ export default function AddAdGroupTargetsScreen() {
   const aiFilterBlocksSelect = aiFilterPending || aiFilterNeedsConfirm;
   const suggestionsBusy =
     suggestionsQ.isLoading || suggestionsQ.isFetching || asinResolving;
+  // Keep Amazon rows + Filtering… chrome visible while Groq runs.
+  const showSuggestionsSpinner =
+    (suggestionsQ.isLoading || asinResolving) && !suggestionsQ.data;
   const filteredSelectionSeedRef = useRef<string | null>(null);
 
   const acceptAmazonUnfiltered = () => {
@@ -497,6 +510,68 @@ export default function AddAdGroupTargetsScreen() {
     }
   };
 
+  // Multi-shot UI soft-recover when AI latched failed_unfiltered (Nest/Groq TPM).
+  // Do not gate on isFetching (that cancelled timers). Latch attempt inside the
+  // timer; after AI_FAILED_SOFT_RECOVER_MAX still-fail → auto-accept Amazon.
+  const aiFailedSoftRecoverAttemptRef = useRef(0);
+  const aiFailedSoftRecoverScopeRef = useRef<string | null>(null);
+  useEffect(() => {
+    aiFailedSoftRecoverAttemptRef.current = 0;
+    aiFailedSoftRecoverScopeRef.current = null;
+  }, [adGroupId, mode]);
+  useEffect(() => {
+    if (
+      suggestionsQ.data?.keywordCounts?.relevanceOutcome !== "failed_unfiltered"
+    ) {
+      return;
+    }
+    const scope = `${adGroupId}|${mode}`;
+    if (aiFailedSoftRecoverScopeRef.current !== scope) {
+      aiFailedSoftRecoverScopeRef.current = scope;
+      aiFailedSoftRecoverAttemptRef.current = 0;
+    }
+    const attempt = aiFailedSoftRecoverAttemptRef.current;
+    if (attempt >= AI_FAILED_SOFT_RECOVER_MAX) {
+      acceptAmazonUnfiltered();
+      return;
+    }
+    const delay =
+      AI_FAILED_SOFT_RECOVER_DELAYS_MS[attempt] ??
+      AI_FAILED_SOFT_RECOVER_DELAYS_MS[
+        AI_FAILED_SOFT_RECOVER_DELAYS_MS.length - 1
+      ]!;
+    const timer = setTimeout(() => {
+      const current = queryClient.getQueryData<typeof suggestionsQ.data>(
+        suggestionsQueryKey,
+      );
+      if (current?.keywordCounts?.relevanceOutcome !== "failed_unfiltered") {
+        return;
+      }
+      aiFailedSoftRecoverAttemptRef.current = attempt + 1;
+      queryClient.setQueryData(suggestionsQueryKey, {
+        ...current,
+        keywordCounts: {
+          ...current.keywordCounts,
+          grokPending: true,
+          relevanceOutcome: "pending",
+        },
+      });
+      void suggestionsQ.refetch().then(() => {
+        const after = queryClient.getQueryData<typeof suggestionsQ.data>(
+          suggestionsQueryKey,
+        );
+        if (
+          after?.keywordCounts?.relevanceOutcome === "failed_unfiltered" &&
+          aiFailedSoftRecoverAttemptRef.current >= AI_FAILED_SOFT_RECOVER_MAX
+        ) {
+          acceptAmazonUnfiltered();
+        }
+      });
+    }, delay);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- multi-shot soft recover
+  }, [suggestionsQ.data?.keywordCounts?.relevanceOutcome, adGroupId, mode]);
+
   // After Step 2 AI filter finishes, pre-select the kept set (not raw Amazon).
   // Skip auto-select when AI failed / empty-restored until user confirms.
   useEffect(() => {
@@ -507,16 +582,16 @@ export default function AddAdGroupTargetsScreen() {
       setSelectedProducts(new Set());
       return;
     }
-    if (!suggestionsQ.data || suggestionsBusy) return;
+    if (!suggestionsQ.data || showSuggestionsSpinner) return;
     if (filteredSelectionSeedRef.current === seedKey) return;
     filteredSelectionSeedRef.current = seedKey;
-    if (mode === "keywords" && keywordRows.length) {
+    if (mode === "keywords" && filteredKeywordRows.length) {
       setSelectedKeywords(
         new Set(
           filteredKeywordRows.map(({ index }) => index),
         ),
       );
-    } else if (mode === "products" && productRows.length) {
+    } else if (mode === "products" && filteredProductRows.length) {
       setSelectedProducts(
         new Set(
           filteredProductRows.map(({ index }) => index),
@@ -526,13 +601,11 @@ export default function AddAdGroupTargetsScreen() {
   }, [
     aiFilterPending,
     aiFilterNeedsConfirm,
-    suggestionsBusy,
+    showSuggestionsSpinner,
     adGroupId,
     mode,
     suggestionsQ.data?.fetchedAt,
     suggestionsQ.data?.keywordCounts?.relevanceOutcome,
-    keywordRows,
-    productRows,
     filteredKeywordRows,
     filteredProductRows,
   ]);
@@ -702,8 +775,8 @@ export default function AddAdGroupTargetsScreen() {
             testIDPrefix="adgroup-ai-filter"
             targeting={mode === "keywords" || mode === "products" ? mode : "auto"}
             stats={suggestionsQ.data?.keywordCounts}
-            loading={suggestionsBusy}
-            retrying={suggestionsQ.isFetching}
+            loading={showSuggestionsSpinner || aiFilterPending}
+            retrying={suggestionsQ.isFetching && !aiFilterPending}
             onRetry={() => {
               void suggestionsQ.refetch();
             }}
@@ -893,7 +966,7 @@ export default function AddAdGroupTargetsScreen() {
                   defaultBidPlaceholder={defaultBidAmount.toFixed(2)}
                 />
               ) : null}
-              {suggestionsBusy ? <ScreenSpinner /> : null}
+              {showSuggestionsSpinner ? <ScreenSpinner /> : null}
               {suggestionsQ.isError ? (
                 <RetryState
                   title="Couldn't load suggestions"
