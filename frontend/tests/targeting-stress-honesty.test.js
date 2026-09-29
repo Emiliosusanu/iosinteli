@@ -324,6 +324,14 @@ test("stress sort: ACoS / bid high→low on period metrics", () => {
   assert.ok(compareTargetingRows(b, a, "impressions") <= 0);
 });
 
+test("metric hydration is globally bounded without dropping entity chunks", () => {
+  assert.match(queries, /const runMetricRead = createReadQueue\(2\)/);
+  assert.match(queries, /const idChunks = chunkArray\(ids, 80\)/);
+  assert.match(queries, /await runMetricRead\(async \(signal\) =>/);
+  assert.match(queries, /\.abortSignal\(signal\)/);
+  assert.doesNotMatch(queries, /const concurrency = 4/);
+});
+
 test("placement selection counts unique campaigns, not 3 rows each", () => {
   assert.match(targeting, /const selectedWriteCount = useMemo/);
   assert.match(targeting, /id\.split\("::"\)\[0\]/);

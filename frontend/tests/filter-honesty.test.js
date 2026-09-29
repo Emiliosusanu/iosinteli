@@ -194,7 +194,10 @@ test("Targets all segments use mobile_targeting_page_v1 numbered pages with snap
   assert.match(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
   assert.match(targeting, /pageSnapshot/);
   assert.match(targeting, /isMobileTargetingSnapshotChanged/);
-  assert.match(targeting, /snapshot: pageNumber > 1 \? pageSnapshot : null/);
+  assert.match(targeting, /pageSnapshotScope/);
+  assert.match(targeting, /pageSnapshotScope === pageScopeKey/);
+  assert.match(targeting, /snapshot: pageNumber > 1 && pageSnapshotIsCurrent \? pageSnapshot : null/);
+  assert.match(targeting, /!isMobileTargetingSnapshotChanged\(error\) && failureCount < 1/);
   assert.match(targeting, /segment === "placement"/);
   assert.doesNotMatch(targeting, /useServerPages/);
 });
