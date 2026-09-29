@@ -155,6 +155,25 @@ test("Overview financial query keys bind sorted profiles and currency", () => {
   assert.match(targeting, /financialPeriodQueryKey\(dateRange, scopeProfiles, primaryCurrency\)/);
 });
 
+test("Home period prefetch reuses active financial keys without eager KDP fan-out", () => {
+  assert.match(
+    home,
+    /kdpRoyalties, royaltyProfiles, start, end, primaryCurrency, kdpQueryScope, "portfolio"/,
+  );
+  assert.match(
+    home,
+    /kdpRoyaltiesPrev, royaltyProfiles, range\.start, range\.end, primaryCurrency, kdpQueryScope, "portfolio"/,
+  );
+  assert.match(
+    home,
+    /campaignMetricsPrev, scopeProfiles, range\.start, range\.end, primaryCurrency/,
+  );
+  assert.doesNotMatch(
+    home,
+    /prefetchPeriodData\(makeDashboardDayRange\(anchor\)\)[\s\S]*prefetchPeriodData\(makeDashboardMonthRange\(anchor\)\)[\s\S]*prefetchPeriodData\(makeDashboardWeekRange\(anchor\)\)/,
+  );
+});
+
 test("list screens tune FlatList virtualization windows", () => {
   assert.match(campaigns, /initialNumToRender=\{16\}/);
   assert.match(campaigns, /windowSize=\{7\}/);

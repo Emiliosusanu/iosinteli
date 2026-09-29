@@ -1607,10 +1607,40 @@ export default function OverviewScreen() {
       const prefetchRoyalties = (start: string, end: string) => {
         if (!kdpRoyaltiesQueryAllowed(royaltyScope)) return Promise.resolve();
         return queryClient.prefetchQuery({
-          queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, royaltyProfiles, start, end, primaryCurrency, kdpQueryScope],
+          // Keep this key byte-for-byte aligned with royaltiesQ so selecting a
+          // period joins the in-flight read instead of starting a duplicate.
+          queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, royaltyProfiles, start, end, primaryCurrency, kdpQueryScope, "portfolio"],
           queryFn: () =>
             withQueryTimeout(
-              fetchKdpRoyaltiesRange(royaltyProfiles, start, end, { kdpScope: kdpQueryScope }),
+              fetchKdpRoyaltiesRange(royaltyProfiles, start, end, {
+                kdpScope: kdpQueryScope,
+                allowLegacyProfileLinks: false,
+              }),
+            ),
+          ...OVERVIEW_QUERY_CACHE,
+          meta: financialQueryMeta(),
+        });
+      };
+
+      const prefetchPreviousMetrics = () =>
+        queryClient.prefetchQuery({
+          // prevMetricsQ keys the comparison by the visible period, while the
+          // fetch reads the calculated previous range.
+          queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetricsPrev, scopeProfiles, range.start, range.end, primaryCurrency],
+          queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(scopeProfiles, prev.start, prev.end)),
+          ...FINANCIAL_QUERY_CACHE,
+        });
+
+      const prefetchPreviousRoyalties = () => {
+        if (!kdpRoyaltiesQueryAllowed(royaltyScope)) return Promise.resolve();
+        return queryClient.prefetchQuery({
+          queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyaltiesPrev, royaltyProfiles, range.start, range.end, primaryCurrency, kdpQueryScope, "portfolio"],
+          queryFn: () =>
+            withQueryTimeout(
+              fetchKdpRoyaltiesRange(royaltyProfiles, prev.start, prev.end, {
+                kdpScope: kdpQueryScope,
+                allowLegacyProfileLinks: false,
+              }),
             ),
           ...OVERVIEW_QUERY_CACHE,
           meta: financialQueryMeta(),
@@ -1624,19 +1654,11 @@ export default function OverviewScreen() {
           // #endregion
         });
       void prefetchRoyalties(range.start, range.end);
-      void prefetchMetrics(prev.start, prev.end);
-      void prefetchRoyalties(prev.start, prev.end);
+      void prefetchPreviousMetrics();
+      void prefetchPreviousRoyalties();
     },
     [sellerReady, scopeProfiles, royaltyProfiles, royaltyScope, kdpQueryScope, primaryCurrency, queryClient],
   );
-
-  useEffect(() => {
-    if (!sellerReady || scopeProfiles.length === 0) return;
-    const anchor = parseDateOnly(todayStr);
-    prefetchPeriodData(makeDashboardDayRange(anchor));
-    prefetchPeriodData(makeDashboardMonthRange(anchor));
-    prefetchPeriodData(makeDashboardWeekRange(anchor));
-  }, [sellerReady, scopeProfiles.join("|"), primaryCurrency, prefetchPeriodData, todayStr]);
 
   const shiftPeriod = useCallback((dir: -1 | 1) => {
     if (periodMode === "custom") return;
