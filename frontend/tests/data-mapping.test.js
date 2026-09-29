@@ -161,6 +161,10 @@ test("product target helper resolves auto subtypes and ASIN expressions", () => 
   });
   assert.equal(extractTargetAsin([{ type: "asinSameAs", value: "b0abc12345" }]), "B0ABC12345");
   assert.equal(
+    extractTargetAsin([{ type: "asinSameAs", value: ["b0g2sl2wrh"] }]),
+    "B0G2SL2WRH",
+  );
+  assert.equal(
     fallbackAsinCoverUrl("b0abc12345"),
     "https://images-na.ssl-images-amazon.com/images/P/B0ABC12345.01._SL500_.jpg",
   );
@@ -341,10 +345,11 @@ test("search terms and ad group detail avoid fixed pagination gaps", () => {
   assert.equal(queriesSource.includes("fetchAllPages<ProductTarget>"), true);
   assert.equal(queriesSource.includes("adGroupId?: string"), true);
   assert.equal(searchTermsSource.includes("limit: 200"), false);
-  // Targets uses server-ranked pages (mobile_targeting_page_v1), not a client 500-cap footer.
+  // Targets uses server-ranked full catalog (mobile_targeting_page_v1), not a client 500-cap footer.
   assert.equal(targetingSource.includes("fetchMobileTargetingPage"), true);
+  assert.equal(targetingSource.includes("fetchMobileTargetingCatalogTail"), true);
   assert.equal(targetingSource.includes("TARGETING_PAGE_SIZE"), true);
-  assert.equal(targetingSource.includes("TargetingPagination"), true);
+  assert.equal(targetingSource.includes("TargetingPagination"), false);
   assert.equal(targetingSource.includes("enabled: canReadPage"), true);
   assert.equal(targetingSource.includes("scopeProfiles.length > 0"), true);
   assert.equal(targetingSource.includes("placeholderData: noPeriodPlaceholder"), true);
@@ -391,4 +396,7 @@ test("book campaign drilldown remains read-only and uses all link paths", () => 
   assert.equal(queriesSource.includes("verified_book_campaign_metrics"), true);
   assert.equal(queriesSource.includes("fetchLogicalBookAsins"), true);
   assert.equal(queriesSource.includes("logicalBookAsinsFromDailyRows"), true);
+  // Placement mix must not block the campaign list (soft budget + catch).
+  assert.match(queriesSource, /BOOK_CAMPAIGN_PLACEMENT_BUDGET_MS/);
+  assert.match(queriesSource, /placement shares skipped/);
 });

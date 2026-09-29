@@ -10,7 +10,8 @@
  * Never invents rows — only reorders / subsets Amazon-provided suggestions.
  * Keywords: unique-phrase collapse → LLM → expand companions (TPM-safe).
  * Products: title/subtitle/theme lines → chunked LLM keep-list vs book meta.
- * A failed chunk keeps its Amazon slice (partial AI still applies).
+ * Chunking covers the FULL Amazon list (no 50-row / page truncate). A failed
+ * chunk throws — never silent keep-all for that slice.
  * Do not ship production keys in the app binary.
  */
 import { nestApiJson, NestApiError } from "./rulesApi.ts";
@@ -31,7 +32,9 @@ import {
   expandGrokAsinIndexesToOriginal,
   expandGrokPhraseIndexesToOriginal,
   parseGrokRelevanceJson,
+  planRelevanceChunks,
   productPromptNeedsChunking,
+  relevanceChunksCoverAll,
   relevancePromptNeedsChunking,
   uniqueValidIndexes,
   GROK_RELEVANCE_KEYWORD_CHUNK,
@@ -48,7 +51,9 @@ export {
   expandGrokAsinIndexesToOriginal,
   expandGrokPhraseIndexesToOriginal,
   parseGrokRelevanceJson,
+  planRelevanceChunks,
   productPromptNeedsChunking,
+  relevanceChunksCoverAll,
   relevancePromptNeedsChunking,
   GROK_RELEVANCE_KEYWORD_CHUNK,
   GROK_RELEVANCE_PRODUCT_CHUNK,
@@ -60,8 +65,14 @@ const XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions";
 const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
 const NEST_RELEVANCE_PATH = "/campaigns/creation/relevance-filter";
 
-/** Short pause only when falling back to Groq free-tier between serial chunks. */
-const GROQ_CHUNK_GAP_MS = 120;
+/**
+ * Gap between serial relevance chunks.
+ * Nest-first path must stay serial (see parallel gate below) — free-tier Groq
+ * TPM (~8k) dies when 2–3 product chunks fan out in parallel after Nest miss.
+ * 120ms was too short when Nest falls through to client Groq between chunks.
+ */
+const NEST_CHUNK_GAP_MS = 350;
+const GROQ_CHUNK_GAP_MS = 2_500;
 
 function xaiApiKey(): string {
   return String(process.env.EXPO_PUBLIC_XAI_API_KEY ?? "").trim();
@@ -106,6 +117,18 @@ function isTpmOrSizeError(error: unknown): boolean {
   return /tokens per minute|TPM|Request too large|rate_limit|413|429/i.test(msg);
 }
 
+/** Pull a JSON object string from model text (content or reasoning). */
+function extractRelevanceJsonText(raw: string): string {
+  const text = String(raw ?? "").trim();
+  if (!text) return "";
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]?.trim()) return fence[1].trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) return text.slice(start, end + 1);
+  return text;
+}
+
 async function callOpenAiCompatibleChat(input: {
   url: string;
   key: string;
@@ -123,6 +146,8 @@ async function callOpenAiCompatibleChat(input: {
     body: JSON.stringify({
       model: input.model,
       temperature: 0.2,
+      // Keep-lists are index arrays; headroom avoids mid-JSON cut on large chunks.
+      max_tokens: 4096,
       messages: [
         { role: "system", content: input.system },
         { role: "user", content: input.user },
@@ -130,7 +155,9 @@ async function callOpenAiCompatibleChat(input: {
     }),
   });
   const body = (await res.json().catch(() => ({}))) as {
-    choices?: Array<{ message?: { content?: string } }>;
+    choices?: Array<{
+      message?: { content?: string | null; reasoning?: string | null };
+    }>;
     error?: { message?: string };
   };
   if (!res.ok) {
@@ -138,11 +165,19 @@ async function callOpenAiCompatibleChat(input: {
       body?.error?.message || `${input.label} API error (${res.status}).`,
     );
   }
-  const content = body?.choices?.[0]?.message?.content;
-  if (!content || !String(content).trim()) {
-    throw new Error(`${input.label} returned an empty relevance response.`);
+  const message = body?.choices?.[0]?.message;
+  const content = String(message?.content ?? "").trim();
+  if (content) return content;
+
+  // gpt-oss and some reasoning models put the JSON keep-list only in
+  // `reasoning` / leave content blank — treat that as the response body.
+  const reasoning = String(message?.reasoning ?? "").trim();
+  const fromReasoning = extractRelevanceJsonText(reasoning);
+  if (fromReasoning.includes("productIndexes") || fromReasoning.includes("keywordIndexes")) {
+    return fromReasoning;
   }
-  return String(content);
+
+  throw new Error(`${input.label} returned an empty relevance response.`);
 }
 
 async function callXaiChat(system: string, user: string): Promise<string> {
@@ -204,9 +239,10 @@ async function callNestRelevanceFilter(input: {
   keywordCount: number;
   productCount: number;
 }): Promise<GrokRelevanceSelection> {
-  // Nest relevance can hang 30–60s; never block Groq that long.
+  // Nest runs the LLM server-side (Groq/xAI). Allow a full chunk; aborting at
+  // 2.5s forced every call onto flaky client free-tier Groq keys.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2_500);
+  const timer = setTimeout(() => controller.abort(), 45_000);
   let raw: unknown;
   try {
     raw = await nestApiJson<unknown>(
@@ -283,8 +319,11 @@ async function callNestRelevanceFilter(input: {
 }
 
 /**
- * Resolve one (chunk) relevance call: Nest → xAI → Groq.
- * When `preferGroq` is set (bench / forced client path), skip Nest/xAI.
+ * Resolve one (chunk) relevance call.
+ * Default: Nest → xAI → Groq.
+ * `preferGroq`: try client Groq first, then Nest → xAI (never fail-closed
+ * solely because prefer was set — 303 Create on device hit Confirm AI filter
+ * when Groq-only threw after Amazon preview).
  */
 async function resolveRelevanceSelection(input: {
   system: string;
@@ -301,8 +340,23 @@ async function resolveRelevanceSelection(input: {
   };
   let selection: GrokRelevanceSelection | null = null;
   let nestError: unknown;
+  let groqError: unknown;
 
-  if (!input.preferGroq) {
+  if (input.preferGroq && groqApiKey()) {
+    try {
+      const content = await callGroqChat(input.system, input.user, {
+        key: input.groqKey,
+      });
+      selection = {
+        ...parseGrokRelevanceJson(content, sizes),
+        source: "groq",
+      };
+    } catch (error) {
+      groqError = error;
+    }
+  }
+
+  if (!selection) {
     try {
       selection = await callNestRelevanceFilter({
         system: input.system,
@@ -313,28 +367,39 @@ async function resolveRelevanceSelection(input: {
     } catch (error) {
       nestError = error;
     }
+  }
 
-    if (!selection && xaiApiKey()) {
+  if (!selection && xaiApiKey()) {
+    try {
       const content = await callXaiChat(input.system, input.user);
       selection = {
         ...parseGrokRelevanceJson(content, sizes),
         source: "xai",
       };
+    } catch {
+      // keep nest/groq errors for throw below
     }
   }
 
+  // After Nest/xAI miss, always try Groq (including when preferGroq already
+  // failed once — second key / cooler TPM often succeeds).
   if (!selection && groqApiKey()) {
-    const content = await callGroqChat(input.system, input.user, {
-      key: input.groqKey,
-    });
-    selection = {
-      ...parseGrokRelevanceJson(content, sizes),
-      source: "groq",
-    };
+    try {
+      const content = await callGroqChat(input.system, input.user, {
+        key: input.groqKey,
+      });
+      selection = {
+        ...parseGrokRelevanceJson(content, sizes),
+        source: "groq",
+      };
+    } catch (error) {
+      groqError = error;
+    }
   }
 
   if (!selection) {
     if (nestError instanceof Error) throw nestError;
+    if (groqError instanceof Error) throw groqError;
     throw new Error("Grok relevance filter unavailable.");
   }
   return selection;
@@ -414,22 +479,23 @@ async function runProductChunksBatched<
     products.length,
     probe.user.length,
   );
-  const chunkSize = GROK_RELEVANCE_PRODUCT_CHUNK;
-  const slices: Array<{ slice: P[]; offset: number }> = [];
-  if (!needsChunks) {
-    slices.push({ slice: products, offset: 0 });
-  } else {
-    for (let offset = 0; offset < products.length; offset += chunkSize) {
-      slices.push({
-        slice: products.slice(offset, offset + chunkSize),
-        offset,
-      });
-    }
+  const slices = needsChunks
+    ? planRelevanceChunks(products, GROK_RELEVANCE_PRODUCT_CHUNK)
+    : products.length
+      ? [{ slice: products, offset: 0 }]
+      : [];
+  if (!relevanceChunksCoverAll(slices, products.length)) {
+    throw new Error(
+      `Product relevance chunks missed rows (${slices.length} slices / ${products.length} products).`,
+    );
   }
 
+  // Parallel ONLY when preferGroq (explicit dual-key Groq bench). Default
+  // Nest-first must stay serial — baked Groq keys alone used to force parallel
+  // and latch Create/AGC on "AI unavailable" (Norway 235 ASINs / 3 chunks).
   const parallel =
     !opts?.forceSerial &&
-    Boolean(opts?.preferGroq || keys.length > 0) &&
+    Boolean(opts?.preferGroq) &&
     keys.length >= 2 &&
     slices.length >= 2;
 
@@ -447,13 +513,19 @@ async function runProductChunksBatched<
         source,
       };
     } catch (error) {
+      // TPM/size: split once. Any other failure (or tiny slice still failing)
+      // must surface — silent keep-all was painting "AI kept all" (CA NE cert).
       if (isTpmOrSizeError(error) && entry.slice.length > 12) {
         const mid = Math.ceil(entry.slice.length / 2);
         const left = await runOne(
           { slice: entry.slice.slice(0, mid), offset: entry.offset },
           key,
         );
-        if (!parallel) await sleep(GROQ_CHUNK_GAP_MS);
+        if (!parallel) {
+          await sleep(
+            left.source === "groq" ? GROQ_CHUNK_GAP_MS : NEST_CHUNK_GAP_MS,
+          );
+        }
         const right = await runOne(
           {
             slice: entry.slice.slice(mid),
@@ -466,32 +538,69 @@ async function runProductChunksBatched<
           source: left.source,
         };
       }
-      return {
-        indexes: entry.slice.map((_, i) => entry.offset + i),
-        source: "groq",
-      };
+      throw error instanceof Error
+        ? error
+        : new Error("Groq product relevance filter unavailable.");
     }
   };
 
   let usedGroq = false;
   const kept: number[] = [];
+  let chunkFailures = 0;
+
+  const runChunkWithRetry = async (
+    entry: { slice: P[]; offset: number },
+    key: string | undefined,
+    index: number,
+  ): Promise<{ indexes: number[]; source: GrokRelevanceSelection["source"] } | null> => {
+    try {
+      return await runOne(entry, key);
+    } catch (firstErr) {
+      // One cool-down retry for transient TPM — do not fail the whole filter
+      // because a single tail chunk rate-limited (Norway 235 ASINs / 3 chunks).
+      await sleep(GROQ_CHUNK_GAP_MS);
+      try {
+        return await runOne(entry, key);
+      } catch (retryErr) {
+        chunkFailures += 1;
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[inteliads:grok] product chunk ${index} soft-failed after retry`,
+          retryErr ?? firstErr,
+        );
+        return null;
+      }
+    }
+  };
+
   if (parallel) {
-    const results = await Promise.all(
-      slices.map((entry, i) => runOne(entry, keys[i % keys.length])),
+    const settled = await Promise.allSettled(
+      slices.map((entry, i) => runChunkWithRetry(entry, keys[i % keys.length], i)),
     );
-    for (const r of results) {
-      if (r.source === "groq") usedGroq = true;
-      kept.push(...r.indexes);
+    for (const result of settled) {
+      if (result.status !== "fulfilled" || !result.value) continue;
+      if (result.value.source === "groq") usedGroq = true;
+      kept.push(...result.value.indexes);
     }
   } else {
     for (let i = 0; i < slices.length; i += 1) {
-      const r = await runOne(slices[i]!, keys[0]);
-      if (r.source === "groq") usedGroq = true;
-      kept.push(...r.indexes);
-      if (r.source === "groq" && i + 1 < slices.length) {
-        await sleep(GROQ_CHUNK_GAP_MS);
+      const r = await runChunkWithRetry(slices[i]!, keys[0], i);
+      if (r) {
+        if (r.source === "groq") usedGroq = true;
+        kept.push(...r.indexes);
+      }
+      if (i + 1 < slices.length) {
+        await sleep(
+          r?.source === "groq" ? GROQ_CHUNK_GAP_MS : NEST_CHUNK_GAP_MS,
+        );
       }
     }
+  }
+
+  if (chunkFailures > 0 && kept.length === 0 && products.length > 0) {
+    throw new Error(
+      `Groq product relevance filter unavailable (${chunkFailures}/${slices.length} chunks failed).`,
+    );
   }
 
   const t1 =
@@ -500,7 +609,7 @@ async function runProductChunksBatched<
       : Date.now();
   const ms = Math.round(t1 - t0);
   console.log(
-    `[inteliads:groq] products keys=${keys.length} chunks=${slices.length} parallel=${parallel} ms=${ms} kept=${kept.length}/${products.length}`,
+    `[inteliads:groq] products keys=${keys.length} chunks=${slices.length} parallel=${parallel} softFails=${chunkFailures} ms=${ms} kept=${kept.length}/${products.length}`,
   );
   return { indexes: kept, usedGroq, parallel, ms };
 }
@@ -509,7 +618,8 @@ async function runProductChunksBatched<
  * Rank/filter Amazon keyword + product suggestions with Grok/Groq.
  * Keywords: unique-phrase collapse → LLM → expand companions.
  * Products: compact title/subtitle/theme lines → chunked LLM keep-list.
- * With 2+ Groq keys, product chunks run in parallel (TPM per key).
+ * Product/keyword chunks stay serial on Nest-first. Parallel only when
+ * `preferGroq` + 2+ keys (explicit dual-key Groq path).
  */
 export async function filterSuggestionsWithGrok<
   K extends {
@@ -543,30 +653,6 @@ export async function filterSuggestionsWithGrok<
     const { phrases, phraseToOriginalIndexes } =
       collapseKeywordsToUniquePhrasesForGrok(suggestions.keywords);
 
-    const runSlice = async (
-      slice: K[],
-      phraseOffset: number,
-    ): Promise<number[]> => {
-      try {
-        const { indexes, source } = await runPhraseChunk(slice, context, {
-          preferGroq: opts?.preferGroq,
-        });
-        if (source === "groq" && phraseOffset + slice.length < phrases.length) {
-          await sleep(GROQ_CHUNK_GAP_MS);
-        }
-        return indexes.map((i) => phraseOffset + i);
-      } catch (error) {
-        if (isTpmOrSizeError(error) && slice.length > 20) {
-          const mid = Math.ceil(slice.length / 2);
-          const left = await runSlice(slice.slice(0, mid), phraseOffset);
-          await sleep(GROQ_CHUNK_GAP_MS);
-          const right = await runSlice(slice.slice(mid), phraseOffset + mid);
-          return [...left, ...right];
-        }
-        return slice.map((_, i) => phraseOffset + i);
-      }
-    };
-
     const probe = buildGrokRelevanceMessages(
       { keywords: phrases, productTargets: [] },
       context,
@@ -575,19 +661,79 @@ export async function filterSuggestionsWithGrok<
       phrases.length,
       probe.user.length,
     );
+    const phraseSlices = needsChunks
+      ? planRelevanceChunks(phrases, GROK_RELEVANCE_KEYWORD_CHUNK)
+      : phrases.length
+        ? [{ slice: phrases, offset: 0 }]
+        : [];
+    if (!relevanceChunksCoverAll(phraseSlices, phrases.length)) {
+      throw new Error(
+        `Keyword relevance chunks missed rows (${phraseSlices.length} slices / ${phrases.length} phrases).`,
+      );
+    }
+
+    const keys = groqApiKeys();
+    // Same rule as products: never parallelize Nest-first just because keys exist.
+    const parallelKw =
+      !opts?.forceSerialGroq &&
+      Boolean(opts?.preferGroq) &&
+      keys.length >= 2 &&
+      phraseSlices.length >= 2;
+
+    const runPhraseEntry = async (
+      entry: { slice: typeof phrases; offset: number },
+      key?: string,
+    ): Promise<number[]> => {
+      try {
+        const { indexes } = await runPhraseChunk(entry.slice, context, {
+          preferGroq: opts?.preferGroq,
+          groqKey: key,
+        });
+        return indexes.map((idx) => entry.offset + idx);
+      } catch (error) {
+        if (isTpmOrSizeError(error) && entry.slice.length > 20) {
+          const mid = Math.ceil(entry.slice.length / 2);
+          const left = await runPhraseEntry(
+            { slice: entry.slice.slice(0, mid), offset: entry.offset },
+            key,
+          );
+          if (!parallelKw) await sleep(GROQ_CHUNK_GAP_MS);
+          const right = await runPhraseEntry(
+            {
+              slice: entry.slice.slice(mid),
+              offset: entry.offset + mid,
+            },
+            key,
+          );
+          return [...left, ...right];
+        }
+        throw error instanceof Error
+          ? error
+          : new Error("Groq keyword relevance filter unavailable.");
+      }
+    };
 
     let keptPhraseIndexes: number[];
-    if (!needsChunks) {
-      keptPhraseIndexes = await runSlice(phrases, 0);
+    if (parallelKw) {
+      // Dual Groq keys: analyze ALL phrase chunks concurrently (full coverage).
+      const parts = await Promise.all(
+        phraseSlices.map((entry, i) =>
+          runPhraseEntry(entry, keys[i % keys.length]),
+        ),
+      );
+      keptPhraseIndexes = parts.flat();
     } else {
       const kept: number[] = [];
-      const chunk = GROK_RELEVANCE_KEYWORD_CHUNK;
-      for (let offset = 0; offset < phrases.length; offset += chunk) {
-        const slice = phrases.slice(offset, offset + chunk);
-        kept.push(...(await runSlice(slice, offset)));
+      for (let i = 0; i < phraseSlices.length; i += 1) {
+        kept.push(...(await runPhraseEntry(phraseSlices[i]!, keys[0])));
+        if (i + 1 < phraseSlices.length) await sleep(GROQ_CHUNK_GAP_MS);
       }
       keptPhraseIndexes = kept;
     }
+
+    console.log(
+      `[inteliads:groq] keywords phrases=${phrases.length} amazonRows=${suggestions.keywords.length} chunks=${phraseSlices.length} parallel=${parallelKw} keptPhrases=${keptPhraseIndexes.length}`,
+    );
 
     keywordIndexes = expandGrokPhraseIndexesToOriginal(
       keptPhraseIndexes,
@@ -599,6 +745,9 @@ export async function filterSuggestionsWithGrok<
     // One LLM row per ASIN (Exact/Expanded companions restored after keep).
     const { asins, asinToOriginalIndexes } = collapseProductsToUniqueAsinsForGrok(
       suggestions.productTargets,
+    );
+    console.log(
+      `[inteliads:groq] products uniqueAsins=${asins.length} amazonRows=${suggestions.productTargets.length} — analyzing ALL (not UI page size)`,
     );
     const batched = await runProductChunksBatched(asins, context, {
       preferGroq: opts?.preferGroq,

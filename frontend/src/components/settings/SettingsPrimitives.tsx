@@ -71,7 +71,6 @@ export function SettingsSection({
           styles.group,
           {
             backgroundColor: t.colors.background_secondary,
-            borderColor: t.colors.separator,
           },
         ]}
       >
@@ -86,14 +85,29 @@ export function SettingsSection({
   );
 }
 
-function SymbolBadge({ name, color }: { name: SFSymbol; color: string }) {
+/** Calm SF Symbol well — muted fill so rainbow tiles don't compete with values. */
+function SymbolBadge({ name, color }: { name: SFSymbol; color?: string }) {
+  const t = useTheme();
+  const destructive = color === t.colors.tone_danger;
   return (
     <View
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
-      style={[styles.symbolWell, { backgroundColor: color }]}
+      style={[
+        styles.symbolWell,
+        {
+          backgroundColor: destructive
+            ? t.colors.tone_danger
+            : t.colors.background_tertiary,
+        },
+      ]}
     >
-      <Symbol name={name} size={16} color="#FFFFFF" weight="semibold" />
+      <Symbol
+        name={name}
+        size={15}
+        color={destructive ? "#FFFFFF" : color ?? t.colors.tone_primary}
+        weight="semibold"
+      />
     </View>
   );
 }
@@ -147,19 +161,34 @@ export function SettingsRow({
         },
       ]}
     >
-      {symbol ? <SymbolBadge name={symbol} color={symbolColor ?? t.colors.tone_primary} /> : null}
+      {symbol ? <SymbolBadge name={symbol} color={symbolColor} /> : null}
       <View style={styles.copy}>
-        <Text style={[t.typography.body, { color: labelColor }]}>{label}</Text>
+        <Text style={[t.typography.body, { color: labelColor }]} numberOfLines={2}>
+          {label}
+        </Text>
         {subtitle ? (
-          <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}>
+          <Text
+            style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}
+            numberOfLines={2}
+          >
             {subtitle}
           </Text>
         ) : null}
       </View>
       {value ? (
         <Text
-          numberOfLines={1}
-          style={[t.typography.body, { color: t.colors.text_secondary, marginRight: onPress ? 4 : 0, maxWidth: "42%" }]}
+          numberOfLines={2}
+          ellipsizeMode="tail"
+          style={[
+            t.typography.body,
+            {
+              color: t.colors.text_secondary,
+              marginRight: onPress ? 4 : 0,
+              flexShrink: 1,
+              maxWidth: "48%",
+              textAlign: "right",
+            },
+          ]}
         >
           {value}
         </Text>
@@ -223,7 +252,7 @@ export function SettingsToggleRow({
         },
       ]}
     >
-      {symbol ? <SymbolBadge name={symbol} color={symbolColor ?? t.colors.tone_primary} /> : null}
+      {symbol ? <SymbolBadge name={symbol} color={symbolColor} /> : null}
       <View style={styles.copy}>
         <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{label}</Text>
         {subtitle ? (
@@ -294,7 +323,7 @@ export function SettingsNote({ children, testID }: { children: string; testID?: 
 
 const styles = StyleSheet.create({
   section: {
-    marginTop: 28,
+    marginTop: 22,
   },
   sectionTitle: {
     letterSpacing: 0.6,
@@ -309,7 +338,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     borderRadius: 10,
     borderCurve: "continuous",
-    borderWidth: StyleSheet.hairlineWidth,
     overflow: "hidden",
   },
   row: {
@@ -325,8 +353,8 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   symbolWell: {
-    width: 29,
-    height: 29,
+    width: 28,
+    height: 28,
     borderRadius: 6,
     borderCurve: "continuous",
     alignItems: "center",

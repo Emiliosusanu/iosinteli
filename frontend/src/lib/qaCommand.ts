@@ -65,6 +65,8 @@ export type QaCommand = {
   targetsSort?: "spend" | "acos" | "orders" | "clicks" | "impressions" | "bid";
   /** Advanced min/max ranges (bid, ACoS, clicks, impressions). */
   targetsAdvanced?: Partial<TargetingAdvancedFilters>;
+  /** Open Targeting Filter pageSheet once after seed (sim/device QA). */
+  targetsOpenFilter?: boolean;
   booksSort?: "net" | "spend" | "acos" | "orders";
 };
 

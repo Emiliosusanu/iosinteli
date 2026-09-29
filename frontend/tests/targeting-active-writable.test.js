@@ -136,8 +136,11 @@ test("targeting defaults to Active across all segments with parent-chain matchin
   assert.doesNotMatch(targetingSource, /Paused[\s\S]{0,80}no parent-chain/);
   assert.match(targetingSource, /subtitle: "Try All"/);
   // Shared stateFilter — segment switch must not reset Active → All.
-  assert.match(targetingSource, /onChange=\{\(next\) => \{\s*setSegment\(next\);\s*setSelectedIds\(\[\]\);/);
-  assert.doesNotMatch(targetingSource, /setSegment\(next\);\s*setStateFilter/);
+  assert.match(
+    targetingSource,
+    /onChange=\{\(next\) => \{\s*setSegment\(next\);\s*setSelectedIds\(\[\]\);\s*\}\}/,
+  );
+  assert.doesNotMatch(targetingSource, /setSegment\([^)]+\);\s*setStateFilter/);
   assert.match(targetingSource, /PLACEMENT_FIELDS\.find/);
   assert.match(targetingSource, /placement_key/);
   assert.match(targetingSource, /getPlacementAdjCooldown/);

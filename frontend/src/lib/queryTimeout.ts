@@ -1,10 +1,42 @@
 export const HOME_QUERY_TIMEOUT_MS = 20_000;
 export const TARGETING_QUERY_TIMEOUT_MS = 60_000;
+/**
+ * Display-only title/cover fill after mobile_targeting_page_v1.
+ * Must stay well under TARGETING_QUERY_TIMEOUT_MS so the list paints;
+ * retail/Open Library gap-fill must never sit on this critical path.
+ */
+export const TARGETING_PAGE_DISPLAY_ENRICH_MS = 12_000;
 /** Nest targeting lists and their local metric enrichment share one page budget. */
 export const NEST_TARGETING_LIST_BUDGET_MS = TARGETING_QUERY_TIMEOUT_MS;
 export const TARGETING_PAGE_METRICS_BUDGET_MS = TARGETING_QUERY_TIMEOUT_MS;
 /** Keyword / search-term funnel reads many entity pages — longer than a Home KPI. */
 export const ADS_ENGINE_FUNNEL_TIMEOUT_MS = 45_000;
+/**
+ * Book detail → campaigns list. Must fail closed to RetryState — never spin forever
+ * while product_ads / placement / metric pages crawl a long date range.
+ */
+export const BOOK_CAMPAIGNS_TIMEOUT_MS = 45_000;
+/**
+ * Campaigns tab complete list (limit:0, multi-profile Nest + placement).
+ * Home's 20s default aborts US+CA aggregations as "Couldn't load campaigns".
+ */
+export const CAMPAIGNS_LIST_TIMEOUT_MS = 60_000;
+/** Placement share bars on Campaigns rows — soft budget; list paints without them. */
+export const CAMPAIGNS_PLACEMENT_BUDGET_MS = 8_000;
+/** Create → book picker. Nest /campaigns/creation/book-candidates must not hang forever.
+ *  Soft-retry once on timeout in Create UI; resume also warms this cache. */
+export const CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS = 45_000;
+/** Create → marketplace chips after book select. */
+export const CAMPAIGN_CREATION_MARKETPLACES_TIMEOUT_MS = 30_000;
+/** Targeting / Campaigns book filter options — must not gate the list forever. */
+export const TARGETING_BOOK_OPTIONS_TIMEOUT_MS = 25_000;
+/** Placement mix is decorative on book campaign rows — never block the list. */
+export const BOOK_CAMPAIGN_PLACEMENT_BUDGET_MS = 8_000;
+/**
+ * Book detail campaign metrics. Soft-budget inside BOOK_CAMPAIGNS_TIMEOUT_MS —
+ * paint campaign rows with zeros rather than spinning until the outer 45s abort.
+ */
+export const BOOK_CAMPAIGN_METRICS_BUDGET_MS = 25_000;
 export const HOME_QUERY_TIMEOUT_MESSAGE = "HOME_QUERY_TIMEOUT";
 
 export function isHomeQueryTimeout(error: unknown): boolean {

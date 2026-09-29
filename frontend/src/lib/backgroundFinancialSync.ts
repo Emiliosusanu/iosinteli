@@ -139,9 +139,31 @@ export async function runDualSourceBackgroundRefresh(
   }
   const ok = await refreshDualSourceFinancialCache(source);
   if (ok) await writeLastRun(LAST_REFRESH_KEY);
+  // Warm Create book catalog even when Create isn't mounted — kill/relaunch
+  // stress otherwise hits a cold Nest /book-candidates under the screen timeout.
+  void warmCampaignCreationBooksCache();
 }
 
-/** React Query roots worth invalidating after a background refresh. */
+/** Prefetch Nest Create book-candidates into React Query (best-effort). */
+export async function warmCampaignCreationBooksCache(): Promise<void> {
+  try {
+    const { fetchCampaignCreationBooks } = await import("./mutations");
+    const { CAMPAIGN_CREATION_BOOKS_QUERY_KEY } = await import("./campaignCreationStock");
+    const { appQueryClient } = await import("./queryClient");
+    const { CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS, withQueryTimeout } = await import("./queryTimeout");
+    const existing = appQueryClient.getQueryData(CAMPAIGN_CREATION_BOOKS_QUERY_KEY);
+    if (existing) return;
+    const data = await withQueryTimeout(
+      fetchCampaignCreationBooks(),
+      CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS,
+    );
+    appQueryClient.setQueryData(CAMPAIGN_CREATION_BOOKS_QUERY_KEY, data);
+  } catch (error) {
+    devWarn("Create books warm skipped", error);
+  }
+}
+
+/** React Query roots worth invalidating after a background refresh / AppState resume. */
 export function backgroundFinancialQueryRoots(): string[] {
   return [
     FINANCIAL_QUERY_ROOTS.mobileOverview,
@@ -150,6 +172,15 @@ export function backgroundFinancialQueryRoots(): string[] {
     FINANCIAL_QUERY_ROOTS.kdpRoyaltiesYesterday,
     FINANCIAL_QUERY_ROOTS.kdpRoyaltiesSevenDay,
     FINANCIAL_QUERY_ROOTS.topBooks,
+    FINANCIAL_QUERY_ROOTS.products,
+    FINANCIAL_QUERY_ROOTS.campaignMetrics,
     FINANCIAL_QUERY_ROOTS.campaignMetricsToday,
+    // List tabs + Create: resume must not keep overnight / background-stale rows.
+    "campaigns-list-range-v3",
+    "mobile-targeting-page-v1",
+    "targeting-book-options-v2",
+    "campaign-filter-books",
+    "campaign-creation-books",
+    "campaign-creation-book-activity",
   ];
 }

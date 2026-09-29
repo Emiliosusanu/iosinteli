@@ -538,6 +538,62 @@ function applyHeuristicRelevanceFilter<
 }
 
 /**
+ * Transient Nest/Groq/xAI failures that should soft-retry (see
+ * RELEVANCE_SOFT_RETRY_GAPS_MS) before painting "AI unavailable"
+ * (`failed_unfiltered`). Auth / config / hard 4xx stay fail-fast.
+ */
+export function isTransientRelevanceError(error: unknown): boolean {
+  const status =
+    error && typeof error === "object" && "status" in error
+      ? Number((error as { status?: unknown }).status)
+      : NaN;
+  if (status === 401 || status === 403 || status === 400 || status === 404) {
+    return false;
+  }
+  const msg = error instanceof Error ? error.message : String(error ?? "");
+  if (
+    /sign in|unauthorized|forbidden|not configured|EXPO_PUBLIC_GROQ_API_KEY is not set/i.test(
+      msg,
+    )
+  ) {
+    return false;
+  }
+  if (status === 408 || status === 429 || status >= 500) return true;
+  return /aborted|timed out|timeout|429|TPM|rate.?limit|Request too large|network|ECONNRESET|fetch failed|502|503|504|Couldn't run Grok|Nest relevance|Groq relevance|Grok relevance filter unavailable|AI search-intent filter unavailable/i.test(
+    msg,
+  );
+}
+
+/** In-filter soft-retry gaps (ms) for transient Nest/Groq TPM/timeouts. */
+export const RELEVANCE_SOFT_RETRY_GAPS_MS = [1_200, 5_000, 12_000] as const;
+
+/**
+ * UI soft-recover delays after `failed_unfiltered` latches. After the last
+ * attempt still fails, screens auto-accept Amazon unfiltered so chrome never
+ * sticks on "AI unavailable" without a way forward.
+ */
+export const AI_FAILED_SOFT_RECOVER_DELAYS_MS = [1_500, 6_000, 15_000] as const;
+export const AI_FAILED_SOFT_RECOVER_MAX = AI_FAILED_SOFT_RECOVER_DELAYS_MS.length;
+
+async function withRelevanceSoftRetry<T>(run: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < RELEVANCE_SOFT_RETRY_GAPS_MS.length; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientRelevanceError(error)) throw error;
+      if (attempt === RELEVANCE_SOFT_RETRY_GAPS_MS.length - 1) break;
+      const gap = RELEVANCE_SOFT_RETRY_GAPS_MS[attempt] ?? 1_200;
+      await new Promise((resolve) => setTimeout(resolve, gap));
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("AI search-intent filter unavailable.");
+}
+
+/**
  * Filter Amazon keyword/ASIN suggestions for the sponsored book + marketplace.
  * - identity: return unchanged (never invent)
  * - heuristic: filter product ASINs by title similarity; **keywords pass through**
@@ -548,6 +604,9 @@ function applyHeuristicRelevanceFilter<
  *   On Grok failure → Amazon rows with `failed_unfiltered` (UI must not
  *   auto-select / claim AI curated). Empty AI keep → Amazon restore with
  *   `restored_empty` (honest label). Edit prompts in suggestionRelevancePrompt.ts.
+ *   Transient Nest/Groq timeouts/429/TPM soft-retry up to 3× (1.2s / 5s / 12s)
+ *   before latching failed_unfiltered. UI then soft-recovers a few more times
+ *   and finally auto-accepts Amazon unfiltered — never sticky "AI unavailable".
  */
 export async function filterSuggestionsForBookRelevance<
   K extends { keyword: string; matchType?: string },
@@ -635,14 +694,22 @@ export async function filterSuggestionsForBookRelevance<
   if (mode === "grok" || mode === "openai") {
     if (opts?.grokFilter) {
       try {
-        return finishGrokKeep(await opts.grokFilter(suggestions, context));
+        return finishGrokKeep(
+          await withRelevanceSoftRetry(() =>
+            opts.grokFilter!(suggestions, context),
+          ),
+        );
       } catch (error) {
         return failUnfiltered(error);
       }
     }
     if (opts?.openaiFilter) {
       try {
-        return finishGrokKeep(await opts.openaiFilter(suggestions, context));
+        return finishGrokKeep(
+          await withRelevanceSoftRetry(() =>
+            opts.openaiFilter!(suggestions, context),
+          ),
+        );
       } catch (error) {
         return failUnfiltered(error);
       }
@@ -651,9 +718,6 @@ export async function filterSuggestionsForBookRelevance<
       // Skip retail scrape before Groq — Nest titles + themes are enough for
       // the keep-list; UI fills missing titles via useProductSuggestionAsinMeta.
       // (Retail enrich was adding tens of seconds for little keep quality.)
-      const { filterSuggestionsWithGrok, groqApiKeys } = await import(
-        "./suggestionRelevanceGrok.ts"
-      );
       const preferGroqEnv =
         String(process.env.EXPO_PUBLIC_SUGGESTION_PREFER_GROQ ?? "")
           .trim()
@@ -661,15 +725,21 @@ export async function filterSuggestionsForBookRelevance<
         String(process.env.EXPO_PUBLIC_SUGGESTION_PREFER_GROQ ?? "")
           .trim()
           .toLowerCase() === "true";
-      // Prefer client Groq (skip Nest relevance hop). Fall back to Nest→xAI→Groq
-      // only when no Groq keys are baked into the binary.
-      const preferGroq = preferGroqEnv || groqApiKeys().length > 0;
+      // Default Nest → xAI → Groq. Only skip Nest when explicitly benching
+      // client Groq (EXPO_PUBLIC_SUGGESTION_PREFER_GROQ=1). Baked Groq keys
+      // alone must NOT force preferGroq — that made Create AI fail-closed on
+      // free-tier TPM while Nest relevance-filter was healthy.
       return finishGrokKeep(
-        await filterSuggestionsWithGrok(
-          suggestions,
-          context,
-          preferGroq ? { preferGroq: true } : undefined,
-        ),
+        await withRelevanceSoftRetry(async () => {
+          const { filterSuggestionsWithGrok } = await import(
+            "./suggestionRelevanceGrok.ts"
+          );
+          return filterSuggestionsWithGrok(
+            suggestions,
+            context,
+            preferGroqEnv ? { preferGroq: true } : undefined,
+          );
+        }),
       );
     } catch (error) {
       return failUnfiltered(error);

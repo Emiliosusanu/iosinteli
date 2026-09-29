@@ -65,6 +65,8 @@ import {
   suggestionRelevanceNeedsUserConfirm,
   uniqueProductMatchTypes,
   uniqueReasonKeys,
+  AI_FAILED_SOFT_RECOVER_DELAYS_MS,
+  AI_FAILED_SOFT_RECOVER_MAX,
   type AsinDisplayMeta,
   type BidMode,
   type KeywordMatchType,
@@ -127,6 +129,7 @@ import {
 } from "@/src/lib/mutations";
 import { fetchActiveCampaignsForBookProfile, fetchTargetingBookOptions } from "@/src/lib/queries";
 import { sortedProfileIds } from "@/src/lib/periodQuery";
+import { CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS, CAMPAIGN_CREATION_MARKETPLACES_TIMEOUT_MS, isHomeQueryTimeout, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { targetingBookHasCampaigns } from "@/src/lib/targetingBookFilter";
 import { appQueryClient } from "@/src/lib/queryClient";
 import { NestApiError, userMessageForNestError } from "@/src/lib/rulesApi";
@@ -166,15 +169,14 @@ function StepHeader({
 }) {
   const t = useTheme();
   return (
-    <View style={{ gap: 4 }}>
+    <View style={{ gap: 2 }}>
       <Text
         style={[
           t.typography.caption2,
           {
             color: t.colors.text_tertiary,
             fontWeight: "600",
-            letterSpacing: 1.1,
-            textTransform: "uppercase",
+            fontVariant: ["tabular-nums"],
           },
         ]}
       >
@@ -182,8 +184,8 @@ function StepHeader({
       </Text>
       <Text
         style={[
-          t.typography.title3,
-          { color: t.colors.text_primary, fontWeight: "600", letterSpacing: -0.3 },
+          t.typography.headline,
+          { color: t.colors.text_primary, fontWeight: "600", letterSpacing: -0.2 },
         ]}
       >
         {title}
@@ -192,7 +194,7 @@ function StepHeader({
         <Text
           style={[
             t.typography.footnote,
-            { color: t.colors.text_secondary, lineHeight: 18 },
+            { color: t.colors.text_tertiary, lineHeight: 18 },
           ]}
         >
           {hint}
@@ -218,6 +220,9 @@ function amount(value: string, min: number, max: number) {
 }
 
 function catalogErrorSubtitle(error: unknown) {
+  if (isHomeQueryTimeout(error)) {
+    return "Book catalog is taking longer than usual. Try again.";
+  }
   if (error instanceof NestApiError) {
     if (error.status === 429)
       return "Amazon is busy. Wait a moment, then retry.";
@@ -260,6 +265,23 @@ function emptyBooksCopy(
   return {
     title: "No paperbacks yet",
     subtitle: "Refresh the KDP catalog, then retry.",
+  };
+}
+
+/** Soft shell while Amazon/AI loads — keeps Create paused + Filtering chrome honest. */
+function pendingKeywordCountsShell(): NonNullable<
+  CampaignCreationPreview["keywordCounts"]
+> {
+  return {
+    amazonApiRowCount: 0,
+    amazonApiPhraseCount: 0,
+    amazonRowCount: 0,
+    amazonPhraseCount: 0,
+    keptRowCount: 0,
+    keptPhraseCount: 0,
+    grokFiltered: false,
+    grokPending: true,
+    relevanceOutcome: "pending",
   };
 }
 
@@ -511,6 +533,12 @@ export default function CreateCampaignScreen() {
   const suggestionMetaByAsinRef = useRef(suggestionMetaByAsin);
   suggestionMetaByAsinRef.current = suggestionMetaByAsin;
   const prefTargetingPrefetchRef = useRef(false);
+  /** One-shot recover when soft shell is left after a discarded paint. */
+  const softShellRecoverRef = useRef(false);
+  /** Bumps on each preview request / marketplace reset so late callbacks cannot overwrite. */
+  const previewRequestGenRef = useRef(0);
+  const targetingRef = useRef(targeting);
+  targetingRef.current = targeting;
   const [suggestionsError, setSuggestionsError] = useState<string | null>(null);
   const [strategy, setStrategy] = useState<Strategy>("LEGACY_FOR_SALES");
   const [topPlacement, setTopPlacement] = useState("0");
@@ -520,9 +548,12 @@ export default function CreateCampaignScreen() {
 
   const booksQ = useQuery({
     queryKey: CAMPAIGN_CREATION_BOOKS_QUERY_KEY,
-    queryFn: fetchCampaignCreationBooks,
-    retry: false,
-    staleTime: 0,
+    queryFn: ({ signal }) =>
+      withQueryTimeout(fetchCampaignCreationBooks(), CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS, signal),
+    // One soft retry on timeout — kill/relaunch stress often races Nest cold start.
+    retry: (count, error) => count < 1 && isHomeQueryTimeout(error),
+    retryDelay: 1_500,
+    staleTime: 60_000,
     refetchOnMount: "always",
   });
 
@@ -584,7 +615,12 @@ export default function CreateCampaignScreen() {
 
   const marketplacesQ = useQuery({
     queryKey: ["campaign-creation-marketplaces", book?.asin],
-    queryFn: () => fetchCampaignCreationMarketplaces(book!.asin),
+    queryFn: ({ signal }) =>
+      withQueryTimeout(
+        fetchCampaignCreationMarketplaces(book!.asin),
+        CAMPAIGN_CREATION_MARKETPLACES_TIMEOUT_MS,
+        signal,
+      ),
     enabled: Boolean(book),
     retry: (count, error) =>
       count < 3 &&
@@ -618,28 +654,72 @@ export default function CreateCampaignScreen() {
   );
 
   const previewM = useMutation({
-    mutationFn: (nextTargeting?: CampaignCreationTargeting) =>
-      previewCampaignCreation({
-        profileId: adsProfileId || profileId,
-        advertisedAsin: book!.asin,
-        targeting: nextTargeting ?? targeting,
-        onAmazonReady: (partial) => {
-          // Step 1: paint Amazon totals immediately. Do NOT select-all raw rows —
-          // Step 2 (AI filter) must finish before we pre-select the kept set.
-          setPreview(partial);
-          setVisibleSuggestionCount(SUGGESTION_PAGE_SIZE);
-          setSelectedKeywords(new Set());
-          setSelectedProducts(new Set());
-        },
-      }),
+    mutationFn: async (nextTargeting?: CampaignCreationTargeting) => {
+      const gen = ++previewRequestGenRef.current;
+      const requestTargeting = nextTargeting ?? targetingRef.current;
+      try {
+        const result = await previewCampaignCreation({
+          profileId: adsProfileId || profileId,
+          advertisedAsin: book!.asin,
+          targeting: requestTargeting,
+          onAmazonReady: (partial) => {
+            // Step 1: paint Amazon totals immediately. Do NOT select-all raw rows —
+            // Step 2 (AI filter) must finish before we pre-select the kept set.
+            if (gen !== previewRequestGenRef.current) {
+              console.log(
+                `[inteliads:create-preview] paint discarded gen=${gen} current=${previewRequestGenRef.current} phase=onAmazonReady`,
+              );
+              return;
+            }
+            if (targetingRef.current !== requestTargeting) {
+              console.log(
+                `[inteliads:create-preview] paint discarded targeting=${requestTargeting}→${targetingRef.current} phase=onAmazonReady`,
+              );
+              return;
+            }
+            setPreview(partial);
+            setVisibleSuggestionCount(SUGGESTION_PAGE_SIZE);
+            setSelectedKeywords(new Set());
+            setSelectedProducts(new Set());
+          },
+        });
+        return { result, gen, requestTargeting };
+      } catch (error) {
+        // Stale errors must not wipe a newer successful paint (soft shell / Kept).
+        if (error && typeof error === "object") {
+          (error as { previewGen?: number; requestTargeting?: string }).previewGen =
+            gen;
+          (
+            error as { previewGen?: number; requestTargeting?: string }
+          ).requestTargeting = requestTargeting;
+        }
+        throw error;
+      }
+    },
     onMutate: () => {
       setSuggestionsError(null);
     },
-    onSuccess: (result) => {
+    onSuccess: (payload) => {
+      const { result, gen, requestTargeting } = payload;
+      if (gen !== previewRequestGenRef.current) {
+        console.log(
+          `[inteliads:create-preview] paint discarded gen=${gen} current=${previewRequestGenRef.current} phase=onSuccess kept=${result.keywords?.length ?? 0}/${result.productTargets?.length ?? 0}`,
+        );
+        return;
+      }
+      if (targetingRef.current !== requestTargeting) {
+        console.log(
+          `[inteliads:create-preview] paint discarded targeting=${requestTargeting}→${targetingRef.current} phase=onSuccess`,
+        );
+        return;
+      }
+      console.log(
+        `[inteliads:create-preview] paint applied keywords=${result.keywords?.length ?? 0} products=${result.productTargets?.length ?? 0} outcome=${result.keywordCounts?.relevanceOutcome ?? "n/a"}`,
+      );
       setSuggestionsError(null);
       // Advance generation so in-flight enrich from a prior preview is ignored.
       // Late meta for THIS gen still applies when gen matches (progressive).
-      const gen = ++suggestionMetaGenRef.current;
+      const metaGen = ++suggestionMetaGenRef.current;
       suggestionRetailAttemptedRef.current = new Set();
       setPreview(result);
       setVisibleSuggestionCount(SUGGESTION_PAGE_SIZE);
@@ -702,7 +782,7 @@ export default function CreateCampaignScreen() {
 
       const profileKey = adsProfileId || profileId;
       const applyMetaPatch = (partial: Map<string, AsinDisplayMeta> | Record<string, AsinDisplayMeta>) => {
-        if (gen !== suggestionMetaGenRef.current) return false;
+        if (metaGen !== suggestionMetaGenRef.current) return false;
         const entries =
           partial instanceof Map ? [...partial.entries()] : Object.entries(partial);
         if (!entries.length) return true;
@@ -733,7 +813,7 @@ export default function CreateCampaignScreen() {
           const visibleSeed = asins.slice(0, SUGGESTION_PAGE_SIZE);
           const prioritized = priorityAsinsForTitleEnrichment(asins, visibleSeed);
           const needTitles = prioritized.filter((asin) => !meta.get(asin)?.title);
-          if (gen === suggestionMetaGenRef.current) {
+          if (metaGen === suggestionMetaGenRef.current) {
             setSuggestionTitlesLoading(false);
           }
           if (!needTitles.length) return;
@@ -747,7 +827,7 @@ export default function CreateCampaignScreen() {
             suggestionRetailAttemptedRef.current.add(asin);
           }
           for (let i = 0; i < capped.length; i += chunkSize) {
-            if (gen !== suggestionMetaGenRef.current) return;
+            if (metaGen !== suggestionMetaGenRef.current) return;
             const chunk = capped.slice(i, i + chunkSize);
             const retail = await fetchAmazonRetailTitles(chunk, {
               concurrency: RETAIL_TAIL_CONCURRENCY,
@@ -775,7 +855,7 @@ export default function CreateCampaignScreen() {
         } catch {
           // Soft-fail: covers still work via CDN; paste ASINs still available.
         } finally {
-          if (gen === suggestionMetaGenRef.current) {
+          if (metaGen === suggestionMetaGenRef.current) {
             setSuggestionTitlesLoading(false);
           }
         }
@@ -783,13 +863,36 @@ export default function CreateCampaignScreen() {
 
     },
     onError: (error, nextTargeting) => {
+      const errMeta =
+        error && typeof error === "object"
+          ? (error as { previewGen?: number; requestTargeting?: string })
+          : {};
+      // Stale failure from a superseded gen must not clobber Kept / in-flight paint.
+      if (
+        typeof errMeta.previewGen === "number" &&
+        errMeta.previewGen !== previewRequestGenRef.current
+      ) {
+        console.log(
+          `[inteliads:create-preview] onError discarded gen=${errMeta.previewGen} current=${previewRequestGenRef.current}`,
+        );
+        return;
+      }
       setSelectedKeywords(new Set());
       setSelectedProducts(new Set());
       setSuggestionTitlesLoading(false);
-      const activeTargeting = nextTargeting ?? targeting;
+      const activeTargeting =
+        (errMeta.requestTargeting as CampaignCreationTargeting | undefined) ??
+        nextTargeting ??
+        targetingRef.current;
       // Soft-fail: keep an empty preview shell so sellers can still paste
       // custom keywords / ASINs when Amazon rate-limits recommendations.
-      if (book && (activeTargeting === "keywords" || activeTargeting === "products")) {
+      // Ignore stale errors from a superseded targeting switch.
+      if (
+        targetingRef.current === activeTargeting &&
+        book &&
+        (activeTargeting === "keywords" || activeTargeting === "products")
+      ) {
+        // Soft shell stays; Refresh retries. Do not clear prefetch or we loop onError.
         setPreview({
           source: "amazon_ads",
           fetchedAt: new Date().toISOString(),
@@ -812,8 +915,9 @@ export default function CreateCampaignScreen() {
           duplicateAuto: null,
           keywords: [],
           productTargets: [],
+          keywordCounts: pendingKeywordCountsShell(),
         });
-      } else {
+      } else if (targetingRef.current === activeTargeting) {
         setPreview(null);
       }
       const message = userMessageForNestError(
@@ -829,16 +933,24 @@ export default function CreateCampaignScreen() {
       if (status === 429 || status >= 500 || status === 0 || rateLimited) {
         return;
       }
+      // Soft-fallback / linked CA·US rows mean Nest bulk already tied this
+      // paperback to the profile (often with active campaigns). Do NOT append
+      // the "pick an in-stock paperback" scare — that contradicts the picker
+      // and mislabels Amazon eligibility flakes as OOS (NE CA 1807973751).
       const advertisableHint =
         /advertisable|not confirm this ASIN|unpublished|suppressed|ineligible/i.test(
           message,
         );
-      Alert.alert(
-        "Couldn't load suggestions",
-        advertisableHint
-          ? `${message}\n\nPick an in-stock, currently published paperback for this marketplace. Unpublished or suppressed ASINs cannot load Amazon suggestions.`
-          : message,
-      );
+      const softLinked =
+        usingFallbackMarketplaces ||
+        Boolean(selectedMarketplace && adsStockSoftListed(selectedMarketplace)) ||
+        (existingCampaignsQ.data?.length ?? 0) > 0;
+      const alertBody = advertisableHint
+        ? softLinked
+          ? `${message}\n\nThis marketplace is linked and may already advertise this book. Retry Refresh — Amazon's eligibility check can flake even when the paperback is in stock.`
+          : `${message}\n\nPick an in-stock, currently published paperback for this marketplace. Unpublished or suppressed ASINs cannot load Amazon suggestions.`
+        : message;
+      Alert.alert("Couldn't load suggestions", alertBody);
     },
   });
 
@@ -965,6 +1077,7 @@ export default function CreateCampaignScreen() {
 
   function resetAfterMarketplace(next: CampaignCreationMarketplace) {
     suggestionMetaGenRef.current += 1;
+    previewRequestGenRef.current += 1;
     prefTargetingPrefetchRef.current = false;
     setProfileId(next.id);
     setAdsProfileId(resolveCreationProfileId(next));
@@ -1074,6 +1187,7 @@ export default function CreateCampaignScreen() {
       setProfileId("");
       setAdsProfileId("");
     }
+    previewRequestGenRef.current += 1;
     setPreview(null);
     setSuggestionMetaByAsin({});
     setSuggestionTitlesLoading(false);
@@ -1313,6 +1427,7 @@ export default function CreateCampaignScreen() {
       });
     if (listed) return;
     suggestionMetaGenRef.current += 1;
+    previewRequestGenRef.current += 1;
     prefTargetingPrefetchRef.current = false;
     setProfileId("");
     setAdsProfileId("");
@@ -1443,11 +1558,55 @@ export default function CreateCampaignScreen() {
 
   // Auto-fetch Amazon suggestions (+ AI filter) when book + marketplace are ready.
   // Segment onChange does not fire for the initial Keywords default.
+  // Soft shell alone (pending + empty rows) must not block a one-shot retry after a
+  // discarded paint left Filtering chrome with no Amazon rows forever.
+  useEffect(() => {
+    softShellRecoverRef.current = false;
+  }, [targeting, book?.asin, adsProfileId]);
   useEffect(() => {
     if (targeting === "auto") return;
     if (!book || !adsProfileId || bookLiveIneligible) return;
-    if (preview || previewM.isPending || prefTargetingPrefetchRef.current) return;
+    if (previewM.isPending) return;
+    const shellStuck =
+      preview != null &&
+      preview.keywordCounts?.grokPending === true &&
+      !preview.recommendationsAvailable &&
+      (preview.keywords?.length ?? 0) === 0 &&
+      (preview.productTargets?.length ?? 0) === 0;
+    if (preview && !shellStuck) return;
+    if (shellStuck) {
+      if (softShellRecoverRef.current) return;
+      softShellRecoverRef.current = true;
+    } else if (prefTargetingPrefetchRef.current) {
+      return;
+    }
     prefTargetingPrefetchRef.current = true;
+    if (!preview) {
+      setPreview({
+        source: "amazon_ads",
+        fetchedAt: new Date().toISOString(),
+        recommendationsAvailable: false,
+        profile: {
+          id: adsProfileId || profileId,
+          profileId: adsProfileId || profileId,
+          countryCode: selectedMarketplace?.countryCode ?? null,
+          currencyCode: selectedMarketplace?.currencyCode ?? null,
+          marketplaceId: selectedMarketplace?.marketplaceId ?? null,
+        },
+        book: {
+          asin: book.asin,
+          title: book.title,
+          subtitle: null,
+          author: null,
+          topic: null,
+          coverUrl: book.coverUrl,
+        },
+        duplicateAuto: null,
+        keywords: [],
+        productTargets: [],
+        keywordCounts: pendingKeywordCountsShell(),
+      });
+    }
     previewM.mutate(targeting);
   }, [
     targeting,
@@ -1655,6 +1814,69 @@ export default function CreateCampaignScreen() {
       );
     }
   }, [preview?.keywords, preview?.productTargets, targeting]);
+
+  // Multi-shot UI soft-recover if AI still latched failed_unfiltered after
+  // in-filter soft-retry (TPM cool-down / Nest warm). Keeps Amazon rows; flips
+  // chrome to Filtering… then refetches. After AI_FAILED_SOFT_RECOVER_MAX
+  // still-fail → auto-accept Amazon unfiltered (never sticky AI unavailable).
+  const aiFailedSoftRecoverAttemptRef = useRef(0);
+  const aiFailedSoftRecoverScopeRef = useRef<string | null>(null);
+  useEffect(() => {
+    aiFailedSoftRecoverAttemptRef.current = 0;
+    aiFailedSoftRecoverScopeRef.current = null;
+  }, [book?.asin, adsProfileId, targeting]);
+  useEffect(() => {
+    if (preview?.keywordCounts?.relevanceOutcome !== "failed_unfiltered") {
+      return;
+    }
+    const scope = `${adsProfileId || profileId}|${book?.asin ?? ""}|${targeting}`;
+    if (aiFailedSoftRecoverScopeRef.current !== scope) {
+      aiFailedSoftRecoverScopeRef.current = scope;
+      aiFailedSoftRecoverAttemptRef.current = 0;
+    }
+    const attempt = aiFailedSoftRecoverAttemptRef.current;
+    if (attempt >= AI_FAILED_SOFT_RECOVER_MAX) {
+      acceptAmazonUnfiltered();
+      return;
+    }
+    const delay =
+      AI_FAILED_SOFT_RECOVER_DELAYS_MS[attempt] ??
+      AI_FAILED_SOFT_RECOVER_DELAYS_MS[
+        AI_FAILED_SOFT_RECOVER_DELAYS_MS.length - 1
+      ]!;
+    const timer = setTimeout(() => {
+      setPreview((prev) => {
+        if (!prev?.keywordCounts) return prev;
+        if (prev.keywordCounts.relevanceOutcome !== "failed_unfiltered") {
+          return prev;
+        }
+        return {
+          ...prev,
+          keywordCounts: {
+            ...prev.keywordCounts,
+            grokPending: true,
+            relevanceOutcome: "pending",
+          },
+        };
+      });
+      aiFailedSoftRecoverAttemptRef.current = attempt + 1;
+      previewM.mutate(undefined, {
+        onSettled: () => {
+          // Effect re-runs on next failed_unfiltered; if attempts exhausted,
+          // the guard above auto-accepts.
+        },
+      });
+    }, delay);
+    return () => clearTimeout(timer);
+    // Intentionally omit previewM.isPending — including it cancelled timers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- multi-shot soft recover
+  }, [
+    preview?.keywordCounts?.relevanceOutcome,
+    adsProfileId,
+    profileId,
+    book?.asin,
+    targeting,
+  ]);
   const productReasonKeys = useMemo(
     () => uniqueReasonKeys(rankedProductSuggestions),
     [rankedProductSuggestions],
@@ -1881,9 +2103,9 @@ export default function CreateCampaignScreen() {
   }
 
   const stickyReserve = 88 + Math.max(insets.bottom, 10);
-  // Sticky book/targeting chrome was eating the ScrollView on phones so
-  // "Amazon suggestions" / "Your keywords" sat off-screen. Keep everything
-  // in-flow and scrollable; create bar still reserves bottom space.
+  // Active campaigns used to sit above Targeting and pushed "Your keywords" /
+  // Amazon suggestions off the first viewport (Refresh-only + Create paused).
+  // Keep suggestions in-flow under Targeting; Active lists below Budget.
   const bookCollapsed = Boolean(book) && !bookPickerExpanded;
   const showSuggestionStickyChrome = false;
   const keywordPhraseCount = useMemo(
@@ -2096,6 +2318,9 @@ export default function CreateCampaignScreen() {
                     `${book!.title.slice(0, 82)} - ${type === "auto" ? "Auto" : type === "keywords" ? "Keywords" : "Products"}`,
                   );
                   if (type === "keywords" || type === "products") {
+                    // Invalidate any in-flight products/keywords preview paint.
+                    previewRequestGenRef.current += 1;
+                    prefTargetingPrefetchRef.current = false;
                     setPreview({
                       source: "amazon_ads",
                       fetchedAt: new Date().toISOString(),
@@ -2120,9 +2345,15 @@ export default function CreateCampaignScreen() {
                       duplicateAuto: null,
                       keywords: [],
                       productTargets: [],
+                      keywordCounts: pendingKeywordCountsShell(),
                     });
-                    if (adsProfileId) previewM.mutate(type);
+                    if (adsProfileId) {
+                      prefTargetingPrefetchRef.current = true;
+                      previewM.mutate(type);
+                    }
                   } else {
+                    previewRequestGenRef.current += 1;
+                    prefTargetingPrefetchRef.current = false;
                     setPreview(null);
                   }
                 }}
@@ -2638,86 +2869,12 @@ export default function CreateCampaignScreen() {
           </CreateReveal>
         ) : null}
 
-        {book && (adsProfileId || profileId) ? (
-          <CreateReveal delay={90}>
-          <ListCard compact testID="campaign-create-existing-campaigns">
-            <Text
-              style={[
-                t.typography.headline,
-                { color: t.colors.text_primary },
-              ]}
-            >
-              Active on this marketplace
-            </Text>
-            {existingCampaignsQ.isPending ? (
-              <ScreenSpinner />
-            ) : existingCampaignsQ.isError ? (
-              <RetryState
-                title="Couldn't load campaigns"
-                onRetry={() => void existingCampaignsQ.refetch()}
-                retrying={existingCampaignsQ.isFetching}
-              />
-            ) : existingCampaigns.length ? (
-              <View style={{ gap: 8, marginTop: 10 }}>
-                {existingCampaigns.map((row) => (
-                  <CreateScalePressable
-                    key={row.id}
-                    testID={`campaign-create-existing-${row.id}`}
-                    onPress={() => router.push(`/campaign/${row.id}`)}
-                    style={[
-                      styles.existingCampaignRow,
-                      {
-                        backgroundColor: t.colors.background_tertiary,
-                        borderColor: t.colors.separator,
-                      },
-                    ]}
-                  >
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text
-                        numberOfLines={2}
-                        style={[
-                          t.typography.callout,
-                          {
-                            color: t.colors.text_primary,
-                            fontWeight: "600",
-                          },
-                        ]}
-                      >
-                        {row.name}
-                      </Text>
-                      <Text
-                        style={[
-                          t.typography.caption1,
-                          { color: t.colors.text_secondary },
-                        ]}
-                      >
-                        {row.label}
-                      </Text>
-                    </View>
-                    <Pill label="Active" tone="good" size="sm" />
-                  </CreateScalePressable>
-                ))}
-              </View>
-            ) : (
-              <Text
-                style={[
-                  t.typography.footnote,
-                  { color: t.colors.text_tertiary, marginTop: 8 },
-                ]}
-              >
-                None yet.
-              </Text>
-            )}
-          </ListCard>
-          </CreateReveal>
-        ) : null}
-
         {showSuggestionStickyChrome ? null : (
         <CreateReveal delay={130}>
         <ListCard compact>
           <StepHeader
             step={3}
-            title="Targeting + AI filter"
+            title="Targeting"
           />
           {!book ||
           !(adsProfileId || profileId || (prefProfileId && book)) ? (
@@ -2727,7 +2884,7 @@ export default function CreateCampaignScreen() {
                 { color: t.colors.text_tertiary, marginTop: 8 },
               ]}
             >
-              Choose a book and marketplace first.
+              Select a book and marketplace.
             </Text>
           ) : (
             <>
@@ -2753,6 +2910,9 @@ export default function CreateCampaignScreen() {
                     // Seed an empty preview shell so paste ASINs/keywords works
                     // while Amazon recommendations load (avoids stuck wait).
                     if (type === "keywords" || type === "products") {
+                      // Invalidate any in-flight products/keywords preview paint.
+                      previewRequestGenRef.current += 1;
+                      prefTargetingPrefetchRef.current = false;
                       setPreview({
                         source: "amazon_ads",
                         fetchedAt: new Date().toISOString(),
@@ -2777,9 +2937,15 @@ export default function CreateCampaignScreen() {
                         duplicateAuto: null,
                         keywords: [],
                         productTargets: [],
+                        keywordCounts: pendingKeywordCountsShell(),
                       });
-                      if (adsProfileId) previewM.mutate(type);
+                      if (adsProfileId) {
+                        prefTargetingPrefetchRef.current = true;
+                        previewM.mutate(type);
+                      }
                     } else {
+                      previewRequestGenRef.current += 1;
+                      prefTargetingPrefetchRef.current = false;
                       setPreview(null);
                     }
                   }}
@@ -2807,6 +2973,25 @@ export default function CreateCampaignScreen() {
                   }}
                 />
               </View>
+              {/* Kept chrome under Refresh so Amazon · N · Kept stays above-fold
+                  (Your keywords / ASINs paste used to push it under Create paused). */}
+              {preview && targeting !== "auto" ? (
+                <SuggestionAiFilterChrome
+                  testIDPrefix="campaign-create-ai-filter"
+                  targeting={targeting}
+                  stats={preview.keywordCounts}
+                  loading={
+                    previewM.isPending ||
+                    (!preview.recommendationsAvailable && !suggestionsError)
+                  }
+                  retrying={previewM.isPending}
+                  onRetry={() => {
+                    setSuggestionsError(null);
+                    previewM.mutate(undefined);
+                  }}
+                  onAcceptUnfiltered={acceptAmazonUnfiltered}
+                />
+              ) : null}
             </>
           )}
         </ListCard>
@@ -2844,112 +3029,9 @@ export default function CreateCampaignScreen() {
 
             {targeting !== "auto" ? (
               <>
-              {/* Paste first in its own card — nesting under Amazon ListCard
-                  historically half-clipped Broad/Phrase/Exact (Host + overflow). */}
+              {/* Amazon suggestions list first so Kept chips are reachable without
+                  scrolling past a tall paste card under the sticky Create bar. */}
               <CreateReveal delay={80}>
-                {targeting === "keywords" ? (
-                  <ListCard
-                    compact
-                    testID="campaign-create-your-keywords"
-                    style={{ overflow: "visible" }}
-                  >
-                    <Text
-                      style={[
-                        t.typography.callout,
-                        { color: t.colors.text_primary, fontWeight: "600" },
-                      ]}
-                    >
-                      Your keywords
-                    </Text>
-                    <View style={styles.matchTypeRow}>
-                      <IOSSegmentedControl
-                        forceFallback
-                        options={[
-                          { key: "broad", label: "Broad" },
-                          { key: "phrase", label: "Phrase" },
-                          { key: "exact", label: "Exact" },
-                        ]}
-                        value={customKeywordMatch}
-                        onChange={setCustomKeywordMatch}
-                      />
-                    </View>
-                    <TextInput
-                      value={customKeywordText}
-                      onChangeText={setCustomKeywordText}
-                      placeholder="Paste keywords, one per line"
-                      placeholderTextColor={t.colors.text_tertiary}
-                      multiline
-                      autoCorrect={false}
-                      style={[
-                        t.typography.body,
-                        styles.keywordInput,
-                        {
-                          color: t.colors.text_primary,
-                          backgroundColor: t.colors.background_tertiary,
-                          borderColor: t.colors.separator,
-                        },
-                      ]}
-                    />
-                    {customKeywords.length ? (
-                      <Text
-                        style={[
-                          t.typography.caption1,
-                          { color: t.colors.text_secondary, marginTop: 6 },
-                        ]}
-                      >
-                        {customKeywords.length} custom keyword
-                        {customKeywords.length === 1 ? "" : "s"}
-                      </Text>
-                    ) : null}
-                  </ListCard>
-                ) : (
-                  <ListCard
-                    compact
-                    testID="campaign-create-your-asins"
-                    style={{ overflow: "visible" }}
-                  >
-                    <Text
-                      style={[
-                        t.typography.callout,
-                        { color: t.colors.text_primary, fontWeight: "600" },
-                      ]}
-                    >
-                      Your product ASINs
-                    </Text>
-                    <TextInput
-                      value={customAsinText}
-                      onChangeText={setCustomAsinText}
-                      placeholder="B0… one per line"
-                      placeholderTextColor={t.colors.text_tertiary}
-                      multiline
-                      autoCorrect={false}
-                      autoCapitalize="characters"
-                      style={[
-                        t.typography.body,
-                        styles.keywordInput,
-                        {
-                          color: t.colors.text_primary,
-                          backgroundColor: t.colors.background_tertiary,
-                          borderColor: t.colors.separator,
-                        },
-                      ]}
-                    />
-                    {customAsins.length ? (
-                      <Text
-                        style={[
-                          t.typography.caption1,
-                          { color: t.colors.text_secondary, marginTop: 6 },
-                        ]}
-                      >
-                        {customAsins.length} custom ASIN
-                        {customAsins.length === 1 ? "" : "s"}
-                      </Text>
-                    ) : null}
-                  </ListCard>
-                )}
-              </CreateReveal>
-
-              <CreateReveal delay={100}>
               <ListCard compact style={{ overflow: "visible" }}>
                 <Text
                   style={[
@@ -2959,23 +3041,6 @@ export default function CreateCampaignScreen() {
                 >
                   Amazon suggestions
                 </Text>
-                {targeting === "auto" ? null : (
-                  <SuggestionAiFilterChrome
-                    testIDPrefix="campaign-create-ai-filter"
-                    targeting={targeting}
-                    stats={preview.keywordCounts}
-                    loading={
-                      previewM.isPending ||
-                      (!preview.recommendationsAvailable && !suggestionsError)
-                    }
-                    retrying={previewM.isPending}
-                    onRetry={() => {
-                      setSuggestionsError(null);
-                      previewM.mutate(undefined);
-                    }}
-                    onAcceptUnfiltered={acceptAmazonUnfiltered}
-                  />
-                )}
                 {suggestionsError && !preview.recommendationsAvailable && !previewM.isPending ? (
                   <RetryState
                     title="Couldn't load suggestions"
@@ -3725,6 +3790,111 @@ export default function CreateCampaignScreen() {
                 </View>
               </ListCard>
               </CreateReveal>
+
+              {/* Paste in its own card — nesting under Amazon ListCard
+                  historically half-clipped Broad/Phrase/Exact (Host + overflow). */}
+              <CreateReveal delay={100}>
+                {targeting === "keywords" ? (
+                  <ListCard
+                    compact
+                    testID="campaign-create-your-keywords"
+                    style={{ overflow: "visible" }}
+                  >
+                    <Text
+                      style={[
+                        t.typography.callout,
+                        { color: t.colors.text_primary, fontWeight: "600" },
+                      ]}
+                    >
+                      Your keywords
+                    </Text>
+                    <View style={styles.matchTypeRow}>
+                      <IOSSegmentedControl
+                        forceFallback
+                        options={[
+                          { key: "broad", label: "Broad" },
+                          { key: "phrase", label: "Phrase" },
+                          { key: "exact", label: "Exact" },
+                        ]}
+                        value={customKeywordMatch}
+                        onChange={setCustomKeywordMatch}
+                      />
+                    </View>
+                    <TextInput
+                      value={customKeywordText}
+                      onChangeText={setCustomKeywordText}
+                      placeholder="Paste keywords, one per line"
+                      placeholderTextColor={t.colors.text_tertiary}
+                      multiline
+                      autoCorrect={false}
+                      style={[
+                        t.typography.body,
+                        styles.keywordInput,
+                        {
+                          color: t.colors.text_primary,
+                          backgroundColor: t.colors.background_tertiary,
+                          borderColor: t.colors.separator,
+                        },
+                      ]}
+                    />
+                    {customKeywords.length ? (
+                      <Text
+                        style={[
+                          t.typography.caption1,
+                          { color: t.colors.text_secondary, marginTop: 6 },
+                        ]}
+                      >
+                        {customKeywords.length} custom keyword
+                        {customKeywords.length === 1 ? "" : "s"}
+                      </Text>
+                    ) : null}
+                  </ListCard>
+                ) : (
+                  <ListCard
+                    compact
+                    testID="campaign-create-your-asins"
+                    style={{ overflow: "visible" }}
+                  >
+                    <Text
+                      style={[
+                        t.typography.callout,
+                        { color: t.colors.text_primary, fontWeight: "600" },
+                      ]}
+                    >
+                      Your product ASINs
+                    </Text>
+                    <TextInput
+                      value={customAsinText}
+                      onChangeText={setCustomAsinText}
+                      placeholder="B0… one per line"
+                      placeholderTextColor={t.colors.text_tertiary}
+                      multiline
+                      autoCorrect={false}
+                      autoCapitalize="characters"
+                      style={[
+                        t.typography.body,
+                        styles.keywordInput,
+                        {
+                          color: t.colors.text_primary,
+                          backgroundColor: t.colors.background_tertiary,
+                          borderColor: t.colors.separator,
+                        },
+                      ]}
+                    />
+                    {customAsins.length ? (
+                      <Text
+                        style={[
+                          t.typography.caption1,
+                          { color: t.colors.text_secondary, marginTop: 6 },
+                        ]}
+                      >
+                        {customAsins.length} custom ASIN
+                        {customAsins.length === 1 ? "" : "s"}
+                      </Text>
+                    ) : null}
+                  </ListCard>
+                )}
+              </CreateReveal>
               </>
             ) : null}
 
@@ -3852,6 +4022,80 @@ export default function CreateCampaignScreen() {
             </ListCard>
             </CreateReveal>
           </>
+        ) : null}
+
+        {book && (adsProfileId || profileId) ? (
+          <CreateReveal delay={90}>
+          <ListCard compact testID="campaign-create-existing-campaigns">
+            <Text
+              style={[
+                t.typography.headline,
+                { color: t.colors.text_primary },
+              ]}
+            >
+              Active on this marketplace
+            </Text>
+            {existingCampaignsQ.isPending ? (
+              <ScreenSpinner />
+            ) : existingCampaignsQ.isError ? (
+              <RetryState
+                title="Couldn't load campaigns"
+                onRetry={() => void existingCampaignsQ.refetch()}
+                retrying={existingCampaignsQ.isFetching}
+              />
+            ) : existingCampaigns.length ? (
+              <View style={{ gap: 8, marginTop: 10 }}>
+                {existingCampaigns.map((row) => (
+                  <CreateScalePressable
+                    key={row.id}
+                    testID={`campaign-create-existing-${row.id}`}
+                    onPress={() => router.push(`/campaign/${row.id}`)}
+                    style={[
+                      styles.existingCampaignRow,
+                      {
+                        backgroundColor: t.colors.background_tertiary,
+                        borderColor: t.colors.separator,
+                      },
+                    ]}
+                  >
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text
+                        numberOfLines={2}
+                        style={[
+                          t.typography.callout,
+                          {
+                            color: t.colors.text_primary,
+                            fontWeight: "600",
+                          },
+                        ]}
+                      >
+                        {row.name}
+                      </Text>
+                      <Text
+                        style={[
+                          t.typography.caption1,
+                          { color: t.colors.text_secondary },
+                        ]}
+                      >
+                        {row.label}
+                      </Text>
+                    </View>
+                    <Pill label="Active" tone="good" size="sm" />
+                  </CreateScalePressable>
+                ))}
+              </View>
+            ) : (
+              <Text
+                style={[
+                  t.typography.footnote,
+                  { color: t.colors.text_tertiary, marginTop: 8 },
+                ]}
+              >
+                None yet.
+              </Text>
+            )}
+          </ListCard>
+          </CreateReveal>
         ) : null}
         </ScrollView>
 

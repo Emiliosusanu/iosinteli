@@ -17,13 +17,12 @@ import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import { useRouter, type Href } from "expo-router";
 import { useApp } from "../contexts/AppContext";
 import { dashboard, density, layout, useTheme } from "../lib/theme";
-import { formatDateRangeLabel, rangePresets } from "../lib/format";
+import { formatDateRangeLabel, rangePresets, shortDateRangeContextLabel } from "../lib/format";
 import { DateRange } from "../lib/types";
 import { IOSDateField, SFSymbol, sfFromIonicon } from "./ios/Native";
 import { GlassPanel } from "./GlassPanel";
 import { MarketPill } from "./MarketPill";
 import { PressableScale } from "./Motion";
-import { ProfileCoverStrip } from "./ProfileCoverStrip";
 import {
   NEST_DISABLED_VIEW_MESSAGE,
   NEST_DISABLED_VIEW_TITLE,
@@ -76,21 +75,25 @@ function DatePresetList({
       {presets.map((preset) => {
         const selected = preset.range.start === dateRange.start && preset.range.end === dateRange.end;
         return (
-          <TouchableOpacity
+          <Pressable
             key={preset.key}
             testID={`date-preset-${preset.key}`}
-            style={[styles.profileRow, { borderBottomColor: t.colors.separator }]}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={`${preset.range.label}, ${preset.range.start} to ${preset.range.end}`}
+            style={[styles.profileRow, { borderBottomColor: t.colors.separator, minHeight: layout.minTap }]}
             onPress={() => onPick(preset.range)}
-            activeOpacity={0.6}
           >
-            <View style={{ flex: 1 }}>
+            <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{preset.range.label}</Text>
               <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                {preset.range.start} {"->"} {preset.range.end}
+                {preset.range.start} – {preset.range.end}
               </Text>
             </View>
-            {selected ? <SFSymbol name="checkmark" size={16} color={t.colors.tone_primary} /> : null}
-          </TouchableOpacity>
+            {selected ? (
+              <SFSymbol name="checkmark" size={16} color={t.colors.tone_primary} />
+            ) : null}
+          </Pressable>
         );
       })}
       <View style={[styles.profileRow, { borderBottomWidth: 0, flexDirection: "column", alignItems: "stretch", gap: 8 }]}>
@@ -167,19 +170,37 @@ function HeaderPill({
         <View
           style={[
             styles.iconBubble,
-            {
-              backgroundColor: t.colors.tone_primary + "14",
-              borderColor: t.colors.tone_primary + "2E",
-            },
+            caption
+              ? {
+                  backgroundColor: t.colors.tone_primary + "14",
+                  borderColor: t.colors.tone_primary + "2E",
+                }
+              : {
+                  backgroundColor: "transparent",
+                  borderColor: "transparent",
+                },
           ]}
         >
-          <SFSymbol name={icon} size={15} color={t.colors.tone_primary} />
+          <SFSymbol
+            name={icon}
+            size={caption ? 15 : 14}
+            color={caption ? t.colors.tone_primary : t.colors.text_secondary}
+          />
         </View>
         <View style={styles.pillLabel}>
-          <Text style={[styles.pillCaption, { color: t.colors.text_tertiary }]} numberOfLines={1}>
-            {caption}
-          </Text>
-          <Text style={[styles.pillValue, { color: t.colors.text_primary }]} numberOfLines={1}>
+          {caption ? (
+            <Text style={[styles.pillCaption, { color: t.colors.text_tertiary }]} numberOfLines={1}>
+              {caption}
+            </Text>
+          ) : null}
+          <Text
+            style={[
+              styles.pillValue,
+              { color: t.colors.text_primary },
+              !caption ? { fontSize: 13, lineHeight: 16, marginTop: 0 } : null,
+            ]}
+            numberOfLines={1}
+          >
             {value}
           </Text>
         </View>
@@ -205,7 +226,8 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
     { key: "last90", range: presets.last90 },
     { key: "allTime", range: presets.allTime },
   ];
-  const dateLabel = formatDateRangeLabel(dateRange);
+  const dateLabel = shortDateRangeContextLabel(dateRange);
+  const dateDetailLabel = formatDateRangeLabel(dateRange);
   const [customStart, setCustomStart] = useState(dateRange.start);
   const [customEnd, setCustomEnd] = useState(dateRange.end);
 
@@ -221,12 +243,12 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
       <HeaderPill
         testID="date-range-btn"
         icon="calendar"
-        caption="Period"
+        caption=""
         value={dateLabel}
         onPress={() => setDateOpen(true)}
-        accessibilityLabel={`Date range: ${dateLabel}`}
+        accessibilityLabel={`Date range: ${dateLabel}. ${dateDetailLabel}`}
         fullWidth={fullWidth}
-        maxWidth={220}
+        maxWidth={168}
       />
 
       <Modal
@@ -458,12 +480,6 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                 >
                   {viewStatusLabel(selected)}
                 </Text>
-                <ProfileCoverStrip
-                  profile={p}
-                  filterUserId={adminFilterUserId}
-                  enabled={profileOpen}
-                  testID={`profile-covers-${p.profile_id}`}
-                />
               </View>
               <Switch
                 value={selected}

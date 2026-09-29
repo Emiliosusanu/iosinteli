@@ -17,6 +17,10 @@ import {
   activatedAdsProfileIds,
   countFreshCompletedProfiles,
   digestCoverageLine,
+  digestFetchGroupsForMoney,
+  digestMoneyAdsProfileIds,
+  digestNativeCurrencyFetchGroups,
+  nestMoneyHiddenForDigest,
   groupActivatedProfilesByCurrency,
 } from "../src/lib/notificationAuthority.ts";
 
@@ -225,4 +229,46 @@ test("activated digest groups keep USD and CAD in separate buckets", () => {
   assert.deepEqual(groups.map((group) => group.currency), ["USD", "CAD"]);
   assert.equal(groups[0].profiles[0].id, "us");
   assert.equal(groups[1].profiles[0].id, "ca");
+});
+
+test("digest money scope is Overview selection ∩ activated; empty selection → all activated", () => {
+  const profiles = [
+    { id: "us", profile_id: "ads-us", is_enabled: true, currency_code: "USD" },
+    { id: "ca", profile_id: "ads-ca", is_enabled: true, currency_code: "CAD" },
+    { id: "off", profile_id: "ads-off", is_enabled: false, currency_code: "GBP" },
+  ];
+  assert.deepEqual(digestMoneyAdsProfileIds(["us"], profiles).sort(), ["ads-us"]);
+  assert.deepEqual(
+    digestMoneyAdsProfileIds(["us", "ca"], profiles).sort(),
+    ["ads-ca", "ads-us"].sort(),
+  );
+  // Disabled selected id must not enter digests.
+  assert.deepEqual(digestMoneyAdsProfileIds(["off"], profiles).sort(), ["ads-ca", "ads-us"].sort());
+  assert.deepEqual(digestMoneyAdsProfileIds([], profiles).sort(), ["ads-ca", "ads-us"].sort());
+});
+
+test("multi-market USD digest uses one FX Nest group; native CAD stays per-currency", () => {
+  const profiles = [
+    { id: "us", profile_id: "ads-us", is_enabled: true, currency_code: "USD" },
+    { id: "ca", profile_id: "ads-ca", is_enabled: true, currency_code: "CAD" },
+  ];
+  const money = ["ads-us", "ads-ca"];
+  const usd = digestFetchGroupsForMoney(profiles, money, "USD");
+  assert.equal(usd.length, 1);
+  assert.equal(usd[0].currency, "USD");
+  assert.deepEqual(usd[0].adsIds.sort(), money.sort());
+
+  const cadOnly = digestFetchGroupsForMoney(profiles, ["ads-ca"], "CAD");
+  assert.equal(cadOnly.length, 1);
+  assert.equal(cadOnly[0].currency, "CAD");
+  assert.deepEqual(cadOnly[0].adsIds, ["ads-ca"]);
+
+  // Display CAD with both markets still splits by native currency (no FX into CAD here).
+  const cadDisplay = digestFetchGroupsForMoney(profiles, money, "CAD");
+  assert.deepEqual(cadDisplay.map((g) => g.currency).sort(), ["CAD", "USD"]);
+
+  const native = digestNativeCurrencyFetchGroups(profiles, money);
+  assert.deepEqual(native.map((g) => g.currency).sort(), ["CAD", "USD"]);
+  assert.equal(nestMoneyHiddenForDigest({ scope: { mixedCurrency: true, currency: null } }), true);
+  assert.equal(nestMoneyHiddenForDigest({ scope: { mixedCurrency: true, currency: "USD" } }), false);
 });

@@ -5,9 +5,12 @@ import { readFileSync } from "node:fs";
 const notifications = readFileSync(new URL("../src/lib/notifications.ts", import.meta.url), "utf8");
 const digest = readFileSync(new URL("../src/lib/notificationDigest.ts", import.meta.url), "utf8");
 
-test("runAlertCheck uses activated per-currency authority and honest totals", () => {
+test("runAlertCheck uses Overview∩activated money scope + FX USD rollup and honest totals", () => {
+  assert.match(notifications, /digestMoneyAdsProfileIds/);
+  assert.match(notifications, /digestFetchGroupsForMoney/);
+  assert.match(notifications, /nestMoneyHiddenForDigest/);
+  assert.match(notifications, /digestNativeCurrencyFetchGroups/);
   assert.match(notifications, /activatedAdsProfileIds/);
-  assert.match(notifications, /groupActivatedProfilesByCurrency/);
   assert.match(notifications, /honestTotalsFromDayPoint/);
   assert.match(notifications, /formatDigestBody/);
   assert.match(notifications, /countFreshCompletedProfiles/);
@@ -15,10 +18,14 @@ test("runAlertCheck uses activated per-currency authority and honest totals", ()
   assert.match(notifications, /fetchMobileOverview/);
   // Soft fallback keeps Overview selection helpers — never all profiles.
   assert.match(notifications, /adsProfileIdsForSelection/);
+  // Per-currency-only grouping (no FX) must not drive digests anymore.
+  assert.doesNotMatch(notifications, /groupActivatedProfilesByCurrency/);
   assert.doesNotMatch(
     notifications,
     /queryIds = uniqueProfileIds\(profiles\.map\(\(p\) => p\.profile_id \|\| p\.id\)\)/,
   );
+  // Empty profile catalog must abort — no mixed-id Nest frankensum.
+  assert.match(notifications, /if \(!profiles\.length\) return 0/);
 });
 
 test("notifications never coerce snapshot spend with Number(x) || 0", () => {

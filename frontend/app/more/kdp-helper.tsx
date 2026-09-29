@@ -85,7 +85,7 @@ export default function KdpHelperScreen() {
             subtitle={
               captured.length
                 ? undefined
-                : "Open royalties, orders, and KENP once after sign-in"
+                : "Open royalties once after sign-in"
             }
             last={!status.lastMessage && !status.lastError}
           />

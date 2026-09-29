@@ -156,6 +156,7 @@ import {
 } from "@/src/lib/homePeriod";
 import {
   ADS_ENGINE_FUNNEL_TIMEOUT_MS,
+  CAMPAIGNS_LIST_TIMEOUT_MS,
   HOME_QUERY_TIMEOUT_MS,
   TARGETING_QUERY_TIMEOUT_MS,
   homeWidgetStatus,
@@ -783,6 +784,8 @@ export default function OverviewScreen() {
   });
 
   // Warm the Campaigns tab list so Overview → Campaigns is cache-first (same scope key).
+  // Must use CAMPAIGNS_LIST_TIMEOUT_MS — Home's 20s default aborts the shared key and
+  // Campaigns then inherits the failed/aborted fetch instead of its 60s budget.
   useEffect(() => {
     if (!sellerSecondary || scopeProfiles.length === 0) return;
     if (!topCampaignsQ.isSuccess) return;
@@ -797,6 +800,7 @@ export default function OverviewScreen() {
             limit: 0,
             filterUserId: adminFilterUserId,
           }),
+          CAMPAIGNS_LIST_TIMEOUT_MS,
         ),
       ...LIST_PERIOD_QUERY_CACHE,
     });
@@ -1254,10 +1258,10 @@ export default function OverviewScreen() {
   type ChartDayFinance = {
     date: string;
     label: string;
-    net: number;
+    net: number | null;
     royalties: number | null;
-    spend: number;
-    sales: number;
+    spend: number | null;
+    sales: number | null;
   };
   const [chartDay, setChartDay] = useState<ChartDayFinance | null>(null);
   const [chartIndex, setChartIndex] = useState<number | null>(null);
@@ -1307,6 +1311,7 @@ export default function OverviewScreen() {
     setChartIndex(null);
   }, []);
 
+  // Day scrub: never coerce missing → 0 and never latch period totals onto a day.
   const handleChartDaySelect = useCallback((selection: ChartDaySelection) => {
     if (!selection) {
       clearChartSelection();
@@ -1316,13 +1321,15 @@ export default function OverviewScreen() {
     const royalties =
       selection.royalties != null && Number.isFinite(selection.royalties)
         ? selection.royalties
-        : paintedFinanceRef.current.royalties ?? 0;
-    const spend = Number.isFinite(selection.spend) ? selection.spend : paintedFinanceRef.current.spend ?? 0;
-    const sales = Number.isFinite(selection.sales) ? selection.sales : paintedFinanceRef.current.sales ?? 0;
+        : null;
+    const spend =
+      selection.spend != null && Number.isFinite(selection.spend) ? selection.spend : null;
+    const sales =
+      selection.sales != null && Number.isFinite(selection.sales) ? selection.sales : null;
     const net =
-      Number.isFinite(selection.net)
+      selection.net != null && Number.isFinite(selection.net)
         ? selection.net
-        : netRoyalties({ kdpRoyalties: royalties, adsSpend: spend }) ?? paintedFinanceRef.current.net ?? 0;
+        : netRoyalties({ kdpRoyalties: royalties, adsSpend: spend });
     setChartDay({
       date: selection.date ?? "",
       label: selection.label ?? "Selected day",
@@ -1785,9 +1792,11 @@ export default function OverviewScreen() {
       ? t.colors.tone_good
       : t.colors.tone_danger;
   const profitColor = !netKnown ? t.colors.text_tertiary : profitAccentColor;
-  // ACoS needs sales > 0 — never paint 0% from safeDivide(spend, 0).
+  // ACoS needs sales > 0 — never paint 0% from safeDivide(spend, 0) or missing scrub spend.
   const heroAcos = scrubbing
-    ? chartDay.sales > 0
+    ? chartDay.spend != null &&
+      chartDay.sales != null &&
+      chartDay.sales > 0
       ? safeDivide(chartDay.spend, chartDay.sales) * 100
       : null
     : spendKnown && (heroSales ?? 0) > 0

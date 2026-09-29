@@ -572,6 +572,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             },
             refetchType: "active",
           });
+          // Prefetch Create catalog while Overview is open so Create doesn't cold-start Nest.
+          void import("../lib/backgroundFinancialSync").then(({ warmCampaignCreationBooksCache }) =>
+            warmCampaignCreationBooksCache(),
+          );
         })();
       }
     });

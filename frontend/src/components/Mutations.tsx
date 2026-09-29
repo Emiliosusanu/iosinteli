@@ -216,12 +216,8 @@ export function EntityStateSwitch({
         testID={testID}
         value={shown}
         disabled={locked}
-        accessibilityLabel={`${noun} is ${shown ? "active" : "paused"}${busy ? ". Updating" : ""}`}
-        accessibilityHint={
-          viewAsOtherUser
-            ? "Amazon writes are blocked while viewing as a customer."
-            : "Changing this writes Amazon Ads."
-        }
+        accessibilityLabel={`${noun} ${shown ? "active" : "paused"}${busy ? ", updating" : ""}`}
+        accessibilityHint={viewAsOtherUser ? "Edits blocked in view-as mode." : undefined}
         accessibilityState={{ disabled: locked, checked: shown, busy }}
         onValueChange={(next) => {
           if (!next && confirmPause) {
@@ -474,12 +470,8 @@ export function MutationTap({
     <TouchableOpacity
       testID={testID}
       accessibilityRole="button"
-      accessibilityLabel={`${label} ${value}${locked ? ". On cooldown" : ""}. Edit ${label.toLowerCase()}.`}
-      accessibilityHint={
-        locked
-          ? "Shows cooldown details. You can still edit and reset the cooldown."
-          : "Opens the editor. Saving writes Amazon Ads."
-      }
+      accessibilityLabel={`${label} ${value}${locked ? ", cooldown" : ""}`}
+      accessibilityHint={locked ? "Edit anyway available." : undefined}
       onPress={openEditor}
       activeOpacity={0.75}
       style={[
@@ -498,7 +490,8 @@ export function MutationTap({
       <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
         {compact ? (
           <Text style={[t.typography.caption2, { color: locked ? t.colors.tone_warning : t.colors.text_tertiary }]}>
-            {locked ? `Cooldown · ${info?.sourceTag ?? "Unknown"}` : label}
+            {/* Keep "Bid" — full "Cooldown · …" belongs in the meta row so titles aren't crushed to "Tit…". */}
+            {label}
           </Text>
         ) : null}
         <Text

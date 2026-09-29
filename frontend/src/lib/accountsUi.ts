@@ -52,28 +52,31 @@ const MARKET_COUNTRY_RANK: Record<string, number> = {
   UK: 2,
 };
 
-/** Short labels for the Overview top market pill (not full country names). */
+/**
+ * Compact ISO-style labels for the market pill.
+ * Full names (Canada, Germany, …) truncate on narrow TopBar rows — keep codes.
+ */
 const MARKET_PILL_SHORT: Record<string, string> = {
   US: "US",
-  CA: "Canada",
+  CA: "CA",
   UK: "UK",
   GB: "UK",
-  DE: "Germany",
-  FR: "France",
-  IT: "Italy",
-  ES: "Spain",
-  AU: "Australia",
-  JP: "Japan",
-  MX: "Mexico",
-  IN: "India",
-  NL: "Netherlands",
-  SE: "Sweden",
-  PL: "Poland",
-  BE: "Belgium",
-  TR: "Turkey",
-  SG: "Singapore",
-  BR: "Brazil",
-  AE: "UAE",
+  DE: "DE",
+  FR: "FR",
+  IT: "IT",
+  ES: "ES",
+  AU: "AU",
+  JP: "JP",
+  MX: "MX",
+  IN: "IN",
+  NL: "NL",
+  SE: "SE",
+  PL: "PL",
+  BE: "BE",
+  TR: "TR",
+  SG: "SG",
+  BR: "BR",
+  AE: "AE",
 };
 
 /** Normalize + unique-sort ISO country codes (UK/GB kept distinct until label). */
@@ -131,7 +134,7 @@ export function marketPillCountryLabel(countryCode: string): string {
 }
 
 /**
- * Overview top market pill copy — e.g. US+CA+USD → `US + Canada • USD`.
+ * Overview top market pill copy — e.g. US+CA+USD → `US + CA • USD`.
  * Currency-only when no countries; empty when both missing.
  */
 export function formatMarketPillLabel(

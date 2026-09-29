@@ -54,7 +54,7 @@ import {
 import { EmptyState, RetryState, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard } from "@/src/components/Primitives";
 import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
-import { withQueryTimeout } from "@/src/lib/queryTimeout";
+import { CAMPAIGNS_LIST_TIMEOUT_MS, isHomeQueryTimeout, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import { loadCampaignsFilterMemory, normalizeBookAsinList, saveCampaignsFilterMemory } from "@/src/lib/filterMemory";
@@ -212,6 +212,7 @@ export default function CampaignsScreen() {
     data: campaigns = [],
     isPending,
     isError,
+    error: campaignsError,
     isRefetching,
     isFetching,
     isPlaceholderData,
@@ -227,7 +228,7 @@ export default function CampaignsScreen() {
           limit: 0,
           filterUserId: adminFilterUserId,
         }),
-        undefined,
+        CAMPAIGNS_LIST_TIMEOUT_MS,
         signal,
       ),
     enabled: scopeProfiles.length > 0,
@@ -241,7 +242,12 @@ export default function CampaignsScreen() {
   const listUpdating = (isFetching || !!isPlaceholderData) && campaigns.length > 0 && !isError;
   const booksQ = useQuery({
     queryKey: ["campaign-filter-books", adminFilterUserId ?? "self", scopeProfiles],
-    queryFn: () => fetchTargetingBookOptions(scopeProfiles, { filterUserId: adminFilterUserId }),
+    queryFn: ({ signal }) =>
+      withQueryTimeout(
+        fetchTargetingBookOptions(scopeProfiles, { filterUserId: adminFilterUserId }),
+        TARGETING_BOOK_OPTIONS_TIMEOUT_MS,
+        signal,
+      ),
     enabled: scopeProfiles.length > 0 && (filterOpen || bookAsins.length > 0),
     staleTime: 60_000,
   });
@@ -474,7 +480,11 @@ export default function CampaignsScreen() {
       ) : isError && campaigns.length === 0 ? (
         <RetryState
           title="Couldn't load campaigns"
-          subtitle="Check your connection and try again."
+          subtitle={
+            isHomeQueryTimeout(campaignsError)
+              ? "This period is taking longer than usual. Try again or shorten the date range."
+              : "Check your connection and try again."
+          }
           onRetry={() => void refetch()}
           retrying={isRefetching}
         />

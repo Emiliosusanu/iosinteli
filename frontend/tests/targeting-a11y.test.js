@@ -23,12 +23,12 @@ test("spoken match types stay human and do not invent metrics", () => {
   assert.equal(enabledSpoken(false), "Paused");
   assert.equal(enabledSpoken(null), null);
   assert.equal(
-    targetingSpeech(["Japanese", "Broad keyword", "Spending without sales", "Enabled", "ACoS 42%", "Spend $18.00"]),
-    "Japanese. Broad keyword. Spending without sales. Enabled. ACoS 42%. Spend $18.00",
+    targetingSpeech(["Japanese", "Broad keyword", "No sales", "Enabled", "ACoS 42%"]),
+    "Japanese. Broad keyword. No sales. Enabled. ACoS 42%",
   );
 });
 
-test("Targets rows combine identity without swallowing the pause switch", () => {
+test("Targets rows keep left enable switch outside the title press target", () => {
   assert.match(targeting, /accessibilityHint=\{selectMode \? "Toggles bulk selection" : "Opens keyword details"\}/);
   assert.match(targeting, /accessibilityHint=\{selectMode \? "Toggles bulk selection" : "Opens target details"\}/);
   assert.match(targeting, /accessibilityHint=\{selectMode \? "Toggles bulk selection" : "Opens campaign details"\}/);
@@ -38,7 +38,12 @@ test("Targets rows combine identity without swallowing the pause switch", () => 
   assert.match(targeting, /accessibilityHint="Closes filters and sort"/);
   assert.match(targeting, /styles\.leadRow/);
   assert.match(targeting, /styles\.switchWell/);
+  assert.match(targeting, /<EntityStateSwitch/);
   assert.match(targeting, /<ResponderBox>/);
+  assert.match(targeting, /DenseMetricLine/);
+  assert.doesNotMatch(targeting, /enableFooter/);
+  assert.doesNotMatch(targeting, /TargetPrimaryMetrics/);
+  // Switch sits in switchWell before the title press target.
   assert.ok(targeting.indexOf("styles.switchWell") < targeting.indexOf("Opens keyword details"));
   assert.match(targeting, /coverAsin/);
   assert.match(targeting, /book_image_url/);
@@ -67,7 +72,6 @@ test("mutation-sensitive details keep identity grouped and switches independent"
 test("shared decorative tone and bid tap stay labeled without swallowing siblings", () => {
   assert.match(primitives, /export function ToneDot/);
   assert.match(primitives, /accessibilityElementsHidden/);
-  assert.match(mutations, /\$\{label\} \$\{value\}\$\{locked \? "\. On cooldown" : ""\}\. Edit \$\{label\.toLowerCase\(\)\}\./);
-  assert.match(mutations, /\$\{noun\} is \$\{shown \? "active" : "paused"\}/);
-  assert.match(mutations, /Changing this writes Amazon Ads\./);
+  assert.match(mutations, /\$\{label\} \$\{value\}\$\{locked \? ", cooldown" : ""\}/);
+  assert.match(mutations, /\$\{noun\} \$\{shown \? "active" : "paused"\}/);
 });

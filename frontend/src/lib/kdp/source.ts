@@ -41,15 +41,15 @@ export function kdpRoyaltySourceValueLabel(source: KdpRoyaltySource): string {
 /** Title for the option row inside the picker. */
 export function kdpRoyaltySourceOptionTitle(source: KdpRoyaltySource): string {
   return source === "extension_ios"
-    ? "Chrome extension and iPhone"
-    : "Chrome extension only";
+    ? "Chrome + iPhone"
+    : "Chrome only";
 }
 
 /** One-line description for the option row inside the picker. */
 export function kdpRoyaltySourceOptionSubtitle(source: KdpRoyaltySource): string {
   return source === "extension_ios"
-    ? "Chrome + this iPhone import royalties"
-    : "Chrome helper only";
+    ? "Imports on Chrome and this iPhone"
+    : "Imports on Chrome only";
 }
 
 export function isIosHelperEnabled(source: KdpRoyaltySource): boolean {

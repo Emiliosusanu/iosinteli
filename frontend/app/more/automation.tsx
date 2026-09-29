@@ -133,7 +133,7 @@ export default function AutomationScreen() {
           <EmptyState
             icon="options-outline"
             title="No rules yet"
-            subtitle="Create a rule to change bids or budgets automatically. New rules start disabled."
+            subtitle="Rules start off until you enable them."
             action={{ label: "New rule", onPress: onNewRule }}
           />
         ) : (

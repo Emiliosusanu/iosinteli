@@ -29,10 +29,11 @@ test("multi-profile lists use fair per-profile quota so one profile cannot hide 
   assert.match(queries, /fairSlice|fair per-profile|per-profile/);
   assert.match(queries, /Math\.max\(80, Math\.ceil\(opts\.limit \/ profileIds\.length\)\)/);
   assert.match(queries, /fairSlice/);
-  // Targets uses server-ranked pages (not a silent 500-row cap).
+  // Targets uses server-ranked full catalog (not a silent 500-row cap).
   assert.match(targeting, /fetchMobileTargetingPage/);
-  assert.match(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
-  assert.match(targeting, /TargetingPagination/);
+  assert.match(targeting, /fetchMobileTargetingCatalogTail/);
+  assert.match(targeting, /of \$\{serverTotal\} loaded/);
+  assert.doesNotMatch(targeting, /TargetingPagination/);
   assert.match(campaigns, /campaigns-list-range-v3/);
   assert.match(campaigns, /limit: 0/);
   assert.doesNotMatch(campaigns, /Showing 500 \(app limit\)/);
@@ -135,7 +136,7 @@ test("targeting placement uses honest Nest-first data and visible segment chips"
   assert.match(targeting, /formatOptionalPercent\(item\.placement_share/);
   assert.match(targeting, /listUpdating/);
   assert.match(targeting, /targeting-list-count/);
-  assert.match(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
+  assert.match(targeting, /of \$\{serverTotal\} loaded|\$\{serverTotal\} rows/);
   assert.match(dashboardApi + placementMetrics, /placement_top_share: null/);
   assert.match(placementMetrics, /function emptyCampaignPlacementShares/);
   assert.doesNotMatch(
@@ -187,27 +188,23 @@ test("targeting persists advanced ranges; ASIN rows still KDP-enrich when list s
   assert.match(queries, /When skipKdp, only fill rows that are product ASINs/);
 });
 
-test("Targets all segments use mobile_targeting_page_v1 numbered pages with snapshot/PT409", () => {
+test("Targets all segments use mobile_targeting_page_v1 full catalog with snapshot/PT409", () => {
   assert.match(targeting, /fetchMobileTargetingPage/);
+  assert.match(targeting, /fetchMobileTargetingCatalogTail/);
   assert.match(targeting, /mobile-targeting-page-v1/);
-  assert.match(targeting, /TargetingPagination/);
-  assert.match(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
   assert.match(targeting, /pageSnapshot/);
   assert.match(targeting, /isMobileTargetingSnapshotChanged/);
-  assert.match(targeting, /pageSnapshotScope/);
-  assert.match(targeting, /pageSnapshotScope === pageScopeKey/);
-  assert.match(targeting, /snapshot: pageNumber > 1 && pageSnapshotIsCurrent \? pageSnapshot : null/);
-  assert.match(targeting, /!isMobileTargetingSnapshotChanged\(error\) && failureCount < 1/);
+  assert.match(queries, /snapshot: head\.snapshot/);
   assert.match(targeting, /segment === "placement"/);
+  assert.doesNotMatch(targeting, /TargetingPagination/);
   assert.doesNotMatch(targeting, /useServerPages/);
 });
 
-test("Targets chrome collapses on scroll; page numbers only in list footer", () => {
+test("Targets chrome collapses on scroll; honest catalog count in list footer", () => {
   assert.match(targeting, /topChromeVisible/);
   assert.match(targeting, /onScroll=\{onListScroll\}/);
   assert.match(targeting, /scrollEventThrottle=\{16\}/);
-  const paginationHits = targeting.match(/<TargetingPagination\b/g) ?? [];
-  assert.equal(paginationHits.length, 1);
+  assert.doesNotMatch(targeting, /<TargetingPagination\b/);
   assert.match(targeting, /ListFooterComponent=\{/);
   assert.match(targeting, /testID="targeting-list-count-footer"/);
   assert.doesNotMatch(targeting, /testID="targeting-list-count"/);
@@ -229,6 +226,8 @@ test("placement book filter matches Nest campaigns via bookCampaignIds (not only
   assert.match(targeting, /Nest aggregated campaigns often omit book_asin/);
   assert.match(targeting, /bookCampaignIds\.has\(campaignId\)/);
   assert.match(targeting, /campaignIds: bookCampaignIdList/);
+  // Never send empty campaignIds:[] (RPC may treat as unscoped / all campaigns).
+  assert.match(targeting, /booksQ\.isSuccess && bookCampaignIdList\.length > 0/);
 });
 
 test("campaigns clear-sort chip restores ACoS default, not ROAS/top", () => {
@@ -267,9 +266,9 @@ test("bulk and filter UI never imply Amazon-confirmed or fake empty from bid ran
   assert.match(targeting, /\$\{cooldown\.count\} on cooldown/);
   assert.match(targeting, /\$\{cooldownSelected\.count\} cooldown/);
   assert.match(targeting, /\{cooldownSelected\.count\} on cooldown/);
-  assert.match(targeting, /Page \$\{pageNumber\} of \$\{totalPages\}/);
-  assert.match(targeting, /TargetingPagination/);
-  assert.match(targeting, /prefer page total over client 500-cap/);
+  assert.match(targeting, /of \$\{serverTotal\} loaded|\$\{serverTotal\} rows/);
+  assert.doesNotMatch(targeting, /TargetingPagination/);
+  assert.match(targeting, /never invent a 500-cap story/);
   assert.match(queries, /Not an Amazon write limit/);
   const mutations = readFileSync(new URL("../src/components/Mutations.tsx", import.meta.url), "utf8");
   assert.match(mutations, /Queues a write to Amazon Ads — not confirmed until Amazon accepts/);

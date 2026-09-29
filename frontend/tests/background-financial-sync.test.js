@@ -32,6 +32,20 @@ test("dual-source background refresh is wired to notifications and resume", () =
   assert.match(notifications, /resolveBackgroundScope/);
   assert.match(appContext, /runDualSourceBackgroundRefresh/);
   assert.match(appContext, /backgroundFinancialQueryRoots/);
+  // Resume must also bust list-tab + Create caches (not only Overview KPIs).
+  assert.match(background, /campaigns-list-range-v3/);
+  assert.match(background, /mobile-targeting-page-v1/);
+  assert.match(background, /campaign-creation-books/);
+  assert.match(background, /targeting-book-options-v2/);
+  assert.match(background, /warmCampaignCreationBooksCache/);
+  // _layout foreground path must share the same root list (no divergent omit).
+  const layout = readFileSync(new URL("../app/_layout.tsx", import.meta.url), "utf8");
+  assert.match(layout, /backgroundFinancialQueryRoots/);
+  assert.match(layout, /FinancialForegroundRefetch/);
+  const create = readFileSync(new URL("../app/campaign/create.tsx", import.meta.url), "utf8");
+  assert.match(create, /CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS/);
+  assert.match(create, /isHomeQueryTimeout\(error\)/);
+  assert.match(appContext, /warmCampaignCreationBooksCache/);
 });
 
 test("supabase bearer always retries once after refresh on 401", () => {

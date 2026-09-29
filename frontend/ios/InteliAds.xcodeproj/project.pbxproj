@@ -2199,7 +2199,7 @@
 				CODE_SIGN_ENTITLEMENTS = InteliAds/InteliAds.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 295;
+				CURRENT_PROJECT_VERSION = 329;
 				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -2238,7 +2238,7 @@
 				CODE_SIGN_ENTITLEMENTS = InteliAds/InteliAdsRelease.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 295;
+				CURRENT_PROJECT_VERSION = 329;
 				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
 				INFOPLIST_FILE = InteliAds/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
@@ -2317,7 +2317,7 @@
 				LIBRARY_SEARCH_PATHS = "$(SDKROOT)/usr/lib/swift\"$(inherited)\"";
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
-				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
+				REACT_NATIVE_PATH = "${PODS_ROOT}/../../../../iosapp-inteli/frontend/node_modules/react-native";
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
 				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
@@ -2372,7 +2372,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = "$(SDKROOT)/usr/lib/swift\"$(inherited)\"";
 				MTL_ENABLE_DEBUG_INFO = NO;
-				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
+				REACT_NATIVE_PATH = "${PODS_ROOT}/../../../../iosapp-inteli/frontend/node_modules/react-native";
 				SDKROOT = iphoneos;
 				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
 				USE_HERMES = true;
