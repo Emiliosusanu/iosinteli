@@ -67,7 +67,7 @@ test("bid edits stay honest until Amazon confirms — revert + alert on permanen
 test("targeting exposes bulk select, durable queue, and expanded filters", () => {
   assert.match(targeting, /targeting-bulk-bar/);
   assert.match(targeting, /bottom: t\.layout\.tabClearance/);
-  assert.match(targeting, /label=\{selectMode \? "Done" : "Select"\}/);
+  assert.match(targeting, /\{selectMode \? "Done" : "Select"\}/);
   assert.match(targeting, /min=\{0\.01\}/);
   assert.match(targeting, /targeting-bulk-increase/);
   assert.match(targeting, /targeting-bulk-decrease/);

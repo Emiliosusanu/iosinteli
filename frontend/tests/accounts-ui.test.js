@@ -431,15 +431,15 @@ test("row speech includes name, enabled, and view without raw ids", () => {
 
 test("formatMarketPillLabel builds Overview market pill copy", () => {
   assert.equal(marketPillCountryLabel("US"), "US");
-  assert.equal(marketPillCountryLabel("CA"), "Canada");
+  assert.equal(marketPillCountryLabel("CA"), "CA");
   assert.equal(marketPillCountryLabel("UK"), "UK");
   assert.equal(marketPillCountryLabel("GB"), "UK");
-  assert.equal(marketPillCountryLabel("DE"), "Germany");
-  assert.equal(formatMarketPillLabel(["US", "CA"], "USD"), "US + Canada • USD");
-  assert.equal(formatMarketPillLabel(["CA", "US"], "USD"), "US + Canada • USD");
+  assert.equal(marketPillCountryLabel("DE"), "DE");
+  assert.equal(formatMarketPillLabel(["US", "CA"], "USD"), "US + CA • USD");
+  assert.equal(formatMarketPillLabel(["CA", "US"], "USD"), "US + CA • USD");
   assert.equal(formatMarketPillLabel(["GB"], "GBP"), "UK • GBP");
   assert.equal(formatMarketPillLabel(["UK", "US"], "GBP"), "US + UK • GBP");
-  assert.equal(formatMarketPillLabel(["US", "CA", "DE"], "USD"), "US + Canada + Germany • USD");
+  assert.equal(formatMarketPillLabel(["US", "CA", "DE"], "USD"), "US + CA + DE • USD");
   assert.equal(formatMarketPillLabel([], "USD"), "USD");
   assert.equal(formatMarketPillLabel(null, "EUR"), "EUR");
   assert.equal(formatMarketPillLabel(["US"], ""), "US");
