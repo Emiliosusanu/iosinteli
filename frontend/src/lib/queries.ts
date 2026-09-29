@@ -379,32 +379,12 @@ export async function fetchMobileTargetingCatalogTail(input: {
     byPage.set(page, result.rows);
   });
 
-  let ordered = pageNumbers.flatMap((page) => byPage.get(page) ?? []);
-  if (!ordered.length) return [];
-
-  try {
-    if (input.segment === "asins" || input.segment === "auto" || input.segment === "category") {
-      ordered = await withQueryTimeout(
-        enrichProductTargetDisplay(ordered as ProductTarget[], input.profiles, {
-          skipKdp: false,
-          skipRetail: true,
-        }),
-        TARGETING_PAGE_DISPLAY_ENRICH_MS,
-        input.signal,
-      );
-    } else if (input.segment === "placement") {
-      ordered = await withQueryTimeout(
-        enrichPlacementPageBookCovers(ordered as Record<string, unknown>[], input.profiles),
-        TARGETING_PAGE_DISPLAY_ENRICH_MS,
-        input.signal,
-      );
-    }
-  } catch (error) {
-    // Soft-degrade: keep ranked tail rows even if title/cover lookup flakes.
-    // eslint-disable-next-line no-console
-    console.warn("[inteliads:targeting] catalog tail display enrichment failed", error);
-  }
-  return ordered;
+  // The tail can contain thousands of rows. Enriching all of them here made an
+  // otherwise complete ranked catalog issue huge `IN (...)` reads and hit the
+  // display-only timeout. Return the authoritative rows immediately; the screen
+  // enriches only currently visible ASIN rows while the user scrolls. This does
+  // not change totals, global order, filters, or any Amazon entity.
+  return pageNumbers.flatMap((page) => byPage.get(page) ?? []);
 }
 /** Targets tab: first-window size so multi-profile keyword reads stay responsive. Not an Amazon write limit — Load more grows past this until the filtered catalog is exhausted. */
 export const TARGETING_LIST_LIMIT = 500;

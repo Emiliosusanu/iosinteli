@@ -825,6 +825,9 @@ export default function TargetingScreen() {
   const retailTitleInFlightRef = useRef<Set<string>>(new Set());
   const retailFillBusyRef = useRef(false);
   const retailFillQueuedRef = useRef(false);
+  const visibleRetailRowsRef = useRef<any[]>([]);
+  const visibleRetailSignatureRef = useRef("");
+  const [visibleRetailKick, setVisibleRetailKick] = useState(0);
   const [retailFillKick, setRetailFillKick] = useState(0);
   const resetRetailTitleFill = () => {
     retailTitleDoneRef.current = new Set();
@@ -846,7 +849,12 @@ export default function TargetingScreen() {
       return;
     }
     const headRows = page.rows as any[];
-    const rows = catalogTail.length ? [...headRows, ...catalogTail] : headRows;
+    // First paint has no viewability callback yet. Once the list reports visible
+    // rows, enrich only that viewport instead of walking thousands of catalog
+    // rows and issuing display reads for items the user has not reached.
+    const rows = visibleRetailRowsRef.current.length
+      ? visibleRetailRowsRef.current
+      : headRows.slice(0, 24);
     const RETAIL_MAX_ATTEMPTS = 3;
     const pendingAsins: string[] = [];
     for (const row of rows) {
@@ -939,7 +947,22 @@ export default function TargetingScreen() {
     queryClient,
     scopeProfiles,
     retailFillKick,
+    visibleRetailKick,
   ]);
+
+  const onViewableTargetRowsChanged = useRef(
+    ({ viewableItems }: { viewableItems: { item?: any; isViewable?: boolean }[] }) => {
+      const visible = viewableItems
+        .filter((entry) => entry.isViewable !== false && entry.item)
+        .map((entry) => entry.item);
+      const signature = visible.map((row) => String(row.id ?? "")).join("|");
+      if (signature === visibleRetailSignatureRef.current) return;
+      visibleRetailSignatureRef.current = signature;
+      visibleRetailRowsRef.current = visible;
+      setVisibleRetailKick((value) => value + 1);
+    },
+  ).current;
+  const targetViewabilityConfig = useRef({ itemVisiblePercentThreshold: 20 }).current;
 
   // Display-only enrichment — do not re-filter or re-sort a server page.
   const data = useMemo(() => {
@@ -1977,6 +2000,8 @@ export default function TargetingScreen() {
           initialNumToRender={14}
           maxToRenderPerBatch={16}
           windowSize={7}
+          onViewableItemsChanged={onViewableTargetRowsChanged}
+          viewabilityConfig={targetViewabilityConfig}
           removeClippedSubviews={Platform.OS !== "ios"}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />

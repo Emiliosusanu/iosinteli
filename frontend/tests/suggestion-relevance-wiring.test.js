@@ -181,6 +181,18 @@ test("ad-group suggestions fall through when creation preview returns 0 keywords
   );
 });
 
+test("ad-group suggestions do not repeat the same failed creation preview", () => {
+  assert.match(mutations, /let creationPreviewUnavailable = false/);
+  assert.match(
+    mutations,
+    /if \(asin && profileId && thinMeta && !creationPreviewUnavailable\)/,
+  );
+  assert.match(
+    mutations,
+    /catch \{[\s\S]{0,100}usedCreationPreview = false;[\s\S]{0,100}creationPreviewUnavailable = true/,
+  );
+});
+
 test("Nest-first product chunks stay serial unless preferGroq", () => {
   const grok = readFileSync(
     join(root, "src/lib/suggestionRelevanceGrok.ts"),

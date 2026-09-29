@@ -250,6 +250,12 @@ test("mobile targeting pages enrich titles/covers without dropping ranked rows",
   assert.match(queries, /skipRetail:\s*true/);
   assert.match(queries, /fillMissingProductTargetTitlesFromRetail/);
   assert.match(targeting, /fillMissingProductTargetTitlesFromRetail/);
+  // Catalog tails stay globally ranked but display work follows the viewport;
+  // never enrich thousands of off-screen ASIN rows in one timeout-prone batch.
+  assert.match(targeting, /onViewableItemsChanged={onViewableTargetRowsChanged}/);
+  assert.match(targeting, /visibleRetailRowsRef/);
+  assert.match(queries, /Return the authoritative rows immediately/);
+  assert.doesNotMatch(queries, /catalog tail display enrichment failed/);
   // Remount / isFetching flicker must not abort or one-shot blacklist (Title unavailable forever).
   assert.match(targeting, /retailTitleInFlightRef/);
   assert.match(targeting, /retailFillBusyRef/);
