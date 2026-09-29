@@ -5,7 +5,10 @@ export const TARGETING_QUERY_TIMEOUT_MS = 60_000;
  * Must stay well under TARGETING_QUERY_TIMEOUT_MS so the list paints;
  * retail/Open Library gap-fill must never sit on this critical path.
  */
-export const TARGETING_PAGE_DISPLAY_ENRICH_MS = 12_000;
+// Page rows are already authoritative and globally ranked when the RPC returns.
+// Title/cover enrichment is display-only, so it must never hold the first paint
+// behind a slow KDP/Open Library read.
+export const TARGETING_PAGE_DISPLAY_ENRICH_MS = 2_500;
 /** Nest targeting lists and their local metric enrichment share one page budget. */
 export const NEST_TARGETING_LIST_BUDGET_MS = TARGETING_QUERY_TIMEOUT_MS;
 export const TARGETING_PAGE_METRICS_BUDGET_MS = TARGETING_QUERY_TIMEOUT_MS;

@@ -1,5 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, StyleSheet, type StyleProp, type TextProps, type ViewStyle } from "react-native";
+import {
+  Pressable,
+  StyleSheet,
+  type AccessibilityProps,
+  type StyleProp,
+  type TextProps,
+  type ViewStyle,
+} from "react-native";
 import Animated, {
   Easing,
   runOnJS,
@@ -42,10 +49,11 @@ export function PressableScale({
   accessibilityHint,
   accessibilityRole = "button",
   accessibilityState,
+  accessibilityValue,
   hitSlop,
   testID,
 }: {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   onPress?: () => void;
   onLongPress?: () => void;
   disabled?: boolean;
@@ -54,6 +62,7 @@ export function PressableScale({
   accessibilityHint?: string;
   accessibilityRole?: "button" | "none" | "tab";
   accessibilityState?: { selected?: boolean; disabled?: boolean };
+  accessibilityValue?: AccessibilityProps["accessibilityValue"];
   hitSlop?: number | { top?: number; bottom?: number; left?: number; right?: number };
   testID?: string;
 }) {
@@ -87,6 +96,7 @@ export function PressableScale({
       accessibilityRole={accessibilityRole}
       accessibilityLabel={accessibilityLabel}
       accessibilityHint={accessibilityHint}
+      accessibilityValue={accessibilityValue}
       hitSlop={hitSlop}
       accessibilityState={
         accessibilityState || disabled

@@ -4793,32 +4793,27 @@ export async function fetchTopCampaignsRange(
       if (profileIds.length > 1) {
         const per = capped ? Math.max(80, Math.ceil(limit / profileIds.length)) : 0;
         const byId = new Map<string, TopCampaignRow>();
-        // A failed profile must invalidate the whole list. Bounded reads also
-        // avoid six simultaneous heavy Nest aggregations on the same account.
-        for (let i = 0; i < profileIds.length; i += 2) {
-          const profileBatch = profileIds.slice(i, i + 2);
-          const batches = await Promise.all(
-            profileBatch.map(async (id) => {
-              const rows = await fetchTopCampaignsRange({
-                ...opts,
-                profileIds: [id],
-                limit: per,
-                // Parent attaches placement once after merge.
-                skipPlacementShares: true,
-              });
-              // The Nest aggregation response does not currently echo the
-              // profile id. This request is scoped to exactly one profile, so
-              // attaching that id is authoritative and lets currency/flag UI
-              // resolve the campaign marketplace without guessing from names.
-              return rows.map((row) => ({
-                ...row,
-                amazon_profile_id: row.amazon_profile_id || id,
-              }));
-            }),
-          );
-          for (const rows of batches) {
-            for (const row of rows) byId.set(row.id, row);
-          }
+        // A failed profile must invalidate the whole list. Three concurrent
+        // profile reads keep six-profile accounts to two waves without opening
+        // an unbounded burst against the aggregation endpoint.
+        const batches = await mapPoolLimited(profileIds, 3, async (id) => {
+          const rows = await fetchTopCampaignsRange({
+            ...opts,
+            profileIds: [id],
+            limit: per,
+            // Parent attaches placement once after merge.
+            skipPlacementShares: true,
+          });
+          // The Nest aggregation response does not currently echo the profile
+          // id. This request is scoped to exactly one profile, so attaching it
+          // is authoritative for currency and marketplace flags.
+          return rows.map((row) => ({
+            ...row,
+            amazon_profile_id: row.amazon_profile_id || id,
+          }));
+        });
+        for (const rows of batches) {
+          for (const row of rows) byId.set(row.id, row);
         }
         const merged = sortCampaignRows([...byId.values()]);
         const limited = capped ? merged.slice(0, limit) : merged;

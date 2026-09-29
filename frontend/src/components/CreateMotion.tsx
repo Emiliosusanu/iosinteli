@@ -52,7 +52,8 @@ export function CreateStickyReveal({ children }: { children: React.ReactNode }) 
   );
 }
 
-type ScalePressableProps = PressableProps & {
+type ScalePressableProps = Omit<PressableProps, "children" | "style"> & {
+  children?: React.ReactNode;
   style?: StyleProp<ViewStyle>;
   /** Fire selection haptic on press (marketplace / match chips). */
   hapticSelect?: boolean;

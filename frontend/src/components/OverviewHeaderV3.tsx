@@ -1295,7 +1295,7 @@ export function OverviewHeaderV3({
                 onPress={onSyncPress}
                 accessibilityRole="button"
                 accessibilityLabel={syncA11y}
-                accessibilityState={{ busy: true }}
+                accessibilityValue={{ text: "Updating" }}
                 hitSlop={6}
                 style={styles.syncChipGhost}
               />
