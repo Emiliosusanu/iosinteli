@@ -661,6 +661,7 @@ export async function fetchAdGroupSuggestions(input: {
       let raw: unknown | null = null;
       let preview = normalizeCampaignCreationPreview({});
       let usedCreationPreview = false;
+      let creationPreviewUnavailable = false;
 
       if (asinHint && profileHint) {
         try {
@@ -673,6 +674,7 @@ export async function fetchAdGroupSuggestions(input: {
           usedCreationPreview = true;
         } catch {
           usedCreationPreview = false;
+          creationPreviewUnavailable = true;
         }
       }
 
@@ -733,7 +735,7 @@ export async function fetchAdGroupSuggestions(input: {
               missingProductTitles /
                 Math.max(1, preview.productTargets.length) >
                 0.3));
-        if (asin && profileId && thinMeta) {
+        if (asin && profileId && thinMeta && !creationPreviewUnavailable) {
           try {
             const upgradeRaw = await loadCreationPreviewRaw(
               input.targeting,
@@ -750,6 +752,7 @@ export async function fetchAdGroupSuggestions(input: {
             }
           } catch {
             // Keep Nest ad-group suggestions; Groq may still use asin fallback.
+            creationPreviewUnavailable = true;
           }
         }
       }
