@@ -8,12 +8,14 @@
 import {
   nestSessionFlagAllowsWrites,
   nestTokenMatchesSupabaseUser,
+  jwtNeedsRefresh,
   pickMobileApiToken,
   readJwtSub,
   shouldRefreshNestToken,
 } from "./mobileAuthContract";
 import { storage } from "../utils/storage";
 import { supabase } from "./supabase";
+import { createTokenRefreshSingleFlight } from "./sessionRefresh";
 
 /** Production Nest API. Env override for local/staging; never ship empty. */
 const DEFAULT_RULES_API_URL = "https://api.inteliads.io/api";
@@ -24,6 +26,10 @@ const ACCESS_KEY = "inteliads.rulesApi.accessToken";
 const REFRESH_KEY = "inteliads.rulesApi.refreshToken";
 const SESSION_VALID_KEY = "inteliads.rulesApi.sessionValid";
 let nestSessionInvalidated = false;
+const runNestRefresh = createTokenRefreshSingleFlight<string | null>();
+const runSupabaseRefresh = createTokenRefreshSingleFlight<string | null>();
+let rejectedNestAccessToken = "";
+let nestRefreshRetryAt = 0;
 
 export const PLAN_MANAGE_MESSAGE = "Manage your plan at inteliads.io.";
 export const SIGN_IN_TO_MUTATE_MESSAGE = "Sign in to change bids.";
@@ -137,25 +143,46 @@ export async function nestLogout(): Promise<boolean> {
   return accessRemoved && refreshRemoved;
 }
 
-async function refreshNestToken(): Promise<string | null> {
-  if (!API_BASE) return null;
-  if (!(await nestSessionAllowed())) return null;
-  const refreshToken = await storage.secureGet<string>(REFRESH_KEY, "");
-  if (!refreshToken) return null;
-  try {
-    const res = await fetch(`${API_BASE}/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refreshToken }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data?.accessToken) await storage.secureSet(ACCESS_KEY, String(data.accessToken));
-    if (data?.refreshToken) await storage.secureSet(REFRESH_KEY, String(data.refreshToken));
-    return data?.accessToken ? String(data.accessToken) : null;
-  } catch {
-    return null;
-  }
+async function refreshNestToken(staleAccessToken?: string): Promise<string | null> {
+  return runNestRefresh(async () => {
+    if (!API_BASE) return null;
+    if (!(await nestSessionAllowed())) return null;
+    const currentAccessToken = (await storage.secureGet<string>(ACCESS_KEY, "")) ?? "";
+    if (staleAccessToken && currentAccessToken && currentAccessToken !== staleAccessToken) {
+      return currentAccessToken;
+    }
+    if (
+      currentAccessToken &&
+      currentAccessToken === rejectedNestAccessToken &&
+      Date.now() < nestRefreshRetryAt
+    ) {
+      return null;
+    }
+    const refreshToken = await storage.secureGet<string>(REFRESH_KEY, "");
+    if (!refreshToken) return null;
+    try {
+      const res = await fetch(`${API_BASE}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (!res.ok) {
+        rejectedNestAccessToken = currentAccessToken;
+        nestRefreshRetryAt = Date.now() + 10_000;
+        return null;
+      }
+      const data = await res.json();
+      if (data?.accessToken) await storage.secureSet(ACCESS_KEY, String(data.accessToken));
+      if (data?.refreshToken) await storage.secureSet(REFRESH_KEY, String(data.refreshToken));
+      rejectedNestAccessToken = "";
+      nestRefreshRetryAt = 0;
+      return data?.accessToken ? String(data.accessToken) : null;
+    } catch {
+      rejectedNestAccessToken = currentAccessToken;
+      nestRefreshRetryAt = Date.now() + 10_000;
+      return null;
+    }
+  });
 }
 
 async function readSupabaseSession(): Promise<{ accessToken: string | null; userId: string | null }> {
@@ -172,15 +199,24 @@ async function readSupabaseAccessToken(): Promise<string | null> {
   return (await readSupabaseSession()).accessToken;
 }
 
-async function refreshSupabaseAccessToken(): Promise<string | null> {
-  const { data, error } = await supabase.auth.refreshSession();
-  if (error) return null;
-  return data.session?.access_token ?? null;
+async function refreshSupabaseAccessToken(staleAccessToken?: string): Promise<string | null> {
+  return runSupabaseRefresh(async () => {
+    const currentAccessToken = await readSupabaseAccessToken();
+    if (staleAccessToken && currentAccessToken && currentAccessToken !== staleAccessToken) {
+      return currentAccessToken;
+    }
+    const { data, error } = await supabase.auth.refreshSession();
+    if (error) return null;
+    return data.session?.access_token ?? null;
+  });
 }
 
 async function resolveMobileApiToken(): Promise<{ token: string; source: "nest" | "supabase" } | null> {
   const nestAllowed = await nestSessionAllowed();
-  const nestAccessToken = nestAllowed ? await storage.secureGet<string>(ACCESS_KEY, "") : "";
+  let nestAccessToken = nestAllowed ? await storage.secureGet<string>(ACCESS_KEY, "") : "";
+  if (nestAccessToken && jwtNeedsRefresh(nestAccessToken)) {
+    nestAccessToken = (await refreshNestToken(nestAccessToken)) ?? "";
+  }
   const liveSession = await readSupabaseSession();
   const nestMatches = nestTokenMatchesSupabaseUser({
     nestAccessToken,
@@ -218,7 +254,7 @@ export async function nestApiFetch(path: string, init: NestRequestInit = {}): Pr
   let res = await send(picked?.token);
   if (res.status !== 401) return res;
   if (shouldRefreshNestToken(picked?.source)) {
-    const freshNest = await refreshNestToken();
+    const freshNest = await refreshNestToken(picked?.token);
     if (freshNest) {
       res = await send(freshNest);
       if (res.status !== 401) return res;
@@ -231,14 +267,14 @@ export async function nestApiFetch(path: string, init: NestRequestInit = {}): Pr
     if (supabaseToken) {
       res = await send(supabaseToken);
       if (res.status === 401) {
-        const freshSupabase = await refreshSupabaseAccessToken();
+        const freshSupabase = await refreshSupabaseAccessToken(supabaseToken);
         if (freshSupabase && freshSupabase !== supabaseToken) res = await send(freshSupabase);
       }
     }
     return res;
   }
   if (picked?.source === "supabase") {
-    const freshSupabase = await refreshSupabaseAccessToken();
+    const freshSupabase = await refreshSupabaseAccessToken(picked.token);
     if (freshSupabase) {
       res = await send(freshSupabase);
       if (res.status !== 401) return res;
