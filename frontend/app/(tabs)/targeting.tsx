@@ -670,6 +670,7 @@ export default function TargetingScreen() {
     perf,
     serverSort,
     advancedScopeKey,
+    `page-size-${TARGETING_PAGE_SIZE}`,
     "catalog-head",
   ] as const;
 
