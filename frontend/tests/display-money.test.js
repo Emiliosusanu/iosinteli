@@ -165,7 +165,7 @@ test("list rows stay native while Ads Engine funnels receive the full FX context
     /aggregateDailyMetricsForDisplay\(rows, \{\s*moneyProfileIds: opts\.moneyProfileIds,\s*displayCurrency: opts\.displayCurrency,\s*profileCurrencyById: opts\.profileCurrencyById,\s*fxRates: opts\.fxRates,\s*\}\)/,
   );
   assert.match(queries, /amazon_profile_id: profileByEntity\.get\(entityId\)/);
-  assert.match(home, /moneyProfileIds=\{moneyProfileIds\}/);
+  assert.match(home, /moneyProfileIds=\{adsWidgetProfileIds\}/);
   assert.match(home, /displayCurrency=\{primaryCurrency\}/);
   assert.match(home, /profileCurrencyById=\{profileCurrencyById\}/);
   assert.match(home, /fxRates=\{fxRates\}/);
@@ -176,4 +176,3 @@ test("CAD money uses C$ not bare dollar", () => {
   assert.equal(formatCurrency(20, "USD"), "$20.00");
   assert.equal(formatCurrency(20, "EUR"), "€20.00");
 });
-

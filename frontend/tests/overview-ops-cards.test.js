@@ -27,3 +27,27 @@ test("Home wires the redesigned ops cards without prior-day budget fallback", ()
   assert.doesNotMatch(home, /BudgetArcWidget/);
   assert.doesNotMatch(home, /function PulseStat/);
 });
+
+test("Home orders operational cards and never renders a pending monthly forecast", () => {
+  const bidBot = home.indexOf("<OverviewBidBotCard");
+  const budget = home.indexOf("<OverviewBudgetTodayCard");
+  const automation = home.indexOf("<OverviewAutomationCard");
+  const marketplace = home.indexOf("<OverviewMarketplaceAdsCard");
+  const review = home.indexOf("<ActionReviewCard");
+
+  assert.ok(bidBot >= 0 && bidBot < budget);
+  assert.ok(budget < automation);
+  assert.ok(automation < marketplace);
+  assert.ok(marketplace < review);
+  assert.match(home, /monthlyBudgetForecastReady = budgetHistoryQ\.isSuccess/);
+  assert.match(home, /projectedMonthSpend=\{monthlyBudgetForecastReady \? monthlyBudgetForecast\.projectedMonthSpend : undefined\}/);
+});
+
+test("Marketplace card is real-data only and controls the Ads widget scope", () => {
+  assert.match(cards, /OverviewMarketplaceAdsCard/);
+  assert.match(cards, /if \(!rows\.length\) return null/);
+  assert.match(home, /adsWidgetProfileIds/);
+  assert.match(home, /selectedCountry=\{selectedAdsMarket\}/);
+  assert.match(home, /onSelect=\{setSelectedAdsMarket\}/);
+  assert.match(home, /scopeLabel=\{overviewMarketplaceLabel\(selectedAdsMarket\)\}/);
+});

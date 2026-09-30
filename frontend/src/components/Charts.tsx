@@ -178,6 +178,12 @@ function useChartSelection(
   const widgetPageSwipe = useOverviewWidgetPageSwipeGesture();
   const gesture = React.useMemo(() => {
     const pan = Gesture.Pan().failOffsetY([-10, 10]);
+    const tap = Gesture.Tap()
+      .maxDuration(280)
+      .maxDistance(12)
+      .onEnd((event, success) => {
+        if (success) runOnJS(selectByX)(event.x);
+      });
     if (holdToInspect) {
       pan.activateAfterLongPress(160);
     } else {
@@ -186,11 +192,15 @@ function useChartSelection(
     // Day scrub wins over period chrome + widget page pans.
     if (periodSwipe) pan.blocksExternalGesture(periodSwipe);
     if (widgetPageSwipe) pan.blocksExternalGesture(widgetPageSwipe);
+    if (periodSwipe) tap.blocksExternalGesture(periodSwipe);
+    if (widgetPageSwipe) tap.blocksExternalGesture(widgetPageSwipe);
     pan.onStart((e) => runOnJS(selectByX)(e.x)).onUpdate((e) => runOnJS(selectByX)(e.x));
     if (!persistSelection) {
       pan.onFinalize(() => runOnJS(clearSelection)());
     }
-    return pan;
+    // A deliberate tap pins the inspected day. Horizontal dragging still
+    // scrubs the full series and retains the existing release behavior.
+    return Gesture.Race(tap, pan);
   }, [selectByX, clearSelection, persistSelection, holdToInspect, periodSwipe, widgetPageSwipe]);
 
   return { selectedIndex, gesture, clearSelection };
