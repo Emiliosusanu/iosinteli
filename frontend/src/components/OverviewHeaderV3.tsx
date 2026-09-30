@@ -31,7 +31,7 @@ import { GlassPanel } from "@/src/components/GlassPanel";
 import { IOSDateField, SFSymbol } from "@/src/components/ios/Native";
 import { MarketPill } from "@/src/components/MarketPill";
 import { PressableScale } from "@/src/components/Motion";
-import { sortMarketCountryCodes } from "@/src/lib/accountsUi";
+import { countryFlagEmoji, marketPillCountryLabel, sortMarketCountryCodes } from "@/src/lib/accountsUi";
 import { formatDateRangeLabel, rangePresets } from "@/src/lib/format";
 import { playHaptic } from "@/src/lib/hapticPolicy";
 import { motion } from "@/src/lib/motion";
@@ -115,6 +115,9 @@ export type OverviewHeaderV3Props = {
    * the overlapping-flag market pill. Prefer this over `marketFlags`.
    */
   marketCountries?: string[];
+  /** null means every enabled marketplace. */
+  selectedMarketCountry?: string | null;
+  onMarketSelectionChange?: (country: string | null) => void;
   /** @deprecated Prefer `marketCountries`; kept for back-compat emoji-only callers. */
   marketFlags?: string[];
   currency: string;
@@ -199,13 +202,10 @@ function SyncDot({ color, active }: { color: string; active: boolean }) {
   );
 }
 
-/** SwiftUI ReportHeaderCard breathe — easeInOut 1.45s, autoreverses forever. */
-const GLOW_BREATHE_MS = 1450;
-const GLOW_SETTLE_MS = 1500;
 const EASE_GLOW = Easing.inOut(Easing.ease);
 
 function hexWithAlpha(hex: string, alpha01: number): string {
-  const mid = hex.length === 7 ? hex : "#FF9500";
+  const mid = hex.length === 7 ? hex : "#0A84FF";
   const a = Math.max(0, Math.min(255, Math.round(alpha01 * 255)));
   return `${mid}${a.toString(16).padStart(2, "0")}`;
 }
@@ -225,9 +225,8 @@ function StadiumSideGlow({
   bloomStyle: object;
 }) {
   const clear = hexWithAlpha(color, 0);
-  // Soft-baked stops (not full-opaque orange) so 0.18↔0.80 container breathe stays smoke, not neon.
-  const peak = hexWithAlpha(color, 0.72);
-  const mid = hexWithAlpha(color, 0.4);
+  const peak = hexWithAlpha(color, 0.48);
+  const mid = hexWithAlpha(color, 0.24);
   const isLeft = side === "left";
   return (
     <View
@@ -263,132 +262,48 @@ function StadiumSideGlow({
 }
 
 /**
- * SwiftUI ReportHeaderCard refreshingGlow — ambient L/R amber smoke breathe +
- * subtle rounded outline. No text, spinner, or orange Refreshing pill.
- * Busy→OK: soft green settle then fade (~1.5s). Failed/Stale = no glow.
+ * Quiet primary-color edge shadow while a refresh is active. It fades directly
+ * to rest: no orange warning pulse, green success flash, or neon outline.
  */
 function StadiumLateralGlow({
   busy,
   failedOrStale,
-  warningColor,
-  successColor,
+  color,
 }: {
   busy: boolean;
   failedOrStale: boolean;
-  warningColor: string;
-  successColor: string;
+  color: string;
 }) {
   const reduceMotion = useReduceMotion();
-  /** 0 = SwiftUI glowPulse false (dim), 1 = glowPulse true (bright). */
   const breath = useSharedValue(0);
   const visible = useSharedValue(0);
-  /** 0 = amber, 1 = green settle layer. */
-  const greenMix = useSharedValue(0);
-  const wasBusyRef = useRef(false);
-  const settleClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    return () => {
-      if (settleClearRef.current) clearTimeout(settleClearRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (settleClearRef.current) {
-      clearTimeout(settleClearRef.current);
-      settleClearRef.current = null;
-    }
-
     if (busy && !failedOrStale) {
-      wasBusyRef.current = true;
       cancelAnimation(breath);
       cancelAnimation(visible);
-      cancelAnimation(greenMix);
-      greenMix.set(0);
-      visible.set(withTiming(1, { duration: reduceMotion ? 120 : 220, easing: EASE_SOFT }));
+      visible.set(withTiming(1, { duration: reduceMotion ? 100 : 260, easing: EASE_SOFT }));
       if (reduceMotion) {
-        // Static mid opacity — no crash, no motion.
-        breath.set(0.5);
+        breath.set(0.35);
         return;
       }
       breath.set(0);
-      breath.set(
-        withRepeat(
-          withTiming(1, { duration: GLOW_BREATHE_MS, easing: EASE_GLOW }),
-          -1,
-          true,
-        ),
-      );
-      return () => {
-        cancelAnimation(breath);
-      };
+      breath.set(withRepeat(withTiming(1, { duration: 2100, easing: EASE_GLOW }), -1, true));
+      return () => cancelAnimation(breath);
     }
-
-    // Failed/Stale — never glow.
-    if (failedOrStale) {
-      wasBusyRef.current = false;
-      cancelAnimation(breath);
-      cancelAnimation(visible);
-      cancelAnimation(greenMix);
-      greenMix.set(0);
-      visible.set(withTiming(0, { duration: reduceMotion ? 100 : 260, easing: EASE_SOFT }));
-      breath.set(withTiming(0, { duration: reduceMotion ? 100 : 260, easing: EASE_SOFT }));
-      return;
-    }
-
-    // Busy → calm OK: soft green settle, then fade out (~1.5s).
-    if (wasBusyRef.current) {
-      wasBusyRef.current = false;
-      cancelAnimation(breath);
-      cancelAnimation(greenMix);
-      if (reduceMotion) {
-        greenMix.set(1);
-        breath.set(0.45);
-        visible.set(1);
-        visible.set(withTiming(0, { duration: 220, easing: EASE_SOFT }));
-        breath.set(withTiming(0, { duration: 220, easing: EASE_SOFT }));
-        return;
-      }
-      greenMix.set(withTiming(1, { duration: 280, easing: EASE_SOFT }));
-      breath.set(0.55);
-      visible.set(1);
-      visible.set(withTiming(0, { duration: GLOW_SETTLE_MS, easing: EASE_SOFT }));
-      breath.set(withTiming(0, { duration: GLOW_SETTLE_MS, easing: EASE_SOFT }));
-      settleClearRef.current = setTimeout(() => {
-        greenMix.set(0);
-        settleClearRef.current = null;
-      }, GLOW_SETTLE_MS + 120);
-      return;
-    }
-
-    // Idle synced — no permanent glow.
     cancelAnimation(breath);
     cancelAnimation(visible);
-    cancelAnimation(greenMix);
-    greenMix.set(0);
-    visible.set(withTiming(0, { duration: 320, easing: EASE_SOFT }));
-    breath.set(withTiming(0, { duration: 320, easing: EASE_SOFT }));
-  }, [busy, failedOrStale, breath, visible, greenMix, reduceMotion]);
+    visible.set(withTiming(0, { duration: reduceMotion ? 100 : 360, easing: EASE_SOFT }));
+    breath.set(withTiming(0, { duration: reduceMotion ? 100 : 360, easing: EASE_SOFT }));
+  }, [busy, failedOrStale, breath, visible, reduceMotion]);
 
-  // Color.orange.opacity(0.18 → 0.80) for the amber edge stack.
-  const amberStyle = useAnimatedStyle(() => ({
-    opacity: visible.get() * (1 - greenMix.get()) * interpolate(breath.get(), [0, 1], [0.18, 0.8]),
+  const edgeStyle = useAnimatedStyle(() => ({
+    opacity: visible.get() * interpolate(breath.get(), [0, 1], [0.08, 0.22]),
   }));
-  // Soft green settle uses a calmer mid opacity (never neon).
-  const greenStyle = useAnimatedStyle(() => ({
-    opacity: visible.get() * greenMix.get() * interpolate(breath.get(), [0, 1], [0.22, 0.55]),
-  }));
-  // Bloom ≈ blur 5↔10 — gentle scale, low opacity (smoke, not wash).
   const bloomStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(breath.get(), [0, 1], [0.28, 0.55]),
-    transform: [{ scaleX: interpolate(breath.get(), [0, 1], [1.05, 1.45]) }],
+    opacity: interpolate(breath.get(), [0, 1], [0.18, 0.34]),
+    transform: [{ scaleX: interpolate(breath.get(), [0, 1], [1.04, 1.22]) }],
   }));
-  // Outline stroke Color.orange.opacity(0.10 ↔ 0.28); soft green during settle.
-  const outlineStyle = useAnimatedStyle(() => {
-    const amberA = visible.get() * (1 - greenMix.get()) * interpolate(breath.get(), [0, 1], [0.1, 0.28]);
-    const greenA = visible.get() * greenMix.get() * interpolate(breath.get(), [0, 1], [0.08, 0.18]);
-    return { opacity: amberA + greenA };
-  });
 
   return (
     <View
@@ -400,24 +315,11 @@ function StadiumLateralGlow({
     >
       <Animated.View
         pointerEvents="none"
-        style={[styles.lateralGlowOutline, { borderColor: warningColor }, outlineStyle]}
-        testID="home-header-glow-outline"
-      />
-      <Animated.View
-        pointerEvents="none"
-        style={[StyleSheet.absoluteFill, amberStyle]}
-        testID="home-header-glow-amber"
+        style={[StyleSheet.absoluteFill, edgeStyle]}
+        testID="home-header-glow-primary"
       >
-        <StadiumSideGlow color={warningColor} side="left" bloomStyle={bloomStyle} />
-        <StadiumSideGlow color={warningColor} side="right" bloomStyle={bloomStyle} />
-      </Animated.View>
-      <Animated.View
-        pointerEvents="none"
-        style={[StyleSheet.absoluteFill, greenStyle]}
-        testID="home-header-glow-green"
-      >
-        <StadiumSideGlow color={successColor} side="left" bloomStyle={bloomStyle} />
-        <StadiumSideGlow color={successColor} side="right" bloomStyle={bloomStyle} />
+        <StadiumSideGlow color={color} side="left" bloomStyle={bloomStyle} />
+        <StadiumSideGlow color={color} side="right" bloomStyle={bloomStyle} />
       </Animated.View>
     </View>
   );
@@ -1065,6 +967,8 @@ export function OverviewHeaderV3({
   profileLabel,
   marketCountries,
   marketFlags = [],
+  selectedMarketCountry = null,
+  onMarketSelectionChange,
   currency,
   onProfilePress,
   onCurrencyPress,
@@ -1092,6 +996,7 @@ export function OverviewHeaderV3({
   const fallbackScrollY = useSharedValue(0);
   const scrollY = scrollYProp ?? fallbackScrollY;
   const [localCustomOpen, setLocalCustomOpen] = useState(false);
+  const [marketOpen, setMarketOpen] = useState(false);
   const customOpen = customOpenProp ?? localCustomOpen;
   const setCustomOpen = onCustomOpenChange ?? setLocalCustomOpen;
   const [expandedInteractive, setExpandedInteractive] = useState(true);
@@ -1099,6 +1004,9 @@ export function OverviewHeaderV3({
   const periodShift = useSharedValue(0);
 
   const resolvedCountries = sortMarketCountryCodes(marketCountries ?? []);
+  const displayedCountries = selectedMarketCountry
+    ? resolvedCountries.filter((country) => country === selectedMarketCountry.toUpperCase())
+    : resolvedCountries;
   const hasMarketPill = resolvedCountries.length > 0;
   // Back-compat: emoji-only callers still get a flag cue without the glass pill.
   const legacyFlags = !hasMarketPill && marketFlags.length > 0 ? marketFlags : [];
@@ -1215,9 +1123,9 @@ export function OverviewHeaderV3({
             {hasMarketPill ? (
               <MarketPill
                 testID="home-market-pill"
-                countries={resolvedCountries}
+                countries={displayedCountries.length ? displayedCountries : resolvedCountries}
                 currency={currency}
-                onPress={onProfilePress}
+                onPress={onMarketSelectionChange ? () => setMarketOpen(true) : onProfilePress}
               />
             ) : (
               <>
@@ -1358,10 +1266,40 @@ export function OverviewHeaderV3({
         <StadiumLateralGlow
           busy={showRefreshGlow}
           failedOrStale={syncFailedOrStale}
-          warningColor={t.colors.tone_warning}
-          successColor={t.colors.tone_good}
+          color={t.colors.tone_primary}
         />
       </View>
+
+      {onMarketSelectionChange ? (
+        <Modal visible={marketOpen} transparent animationType="fade" onRequestClose={() => setMarketOpen(false)}>
+          <Pressable style={styles.marketSheetBackdrop} onPress={() => setMarketOpen(false)}>
+            <Pressable style={[styles.marketSheet, { backgroundColor: chrome.colors.background_secondary, borderColor: chrome.colors.separator }]}>
+              <Text style={[t.typography.headline, { color: chrome.colors.text_primary }]}>Ads marketplace</Text>
+              {[null, ...resolvedCountries].map((country) => {
+                const selected = (country ?? null) === selectedMarketCountry;
+                const label = country
+                  ? `${countryFlagEmoji(country)}  ${marketPillCountryLabel(country)}`
+                  : "🌐  All markets";
+                return (
+                  <TouchableOpacity
+                    key={country ?? "all"}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    onPress={() => {
+                      onMarketSelectionChange(country);
+                      setMarketOpen(false);
+                    }}
+                    style={[styles.marketSheetRow, { borderColor: chrome.colors.separator }]}
+                  >
+                    <Text style={[t.typography.body, { color: chrome.colors.text_primary, flex: 1 }]}>{label}</Text>
+                    {selected ? <SFSymbol name="checkmark" size={15} color={chrome.colors.tone_primary} /> : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </Pressable>
+          </Pressable>
+        </Modal>
+      ) : null}
 
       {ownsSheet && canCustom && dateRange && onCustomRange ? (
         <CustomRangeSheet
@@ -1395,12 +1333,25 @@ const styles = StyleSheet.create({
     zIndex: 2,
     overflow: "visible",
   },
-  /** Full rounded outline — SwiftUI stroke orange 0.10↔0.28, matches shell radius. */
-  lateralGlowOutline: {
-    ...StyleSheet.absoluteFillObject,
+  marketSheetBackdrop: {
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 28,
+    backgroundColor: "#00000066",
+  },
+  marketSheet: {
     borderRadius: 22,
     borderCurve: "continuous",
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 18,
+  },
+  marketSheetRow: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: 10,
+    paddingTop: 10,
   },
   /** Thin side slot — SwiftUI sideGlow frame(width: 3) + padding.vertical 32. */
   lateralGlowSide: {

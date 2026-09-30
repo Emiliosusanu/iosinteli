@@ -120,6 +120,7 @@ import {
   OverviewAutomationCard,
   OverviewBidBotCard,
   OverviewBudgetTodayCard,
+  OverviewMarketplaceAdsCard,
 } from "@/src/components/OverviewOpsCards";
 import { DashboardSurface } from "@/src/components/DashboardSurface";
 import {
@@ -206,6 +207,8 @@ import {
   overviewKdpQueryScope,
   overviewPortfolioProfileIds,
 } from "@/src/lib/booksProfileScope";
+import { overviewAdsProfileIdsForMarket, overviewMarketplaceLabel } from "@/src/lib/overviewMarketplace";
+import { buildMonthlyBudgetForecast } from "@/src/lib/monthlyBudgetForecast";
 
 const PAGE_PAD = dashboard.pageInset;
 const OVERVIEW_QUERY_CACHE = {
@@ -340,6 +343,21 @@ export default function OverviewScreen() {
     () => sortedProfileIds(booksMoneyProfileIds(profiles, portfolioProfileIds)),
     [profiles, portfolioProfileIds],
   );
+  const adsMarketCountries = useMemo(() => {
+    const inMoneyScope = new Set(moneyProfileIds);
+    return multiCountryCodes(
+      profiles.filter((profile) => inMoneyScope.has(profile.id) || inMoneyScope.has(profile.profile_id)),
+      { onlyEnabled: true },
+    );
+  }, [moneyProfileIds, profiles]);
+  const [selectedAdsMarket, setSelectedAdsMarket] = useState<string | null>(null);
+  useEffect(() => {
+    if (selectedAdsMarket && !adsMarketCountries.includes(selectedAdsMarket)) setSelectedAdsMarket(null);
+  }, [adsMarketCountries, selectedAdsMarket]);
+  const adsWidgetProfileIds = useMemo(
+    () => sortedProfileIds(overviewAdsProfileIdsForMarket(moneyProfileIds, profiles, selectedAdsMarket)),
+    [moneyProfileIds, profiles, selectedAdsMarket],
+  );
   /** Enabled portfolio profiles (all currencies) — for honesty vs money-chip scope. */
   const enabledPortfolioIds = useMemo(
     () => enabledSelectedProfileIds(profiles, portfolioProfileIds),
@@ -358,6 +376,10 @@ export default function OverviewScreen() {
   const todayDate = parseDateOnly(toDateString(new Date()));
   const todayStr = toDateString(todayDate);
   const yesterdayStr = toDateString(addDays(todayDate, -1));
+  const currentPeriodIncludesToday = dateRange.start <= todayStr && dateRange.end >= todayStr;
+  const forecastStartDate = toDateString(
+    new Date(todayDate.getFullYear(), todayDate.getMonth() - 3, 1),
+  );
   const queryClient = useQueryClient();
   const pathname = usePathname();
   const homeVisible = pathname === "/" || pathname === "/(tabs)" || pathname === "/(tabs)/index";
@@ -434,12 +456,14 @@ export default function OverviewScreen() {
   }, [profiles]);
   const needsAdsFx =
     mixedCurrency && String(primaryCurrency || "").toUpperCase() === "USD";
-  const fxStartDate = previousRange(dateRange.start, dateRange.end).start;
+  const fxStartDate = [previousRange(dateRange.start, dateRange.end).start, forecastStartDate]
+    .sort()[0];
+  const fxEndDate = [dateRange.end, todayStr].sort().at(-1) ?? todayStr;
   const fxRatesQ = useQuery({
     queryKey: [
       "fx-daily-rates",
       fxStartDate,
-      dateRange.end,
+      fxEndDate,
       enabledPortfolioCurrencies.join(","),
       primaryCurrency,
     ],
@@ -447,7 +471,7 @@ export default function OverviewScreen() {
       withQueryTimeout(
         fetchFxDailyRates({
           startDate: fxStartDate,
-          endDate: dateRange.end,
+          endDate: fxEndDate,
           fromCurrencies: enabledPortfolioCurrencies,
           toCurrency: "USD",
         }),
@@ -635,6 +659,16 @@ export default function OverviewScreen() {
     queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(scopeProfiles, dateRange.start, dateRange.end)),
     enabled: sellerReady,
     ...FINANCIAL_QUERY_CACHE,
+    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchIntervalInBackground: false,
+  });
+  const adsWidgetMetricsQ = useQuery({
+    queryKey: ["overview-ads-market-metrics", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(adsWidgetProfileIds, dateRange.start, dateRange.end)),
+    enabled: sellerReady && selectedAdsMarket != null && adsWidgetProfileIds.length > 0,
+    ...FINANCIAL_QUERY_CACHE,
+    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
   useEffect(() => {
     if (!metricsQ.data) return;
@@ -704,7 +738,7 @@ export default function OverviewScreen() {
   useQuery({
     queryKey: [
       "ads-engine-keywords-daily",
-      scopeProfiles,
+      adsWidgetProfileIds,
       dateRange.start,
       dateRange.end,
       moneyProfileIds,
@@ -714,21 +748,21 @@ export default function OverviewScreen() {
     ],
     queryFn: () =>
       withQueryTimeout(
-        fetchKeywordDailyAggregate(scopeProfiles, dateRange.start, dateRange.end, {
-          moneyProfileIds,
+        fetchKeywordDailyAggregate(adsWidgetProfileIds, dateRange.start, dateRange.end, {
+          moneyProfileIds: adsWidgetProfileIds,
           displayCurrency: primaryCurrency,
           profileCurrencyById,
           fxRates,
         }),
         ADS_ENGINE_FUNNEL_TIMEOUT_MS,
       ),
-    enabled: sellerReady && scopeProfiles.length > 0 && adsEngineFxReady,
+    enabled: sellerReady && adsWidgetProfileIds.length > 0 && adsEngineFxReady,
     ...OVERVIEW_QUERY_CACHE,
   });
   useQuery({
     queryKey: [
       "ads-engine-search-terms-daily",
-      scopeProfiles,
+      adsWidgetProfileIds,
       dateRange.start,
       dateRange.end,
       moneyProfileIds,
@@ -738,15 +772,15 @@ export default function OverviewScreen() {
     ],
     queryFn: () =>
       withQueryTimeout(
-        fetchSearchTermDailyAggregate(scopeProfiles, dateRange.start, dateRange.end, {
-          moneyProfileIds,
+        fetchSearchTermDailyAggregate(adsWidgetProfileIds, dateRange.start, dateRange.end, {
+          moneyProfileIds: adsWidgetProfileIds,
           displayCurrency: primaryCurrency,
           profileCurrencyById,
           fxRates,
         }),
         ADS_ENGINE_FUNNEL_TIMEOUT_MS,
       ),
-    enabled: sellerReady && scopeProfiles.length > 0 && adsEngineFxReady,
+    enabled: sellerReady && adsWidgetProfileIds.length > 0 && adsEngineFxReady,
     ...OVERVIEW_QUERY_CACHE,
   });
 
@@ -767,11 +801,11 @@ export default function OverviewScreen() {
   });
 
   const topCampaignsQ = useQuery({
-    queryKey: ["top-campaigns-range-v2", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
+    queryKey: ["top-campaigns-range-v2", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () =>
       withQueryTimeout(
         fetchTopCampaignsRange({
-          profileIds: scopeProfiles,
+          profileIds: adsWidgetProfileIds,
           start: dateRange.start,
           end: dateRange.end,
           // Need a wide pool so ACoS → clicks → impressions → sync can fill 7 rows.
@@ -781,20 +815,22 @@ export default function OverviewScreen() {
       ),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
+    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
 
   // Warm the Campaigns tab list so Overview → Campaigns is cache-first (same scope key).
   // Must use CAMPAIGNS_LIST_TIMEOUT_MS — Home's 20s default aborts the shared key and
   // Campaigns then inherits the failed/aborted fetch instead of its 60s budget.
   useEffect(() => {
-    if (!sellerSecondary || scopeProfiles.length === 0) return;
+    if (!sellerSecondary || adsWidgetProfileIds.length === 0) return;
     if (!topCampaignsQ.isSuccess) return;
     void queryClient.prefetchQuery({
-      queryKey: ["campaigns-list-range-v3", adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
+      queryKey: ["campaigns-list-range-v3", adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
       queryFn: () =>
         withQueryTimeout(
           fetchTopCampaignsRange({
-            profileIds: scopeProfiles,
+            profileIds: adsWidgetProfileIds,
             start: dateRange.start,
             end: dateRange.end,
             limit: 0,
@@ -807,7 +843,7 @@ export default function OverviewScreen() {
   }, [
     sellerSecondary,
     topCampaignsQ.isSuccess,
-    scopeProfiles,
+    adsWidgetProfileIds,
     dateRange.start,
     dateRange.end,
     adminFilterUserId,
@@ -873,8 +909,8 @@ export default function OverviewScreen() {
   }, [topBooksQ.data]);
 
   const placementMixQ = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.placementMix, scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
-    queryFn: () => withQueryTimeout(fetchPlacementMixRange(scopeProfiles, dateRange.start, dateRange.end)),
+    queryKey: [FINANCIAL_QUERY_ROOTS.placementMix, adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () => withQueryTimeout(fetchPlacementMixRange(adsWidgetProfileIds, dateRange.start, dateRange.end)),
     enabled: sellerSecondary,
     ...FINANCIAL_QUERY_CACHE,
   });
@@ -895,15 +931,24 @@ export default function OverviewScreen() {
   });
 
   const todayMetricsQ = useQuery({
-    queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetricsToday, scopeProfiles, todayStr, primaryCurrency],
-    queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(scopeProfiles, todayStr, todayStr)),
+    queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetricsToday, adsWidgetProfileIds, todayStr, primaryCurrency],
+    queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(adsWidgetProfileIds, todayStr, todayStr)),
     enabled: sellerSecondary,
     ...FINANCIAL_LIVE_QUERY_CACHE,
+    refetchInterval: homeVisible ? 60_000 : false,
+    refetchIntervalInBackground: false,
+  });
+
+  const budgetHistoryQ = useQuery({
+    queryKey: ["overview-budget-history", adsWidgetProfileIds, forecastStartDate, todayStr, primaryCurrency],
+    queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(adsWidgetProfileIds, forecastStartDate, todayStr)),
+    enabled: sellerSecondary && adsWidgetProfileIds.length > 0,
+    ...FINANCIAL_QUERY_CACHE,
   });
 
   const allBudgetsQ = useQuery({
-    queryKey: ["all-campaign-budgets", scopeProfiles],
-    queryFn: () => withQueryTimeout(fetchAllCampaignBudgets(scopeProfiles)),
+    queryKey: ["all-campaign-budgets", adsWidgetProfileIds],
+    queryFn: () => withQueryTimeout(fetchAllCampaignBudgets(adsWidgetProfileIds)),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
   });
@@ -941,24 +986,24 @@ export default function OverviewScreen() {
   });
 
   const searchTermsPulseQ = useQuery({
-    queryKey: ["search-terms-pulse", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
-    queryFn: () => fetchSearchTerms(scopeProfiles, { start: dateRange.start, end: dateRange.end, limit: 80 }),
+    queryKey: ["search-terms-pulse", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () => fetchSearchTerms(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80 }),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
   });
 
   const bleedersQ = useQuery({
-    queryKey: ["bleeding-keywords", adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
-    queryFn: () => withQueryTimeout(fetchKeywords(scopeProfiles, { start: dateRange.start, end: dateRange.end, limit: 80, filterUserId: adminFilterUserId })),
+    queryKey: ["bleeding-keywords", adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
+    queryFn: () => withQueryTimeout(fetchKeywords(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80, filterUserId: adminFilterUserId })),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
   });
 
   const adGroupsQ = useQuery({
-    queryKey: ["overview-ad-groups", adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
+    queryKey: ["overview-ad-groups", adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () =>
       withQueryTimeout(
-        fetchAdGroups(scopeProfiles, undefined, {
+        fetchAdGroups(adsWidgetProfileIds, undefined, {
           start: dateRange.start,
           end: dateRange.end,
           limit: 80,
@@ -1120,6 +1165,51 @@ export default function OverviewScreen() {
       }),
     [metricRows, moneyProfileIds, primaryCurrency, profileCurrencyById, fxRates],
   );
+  const adsWidgetMetricRows = useMemo(
+    () => (selectedAdsMarket ? (adsWidgetMetricsQ.data ?? []) : metricRows),
+    [adsWidgetMetricsQ.data, metricRows, selectedAdsMarket],
+  );
+  const adsWidgetDaily = useMemo(
+    () =>
+      aggregateDailyMetricsForDisplay(adsWidgetMetricRows, {
+        moneyProfileIds: adsWidgetProfileIds,
+        displayCurrency: primaryCurrency,
+        profileCurrencyById,
+        fxRates,
+      }),
+    [adsWidgetMetricRows, adsWidgetProfileIds, primaryCurrency, profileCurrencyById, fxRates],
+  );
+  const marketplaceAdsRows = useMemo(
+    () =>
+      adsMarketCountries.flatMap((country) => {
+        const ids = overviewAdsProfileIdsForMarket(moneyProfileIds, profiles, country);
+        const rows = aggregateDailyMetricsForDisplay(metricRows, {
+          moneyProfileIds: ids,
+          displayCurrency: primaryCurrency,
+          profileCurrencyById,
+          fxRates,
+        });
+        if (!rows.length) return [];
+        const totals = rows.reduce(
+          (acc, row) => ({
+            spend: acc.spend + row.spend,
+            sales: acc.sales + row.sales,
+            orders: acc.orders + row.orders,
+            clicks: acc.clicks + row.clicks,
+          }),
+          { spend: 0, sales: 0, orders: 0, clicks: 0 },
+        );
+        if (!(totals.spend || totals.sales || totals.orders || totals.clicks)) return [];
+        return [{
+          country,
+          spend: totals.spend,
+          orders: totals.orders,
+          clicks: totals.clicks,
+          acos: totals.sales > 0 ? (totals.spend / totals.sales) * 100 : null,
+        }];
+      }),
+    [adsMarketCountries, moneyProfileIds, profiles, metricRows, primaryCurrency, profileCurrencyById, fxRates],
+  );
   const prevDaily = useMemo(
     () =>
       aggregateDailyMetricsForDisplay(prevMetricRows, {
@@ -1222,7 +1312,7 @@ export default function OverviewScreen() {
   const ordersSeries = useMemo(() => daily.slice(-14).map((m) => ({ value: m.orders, label: formatDateShort(m.date) })), [daily]);
 
   // Ads Engine chart data (wired into Overview swipe below hero)
-  const adsEngineSeries = useMemo(() => dailyToAdsEngineSeries(daily), [daily]);
+  const adsEngineSeries = useMemo(() => dailyToAdsEngineSeries(adsWidgetDaily), [adsWidgetDaily]);
   const adsEngineImpressions = adsEngineSeries.impressions;
   const adsEngineClicks = adsEngineSeries.clicks;
   const adsEngineOrders = adsEngineSeries.orders;
@@ -1346,7 +1436,7 @@ export default function OverviewScreen() {
     const todayRows = viewingAsAdmin
       ? daily.filter((row) => row.date === todayStr)
       : aggregateDailyMetricsForDisplay(todayMetricsQ.data ?? [], {
-          moneyProfileIds,
+          moneyProfileIds: adsWidgetProfileIds,
           displayCurrency: primaryCurrency,
           profileCurrencyById,
           fxRates,
@@ -1357,7 +1447,7 @@ export default function OverviewScreen() {
     todayMetricsQ.data,
     viewingAsAdmin,
     todayStr,
-    moneyProfileIds,
+    adsWidgetProfileIds,
     primaryCurrency,
     profileCurrencyById,
     fxRates,
@@ -1365,6 +1455,21 @@ export default function OverviewScreen() {
   const budgetSpend = todayBudgetRow?.spend ?? 0;
   const budgetTodaySynced = !!todayBudgetRow;
   const totalDailyBudget = allBudgetsQ.data ?? 0;
+  const budgetHistoryDaily = useMemo(
+    () =>
+      aggregateDailyMetricsForDisplay(budgetHistoryQ.data ?? [], {
+        moneyProfileIds: adsWidgetProfileIds,
+        displayCurrency: primaryCurrency,
+        profileCurrencyById,
+        fxRates,
+      }),
+    [budgetHistoryQ.data, adsWidgetProfileIds, primaryCurrency, profileCurrencyById, fxRates],
+  );
+  const monthlyBudgetForecast = useMemo(
+    () => buildMonthlyBudgetForecast(budgetHistoryDaily, todayStr, totalDailyBudget),
+    [budgetHistoryDaily, todayStr, totalDailyBudget],
+  );
+  const monthlyBudgetForecastReady = budgetHistoryQ.isSuccess;
   const placementMix = periodLoading && !viewingAsAdmin ? [] : placementMixQ.data ?? [];
   const searchTerms = periodLoading && !viewingAsAdmin ? [] : searchTermsPulseQ.data ?? [];
   const adGroups = periodLoading && !viewingAsAdmin ? [] : adGroupsQ.data ?? [];
@@ -1524,12 +1629,7 @@ export default function OverviewScreen() {
       : selectedProfiles.length > 1
         ? `${selectedProfiles.length}`
         : "All";
-  const marketCountries = useMemo(() => {
-    if (selectedProfiles.length > 0) {
-      return multiCountryCodes(selectedProfiles, { onlyEnabled: false });
-    }
-    return multiCountryCodes(profiles, { onlyEnabled: true });
-  }, [profiles, selectedProfiles]);
+  const marketCountries = adsMarketCountries;
 
   const { scrollY: headerScrollY, onScroll: onHeaderScroll, scrollEventThrottle } =
     useOverviewHeaderScroll();
@@ -1878,12 +1978,23 @@ export default function OverviewScreen() {
     router.push("/(tabs)/products");
   }, [router]);
   const reviewReady = viewingAsAdmin ? bootstrapQ.isFetched : metricsQ.isFetched;
-  const reviewSources = [metricsQ, topCampaignsQ, todayMetricsQ, allBudgetsQ,
-    ruleExecsQ, todayStatsQ, syncLogsQ, ...(kdpQueryReady ? [kdpIngestQ] : [])];
-  const reviewChecks = viewingAsAdmin || reviewSources.some(query => query.isError)
-    ? 'incomplete' as const
-    : reviewSources.every(query => query.isSuccess && !query.isFetching)
-      ? 'complete' as const : 'pending' as const;
+  const reviewSources = [
+    metricsQ,
+    ...(selectedAdsMarket ? [adsWidgetMetricsQ] : []),
+    topCampaignsQ,
+    todayMetricsQ,
+    allBudgetsQ,
+    ruleExecsQ,
+    todayStatsQ,
+    syncLogsQ,
+    ...(kdpQueryReady ? [kdpIngestQ] : []),
+  ];
+  const reviewChecksPassed = reviewSources.filter((query) => query.isSuccess && !query.isFetching).length;
+  const reviewChecks = viewingAsAdmin || reviewSources.some((query) => query.isError)
+    ? "incomplete" as const
+    : reviewSources.every((query) => query.isSuccess && !query.isFetching)
+      ? "complete" as const
+      : "pending" as const;
   const bidBot = bidBotStatusQ.data;
   const snapshot = [snapshotQ.data, cachedSnapshot, peekMobileHomeSnapshot(homeScope)].find((candidate) =>
     candidate && usableCachedHomeSnapshot(candidate, homeScope, todayStr),
@@ -1899,6 +2010,7 @@ export default function OverviewScreen() {
     const primary: Promise<unknown>[] = [
       snapshotQ.refetch(),
       metricsQ.refetch(),
+      ...(selectedAdsMarket ? [adsWidgetMetricsQ.refetch()] : []),
       royaltiesQ.refetch(),
       syncLogsQ.refetch(),
       royaltySetup.refetchAccounts(),
@@ -1919,6 +2031,7 @@ export default function OverviewScreen() {
         placementMixQ.refetch(),
         todayMetricsQ.refetch(),
         allBudgetsQ.refetch(),
+        budgetHistoryQ.refetch(),
         ruleExecsQ.refetch(),
         rulesQ.refetch(),
         todayStatsQ.refetch(),
@@ -2058,6 +2171,8 @@ export default function OverviewScreen() {
           <OverviewHeaderV3
             profileLabel={primaryProfile}
             marketCountries={marketCountries}
+            selectedMarketCountry={selectedAdsMarket}
+            onMarketSelectionChange={setSelectedAdsMarket}
             currency={primaryCurrency}
             onProfilePress={() => router.push("/more/accounts")}
             onCurrencyPress={() => router.push("/more/accounts")}
@@ -2225,7 +2340,7 @@ export default function OverviewScreen() {
 
           {(sellerReady || viewingAsAdmin) ? (
             <OverviewSwipeWidget
-              key={`home-ads-engine-${scopeProfiles.join("|")}`}
+              key={`home-ads-engine-${adsWidgetProfileIds.join("|")}`}
               staggerIndex={1}
               testID="home-ads-engine"
               title="Ads Engine"
@@ -2250,12 +2365,12 @@ export default function OverviewScreen() {
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineKeywordsPage
-                      profileIds={scopeProfiles}
+                      profileIds={adsWidgetProfileIds}
                       start={dateRange.start}
                       end={dateRange.end}
                       breakEvenAcos={breakEvenAcos}
                       width={chartWidgetWidth}
-                      moneyProfileIds={moneyProfileIds}
+                      moneyProfileIds={adsWidgetProfileIds}
                       displayCurrency={primaryCurrency}
                       profileCurrencyById={profileCurrencyById}
                       fxRates={fxRates}
@@ -2270,12 +2385,12 @@ export default function OverviewScreen() {
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineSearchTermsPage
-                      profileIds={scopeProfiles}
+                      profileIds={adsWidgetProfileIds}
                       start={dateRange.start}
                       end={dateRange.end}
                       breakEvenAcos={breakEvenAcos}
                       width={chartWidgetWidth}
-                      moneyProfileIds={moneyProfileIds}
+                      moneyProfileIds={adsWidgetProfileIds}
                       displayCurrency={primaryCurrency}
                       profileCurrencyById={profileCurrencyById}
                       fxRates={fxRates}
@@ -2319,7 +2434,7 @@ export default function OverviewScreen() {
 
           {(sellerReady || viewingAsAdmin) ? (
           <OverviewSwipeWidget
-            key={`home-campaigns-${scopeProfiles.join("|")}`}
+            key={`home-campaigns-${adsWidgetProfileIds.join("|")}`}
             staggerIndex={3}
             testID="home-campaigns"
             title="Campaigns"
@@ -2434,18 +2549,17 @@ export default function OverviewScreen() {
 
           {belowFoldReady ? (
           <>
-          {reviewReady ? (
-            <View style={{ marginTop: dashboard.sectionGap }}>
-              <ActionReviewCard
-                items={actionItems}
-                rulesChecked={pulseStats.rulesRun}
-                checks={reviewChecks}
-                t={t}
-                onOpen={(route) => {
-                  router.push(route as never);
-                }}
-              />
-            </View>
+          {bidBotStatusQ.isFetched || bidBot ? (
+            <OverviewBidBotCard
+              autoMode={bidBot?.autoMode ?? snapshotAutomation?.autoMode}
+              pendingCount={snapshotAutomation?.pendingCount ?? null}
+              lastRunAt={bidBot?.lastRunAt ?? snapshotAutomation?.lastRunAt}
+              targetAcos={bidBot?.targetAcos}
+              recommendations={bidBot?.lastRunStats?.recommendations ?? null}
+              statusError={bidBotStatusQ.isError && !bidBot}
+              onPress={() => router.push("/more/bid-bot")}
+              staggerIndex={2}
+            />
           ) : null}
 
           {totalDailyBudget > 0 || budgetSpend > 0 || budgetTodaySynced ? (
@@ -2456,19 +2570,10 @@ export default function OverviewScreen() {
               usedPct={budgetUsedPct}
               danger={budgetDanger}
               todaySynced={budgetTodaySynced}
-              staggerIndex={2}
-            />
-          ) : null}
-
-          {bidBotStatusQ.isFetched || bidBot ? (
-            <OverviewBidBotCard
-              autoMode={bidBot?.autoMode ?? snapshotAutomation?.autoMode}
-              pendingCount={snapshotAutomation?.pendingCount ?? null}
-              lastRunAt={bidBot?.lastRunAt ?? snapshotAutomation?.lastRunAt}
-              targetAcos={bidBot?.targetAcos}
-              recommendations={bidBot?.lastRunStats?.recommendations ?? null}
-              statusError={bidBotStatusQ.isError && !bidBot}
-              onPress={() => router.push("/more/bid-bot")}
+              monthToDate={monthlyBudgetForecastReady ? monthlyBudgetForecast.monthToDateSpend : undefined}
+              projectedMonthSpend={monthlyBudgetForecastReady ? monthlyBudgetForecast.projectedMonthSpend : undefined}
+              monthlyBudget={monthlyBudgetForecastReady ? monthlyBudgetForecast.monthlyBudget : undefined}
+              daysRemaining={monthlyBudgetForecastReady ? monthlyBudgetForecast.daysRemaining : undefined}
               staggerIndex={3}
             />
           ) : null}
@@ -2483,9 +2588,31 @@ export default function OverviewScreen() {
             />
           ) : null}
 
+          <OverviewMarketplaceAdsCard
+            rows={marketplaceAdsRows}
+            selectedCountry={selectedAdsMarket}
+            currency={primaryCurrency}
+            onSelect={setSelectedAdsMarket}
+            staggerIndex={5}
+          />
+
+          {reviewReady ? (
+            <View style={{ marginTop: dashboard.sectionGap }}>
+              <ActionReviewCard
+                items={actionItems}
+                checksPassed={reviewChecksPassed}
+                checksTotal={reviewSources.length}
+                scopeLabel={overviewMarketplaceLabel(selectedAdsMarket)}
+                checks={reviewChecks}
+                t={t}
+                onOpen={(route) => router.push(route as never)}
+              />
+            </View>
+          ) : null}
+
           {(keywordBleeders.length > 0 || keywordHighAcos.length > 0 || termSpendNoOrders.length > 0 || termLowAcos.length > 0) ? (
             <OverviewSwipeWidget
-              key={`w4-${scopeProfiles.join("|")}`}
+              key={`w4-${adsWidgetProfileIds.join("|")}`}
               staggerIndex={4}
               title="Keywords & search"
               icon="targeting"
@@ -2575,7 +2702,7 @@ export default function OverviewScreen() {
 
           {placementMix.length > 0 || placementCampaigns.length > 0 ? (
             <OverviewSwipeWidget
-              key={`w5-${scopeProfiles.join("|")}`}
+              key={`w5-${adsWidgetProfileIds.join("|")}`}
               staggerIndex={5}
               title="Placement mix"
               icon="targeting"
@@ -2815,25 +2942,31 @@ function AnimatedValueText({
 function ActionReviewCard({
   checks,
   items,
-  rulesChecked,
+  checksPassed,
+  checksTotal,
+  scopeLabel,
   t,
   onOpen,
 }: {
   checks: 'pending' | 'incomplete' | 'complete';
   items: DashboardActionItem[];
-  rulesChecked: number;
+  checksPassed: number;
+  checksTotal: number;
+  scopeLabel: string;
   t: any;
   onOpen: (route: string) => void;
 }) {
-  const active = items.length > 0;
+  // Signals are actionable only after every source in the current scope has
+  // completed. A partial queue can otherwise look definitive.
+  const active = checks === "complete" && items.length > 0;
   const visibleItems = items.slice(0, 3);
   const statusLabel = active
     ? `${items.length} signal${items.length === 1 ? "" : "s"}`
     : checks === "complete"
-      ? `${rulesChecked} checked`
+      ? `${checksPassed} checks passed · ${scopeLabel}`
       : checks === "pending"
-        ? "Checking…"
-        : "Incomplete";
+        ? `${checksPassed} of ${checksTotal} checked · ${scopeLabel}`
+        : `Needs retry · ${scopeLabel}`;
 
   return (
     <View style={[styles.actionReviewCard, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.border }]}>
@@ -2841,14 +2974,14 @@ function ActionReviewCard({
         <InteliAdsIcon name={active || checks !== "complete" ? "attention" : "success"} size={dashboard.iconLg} color={active ? t.colors.tone_warning : t.colors.text_secondary} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.actionReviewTitle, { color: t.colors.text_primary }]}>
-            {active ? "Review queue" : checks === "complete" ? "All clear" : checks === "pending" ? "Checking…" : "Checks incomplete"}
+            {active ? "Review queue" : checks === "complete" ? "All clear" : checks === "pending" ? "Checking…" : "Review unavailable"}
           </Text>
           <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 1 }]} numberOfLines={1}>
             {statusLabel}
           </Text>
         </View>
         <View style={[styles.actionReviewCount, { backgroundColor: t.colors.background_tertiary }]}>
-          <Text style={[styles.actionReviewCountText, { color: t.colors.text_primary }]}>{active ? items.length : checks === "complete" ? "OK" : "—"}</Text>
+          <Text style={[styles.actionReviewCountText, { color: t.colors.text_primary }]}>{active ? items.length : checks === "complete" ? "OK" : checks === "pending" ? checksPassed : "!"}</Text>
         </View>
       </View>
 

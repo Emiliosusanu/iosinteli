@@ -69,9 +69,11 @@ test("Home uses the motion system and does not replay entrance or haptic navigat
   assert.match(tabs, /freezeOnBlur:\s*false/);
   // Period changes must not remount Overview widgets (StaggerReveal flash / freeze feel).
   assert.doesNotMatch(home, /key=\{`[^`$]*\$\{activePeriodKey\}/);
-  assert.match(home, /key=\{`home-ads-engine-\$\{scopeProfiles\.join/);
+  assert.match(home, /key=\{`home-ads-engine-\$\{adsWidgetProfileIds\.join/);
   assert.match(charts, /playHaptic\("select"\)/);
   assert.match(charts, /ChartScrubCursor/);
+  assert.match(charts, /Gesture\.Tap\(\)/);
+  assert.match(charts, /Gesture\.Race\(tap, pan\)/);
   assert.match(charts, /VerifiedValue/);
   assert.match(charts, /makeSmoothPath/);
   assert.match(charts, /netPosFill/);

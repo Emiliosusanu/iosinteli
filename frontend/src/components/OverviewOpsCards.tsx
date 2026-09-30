@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -257,6 +257,10 @@ export function OverviewBudgetTodayCard({
   usedPct,
   danger,
   todaySynced = true,
+  monthToDate,
+  projectedMonthSpend,
+  monthlyBudget,
+  daysRemaining,
   staggerIndex = 0,
 }: {
   spent: number;
@@ -266,6 +270,10 @@ export function OverviewBudgetTodayCard({
   danger: boolean;
   /** False when today's Ads metrics are not imported yet — do not imply $0 spend. */
   todaySynced?: boolean;
+  monthToDate?: number;
+  projectedMonthSpend?: number;
+  monthlyBudget?: number;
+  daysRemaining?: number;
   staggerIndex?: number;
 }) {
   const t = useTheme();
@@ -307,8 +315,85 @@ export function OverviewBudgetTodayCard({
               <StatusChip label="Spend so far" tone="neutral" t={t} />
             )}
           </View>
+          {todaySynced && projectedMonthSpend != null ? (
+            <View style={styles.forecastRows}>
+              <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>
+                Month to date {formatCurrency(monthToDate ?? 0, currency, { compact: true })}
+              </Text>
+              <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "600" }]}>
+                Forecast {formatCurrency(projectedMonthSpend, currency, { compact: true })}
+                {monthlyBudget && monthlyBudget > 0
+                  ? ` of ${formatCurrency(monthlyBudget, currency, { compact: true })}`
+                  : ""}
+              </Text>
+              <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>
+                {Math.max(0, daysRemaining ?? 0)} days remaining
+              </Text>
+            </View>
+          ) : null}
         </View>
       </View>
+    </OpsCardShell>
+  );
+}
+
+export type MarketplaceAdsSummary = {
+  country: string;
+  spend: number;
+  orders: number;
+  clicks: number;
+  acos: number | null;
+};
+
+export function OverviewMarketplaceAdsCard({
+  rows,
+  selectedCountry,
+  currency,
+  onSelect,
+  staggerIndex = 5,
+}: {
+  rows: MarketplaceAdsSummary[];
+  selectedCountry: string | null;
+  currency: string;
+  onSelect: (country: string | null) => void;
+  staggerIndex?: number;
+}) {
+  const t = useTheme();
+  if (!rows.length) return null;
+  return (
+    <OpsCardShell staggerIndex={staggerIndex} toneWash={t.colors.tone_primary + "14"} testID="overview-marketplace-ads">
+      <OverviewCardHeader title="Ads marketplaces" icon="campaigns" />
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ selected: selectedCountry == null }}
+        onPress={() => onSelect(null)}
+        style={[styles.marketRow, { borderBottomColor: t.colors.separator }]}
+      >
+        <Text style={[t.typography.subhead, { color: t.colors.text_primary, flex: 1 }]}>All markets</Text>
+        {selectedCountry == null ? <SFSymbol name="checkmark" size={14} color={t.colors.tone_primary} /> : null}
+      </TouchableOpacity>
+      {rows.map((row) => (
+        <TouchableOpacity
+          key={row.country}
+          accessibilityRole="button"
+          accessibilityState={{ selected: selectedCountry === row.country }}
+          accessibilityLabel={`${row.country}, spend ${formatCurrency(row.spend, currency)}, ${formatInt(row.orders)} orders, ${formatInt(row.clicks)} clicks${row.acos == null ? "" : `, ACoS ${formatPercent(row.acos, 1)}`}`}
+          onPress={() => onSelect(row.country)}
+          style={[styles.marketRow, { borderBottomColor: t.colors.separator }]}
+        >
+          <Text style={[t.typography.headline, { color: t.colors.text_primary, width: 38 }]}>{row.country}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[t.typography.subhead, { color: t.colors.text_primary }]}>
+              {formatCurrency(row.spend, currency, { compact: true })} spend
+            </Text>
+            <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
+              {formatInt(row.orders)} orders · {formatInt(row.clicks)} clicks
+              {row.acos == null ? "" : ` · ${formatPercent(row.acos, 1)} ACoS`}
+            </Text>
+          </View>
+          {selectedCountry === row.country ? <SFSymbol name="checkmark" size={14} color={t.colors.tone_primary} /> : null}
+        </TouchableOpacity>
+      ))}
     </OpsCardShell>
   );
 }
@@ -522,6 +607,17 @@ const styles = StyleSheet.create({
   budgetCopy: {
     flex: 1,
     minWidth: 0,
+  },
+  forecastRows: {
+    marginTop: 10,
+    gap: 3,
+  },
+  marketRow: {
+    minHeight: 54,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   arcGlow: {
     position: "absolute",
