@@ -27,8 +27,10 @@ export type SyncSnapshotPayload = {
 };
 
 export type NativeWakeKind = "recent" | "processing";
+export type ApnsEnvironment = "sandbox" | "production";
 
 type NativeModule = {
+  getApnsEnvironmentAsync(): Promise<string>;
   registerAndScheduleAsync(force: boolean): Promise<boolean>;
   scheduleIfNeededAsync(force: boolean): Promise<boolean>;
   setEnabledAsync(enabled: boolean): Promise<boolean>;
@@ -49,6 +51,16 @@ export const APP_GROUP_ID = "group.io.inteliads.app";
 
 export function isNativeSyncAvailable(): boolean {
   return NativeSync != null;
+}
+
+export async function getNativeApnsEnvironment(): Promise<ApnsEnvironment | null> {
+  if (!NativeSync) return null;
+  try {
+    const environment = await NativeSync.getApnsEnvironmentAsync();
+    return environment === "sandbox" || environment === "production" ? environment : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function registerNativeMetronome(force = true): Promise<boolean> {

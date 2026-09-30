@@ -1,11 +1,71 @@
 import ExpoModulesCore
+import Foundation
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
 
 public class InteliAdsNativeSyncModule: Module {
+  private func normalizedApnsEnvironment(_ value: Any?) -> String? {
+    guard let raw = value as? String else { return nil }
+    switch raw.lowercased() {
+    case "development", "sandbox":
+      return "sandbox"
+    case "production":
+      return "production"
+    default:
+      return nil
+    }
+  }
+
+  /// Reads the public provisioning profile bundled with development/ad-hoc builds.
+  /// TestFlight/App Store builds either report production here or omit the profile,
+  /// in which case the Release fallback below is correct.
+  private func provisionedApnsEnvironment() -> String? {
+    guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+          let data = try? Data(contentsOf: url) else {
+      return nil
+    }
+
+    let plistStartMarker = Data("<?xml".utf8)
+    let plistEndMarker = Data("</plist>".utf8)
+    guard let start = data.range(of: plistStartMarker)?.lowerBound,
+          let endRange = data.range(
+            of: plistEndMarker,
+            options: [],
+            in: start..<data.endIndex
+          ) else {
+      return nil
+    }
+
+    let plistData = data.subdata(in: start..<endRange.upperBound)
+    guard let root = try? PropertyListSerialization.propertyList(
+      from: plistData,
+      options: [],
+      format: nil
+    ) as? [String: Any],
+          let entitlements = root["Entitlements"] as? [String: Any] else {
+      return nil
+    }
+    return normalizedApnsEnvironment(entitlements["aps-environment"])
+  }
+
+  private func signedApnsEnvironment() -> String {
+    if let environment = provisionedApnsEnvironment() {
+      return environment
+    }
+#if DEBUG
+    return "sandbox"
+#else
+    return "production"
+#endif
+  }
+
   public func definition() -> ModuleDefinition {
     Name("InteliAdsNativeSync")
+
+    AsyncFunction("getApnsEnvironmentAsync") { () -> String in
+      self.signedApnsEnvironment()
+    }
 
     AsyncFunction("registerAndScheduleAsync") { (force: Bool) in
       InteliAdsBackgroundRefreshManager.shared.register()
