@@ -213,8 +213,9 @@ export default function AddAdGroupTargetsScreen() {
     // Nest can resolve ASIN via product_ads / campaign_asin_links when client
     // primaryAsin is still empty. Paste keywords/ASINs still works without suggestions.
     enabled: !!campaignId && !guestMode && !asinResolving,
-    retry: 2,
-    retryDelay: (n) => Math.min(8000, 1500 * 2 ** n),
+    // The fetcher already retries transient Amazon failures three times. Keep
+    // one retry owner so throttling cannot multiply into nine endpoint calls.
+    retry: false,
     staleTime: 60_000,
   });
 

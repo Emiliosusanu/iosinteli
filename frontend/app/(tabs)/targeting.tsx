@@ -22,7 +22,6 @@ import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { isHomeQueryTimeout, queryStillWaiting, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import {
   fetchAdGroupDefaultBids,
-  fetchMobileTargetingCatalogTail,
   fetchMobileTargetingPage,
   fetchTargetingBookOptions,
   fillMissingProductTargetTitlesFromRetail,
@@ -31,7 +30,7 @@ import {
   type MobileTargetingSort,
   type TargetingBookOption,
 } from "@/src/lib/queries";
-import { TARGETING_PAGE_SIZE } from "@/src/lib/targetingPage";
+import { appendTargetingPageRows, TARGETING_PAGE_SIZE } from "@/src/lib/targetingPage";
 import { filterTargetingBookOptions } from "@/src/lib/targetingBookFilter";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
@@ -483,6 +482,9 @@ export default function TargetingScreen() {
   const [catalogTail, setCatalogTail] = useState<any[]>([]);
   const [catalogTailLoading, setCatalogTailLoading] = useState(false);
   const [catalogTailIncomplete, setCatalogTailIncomplete] = useState(false);
+  const [catalogNextPage, setCatalogNextPage] = useState(2);
+  const catalogPageRequestRef = useRef<string | null>(null);
+  const catalogGenerationRef = useRef(0);
   const listRef = useRef<FlatList>(null);
 
   useEffect(() => {
@@ -626,6 +628,9 @@ export default function TargetingScreen() {
     setCatalogTail([]);
     setCatalogTailLoading(false);
     setCatalogTailIncomplete(false);
+    setCatalogNextPage(2);
+    catalogPageRequestRef.current = null;
+    catalogGenerationRef.current += 1;
   }, [
     periodKey,
     profileScopeKey,
@@ -724,7 +729,15 @@ export default function TargetingScreen() {
   useEffect(() => {
     const snap = mobilePageQ.data?.snapshot;
     if (typeof snap === "string" && snap.length > 0 && snap !== pageSnapshot) {
+      // A refreshed head starts a new immutable ranking. Never append pages from
+      // the previous snapshot under it.
       setPageSnapshot(snap);
+      setCatalogTail([]);
+      setCatalogTailLoading(false);
+      setCatalogTailIncomplete(false);
+      setCatalogNextPage(2);
+      catalogPageRequestRef.current = null;
+      catalogGenerationRef.current += 1;
     }
   }, [mobilePageQ.data?.snapshot, pageSnapshot]);
 
@@ -733,89 +746,76 @@ export default function TargetingScreen() {
     setPageSnapshot(null);
     setCatalogTail([]);
     setCatalogTailIncomplete(false);
+    setCatalogNextPage(2);
+    catalogPageRequestRef.current = null;
+    catalogGenerationRef.current += 1;
   }, [mobilePageQ.error]);
 
-  // After page-1 paints, walk remaining RPC pages under the same snapshot (no truncate).
-  // Depend on stable page identity only — title patches mutate row objects via
-  // setQueryData and must NOT restart / cancel catalog-tail fetches.
+  // Page 1 is globally filtered and ranked by the RPC. Fetch one following page
+  // only when the user asks for it; eagerly walking every page made Targeting
+  // download tens of MB even when the user only needed the first ranked rows.
+  // Snapshot continuity preserves the exact server order across pages.
   const catalogHeadRef = useRef(mobilePageQ.data);
   catalogHeadRef.current = mobilePageQ.data;
-  const catalogHeadSnapshot = mobilePageQ.data?.snapshot ?? null;
-  const catalogHeadTotal = mobilePageQ.data?.total ?? 0;
-  const catalogHeadLen = mobilePageQ.data?.rows?.length ?? 0;
-  useEffect(() => {
+  const loadNextCatalogPage = async () => {
     const head = catalogHeadRef.current;
-    if (!head?.rows || mobilePageQ.isFetching) return;
-    if (head.rows.length >= head.total) {
-      setCatalogTail([]);
-      setCatalogTailLoading(false);
-      setCatalogTailIncomplete(false);
-      return;
-    }
-    let cancelled = false;
+    if (!head?.rows || mobilePageQ.isFetching || catalogTailLoading) return;
+    if (head.rows.length + catalogTail.length >= head.total) return;
+
+    const snapshot = head.snapshot;
+    const page = catalogNextPage;
+    const generation = catalogGenerationRef.current;
+    const requestKey = `${generation}:${snapshot}:${page}`;
+    if (catalogPageRequestRef.current === requestKey) return;
+    catalogPageRequestRef.current = requestKey;
     setCatalogTailLoading(true);
     setCatalogTailIncomplete(false);
-    void (async () => {
-      try {
-        const tail = await fetchMobileTargetingCatalogTail({
-          head,
-          segment,
-          sort: serverSort,
-          pageSize: TARGETING_PAGE_SIZE,
-          start: dateRange.start,
-          end: dateRange.end,
-          profiles: scopeProfiles,
-          ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
-          ...(bookFilterActive && booksQ.isSuccess && bookCampaignIdList.length > 0
-            ? { campaignIds: bookCampaignIdList }
-            : {}),
-          state: stateFilter,
-          search: searchNeedle,
-          perf,
-          advanced: advancedForRpc,
-        });
-        if (cancelled) return;
-        setCatalogTail(tail);
-        setCatalogTailLoading(false);
-        setCatalogTailIncomplete(head.rows.length + tail.length < head.total);
-      } catch (error) {
-        if (cancelled) return;
-        if (isMobileTargetingSnapshotChanged(error)) {
-          setPageSnapshot(null);
-          setCatalogTail([]);
-          void queryClient.invalidateQueries({ queryKey: mobilePageQueryKey });
-        }
-        setCatalogTailLoading(false);
-        setCatalogTailIncomplete(true);
-        // eslint-disable-next-line no-console
-        console.warn("[inteliads:targeting] catalog tail failed", error);
+    try {
+      const next = await withQueryTimeout(fetchMobileTargetingPage({
+        segment,
+        sort: serverSort,
+        page,
+        pageSize: TARGETING_PAGE_SIZE,
+        start: dateRange.start,
+        end: dateRange.end,
+        profiles: scopeProfiles,
+        ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+        ...(bookFilterActive && booksQ.isSuccess && bookCampaignIdList.length > 0
+          ? { campaignIds: bookCampaignIdList }
+          : {}),
+        state: stateFilter,
+        search: searchNeedle,
+        perf,
+        advanced: advancedForRpc,
+        snapshot,
+        skipDisplayEnrich: true,
+      }), TARGETING_QUERY_TIMEOUT_MS);
+      if (catalogGenerationRef.current !== generation) return;
+      if (next.snapshot !== snapshot || catalogHeadRef.current?.snapshot !== snapshot) {
+        throw new Error("Targeting snapshot changed");
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    catalogHeadSnapshot,
-    catalogHeadTotal,
-    catalogHeadLen,
-    mobilePageQ.isFetching,
-    segment,
-    serverSort,
-    dateRange.start,
-    dateRange.end,
-    scopeProfiles,
-    viewAsOtherUser,
-    adminFilterUserId,
-    user?.id,
-    bookFilterActive,
-    bookCampaignIdList,
-    stateFilter,
-    searchNeedle,
-    perf,
-    advancedForRpc,
-    mobilePageQueryKey,
-    queryClient,
-  ]);
+      setCatalogTail((previous) => appendTargetingPageRows(head.rows, previous, next.rows));
+      setCatalogNextPage(page + 1);
+      setCatalogTailIncomplete(false);
+    } catch (error) {
+      if (catalogGenerationRef.current !== generation) return;
+      if (isMobileTargetingSnapshotChanged(error) || /snapshot changed/i.test(String(error))) {
+        setPageSnapshot(null);
+        setCatalogTail([]);
+        setCatalogNextPage(2);
+        void queryClient.invalidateQueries({ queryKey: mobilePageQueryKey });
+      } else {
+        setCatalogTailIncomplete(true);
+      }
+      // eslint-disable-next-line no-console
+      console.warn("[inteliads:targeting] next catalog page failed", error);
+    } finally {
+      if (catalogPageRequestRef.current === requestKey) {
+        catalogPageRequestRef.current = null;
+        setCatalogTailLoading(false);
+      }
+    }
+  };
 
   // Page load skips Amazon retail HTML (spinner hang). Fill remaining titles
   // after paint — covers already work via CDN; titles need retail for competitors.
@@ -1059,13 +1059,14 @@ export default function TargetingScreen() {
       data.length > 0 &&
       !isError);
 
-  // Honest catalog footer — server total from RPC; never invent a 500-cap story.
+  // Honest catalog footer — total is the globally filtered RPC count. Only
+  // transfer more ranked rows when requested; never pretend the loaded window
+  // is the complete result set and never invent a 500-cap story.
+  const hasMoreCatalogRows = Boolean(mobilePageQ.data && data.length < serverTotal);
   const pageSummary = mobilePageQ.data
-    ? catalogTailLoading && data.length < serverTotal
+    ? hasMoreCatalogRows
       ? `${data.length} of ${serverTotal} loaded`
-      : catalogTailIncomplete && data.length < serverTotal
-        ? `${data.length} of ${serverTotal} loaded · rest unavailable`
-        : `${serverTotal} rows${listUpdating ? " · updating" : ""}`
+      : `${serverTotal} rows${listUpdating ? " · updating" : ""}`
     : null;
 
   // Placement list is 3 rows per campaign; Amazon writes once per campaign.
@@ -1086,6 +1087,9 @@ export default function TargetingScreen() {
       resetRetailTitleFill();
       setCatalogTail([]);
       setCatalogTailIncomplete(false);
+      setCatalogNextPage(2);
+      catalogPageRequestRef.current = null;
+      catalogGenerationRef.current += 1;
       if (bookFilterActive && booksQ.isError) await booksQ.refetch();
       else await activeQuery.refetch();
       setRetailFillKick((n) => n + 1);
@@ -2033,6 +2037,35 @@ export default function TargetingScreen() {
                   >
                     {pageSummary}
                   </Text>
+                ) : null}
+                {hasMoreCatalogRows ? (
+                  <TouchableOpacity
+                    testID="targeting-load-more"
+                    accessibilityRole="button"
+                    accessibilityLabel={catalogTailIncomplete ? "Retry loading more results" : "Load more results"}
+                    disabled={catalogTailLoading}
+                    onPress={() => void loadNextCatalogPage()}
+                    style={{
+                      alignSelf: "center",
+                      minWidth: 132,
+                      minHeight: 40,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 18,
+                      borderRadius: 20,
+                      backgroundColor: t.colors.tone_primary + "18",
+                      opacity: catalogTailLoading ? 0.65 : 1,
+                    }}
+                  >
+                    <Text
+                      style={[
+                        t.typography.caption1,
+                        { color: t.colors.tone_primary, fontWeight: "700" },
+                      ]}
+                    >
+                      {catalogTailLoading ? "Loading…" : catalogTailIncomplete ? "Retry" : "Load more"}
+                    </Text>
+                  </TouchableOpacity>
                 ) : null}
               </View>
             ) : null

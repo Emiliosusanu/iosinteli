@@ -48,7 +48,7 @@ test("all five targeting segments are always wired (kw / asin / auto / cat / pla
   assert.match(targeting, /from "@\/src\/components\/TargetingModePills"/);
   // Server-ranked catalog owns segment routing — no client asins/auto/category buckets.
   assert.match(targeting, /fetchMobileTargetingPage/);
-  assert.match(targeting, /fetchMobileTargetingCatalogTail/);
+  assert.match(targeting, /loadNextCatalogPage/);
   assert.match(targeting, /segment,/);
   assert.doesNotMatch(targeting, /TargetingPagination/);
   assert.doesNotMatch(targeting, /buckets\.auto\.push/);
@@ -342,17 +342,12 @@ test("list cap 500 is fetch-only — not Amazon write ceiling; entities not sile
   assert.match(queries, /Not an Amazon write limit/);
   // Honesty: progressive full catalog + server totals — no fabricated 500-cap footer / page chrome.
   assert.match(targeting, /TARGETING_PAGE_SIZE/);
-  assert.match(targeting, /fetchMobileTargetingCatalogTail/);
+  assert.match(targeting, /loadNextCatalogPage/);
   assert.match(targeting, /catalogTailLoading/);
-  // Title patches must not restart catalog-tail (stable snapshot/total/len deps).
-  assert.match(targeting, /catalogHeadSnapshot/);
-  assert.match(targeting, /catalogHeadTotal/);
-  assert.match(targeting, /catalogHeadLen/);
+  // Title patches must not change the ranked head snapshot or trigger a full walk.
   assert.match(targeting, /catalogHeadRef/);
-  assert.doesNotMatch(
-    targeting,
-    /return \(\) => \{\s*cancelled = true;\s*\};\s*\}, \[\s*mobilePageQ\.data,/,
-  );
+  assert.match(targeting, /testID="targeting-load-more"/);
+  assert.doesNotMatch(targeting, /fetchMobileTargetingCatalogTail/);
   assert.match(targeting, /of \$\{serverTotal\} loaded/);
   assert.match(targeting, /never invent a 500-cap story/);
   assert.doesNotMatch(targeting, /TargetingPagination/);
