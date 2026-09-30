@@ -67,6 +67,36 @@ public class InteliAdsNativeSyncModule: Module {
       self.signedApnsEnvironment()
     }
 
+    AsyncFunction("getStoreProductsAsync") { () async throws -> [[String: Any]] in
+      guard #available(iOS 15.0, *) else { return [] }
+      return try await InteliAdsStoreKit.products()
+    }
+
+    AsyncFunction("purchaseStoreProductAsync") { (productId: String, appAccountToken: String) async throws -> [String: Any] in
+      guard #available(iOS 15.0, *) else { throw StoreKitBridgeError.productUnavailable }
+      return try await InteliAdsStoreKit.purchase(productId: productId, appAccountToken: appAccountToken)
+    }
+
+    AsyncFunction("restoreStorePurchasesAsync") { () async throws -> [[String: Any]] in
+      guard #available(iOS 15.0, *) else { return [] }
+      return try await InteliAdsStoreKit.restore()
+    }
+
+    AsyncFunction("getStoreEntitlementsAsync") { () async -> [[String: Any]] in
+      guard #available(iOS 15.0, *) else { return [] }
+      return await InteliAdsStoreKit.currentEntitlements()
+    }
+
+    AsyncFunction("finishStoreTransactionAsync") { (transactionId: String) async throws -> Bool in
+      guard #available(iOS 15.0, *) else { return false }
+      return try await InteliAdsStoreKit.finish(transactionId: transactionId)
+    }
+
+    AsyncFunction("showManageStoreSubscriptionsAsync") { () async throws -> Bool in
+      guard #available(iOS 15.0, *) else { return false }
+      return try await InteliAdsStoreKit.showManageSubscriptions()
+    }
+
     AsyncFunction("registerAndScheduleAsync") { (force: Bool) in
       InteliAdsBackgroundRefreshManager.shared.register()
       InteliAdsBackgroundRefreshManager.shared.isEnabled = true

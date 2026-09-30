@@ -24,11 +24,9 @@ import { useCurrentUserPlan } from "@/src/hooks/useCurrentUserPlan";
 import {
   BILLING_CURRENT_PLAN_BADGE,
   BILLING_MANAGE_PORTAL_LABEL,
-  BILLING_OPEN_WEB_LABEL,
   BILLING_SCREEN_FOOTER,
   BILLING_SCREEN_TITLE,
   ACCOUNT_GUEST_NOTE,
-  buildAccountBillingUrl,
   formatNestPricingPlanPrice,
   groupNestPricingPlans,
   isNestPricingPlanCurrent,
@@ -40,12 +38,21 @@ import {
 } from "@/src/lib/accountContract";
 import {
   createStripeBillingPortalSession,
-  createStripeCheckoutSession,
   fetchPricingPlans,
-  updateStripeSubscription,
+  verifyAppleTransaction,
 } from "@/src/lib/mutations";
 import { NestApiError } from "@/src/lib/rulesApi";
+import { appleProductIdForPlanSlug } from "@/src/lib/storeBilling";
 import { useTheme } from "@/src/lib/theme";
+import {
+  finishStoreTransaction,
+  getStoreProducts,
+  isStoreKitAvailable,
+  purchaseStoreProduct,
+  restoreStorePurchases,
+  showManageStoreSubscriptions,
+  type StoreProduct,
+} from "inteliads-native-sync";
 
 async function openSafari(url: string) {
   await WebBrowser.openBrowserAsync(url, {
@@ -69,6 +76,14 @@ export default function BillingScreen() {
     queryFn: fetchPricingPlans,
     enabled,
     staleTime: 60_000,
+    retry: 1,
+  });
+
+  const storeProductsQ = useQuery({
+    queryKey: ["app-store-products"],
+    queryFn: getStoreProducts,
+    enabled: enabled && isStoreKitAvailable(),
+    staleTime: 5 * 60_000,
     retry: 1,
   });
 
@@ -99,19 +114,6 @@ export default function BillingScreen() {
     [plansQ.data],
   );
 
-  const openWebBilling = async (planSlug?: string | null) => {
-    try {
-      await openSafari(buildAccountBillingUrl({ planSlug, source: "ios" }));
-    } catch {
-      Alert.alert(
-        "Couldn't open billing",
-        "Open dashboard.inteliads.io/billing in Safari.",
-      );
-    } finally {
-      refetchBilling();
-    }
-  };
-
   const openPortal = async () => {
     if (busySlug) return;
     setBusySlug("portal");
@@ -123,10 +125,7 @@ export default function BillingScreen() {
         error instanceof NestApiError
           ? error.message
           : "Couldn't open Stripe billing portal.";
-      Alert.alert("Couldn't open portal", message, [
-        { text: "Cancel", style: "cancel" },
-        { text: "Open web billing", onPress: () => void openWebBilling() },
-      ]);
+      Alert.alert("Couldn't open portal", message);
     } finally {
       setBusySlug(null);
       refetchBilling();
@@ -134,38 +133,19 @@ export default function BillingScreen() {
   };
 
   const startCheckout = async (plan: NestPricingPlan) => {
-    if (!plan.stripePriceId) {
-      Alert.alert("Plan unavailable", "This plan has no Stripe price yet.");
+    const productId = appleProductIdForPlanSlug(plan.slug);
+    const product = storeProductsQ.data?.find((item) => item.id === productId);
+    if (!user?.id || !productId || !product) {
+      Alert.alert("Plan unavailable", "This subscription is not available from the App Store yet.");
       return;
     }
     if (busySlug) return;
     setBusySlug(plan.slug);
-    const current = currentPlanQ.nestPlan;
     try {
-      // Existing paid subscription → Nest update path (may return a Checkout URL).
-      if (current?.stripeSubscriptionId && current.isActive && !current.paymentFailed) {
-        const updated = await updateStripeSubscription(plan.stripePriceId);
-        if (updated.requiresCheckout && updated.url) {
-          await openSafari(updated.url);
-          return;
-        }
-        if (updated.success) {
-          Alert.alert("Plan updated", updated.message || "Your plan change is scheduled.");
-          refetchBilling();
-          return;
-        }
-      }
-
-      const { url } = await createStripeCheckoutSession(plan.stripePriceId, {
-        source: "ios",
-      });
-      await openSafari(url);
-    } catch (error) {
-      const status = error instanceof NestApiError ? error.status : 0;
-      if (status === 409) {
+      if (currentPlanQ.nestPlan?.stripeSubscriptionId) {
         Alert.alert(
-          "Subscription already active",
-          "Manage or change your plan in Stripe billing.",
+          "Web subscription active",
+          "Manage the existing subscription first to avoid being charged twice.",
           [
             { text: "Cancel", style: "cancel" },
             { text: BILLING_MANAGE_PORTAL_LABEL, onPress: () => void openPortal() },
@@ -173,17 +153,67 @@ export default function BillingScreen() {
         );
         return;
       }
-      // Nest checkout failed — fall back to dashboard billing with plan + source=ios.
+      const purchase = await purchaseStoreProduct(productId, user.id);
+      if (purchase.status === "cancelled") return;
+      if (purchase.status === "pending") {
+        Alert.alert("Purchase pending", "Apple will activate the plan when the purchase is approved.");
+        return;
+      }
+      if (!purchase.signedTransaction || !purchase.transactionId) {
+        throw new Error("The App Store receipt is incomplete.");
+      }
+      await verifyAppleTransaction(purchase.signedTransaction);
+      await finishStoreTransaction(purchase.transactionId);
+      await queryClient.invalidateQueries({ queryKey: ["pricing-plans"] });
+      Alert.alert("Subscription active", `${product.displayName} is now active.`);
+    } catch (error) {
       Alert.alert(
-        "Couldn't start checkout",
-        "Open web billing in Safari to continue with Apple Pay.",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: BILLING_OPEN_WEB_LABEL,
-            onPress: () => void openWebBilling(plan.slug),
-          },
-        ],
+        "Purchase not completed",
+        error instanceof Error ? error.message : "The App Store purchase could not be completed.",
+      );
+    } finally {
+      setBusySlug(null);
+      refetchBilling();
+    }
+  };
+
+  const restorePurchases = async () => {
+    if (busySlug) return;
+    setBusySlug("restore");
+    try {
+      const purchases = await restoreStorePurchases();
+      const verified = purchases.filter(
+        (purchase) => purchase.status === "verified" && purchase.signedTransaction,
+      );
+      if (verified.length === 0) {
+        Alert.alert("No subscription found", "No active InteliAds subscription was found for this Apple ID.");
+        return;
+      }
+      for (const purchase of verified) {
+        await verifyAppleTransaction(purchase.signedTransaction!);
+        if (purchase.transactionId) await finishStoreTransaction(purchase.transactionId);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["pricing-plans"] });
+      Alert.alert("Purchases restored", "Your App Store subscription is active.");
+    } catch (error) {
+      Alert.alert(
+        "Restore failed",
+        error instanceof Error ? error.message : "The App Store purchase could not be restored.",
+      );
+    } finally {
+      setBusySlug(null);
+    }
+  };
+
+  const manageAppleSubscription = async () => {
+    if (busySlug) return;
+    setBusySlug("manage-apple");
+    try {
+      await showManageStoreSubscriptions();
+    } catch (error) {
+      Alert.alert(
+        "Couldn't open subscriptions",
+        error instanceof Error ? error.message : "Try again in a moment.",
       );
     } finally {
       setBusySlug(null);
@@ -223,7 +253,7 @@ export default function BillingScreen() {
           footer={
             currentPlanQ.nestPlan
               ? undefined
-              : "Pick a plan below. Checkout opens in Safari (Apple Pay)."
+              : "Pick a plan below to subscribe with your Apple ID."
           }
         >
           <View
@@ -245,7 +275,18 @@ export default function BillingScreen() {
               </Text>
             ) : null}
           </View>
-          {currentPlanQ.nestPlan?.stripeCustomerId ||
+          {currentPlanQ.nestPlan?.billingProvider === "apple" ? (
+            <Pressable
+              testID="billing-manage-apple"
+              onPress={() => void manageAppleSubscription()}
+              disabled={busySlug === "manage-apple"}
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.actionRow, { opacity: pressed ? 0.55 : 1 }]}
+            >
+              <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Manage App Store subscription</Text>
+              <SFSymbol name="chevron.right" size={14} color={t.colors.tone_primary} />
+            </Pressable>
+          ) : currentPlanQ.nestPlan?.stripeCustomerId ||
           currentPlanQ.nestPlan?.stripeSubscriptionId ? (
             <Pressable
               testID="billing-manage-portal"
@@ -263,20 +304,21 @@ export default function BillingScreen() {
               </Text>
               <SFSymbol name="arrow.up.right.square" size={14} color={t.colors.tone_primary} />
             </Pressable>
-          ) : (
-            <Pressable
-              testID="billing-open-web"
-              onPress={() => void openWebBilling()}
-              accessibilityRole="button"
-              accessibilityLabel={BILLING_OPEN_WEB_LABEL}
-              style={({ pressed }) => [styles.actionRow, { opacity: pressed ? 0.55 : 1 }]}
-            >
-              <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>
-                {BILLING_OPEN_WEB_LABEL}
-              </Text>
-              <SFSymbol name="arrow.up.right.square" size={14} color={t.colors.tone_primary} />
-            </Pressable>
-          )}
+          ) : null}
+          <Pressable
+            testID="billing-restore-purchases"
+            onPress={() => void restorePurchases()}
+            disabled={busySlug === "restore"}
+            accessibilityRole="button"
+            style={({ pressed }) => [styles.actionRow, { opacity: pressed ? 0.55 : 1 }]}
+          >
+            <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Restore purchases</Text>
+            {busySlug === "restore" ? (
+              <ActivityIndicator size="small" />
+            ) : (
+              <SFSymbol name="arrow.clockwise" size={14} color={t.colors.tone_primary} />
+            )}
+          </Pressable>
         </SettingsSection>
 
         <View style={styles.cycleWrap} testID="billing-cycle-toggle">
@@ -344,6 +386,13 @@ export default function BillingScreen() {
                 cycle={cycle}
                 current={currentPlanQ.nestPlan}
                 busySlug={busySlug}
+                storeProduct={storeProductsQ.data?.find(
+                  (item) =>
+                    item.id ===
+                    appleProductIdForPlanSlug(
+                      pickNestPricingPlanForCycle(group, cycle)?.slug || "",
+                    ),
+                )}
                 last={index === groups.length - 1}
                 onSelect={(plan) => void startCheckout(plan)}
               />
@@ -360,6 +409,7 @@ function PlanRow({
   cycle,
   current,
   busySlug,
+  storeProduct,
   last,
   onSelect,
 }: {
@@ -367,6 +417,7 @@ function PlanRow({
   cycle: BillingCyclePreference;
   current: ReturnType<typeof useCurrentUserPlan>["nestPlan"];
   busySlug: string | null;
+  storeProduct?: StoreProduct;
   last: boolean;
   onSelect: (plan: NestPricingPlan) => void;
 }) {
@@ -374,13 +425,15 @@ function PlanRow({
   const plan = pickNestPricingPlanForCycle(group, cycle);
   if (!plan) return null;
   const isCurrent = isNestPricingPlanCurrent(plan, current);
-  const price = formatNestPricingPlanPrice(plan, nestPricingPlanCycle(plan) ?? cycle);
+  const price =
+    storeProduct?.displayPrice ??
+    formatNestPricingPlanPrice(plan, nestPricingPlanCycle(plan) ?? cycle);
   const busy = busySlug === plan.slug;
   const cta = isCurrent
     ? BILLING_CURRENT_PLAN_BADGE
     : busy
       ? "Opening…"
-      : plan.stripePriceId
+      : storeProduct
         ? "Continue"
         : "Unavailable";
 
@@ -388,12 +441,12 @@ function PlanRow({
     <Pressable
       testID={`billing-plan-${plan.slug}`}
       onPress={() => {
-        if (isCurrent || !plan.stripePriceId || busy) return;
+        if (isCurrent || !storeProduct || busy) return;
         onSelect(plan);
       }}
-      disabled={isCurrent || !plan.stripePriceId || !!busySlug}
+      disabled={isCurrent || !storeProduct || !!busySlug}
       accessibilityRole="button"
-      accessibilityState={{ disabled: isCurrent || !plan.stripePriceId }}
+      accessibilityState={{ disabled: isCurrent || !storeProduct }}
       accessibilityLabel={`${group.name}. ${price}. ${cta}`}
       style={({ pressed }) => [
         styles.planRow,

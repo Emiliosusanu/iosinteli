@@ -31,6 +31,7 @@ import {
   unwrapNestUrlPayload,
 } from "../src/lib/accountContract.ts";
 import { MORE_GROUPS } from "../src/lib/moreRoot.ts";
+import { appleProductIdForPlanSlug } from "../src/lib/storeBilling.ts";
 
 const account = readFileSync(new URL("../app/more/account.tsx", import.meta.url), "utf8");
 const settings = readFileSync(new URL("../app/more/settings.tsx", import.meta.url), "utf8");
@@ -176,8 +177,10 @@ test("account metadata is fallback only when Nest fails — never claims Nest au
   assert.match(mutations, /fetchPricingPlans/);
   assert.match(mutations, /\/stripe\/create-checkout-session/);
   assert.match(mutations, /\/stripe\/billing-portal/);
+  assert.match(mutations, /\/apple-iap\/transactions\/verify/);
   assert.equal(ACCOUNT_NEST_SUBSCRIPTION_FOOTER, "");
-  assert.match(ACCOUNT_BILLING_FOOTER, /Billing is managed on the web/);
+  assert.match(ACCOUNT_BILLING_FOOTER, /Plans & billing/);
+  assert.doesNotMatch(ACCOUNT_BILLING_FOOTER, /on the web/i);
   assert.doesNotMatch(ACCOUNT_BILLING_FOOTER, /does not receive authoritative/);
   assert.doesNotMatch(settings, /does not receive authoritative/);
   assert.doesNotMatch(account, /does not receive authoritative/);
@@ -247,7 +250,7 @@ test("guest state has auth actions and no real-account subscription UI", () => {
   assert.match(account, /guestMode \? \(/);
 });
 
-test("billing opens in-app plans then Stripe Checkout / portal in Safari", () => {
+test("billing purchases new plans through StoreKit and keeps Stripe portal for legacy subscribers", () => {
   assert.equal(ACCOUNT_BILLING_URL, "https://dashboard.inteliads.io/billing");
   assert.equal(
     buildAccountBillingUrl({ planSlug: "pro-month", source: "ios" }),
@@ -262,13 +265,23 @@ test("billing opens in-app plans then Stripe Checkout / portal in Safari", () =>
   assert.doesNotMatch(settings, /openBrowserAsync\(ACCOUNT_BILLING_URL\)/);
   assert.match(rootLayout, /more\/billing/);
   assert.match(billing, /fetchPricingPlans/);
-  assert.match(billing, /createStripeCheckoutSession/);
+  assert.match(billing, /getStoreProducts/);
+  assert.match(billing, /purchaseStoreProduct/);
+  assert.match(billing, /verifyAppleTransaction/);
+  assert.match(billing, /finishStoreTransaction/);
+  assert.match(billing, /restoreStorePurchases/);
+  assert.match(billing, /showManageStoreSubscriptions/);
+  assert.doesNotMatch(billing, /createStripeCheckoutSession/);
   assert.match(billing, /createStripeBillingPortalSession/);
   assert.match(billing, /openBrowserAsync/);
-  assert.match(billing, /source:\s*"ios"|source=ios/);
+  assert.match(billing, /stripeSubscriptionId/);
   assert.match(billing, /invalidateQueries\(\{\s*queryKey:\s*\["pricing-plans"\]/);
   assert.match(billing, /AppState\.addEventListener/);
   assert.match(billing, /useFocusEffect/);
+  assert.equal(appleProductIdForPlanSlug("starter-month"), "io.inteliads.app.starter.month");
+  assert.equal(appleProductIdForPlanSlug("pro-year"), "io.inteliads.app.pro.year");
+  assert.equal(appleProductIdForPlanSlug("unlimited-month"), "io.inteliads.app.publisher.month");
+  assert.equal(appleProductIdForPlanSlug("invented"), null);
 
   const plans = normalizeNestPricingPlansPayload({
     data: [
