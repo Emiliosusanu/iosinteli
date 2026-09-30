@@ -1156,6 +1156,19 @@ export async function fetchPricingPlans(): Promise<NestPricingPlan[]> {
   return normalizeNestPricingPlansPayload(data);
 }
 
+export async function verifyAppleTransaction(signedTransaction: string): Promise<{
+  active: boolean;
+  planSlug: string;
+  productId: string;
+  expiresAt: string;
+}> {
+  return nestApiJson(
+    "/apple-iap/transactions/verify",
+    { method: "POST", body: JSON.stringify({ signedTransaction }) },
+    "Couldn't verify the App Store purchase.",
+  );
+}
+
 /**
  * Stripe Checkout session for a Nest catalog `stripePriceId`.
  * Opens in Safari (Apple Pay). Matches web `POST /stripe/create-checkout-session`.

@@ -10,26 +10,25 @@ export const ACCOUNT_STATUS_CHECKING = "Checking…";
 export const ACCOUNT_VIEW_AS_NOTE =
   "Viewing a customer — still your InteliAds account.";
 
-/** Shared web handoff — never claim App Store / Amazon billing. Kept for tests / rare footers. */
-export const ACCOUNT_BILLING_FOOTER = "Billing is managed on the web.";
+/** Account screens route subscription actions through the native billing screen. */
+export const ACCOUNT_BILLING_FOOTER = "Manage your subscription in Plans & billing.";
 
 /** Nest plan already shows on the row — no permanent footer. */
 export const ACCOUNT_NEST_SUBSCRIPTION_FOOTER = "";
 
-export const ACCOUNT_NO_PLAN_FOOTER = "No active plan. Choose a plan below or open web billing.";
+export const ACCOUNT_NO_PLAN_FOOTER = "No active plan. Choose a plan in Plans & billing.";
 
-export const ACCOUNT_METADATA_PLAN_FOOTER = "From account metadata. Billing is on the web.";
+export const ACCOUNT_METADATA_PLAN_FOOTER = "From account metadata. Manage it in Plans & billing.";
 
-export const ACCOUNT_SUBSCRIPTION_LOAD_FAILED_FOOTER = "Couldn't load plan. Billing is on the web.";
+export const ACCOUNT_SUBSCRIPTION_LOAD_FAILED_FOOTER = "Couldn't load plan. Try again in Plans & billing.";
 
 export const ACCOUNT_GUEST_NOTE = "Preview — not signed in.";
 
 export const BILLING_SCREEN_TITLE = "Plans & billing";
 export const BILLING_SCREEN_FOOTER =
-  "Checkout opens in Safari so Apple Pay works. Not an App Store purchase.";
+  "Subscriptions are purchased securely through your Apple ID.";
 export const BILLING_CURRENT_PLAN_BADGE = "Current";
 export const BILLING_MANAGE_PORTAL_LABEL = "Manage in Stripe";
-export const BILLING_OPEN_WEB_LABEL = "Open web billing";
 
 type Metadata = Record<string, unknown> | null | undefined;
 
@@ -50,6 +49,7 @@ export type NestUserPlan = {
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
   stripePriceId?: string;
+  billingProvider?: "apple" | "stripe";
   paymentFailed?: boolean;
   effectivePlanId?: string;
   effectivePlanName?: string;

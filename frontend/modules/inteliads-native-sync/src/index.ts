@@ -38,6 +38,35 @@ type NativeModule = {
   consumePendingWakeKindAsync(): Promise<string | null>;
   updateSyncSnapshotAsync(payload: SyncSnapshotPayload): Promise<boolean>;
   getSyncSnapshotAsync(): Promise<Record<string, unknown>>;
+  getStoreProductsAsync(): Promise<StoreProduct[]>;
+  purchaseStoreProductAsync(productId: string, appAccountToken: string): Promise<StoreTransaction>;
+  restoreStorePurchasesAsync(): Promise<StoreTransaction[]>;
+  getStoreEntitlementsAsync(): Promise<StoreTransaction[]>;
+  finishStoreTransactionAsync(transactionId: string): Promise<boolean>;
+  showManageStoreSubscriptionsAsync(): Promise<boolean>;
+};
+
+export type StoreProduct = {
+  id: string;
+  displayName: string;
+  description: string;
+  displayPrice: string;
+  price: number;
+  periodUnit?: string;
+  periodValue?: number;
+  introDisplayPrice?: string;
+  introPeriods?: number;
+};
+
+export type StoreTransaction = {
+  status: "verified" | "pending" | "cancelled";
+  productId: string;
+  transactionId?: string;
+  originalTransactionId?: string;
+  signedTransaction?: string;
+  purchaseDateMs?: number;
+  expiresDateMs?: number;
+  revocationDateMs?: number;
 };
 
 const NativeSync =
@@ -51,6 +80,37 @@ export const APP_GROUP_ID = "group.io.inteliads.app";
 
 export function isNativeSyncAvailable(): boolean {
   return NativeSync != null;
+}
+
+export function isStoreKitAvailable(): boolean {
+  return NativeSync != null && Platform.OS === "ios";
+}
+
+export async function getStoreProducts(): Promise<StoreProduct[]> {
+  return NativeSync ? NativeSync.getStoreProductsAsync() : [];
+}
+
+export async function purchaseStoreProduct(productId: string, appAccountToken: string): Promise<StoreTransaction> {
+  if (!NativeSync) throw new Error("App Store purchases are unavailable.");
+  return NativeSync.purchaseStoreProductAsync(productId, appAccountToken);
+}
+
+export async function restoreStorePurchases(): Promise<StoreTransaction[]> {
+  return NativeSync ? NativeSync.restoreStorePurchasesAsync() : [];
+}
+
+export async function getStoreEntitlements(): Promise<StoreTransaction[]> {
+  return NativeSync ? NativeSync.getStoreEntitlementsAsync() : [];
+}
+
+export async function finishStoreTransaction(transactionId: string): Promise<boolean> {
+  if (!NativeSync) return false;
+  return NativeSync.finishStoreTransactionAsync(transactionId);
+}
+
+export async function showManageStoreSubscriptions(): Promise<boolean> {
+  if (!NativeSync) return false;
+  return NativeSync.showManageStoreSubscriptionsAsync();
 }
 
 export async function getNativeApnsEnvironment(): Promise<ApnsEnvironment | null> {
