@@ -8,6 +8,7 @@
 import {
   nestSessionFlagAllowsWrites,
   nestTokenMatchesSupabaseUser,
+  jwtNeedsRefresh,
   pickMobileApiToken,
   readJwtSub,
   shouldRefreshNestToken,
@@ -27,6 +28,8 @@ const SESSION_VALID_KEY = "inteliads.rulesApi.sessionValid";
 let nestSessionInvalidated = false;
 const runNestRefresh = createTokenRefreshSingleFlight<string | null>();
 const runSupabaseRefresh = createTokenRefreshSingleFlight<string | null>();
+let rejectedNestAccessToken = "";
+let nestRefreshRetryAt = 0;
 
 export const PLAN_MANAGE_MESSAGE = "Manage your plan at inteliads.io.";
 export const SIGN_IN_TO_MUTATE_MESSAGE = "Sign in to change bids.";
@@ -144,9 +147,16 @@ async function refreshNestToken(staleAccessToken?: string): Promise<string | nul
   return runNestRefresh(async () => {
     if (!API_BASE) return null;
     if (!(await nestSessionAllowed())) return null;
-    const currentAccessToken = await storage.secureGet<string>(ACCESS_KEY, "");
+    const currentAccessToken = (await storage.secureGet<string>(ACCESS_KEY, "")) ?? "";
     if (staleAccessToken && currentAccessToken && currentAccessToken !== staleAccessToken) {
       return currentAccessToken;
+    }
+    if (
+      currentAccessToken &&
+      currentAccessToken === rejectedNestAccessToken &&
+      Date.now() < nestRefreshRetryAt
+    ) {
+      return null;
     }
     const refreshToken = await storage.secureGet<string>(REFRESH_KEY, "");
     if (!refreshToken) return null;
@@ -156,12 +166,20 @@ async function refreshNestToken(staleAccessToken?: string): Promise<string | nul
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refreshToken }),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        rejectedNestAccessToken = currentAccessToken;
+        nestRefreshRetryAt = Date.now() + 10_000;
+        return null;
+      }
       const data = await res.json();
       if (data?.accessToken) await storage.secureSet(ACCESS_KEY, String(data.accessToken));
       if (data?.refreshToken) await storage.secureSet(REFRESH_KEY, String(data.refreshToken));
+      rejectedNestAccessToken = "";
+      nestRefreshRetryAt = 0;
       return data?.accessToken ? String(data.accessToken) : null;
     } catch {
+      rejectedNestAccessToken = currentAccessToken;
+      nestRefreshRetryAt = Date.now() + 10_000;
       return null;
     }
   });
@@ -195,7 +213,10 @@ async function refreshSupabaseAccessToken(staleAccessToken?: string): Promise<st
 
 async function resolveMobileApiToken(): Promise<{ token: string; source: "nest" | "supabase" } | null> {
   const nestAllowed = await nestSessionAllowed();
-  const nestAccessToken = nestAllowed ? await storage.secureGet<string>(ACCESS_KEY, "") : "";
+  let nestAccessToken = nestAllowed ? await storage.secureGet<string>(ACCESS_KEY, "") : "";
+  if (nestAccessToken && jwtNeedsRefresh(nestAccessToken)) {
+    nestAccessToken = (await refreshNestToken(nestAccessToken)) ?? "";
+  }
   const liveSession = await readSupabaseSession();
   const nestMatches = nestTokenMatchesSupabaseUser({
     nestAccessToken,
