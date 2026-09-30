@@ -50,6 +50,6 @@ test("dual-source background refresh is wired to notifications and resume", () =
 
 test("supabase bearer always retries once after refresh on 401", () => {
   assert.match(rulesApi, /picked\?\.source === "supabase"/);
-  assert.match(rulesApi, /refreshSupabaseAccessToken\(\)/);
+  assert.match(rulesApi, /refreshSupabaseAccessToken\(picked\.token\)/);
   assert.doesNotMatch(rulesApi, /freshSupabase !== picked\.token/);
 });

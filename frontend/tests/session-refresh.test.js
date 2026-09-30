@@ -1,8 +1,32 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createSessionRefresh, createSessionIdentityBoundary } = require('../src/lib/sessionRefresh.ts');
+const { createSessionRefresh, createSessionIdentityBoundary, createTokenRefreshSingleFlight } = require('../src/lib/sessionRefresh.ts');
 const session = (seconds) => ({ access_token: 'unit-token', refresh_token: 'unit-refresh', expires_at: Date.now() / 1000 + seconds, user: { id: 'unit-user' } });
 const response = (s, error = null) => ({ data: { session: s }, error });
+
+test('token refresh single-flight shares one request and permits the next generation', async () => {
+  const run = createTokenRefreshSingleFlight();
+  let calls = 0;
+  let release;
+  const first = run(async () => {
+    calls++;
+    await new Promise(resolve => { release = resolve; });
+    return 'fresh';
+  });
+  const second = run(async () => {
+    calls++;
+    return 'duplicate';
+  });
+  assert.equal(calls, 0);
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  release();
+  assert.equal(await first, 'fresh');
+  assert.equal(await second, 'fresh');
+  await Promise.resolve();
+  assert.equal(await run(async () => { calls++; return 'next'; }), 'next');
+  assert.equal(calls, 2);
+});
 
 test('20 simultaneous callers share one refresh and receive the fresh session', async () => {
   let reads = 0, refreshes = 0;
