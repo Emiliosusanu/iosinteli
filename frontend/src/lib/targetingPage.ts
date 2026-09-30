@@ -1,6 +1,6 @@
-/** Numbered Targets pagination (build 209-style page chrome). */
+/** Initial ranked Targets window; sorting/filtering still run globally in the RPC. */
 
-export const TARGETING_PAGE_SIZE = 500;
+export const TARGETING_PAGE_SIZE = 100;
 
 /** Append a ranked server page without re-sorting or duplicating entity IDs. */
 export function appendTargetingPageRows<T extends { id?: unknown }>(
