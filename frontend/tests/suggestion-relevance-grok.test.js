@@ -300,7 +300,7 @@ test("grok mode uses injected filter and falls back to heuristic on throw", asyn
   assert.ok(fellBack.productTargets.some((p) => p.asin === "B0ICE00001"));
 });
 
-test("grok soft-retries on transient timeout then recovers (no AI unavailable latch)", async () => {
+test("client bounds transient AI failure and leaves Amazon rows usable", async () => {
   const keywords = Array.from({ length: 12 }, (_, i) => ({
     keyword: i === 0 ? "iceland roads" : `filler kw ${i}`,
     matchType: "broad",
@@ -326,18 +326,17 @@ test("grok soft-retries on transient timeout then recovers (no AI unavailable la
       },
     },
   );
-  assert.equal(calls, 2);
-  assert.equal(out.relevanceOutcome, "filtered");
-  assert.equal(out.keywords.length, 3);
+  assert.equal(calls, 1);
+  assert.equal(out.relevanceOutcome, "failed_unfiltered");
+  assert.equal(out.keywords.length, 12);
   assert.equal(out.keywords[0].keyword, "iceland roads");
 });
 
-test("RELEVANCE_SOFT_RETRY_GAPS_MS exports multi-shot backoff", async () => {
+test("relevance retry budgets stay bounded for an interactive picker", async () => {
   const { RELEVANCE_SOFT_RETRY_GAPS_MS, AI_FAILED_SOFT_RECOVER_DELAYS_MS } =
     await import("../src/lib/amazonCampaignSuggestions.ts");
-  assert.equal(RELEVANCE_SOFT_RETRY_GAPS_MS.length, 3);
-  assert.ok(RELEVANCE_SOFT_RETRY_GAPS_MS[0] < RELEVANCE_SOFT_RETRY_GAPS_MS[2]);
-  assert.equal(AI_FAILED_SOFT_RECOVER_DELAYS_MS.length, 3);
+  assert.deepEqual([...RELEVANCE_SOFT_RETRY_GAPS_MS], [800]);
+  assert.deepEqual([...AI_FAILED_SOFT_RECOVER_DELAYS_MS], [0]);
 });
 
 test("isTransientRelevanceError treats timeouts/429/TPM as retryable", async () => {

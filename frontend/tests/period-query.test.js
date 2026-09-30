@@ -33,7 +33,7 @@ test("period query cache blocks cross-key placeholders", () => {
   assert.equal(noPeriodPlaceholder(), undefined);
   assert.equal(HOME_PERIOD_QUERY_CACHE.refetchOnMount, "always");
   assert.equal(HOME_PERIOD_QUERY_CACHE.staleTime, 30_000);
-  assert.equal(LIST_PERIOD_QUERY_CACHE.refetchOnMount, "always");
+  assert.equal(LIST_PERIOD_QUERY_CACHE.refetchOnMount, true);
   assert.equal(LIST_PERIOD_QUERY_CACHE.staleTime, 20_000);
   assert.equal(STABLE_SCOPED_CACHE.placeholderData, noPeriodPlaceholder);
 });

@@ -1937,6 +1937,50 @@ export async function fetchAdGroupDefaultBids(profileIds: string[]): Promise<Rec
 /** List fetch cap — same honesty as Campaigns/Targets (not an Amazon write ceiling). */
 export const AD_GROUPS_LIST_LIMIT = 500;
 
+/**
+ * Read one ad group without loading and aggregating the account-wide list.
+ * Detail and add-target screens only need this row; their keyword/product
+ * queries provide the live target counts separately.
+ */
+export async function fetchAdGroupById(
+  id: string,
+  profileIds: string[],
+  range?: { start?: string; end?: string },
+): Promise<AdGroupEnriched | null> {
+  if (!id || !profileIds.length) return null;
+  const { data, error } = await supabase
+    .from("ad_groups")
+    .select("*")
+    .eq("id", id)
+    .in("amazon_profile_id", profileIds)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+
+  const row = data as AdGroup;
+  const totals =
+    range?.start && range?.end
+      ? await fetchMetricTotalsByEntity(
+          "ad_group_metrics",
+          "ad_group_id",
+          [row.id],
+          range.start,
+          range.end,
+        )
+      : null;
+  const enriched = applyMetricTotals(
+    row,
+    totals ? totals.get(row.id) ?? emptyTotals() : undefined,
+  );
+  return {
+    ...enriched,
+    keyword_count: 0,
+    product_target_count: 0,
+    auto_target_count: 0,
+    is_auto: String(row.targeting_type ?? "").toLowerCase() === "auto",
+  };
+}
+
 export async function fetchAdGroups(
   profileIds: string[],
   campaignId?: string,
@@ -6391,7 +6435,9 @@ export async function fetchAdGroupAutomationHistory(
 ): Promise<Array<RuleExecutionEntity & { rule_name?: string | null; executed_at?: string | null }>> {
   if (!profileIds.length || !adGroupId) return [];
 
-  const adGroup = await fetchAdGroups(profileIds).then((rows) => rows.find((row) => row.id === adGroupId));
+  // Scope ownership with a direct row read. Loading the account-wide top-500
+  // list here made the History tab pay the full list + metrics cost on mount.
+  const adGroup = await fetchAdGroupById(adGroupId, profileIds);
   if (!adGroup) return [];
 
   const { data, error } = await supabase

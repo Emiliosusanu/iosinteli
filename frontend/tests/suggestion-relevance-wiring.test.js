@@ -167,7 +167,7 @@ test("filterSuggestionsForBookRelevance soft-retries transient relevance errors"
   assert.match(suggestions, /isTransientRelevanceError/);
   assert.match(suggestions, /withRelevanceSoftRetry|RELEVANCE_SOFT_RETRY_GAPS_MS/);
   assert.match(suggestions, /AI_FAILED_SOFT_RECOVER_DELAYS_MS/);
-  assert.match(suggestions, /soft-retry up to 3/);
+  assert.match(suggestions, /one[\s\S]{0,80}bounded attempt/);
 });
 
 test("ad-group suggestions fall through when creation preview returns 0 keywords", () => {

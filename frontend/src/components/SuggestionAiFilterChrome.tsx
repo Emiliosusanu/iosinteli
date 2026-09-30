@@ -58,8 +58,7 @@ export function SuggestionAiFilterChrome({
         ? "Paste keywords below, or retry."
         : "Paste ASINs below, or retry.";
   } else if (stats?.relevanceOutcome === "failed_unfiltered") {
-    statusTitle = "AI unavailable";
-    statusDetail = "Showing Amazon unfiltered — confirm or retry.";
+    statusTitle = "Amazon suggestions";
   } else if (stats?.relevanceOutcome === "restored_empty") {
     statusTitle = "AI empty · Amazon restored";
     statusDetail = "Confirm before adding all, or retry.";

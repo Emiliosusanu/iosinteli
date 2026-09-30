@@ -565,15 +565,17 @@ export function isTransientRelevanceError(error: unknown): boolean {
 }
 
 /** In-filter soft-retry gaps (ms) for transient Nest/Groq TPM/timeouts. */
-export const RELEVANCE_SOFT_RETRY_GAPS_MS = [1_200, 5_000, 12_000] as const;
+export const RELEVANCE_SOFT_RETRY_GAPS_MS = [800] as const;
 
 /**
  * UI soft-recover delays after `failed_unfiltered` latches. After the last
  * attempt still fails, screens auto-accept Amazon unfiltered so chrome never
  * sticks on "AI unavailable" without a way forward.
  */
-export const AI_FAILED_SOFT_RECOVER_DELAYS_MS = [1_500, 6_000, 15_000] as const;
-export const AI_FAILED_SOFT_RECOVER_MAX = AI_FAILED_SOFT_RECOVER_DELAYS_MS.length;
+// Kept as a typed sentinel for the existing recovery effect. MAX=0 makes it
+// accept the real Amazon rows immediately without scheduling another request.
+export const AI_FAILED_SOFT_RECOVER_DELAYS_MS = [0] as const;
+export const AI_FAILED_SOFT_RECOVER_MAX = 0;
 
 async function withRelevanceSoftRetry<T>(run: () => Promise<T>): Promise<T> {
   let lastError: unknown;
@@ -604,9 +606,9 @@ async function withRelevanceSoftRetry<T>(run: () => Promise<T>): Promise<T> {
  *   On Grok failure → Amazon rows with `failed_unfiltered` (UI must not
  *   auto-select / claim AI curated). Empty AI keep → Amazon restore with
  *   `restored_empty` (honest label). Edit prompts in suggestionRelevancePrompt.ts.
- *   Transient Nest/Groq timeouts/429/TPM soft-retry up to 3× (1.2s / 5s / 12s)
- *   before latching failed_unfiltered. UI then soft-recovers a few more times
- *   and finally auto-accepts Amazon unfiltered — never sticky "AI unavailable".
+ *   The server already retries provider rate limits. The client performs one
+ *   bounded attempt, then keeps the real Amazon rows available for selection;
+ *   it never starts a minutes-long retry chain or invents replacement rows.
  */
 export async function filterSuggestionsForBookRelevance<
   K extends { keyword: string; matchType?: string },
@@ -1247,7 +1249,7 @@ export function buildProductSuggestionCountStats(input: {
  *   "Amazon · {N} phrases · {M} · Ranking…"
  *   "Amazon · {N} phrases · {M} · Kept {K}"
  *   "Amazon · {N} phrases · {M} · AI kept all"  (Grok finished, no thin)
- *   "Amazon · {N} · AI filter failed · unfiltered"
+ *   "Amazon · {N} · Amazon suggestions"
  *   "Amazon · {N} · Amazon restored (AI empty)"
  */
 export function formatKeywordSuggestionCountLabel(
@@ -1275,7 +1277,7 @@ export function formatKeywordSuggestionCountLabel(
   if (stats.grokPending || outcome === "pending") {
     parts.push("Ranking…");
   } else if (outcome === "failed_unfiltered") {
-    parts.push("AI filter failed · unfiltered");
+    parts.push("Amazon suggestions");
   } else if (outcome === "restored_empty") {
     parts.push("Amazon restored (AI empty)");
   } else if (outcome === "user_accepted_unfiltered") {
@@ -1304,13 +1306,17 @@ export function formatKeywordSuggestionCountLabel(
   return parts.join(" · ");
 }
 
-/** True when Step 2 failed or restored empty — block auto-select until user confirms. */
+/**
+ * Only an empty AI result needs confirmation. Provider failure keeps the real
+ * Amazon set usable; users can review and select it without an unavailable
+ * dead-end.
+ */
 export function suggestionRelevanceNeedsUserConfirm(
   stats: KeywordSuggestionCountStats | null | undefined,
 ): boolean {
   if (!stats || stats.grokPending) return false;
   const outcome = stats.relevanceOutcome;
-  return outcome === "failed_unfiltered" || outcome === "restored_empty";
+  return outcome === "restored_empty";
 }
 
 export function uniqueKeywordMatchTypes(

@@ -11,7 +11,7 @@ import { useAuth } from "@/src/contexts/AuthContext";
 import { acosTone, layout, radii, spacing, toneColor, useTheme } from "@/src/lib/theme";
 import { applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityState } from "@/src/lib/invalidateAds";
 import { updateAdGroupManual, updateAdGroupState, updateKeywordManual, updateProductTargetManual } from "@/src/lib/mutations";
-import { fetchAdGroupAutomationHistory, fetchAdGroups, fetchKeywords, fetchProductTargets, fetchSearchTerms } from "@/src/lib/queries";
+import { fetchAdGroupAutomationHistory, fetchAdGroupById, fetchKeywords, fetchProductTargets, fetchSearchTerms } from "@/src/lib/queries";
 import { shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
 import { describeProductTarget, fallbackAsinCoverUrl, formatMatchTypeLabel, isExactMatchType, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
 import { resolveAdGroupAddMode } from "@/src/lib/adGroupTargets";
@@ -53,11 +53,11 @@ export default function AdGroupDetailScreen() {
   const [addingExactId, setAddingExactId] = useState<string | null>(null);
 
   const adGroupsQ = useQuery({
-    queryKey: ["ad-groups-list", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => fetchAdGroups(selectedProfileIds, undefined, { start: dateRange.start, end: dateRange.end }),
+    queryKey: ["ad-group-detail", id, selectedProfileIds, dateRange.start, dateRange.end],
+    queryFn: () => fetchAdGroupById(id, selectedProfileIds, { start: dateRange.start, end: dateRange.end }),
     enabled: !!id && selectedProfileIds.length > 0,
   });
-  const group = useMemo(() => (adGroupsQ.data ?? []).find((row) => row.id === id), [adGroupsQ.data, id]);
+  const group = adGroupsQ.data ?? null;
   const groupState = String(group?.state ?? stateParam ?? "");
   const displayName = group?.name || nameParam || "Ad Group";
   const auto = group?.is_auto ?? isAuto === "true";

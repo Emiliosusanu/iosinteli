@@ -27,7 +27,10 @@ import {
   NEST_DISABLED_VIEW_MESSAGE,
   NEST_DISABLED_VIEW_TITLE,
   PROFILE_LIST_ALL_LABEL,
+  PROFILE_LIST_ADS_ONLY_LABEL,
+  PROFILE_LIST_KDP_ADS_LABEL,
   PROFILE_LIST_READY_LABEL,
+  type ProfileSheetMode,
   VIEW_SWITCH_HINT_OFF,
   VIEW_SWITCH_HINT_ON,
   adsAccountGroupHeading,
@@ -332,7 +335,7 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
   } = useApp();
   const viewingUser = adminUsers.find((user) => user.id === adminFilterUserId);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [listMode, setListMode] = useState<"ready" | "all">("ready");
+  const [listMode, setListMode] = useState<ProfileSheetMode>("ready");
 
   const visibleProfiles = useMemo(
     () => filterProfilesBySheetMode(profiles, listMode),
@@ -346,6 +349,11 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
     () => profiles.filter((p) => isReadyToEnable(p) || profileEnabled(p)).length,
     [profiles],
   );
+  const kdpAdsCount = useMemo(
+    () => profiles.filter((p) => (p.kdp_account_count ?? 0) > 0).length,
+    [profiles],
+  );
+  const adsOnlyCount = profiles.length - kdpAdsCount;
   const enabledProfiles = useMemo(
     () => profiles.filter((p) => profileEnabled(p)),
     [profiles],
@@ -625,6 +633,50 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
+                testID="profiles-filter-kdp-ads"
+                onPress={() => setListMode("kdp_ads")}
+                style={[
+                  styles.filterChip,
+                  {
+                    backgroundColor: listMode === "kdp_ads" ? t.colors.tone_primary + "1A" : t.colors.background_tertiary,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    t.typography.caption1,
+                    {
+                      color: listMode === "kdp_ads" ? t.colors.tone_primary : t.colors.text_secondary,
+                      fontWeight: "700",
+                    },
+                  ]}
+                >
+                  {PROFILE_LIST_KDP_ADS_LABEL} ({kdpAdsCount})
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="profiles-filter-ads-only"
+                onPress={() => setListMode("ads_only")}
+                style={[
+                  styles.filterChip,
+                  {
+                    backgroundColor: listMode === "ads_only" ? t.colors.tone_primary + "1A" : t.colors.background_tertiary,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    t.typography.caption1,
+                    {
+                      color: listMode === "ads_only" ? t.colors.tone_primary : t.colors.text_secondary,
+                      fontWeight: "700",
+                    },
+                  ]}
+                >
+                  {PROFILE_LIST_ADS_ONLY_LABEL} ({adsOnlyCount})
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
                 testID="profiles-filter-all"
                 onPress={() => setListMode("all")}
                 style={[
@@ -694,6 +746,16 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                 <TouchableOpacity testID="profiles-filter-ready" onPress={() => setListMode("ready")}>
                   <Text style={{ color: listMode === "ready" ? t.colors.tone_primary : t.colors.text_secondary }}>
                     {PROFILE_LIST_READY_LABEL}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity testID="profiles-filter-kdp-ads" onPress={() => setListMode("kdp_ads")}>
+                  <Text style={{ color: listMode === "kdp_ads" ? t.colors.tone_primary : t.colors.text_secondary }}>
+                    {PROFILE_LIST_KDP_ADS_LABEL} ({kdpAdsCount})
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity testID="profiles-filter-ads-only" onPress={() => setListMode("ads_only")}>
+                  <Text style={{ color: listMode === "ads_only" ? t.colors.tone_primary : t.colors.text_secondary }}>
+                    {PROFILE_LIST_ADS_ONLY_LABEL} ({adsOnlyCount})
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity testID="profiles-filter-all" onPress={() => setListMode("all")}>
@@ -783,6 +845,7 @@ const styles = StyleSheet.create({
   },
   filterRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: density.chromeGap,
     paddingHorizontal: dashboard.pageInset,
     paddingBottom: density.chromeGap,

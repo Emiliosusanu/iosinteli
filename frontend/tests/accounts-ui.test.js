@@ -8,6 +8,8 @@ import {
   KDP_SECTION_FOOTER,
   NEST_DISABLED_VIEW_MESSAGE,
   PROFILE_LIST_ALL_LABEL,
+  PROFILE_LIST_ADS_ONLY_LABEL,
+  PROFILE_LIST_KDP_ADS_LABEL,
   PROFILE_LIST_READY_LABEL,
   adsAccountFamilyName,
   adsAccountGroupHeading,
@@ -107,7 +109,27 @@ test("ready default uses campaigns_enabled_count, not total campaign_count alone
   assert.match(topBar, /profiles-filter-ready/);
   assert.match(topBar, /listMode/);
   assert.equal(PROFILE_LIST_READY_LABEL, "Ready");
+  assert.equal(PROFILE_LIST_KDP_ADS_LABEL, "KDP + Ads");
+  assert.equal(PROFILE_LIST_ADS_ONLY_LABEL, "Ads only");
   assert.equal(PROFILE_LIST_ALL_LABEL, "All profiles");
+});
+
+test("KDP + Ads and Ads-only filters use bridge-enriched KDP counts", () => {
+  const profiles = [
+    { id: "linked", profile_id: "linked", kdp_account_count: 2 },
+    { id: "ads", profile_id: "ads", kdp_account_count: 0 },
+    { id: "unknown", profile_id: "unknown" },
+  ];
+  assert.deepEqual(
+    filterProfilesBySheetMode(profiles, "kdp_ads").map((p) => p.id),
+    ["linked"],
+  );
+  assert.deepEqual(
+    filterProfilesBySheetMode(profiles, "ads_only").map((p) => p.id),
+    ["ads", "unknown"],
+  );
+  assert.match(topBar, /profiles-filter-kdp-ads/);
+  assert.match(topBar, /profiles-filter-ads-only/);
 });
 
 test("select-all includes every Nest-enabled marketplace and skips Nest-off profiles", () => {

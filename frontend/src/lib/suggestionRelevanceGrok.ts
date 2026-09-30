@@ -64,6 +64,7 @@ export type { GrokRelevanceSelection } from "./suggestionRelevanceGrokLogic.ts";
 const XAI_CHAT_URL = "https://api.x.ai/v1/chat/completions";
 const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
 const NEST_RELEVANCE_PATH = "/campaigns/creation/relevance-filter";
+const NEST_RELEVANCE_TIMEOUT_MS = 10_000;
 
 /**
  * Gap between serial relevance chunks.
@@ -239,10 +240,11 @@ async function callNestRelevanceFilter(input: {
   keywordCount: number;
   productCount: number;
 }): Promise<GrokRelevanceSelection> {
-  // Nest runs the LLM server-side (Groq/xAI). Allow a full chunk; aborting at
-  // 2.5s forced every call onto flaky client free-tier Groq keys.
+  // Amazon suggestions are already available to the caller. Bound the
+  // optional AI refinement so a slow provider can never hold the picker for
+  // 45 seconds per chunk.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45_000);
+  const timer = setTimeout(() => controller.abort(), NEST_RELEVANCE_TIMEOUT_MS);
   let raw: unknown;
   try {
     raw = await nestApiJson<unknown>(
