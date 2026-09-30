@@ -2,6 +2,7 @@ import { Platform } from "react-native";
 import * as BackgroundTask from "expo-background-task";
 import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
+import { getNativeApnsEnvironment } from "inteliads-native-sync";
 import type { NotificationPrefs } from "@/src/contexts/AppContext";
 import { storage } from "@/src/utils/storage";
 import { supabase } from "./supabase";
@@ -50,6 +51,7 @@ import {
 } from "./notificationAuthority";
 import { adsProfileIdsForSelection, filterToEnabledProfileSelection, uniqueProfileIds } from "./notificationScope";
 import { nestApiJson } from "./rulesApi";
+import { resolveApnsEnvironment } from "./apnsEnvironment";
 
 export const INTELIADS_BACKGROUND_TASK = "io.inteliads.app.background-refresh";
 export const INTELIADS_NOTIFICATION_TASK = "io.inteliads.app.notification-response";
@@ -776,17 +778,16 @@ export async function registerForPushAsync(opts?: {
       }),
     );
 
-    // Prefer explicit env; otherwise Release/TestFlight → production, Metro debug → sandbox.
-    // (A production-only APNs .p8 cannot deliver to sandbox tokens.)
+    // Prefer explicit env, then the environment in the signed iOS provisioning
+    // profile. A locally archived Release build can still be development-signed,
+    // so __DEV__ alone cannot distinguish sandbox from production APNs tokens.
     const configuredEnvironment = process.env.EXPO_PUBLIC_APNS_ENVIRONMENT;
-    const environment =
-      configuredEnvironment === "sandbox"
-        ? "sandbox"
-        : configuredEnvironment === "production"
-          ? "production"
-          : __DEV__
-            ? "sandbox"
-            : "production";
+    const signedEnvironment = Platform.OS === "ios" ? await getNativeApnsEnvironment() : null;
+    const environment = resolveApnsEnvironment({
+      configured: configuredEnvironment,
+      signed: signedEnvironment,
+      isDevelopment: __DEV__,
+    });
 
     if (userId) {
       try {
