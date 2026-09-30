@@ -41,7 +41,10 @@ import {
   DISABLE_CONFIRM_MESSAGE,
   KDP_SECTION_FOOTER,
   PROFILE_LIST_ALL_LABEL,
+  PROFILE_LIST_ADS_ONLY_LABEL,
+  PROFILE_LIST_KDP_ADS_LABEL,
   PROFILE_LIST_READY_LABEL,
+  type ProfileSheetMode,
   PROFILE_SWITCH_OFF_HINT,
   PROFILE_SWITCH_ON_HINT,
   VIEW_ADD_HINT,
@@ -143,7 +146,7 @@ export default function AmazonAccountsScreen() {
   const [enabledOverrides, setEnabledOverrides] = useState<Record<string, boolean>>({});
   /** Per-profile in-flight toggles — do not block other rows (was causing lag). */
   const [togglePendingIds, setTogglePendingIds] = useState<Record<string, true>>({});
-  const [listMode, setListMode] = useState<"ready" | "all">("ready");
+  const [listMode, setListMode] = useState<ProfileSheetMode>("ready");
 
   const viewingCustomer = !!adminFilterUserId;
   const canMutate = !!user?.id && !guestMode && !viewingCustomer;
@@ -458,6 +461,8 @@ export default function AmazonAccountsScreen() {
   }, [profiles, listMode]);
 
   const readyCount = profiles.filter((p) => isReadyToEnable(p) || profileEnabled(p)).length;
+  const kdpAdsCount = profiles.filter((p) => (p.kdp_account_count ?? 0) > 0).length;
+  const adsOnlyCount = profiles.length - kdpAdsCount;
   const enabledCount = profiles.filter((p) => profileEnabled(p)).length;
   const viewCount = selectedProfileIds.length;
   const totalCount = profiles.length;
@@ -566,6 +571,34 @@ export default function AmazonAccountsScreen() {
                 >
                   {PROFILE_LIST_READY_LABEL}
                   {readyCount ? ` (${readyCount})` : ""}
+                </Text>
+              </Pressable>
+              <Pressable
+                testID="accounts-filter-kdp-ads"
+                onPress={() => setListMode("kdp_ads")}
+                style={[
+                  styles.filterChip,
+                  {
+                    backgroundColor: listMode === "kdp_ads" ? t.colors.tone_primary + "1A" : t.colors.background_tertiary,
+                  },
+                ]}
+              >
+                <Text style={[t.typography.footnote, { color: listMode === "kdp_ads" ? t.colors.tone_primary : t.colors.text_secondary, fontWeight: "700" }]}>
+                  {PROFILE_LIST_KDP_ADS_LABEL} ({kdpAdsCount})
+                </Text>
+              </Pressable>
+              <Pressable
+                testID="accounts-filter-ads-only"
+                onPress={() => setListMode("ads_only")}
+                style={[
+                  styles.filterChip,
+                  {
+                    backgroundColor: listMode === "ads_only" ? t.colors.tone_primary + "1A" : t.colors.background_tertiary,
+                  },
+                ]}
+              >
+                <Text style={[t.typography.footnote, { color: listMode === "ads_only" ? t.colors.tone_primary : t.colors.text_secondary, fontWeight: "700" }]}>
+                  {PROFILE_LIST_ADS_ONLY_LABEL} ({adsOnlyCount})
                 </Text>
               </Pressable>
               <Pressable
@@ -887,6 +920,7 @@ const styles = StyleSheet.create({
   },
   filterRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 8,
     paddingHorizontal: 16,
     paddingBottom: 8,

@@ -257,11 +257,24 @@ export function groupProfilesByAdsAccount(profiles: AmazonProfile[]): AdsAccount
     });
 }
 
+export type ProfileSheetMode = "ready" | "kdp_ads" | "ads_only" | "all";
+
+/**
+ * Profile-picker scope. KDP membership comes from the live
+ * kdp_account_amazon_profiles bridge enrichment on AmazonProfile; it is never
+ * inferred from a marketplace, account name, or campaign presence.
+ */
 export function filterProfilesBySheetMode(
   profiles: AmazonProfile[],
-  mode: "ready" | "all",
+  mode: ProfileSheetMode,
 ): AmazonProfile[] {
   if (mode === "all") return profiles;
+  if (mode === "kdp_ads") {
+    return profiles.filter((profile) => (profile.kdp_account_count ?? 0) > 0);
+  }
+  if (mode === "ads_only") {
+    return profiles.filter((profile) => (profile.kdp_account_count ?? 0) === 0);
+  }
   const ready = profiles.filter(matchesReadyDefaultFilter);
   const keepKeys = new Set(ready.map((profile) => adsAccountGroupKey(profile)));
   // Keep CA/UK siblings of a ready US (or any ready marketplace) so grouping is visible.
@@ -589,6 +602,8 @@ export const NEST_DISABLED_VIEW_MESSAGE = "Enable in Amazon Accounts first";
 export const ENABLE_PROFILE_FAILED_TITLE = "Couldn't enable profile";
 
 export const PROFILE_LIST_READY_LABEL = "Ready";
+export const PROFILE_LIST_KDP_ADS_LABEL = "KDP + Ads";
+export const PROFILE_LIST_ADS_ONLY_LABEL = "Ads only";
 export const PROFILE_LIST_ALL_LABEL = "All profiles";
 
 export const DISABLE_CONFIRM_MESSAGE =

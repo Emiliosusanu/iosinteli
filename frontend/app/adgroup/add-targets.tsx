@@ -29,7 +29,7 @@ import { useProductSuggestionAsinMeta } from "@/src/hooks/useProductSuggestionAs
 import { countryCodeForProfile } from "@/src/lib/bookMarketplaces";
 import { layout, radii, spacing, useTheme } from "@/src/lib/theme";
 import {
-  fetchAdGroups,
+  fetchAdGroupById,
   fetchCampaignAdvertisedAsin,
   fetchCampaignById,
   fetchKeywords,
@@ -97,18 +97,15 @@ export default function AddAdGroupTargetsScreen() {
   const writeGuard = { guestMode, viewAsOtherUser };
 
   const adGroupsQ = useQuery({
-    queryKey: ["ad-groups-list", selectedProfileIds, dateRange.start, dateRange.end],
+    queryKey: ["ad-group-detail", adGroupId, selectedProfileIds, dateRange.start, dateRange.end],
     queryFn: () =>
-      fetchAdGroups(selectedProfileIds, undefined, {
+      fetchAdGroupById(adGroupId, selectedProfileIds, {
         start: dateRange.start,
         end: dateRange.end,
       }),
     enabled: !!adGroupId && selectedProfileIds.length > 0,
   });
-  const group = useMemo(
-    () => (adGroupsQ.data ?? []).find((row) => row.id === adGroupId),
-    [adGroupsQ.data, adGroupId],
-  );
+  const group = adGroupsQ.data ?? null;
   const campaignId = campaignIdParam || group?.campaign_id || "";
 
   const campaignQ = useQuery({

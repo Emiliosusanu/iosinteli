@@ -497,7 +497,7 @@ test("buildKeywordSuggestionCountStats + label: New England 156→468 fixture (e
   };
   assert.match(
     formatKeywordSuggestionCountLabel(failed),
-    /AI filter failed · unfiltered/,
+    /Amazon suggestions/,
   );
   assert.doesNotMatch(formatKeywordSuggestionCountLabel(failed), /AI kept all/);
   const restored = {
