@@ -2,6 +2,24 @@
 
 export const TARGETING_PAGE_SIZE = 500;
 
+/** Append a ranked server page without re-sorting or duplicating entity IDs. */
+export function appendTargetingPageRows<T extends { id?: unknown }>(
+  head: readonly T[],
+  loadedTail: readonly T[],
+  nextPage: readonly T[],
+): T[] {
+  const seen = new Set(
+    [...head, ...loadedTail].map((row) => String(row.id ?? "")),
+  );
+  const append = nextPage.filter((row) => {
+    const id = String(row.id ?? "");
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return [...loadedTail, ...append];
+}
+
 /** Bounded page number strip: always first + last, and a window around current. */
 export function targetingPageNumbers(page: number, totalPages: number): number[] {
   const safeTotal = Math.max(1, Math.floor(totalPages) || 1);

@@ -260,8 +260,9 @@ export default function CreateAdGroupScreen() {
         },
       }),
     enabled: !!campaignId && !guestMode && !asinResolving && needsSuggestions,
-    retry: 2,
-    retryDelay: (n) => Math.min(8000, 1500 * 2 ** n),
+    // fetchAdGroupSuggestions already owns a bounded three-attempt retry loop.
+    // Avoid multiplying an Amazon throttle into as many as nine requests.
+    retry: false,
     staleTime: 60_000,
   });
 

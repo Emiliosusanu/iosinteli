@@ -31,7 +31,7 @@ test("multi-profile lists use fair per-profile quota so one profile cannot hide 
   assert.match(queries, /fairSlice/);
   // Targets uses server-ranked full catalog (not a silent 500-row cap).
   assert.match(targeting, /fetchMobileTargetingPage/);
-  assert.match(targeting, /fetchMobileTargetingCatalogTail/);
+  assert.match(targeting, /loadNextCatalogPage/);
   assert.match(targeting, /of \$\{serverTotal\} loaded/);
   assert.doesNotMatch(targeting, /TargetingPagination/);
   assert.match(campaigns, /campaigns-list-range-v3/);
@@ -190,11 +190,11 @@ test("targeting persists advanced ranges; ASIN rows still KDP-enrich when list s
 
 test("Targets all segments use mobile_targeting_page_v1 full catalog with snapshot/PT409", () => {
   assert.match(targeting, /fetchMobileTargetingPage/);
-  assert.match(targeting, /fetchMobileTargetingCatalogTail/);
+  assert.match(targeting, /loadNextCatalogPage/);
   assert.match(targeting, /mobile-targeting-page-v1/);
   assert.match(targeting, /pageSnapshot/);
   assert.match(targeting, /isMobileTargetingSnapshotChanged/);
-  assert.match(queries, /snapshot: head\.snapshot/);
+  assert.match(targeting, /snapshot,/);
   assert.match(targeting, /segment === "placement"/);
   assert.doesNotMatch(targeting, /TargetingPagination/);
   assert.doesNotMatch(targeting, /useServerPages/);
@@ -207,6 +207,7 @@ test("Targets chrome collapses on scroll; honest catalog count in list footer", 
   assert.doesNotMatch(targeting, /<TargetingPagination\b/);
   assert.match(targeting, /ListFooterComponent=\{/);
   assert.match(targeting, /testID="targeting-list-count-footer"/);
+  assert.match(targeting, /testID="targeting-load-more"/);
   assert.doesNotMatch(targeting, /testID="targeting-list-count"/);
 });
 

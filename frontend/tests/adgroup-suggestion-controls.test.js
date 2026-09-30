@@ -81,6 +81,13 @@ test("Add targets wires select-all controls + suggested bids default on", () => 
   assert.match(addTargets, /!asinResolving/);
 });
 
+test("suggestion screens keep one bounded retry owner", () => {
+  assert.match(adGroupCreate, /retry:\s*false/);
+  assert.match(addTargets, /retry:\s*false/);
+  assert.doesNotMatch(adGroupCreate, /retry:\s*2/);
+  assert.doesNotMatch(addTargets, /retry:\s*2/);
+});
+
 test("ad-group create reads targeting from URL params", () => {
   assert.match(adGroupCreate, /targeting:\s*targetingParam|targetingParam/);
   assert.match(adGroupCreate, /targetingFromRoute/);

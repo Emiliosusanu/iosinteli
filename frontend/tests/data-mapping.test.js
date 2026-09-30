@@ -347,7 +347,8 @@ test("search terms and ad group detail avoid fixed pagination gaps", () => {
   assert.equal(searchTermsSource.includes("limit: 200"), false);
   // Targets uses server-ranked full catalog (mobile_targeting_page_v1), not a client 500-cap footer.
   assert.equal(targetingSource.includes("fetchMobileTargetingPage"), true);
-  assert.equal(targetingSource.includes("fetchMobileTargetingCatalogTail"), true);
+  assert.equal(targetingSource.includes("loadNextCatalogPage"), true);
+  assert.equal(targetingSource.includes('testID="targeting-load-more"'), true);
   assert.equal(targetingSource.includes("TARGETING_PAGE_SIZE"), true);
   assert.equal(targetingSource.includes("TargetingPagination"), false);
   assert.equal(targetingSource.includes("enabled: canReadPage"), true);
