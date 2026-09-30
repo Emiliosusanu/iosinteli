@@ -7,8 +7,8 @@ import {
   TARGETING_PAGE_SIZE,
 } from "../src/lib/targetingPage.ts";
 
-test("targeting page size stays 500 like build 209", () => {
-  assert.equal(TARGETING_PAGE_SIZE, 500);
+test("targeting first paint uses a compact globally ranked page", () => {
+  assert.equal(TARGETING_PAGE_SIZE, 100);
 });
 
 test("targetingPageNumbers always includes first and last", () => {
@@ -29,8 +29,8 @@ test("progressive targeting pages preserve server order and remove duplicate bou
 
 test("targetingTotalPages matches catalog math", () => {
   assert.equal(targetingTotalPages(0), 1);
-  assert.equal(targetingTotalPages(500), 1);
-  assert.equal(targetingTotalPages(501), 2);
-  assert.equal(targetingTotalPages(5666), 12);
-  assert.equal(targetingTotalPages(1510), 4);
+  assert.equal(targetingTotalPages(100), 1);
+  assert.equal(targetingTotalPages(101), 2);
+  assert.equal(targetingTotalPages(5666), 57);
+  assert.equal(targetingTotalPages(1510), 16);
 });
