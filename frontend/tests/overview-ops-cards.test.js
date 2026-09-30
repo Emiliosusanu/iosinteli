@@ -51,3 +51,14 @@ test("Marketplace card is real-data only and controls the Ads widget scope", () 
   assert.match(home, /onSelect=\{setSelectedAdsMarket\}/);
   assert.match(home, /scopeLabel=\{overviewMarketplaceLabel\(selectedAdsMarket\)\}/);
 });
+
+test("Review queue exposes only source-verified signals without one failed source blanking the card", () => {
+  assert.match(home, /const rulesVerified = ruleExecsQ\.isSuccess && !ruleExecsQ\.isFetching/);
+  assert.match(home, /const campaignsVerified = topCampaignsQ\.isSuccess && !topCampaignsQ\.isFetching/);
+  assert.match(home, /const budgetVerified =[\s\S]*todayMetricsQ\.isSuccess[\s\S]*allBudgetsQ\.isSuccess/);
+  assert.match(home, /const syncVerified = syncLogsQ\.isSuccess && !syncLogsQ\.isFetching/);
+  assert.match(home, /const active = items\.length > 0/);
+  assert.match(home, /verified signal/);
+  assert.match(home, /actionItems\.length > 0 \|\| reviewChecks !== "incomplete"/);
+  assert.doesNotMatch(home, /const active = checks === "complete" && items\.length > 0/);
+});

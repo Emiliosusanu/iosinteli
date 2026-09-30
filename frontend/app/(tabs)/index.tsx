@@ -1666,30 +1666,72 @@ export default function OverviewScreen() {
 
   const actionItems = useMemo(() => {
     const items: DashboardActionItem[] = [];
-    if (failedRuleRuns > 0)
+    const rulesVerified = ruleExecsQ.isSuccess && !ruleExecsQ.isFetching;
+    const campaignsVerified = topCampaignsQ.isSuccess && !topCampaignsQ.isFetching;
+    const budgetVerified =
+      todayMetricsQ.isSuccess &&
+      !todayMetricsQ.isFetching &&
+      allBudgetsQ.isSuccess &&
+      !allBudgetsQ.isFetching;
+    const syncVerified = syncLogsQ.isSuccess && !syncLogsQ.isFetching;
+    const kdpVerified =
+      !kdpQueryReady ||
+      (royaltiesQ.isSuccess &&
+        !royaltiesQ.isFetching &&
+        kdpIngestQ.isSuccess &&
+        !kdpIngestQ.isFetching);
+
+    if (rulesVerified && failedRuleRuns > 0)
       items.push({ icon: "alert-circle", text: `${failedRuleRuns} rule run${failedRuleRuns === 1 ? "" : "s"} failed`, tone: "danger", route: "/more/rule-history" });
-    if (wastedSpendCampaigns.length > 0)
+    if (campaignsVerified && wastedSpendCampaigns.length > 0)
       items.push({
         icon: "cash-outline",
         text: `${wastedSpendCampaigns.length} campaign${wastedSpendCampaigns.length === 1 ? "" : "s"} spent ${formatCurrency(wastedSpendTotal, primaryCurrency, { compact: true })} with 0 orders`,
         tone: "danger",
         route: "/(tabs)/campaigns",
       });
-    if (highAcosCampaigns.length > 0)
+    if (campaignsVerified && highAcosCampaigns.length > 0)
       items.push({
         icon: "trending-up-outline",
         text: `${highAcosCampaigns.length} campaign${highAcosCampaigns.length === 1 ? "" : "s"} above break-even ACOS`,
         tone: "warning",
         route: "/(tabs)/campaigns",
       });
-    if (budgetDanger)
+    if (budgetVerified && budgetDanger)
       items.push({ icon: "wallet-outline", text: `Today's ad budget ${Math.round(budgetUsedPct)}% used`, tone: "warning", route: "/(tabs)/campaigns" });
-    if (syncWarning || syncStale)
+    if (syncVerified && (syncWarning || syncStale))
       items.push({ icon: "sync-outline", text: syncStale ? "Sync appears stuck" : "Sync needs review", tone: "warning", route: "/more/sync" });
-    if (kdpStale && kdpLatestDate)
+    if (kdpVerified && kdpStale && kdpLatestDate)
       items.push({ icon: "book-outline", text: `KDP royalties only through ${formatDateShort(kdpLatestDate)}`, tone: "warning", route: "/more/sync" });
     return items;
-  }, [failedRuleRuns, wastedSpendCampaigns, highAcosCampaigns, wastedSpendTotal, budgetDanger, budgetUsedPct, syncWarning, syncStale, kdpStale, kdpLatestDate, primaryCurrency]);
+  }, [
+    allBudgetsQ.isFetching,
+    allBudgetsQ.isSuccess,
+    budgetDanger,
+    budgetUsedPct,
+    failedRuleRuns,
+    highAcosCampaigns,
+    kdpIngestQ.isFetching,
+    kdpIngestQ.isSuccess,
+    kdpLatestDate,
+    kdpQueryReady,
+    kdpStale,
+    primaryCurrency,
+    royaltiesQ.isFetching,
+    royaltiesQ.isSuccess,
+    ruleExecsQ.isFetching,
+    ruleExecsQ.isSuccess,
+    syncLogsQ.isFetching,
+    syncLogsQ.isSuccess,
+    syncStale,
+    syncWarning,
+    todayMetricsQ.isFetching,
+    todayMetricsQ.isSuccess,
+    topCampaignsQ.isFetching,
+    topCampaignsQ.isSuccess,
+    wastedSpendCampaigns,
+    wastedSpendTotal,
+  ]);
 
   // ACOS judgment colors
   const acosKnown = totals.sales > 0 && breakEvenAcos > 0;
@@ -1979,15 +2021,12 @@ export default function OverviewScreen() {
   }, [router]);
   const reviewReady = viewingAsAdmin ? bootstrapQ.isFetched : metricsQ.isFetched;
   const reviewSources = [
-    metricsQ,
-    ...(selectedAdsMarket ? [adsWidgetMetricsQ] : []),
     topCampaignsQ,
     todayMetricsQ,
     allBudgetsQ,
     ruleExecsQ,
-    todayStatsQ,
     syncLogsQ,
-    ...(kdpQueryReady ? [kdpIngestQ] : []),
+    ...(kdpQueryReady ? [royaltiesQ, kdpIngestQ] : []),
   ];
   const reviewChecksPassed = reviewSources.filter((query) => query.isSuccess && !query.isFetching).length;
   const reviewChecks = viewingAsAdmin || reviewSources.some((query) => query.isError)
@@ -2596,7 +2635,7 @@ export default function OverviewScreen() {
             staggerIndex={5}
           />
 
-          {reviewReady ? (
+          {reviewReady && (actionItems.length > 0 || reviewChecks !== "incomplete") ? (
             <View style={{ marginTop: dashboard.sectionGap }}>
               <ActionReviewCard
                 items={actionItems}
@@ -2956,12 +2995,14 @@ function ActionReviewCard({
   t: any;
   onOpen: (route: string) => void;
 }) {
-  // Signals are actionable only after every source in the current scope has
-  // completed. A partial queue can otherwise look definitive.
-  const active = checks === "complete" && items.length > 0;
+  // Each item is admitted only after its own source has completed. Keep those
+  // verified signals visible while unrelated checks finish or retry.
+  const active = items.length > 0;
   const visibleItems = items.slice(0, 3);
   const statusLabel = active
-    ? `${items.length} signal${items.length === 1 ? "" : "s"}`
+    ? checks === "complete"
+      ? `${items.length} verified signal${items.length === 1 ? "" : "s"} · ${scopeLabel}`
+      : `${items.length} verified signal${items.length === 1 ? "" : "s"} · ${checksPassed}/${checksTotal} sources`
     : checks === "complete"
       ? `${checksPassed} checks passed · ${scopeLabel}`
       : checks === "pending"
