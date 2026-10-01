@@ -140,33 +140,23 @@ test("mutations pass relevanceOutcome into keywordCounts", () => {
   assert.match(suggestions, /suggestionRelevanceNeedsUserConfirm/);
 });
 
-test("Create / ad-group / add-targets soft-recover failed_unfiltered without waiting for tap", () => {
+test("Create / ad-group / add-targets never auto-accept failed AI filtering", () => {
   const create = readFileSync(join(root, "app/campaign/create.tsx"), "utf8");
   const adGroupCreate = readFileSync(
     join(root, "app/campaign/ad-group-create.tsx"),
     "utf8",
   );
-  assert.match(create, /aiFailedSoftRecoverAttemptRef/);
-  assert.match(create, /AI_FAILED_SOFT_RECOVER_DELAYS_MS/);
-  assert.match(create, /AI_FAILED_SOFT_RECOVER_MAX/);
   assert.match(create, /acceptAmazonUnfiltered/);
-  assert.match(create, /relevanceOutcome !== "failed_unfiltered"/);
-  assert.match(create, /grokPending:\s*true/);
-  assert.match(adGroupCreate, /aiFailedSoftRecoverAttemptRef/);
-  assert.match(adGroupCreate, /AI_FAILED_SOFT_RECOVER_DELAYS_MS/);
-  assert.match(addTargets, /aiFailedSoftRecoverAttemptRef/);
-  assert.match(addTargets, /AI_FAILED_SOFT_RECOVER_MAX/);
-  // Must not gate recover on isFetching (that cancelled timers mid-flight).
-  assert.doesNotMatch(
-    adGroupCreate,
-    /failed_unfiltered[\s\S]{0,200}if \(suggestionsQ\.isFetching\) return/,
-  );
+  assert.match(adGroupCreate, /acceptAmazonUnfiltered/);
+  assert.match(addTargets, /acceptAmazonUnfiltered/);
+  assert.doesNotMatch(create, /aiFailedSoftRecoverAttemptRef|auto-accept Amazon/);
+  assert.doesNotMatch(adGroupCreate, /aiFailedSoftRecoverAttemptRef|auto-accept Amazon/);
+  assert.doesNotMatch(addTargets, /aiFailedSoftRecoverAttemptRef|auto-accept Amazon/);
 });
 
 test("filterSuggestionsForBookRelevance soft-retries transient relevance errors", () => {
   assert.match(suggestions, /isTransientRelevanceError/);
   assert.match(suggestions, /withRelevanceSoftRetry|RELEVANCE_SOFT_RETRY_GAPS_MS/);
-  assert.match(suggestions, /AI_FAILED_SOFT_RECOVER_DELAYS_MS/);
   assert.match(suggestions, /one[\s\S]{0,80}bounded attempt/);
 });
 

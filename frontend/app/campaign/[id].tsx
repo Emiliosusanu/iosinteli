@@ -37,7 +37,7 @@ import {
   formatDateShort,
   safeDivide,
 } from "@/src/lib/format";
-import { EmptyState, ToneDot, SectionCard, MetricStrip, RetryState, ScreenSpinner } from "@/src/components/Primitives";
+import { DenseMetricLine, EmptyState, ToneDot, SectionCard, MetricStrip, RetryState, ScreenSpinner } from "@/src/components/Primitives";
 import { alertMutationError, assertCanWriteAmazon, assertNotViewingAsOtherUser, BidBudgetEditor, blockIfCannotWriteAmazon, EntityStateSwitch, MutationTap } from "@/src/components/Mutations";
 import { CampaignDailyChart, Funnel } from "@/src/components/Charts";
 import { SubScreen } from "@/src/components/SubScreen";
@@ -56,6 +56,8 @@ import {
   updateAdGroupManual,
   updateCampaign,
   updateCampaignState,
+  updateKeywordManual,
+  updateProductTargetManual,
   type PlacementAdjustments,
 } from "@/src/lib/mutations";
 import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
@@ -142,7 +144,10 @@ export default function CampaignDetail() {
   const router = useRouter();
   const { width: viewportWidth } = useWindowDimensions();
   const { id, childState } = useLocalSearchParams<{ id: string; childState?: string }>();
-  const activeChildrenOnly = childState !== "all";
+  // Campaign detail is also the recovery surface for paused children. Showing
+  // enabled rows only made a paused keyword/target disappear before the user
+  // could turn it back on. Explicit `childState=enabled` keeps the narrow view.
+  const activeChildrenOnly = childState === "enabled";
   const { primaryCurrency, dateRange, selectedProfileIds, profilesLoading, adminFilterUserId, entityCooldownHours, profiles, defaultExactBid } = useApp();
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const { user, guestMode } = useAuth();
@@ -1087,6 +1092,24 @@ export default function CampaignDetail() {
                 key={kw.id}
                 style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: idx === visibleKeywords.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
               >
+                <View onStartShouldSetResponder={() => true} onTouchEnd={(event) => event.stopPropagation()} style={{ marginRight: 8 }}>
+                  <EntityStateSwitch
+                    testID={`campaign-keyword-state-${kw.id}`}
+                    enabled={matchesEntityStateFilter(kw.status, "enabled")}
+                    noun="keyword"
+                    onChange={async (next) => {
+                      assertNotViewingAsOtherUser(viewAsOtherUser);
+                      const previous = applyOptimisticEntityState(queryClient, "keyword", kw.id, next);
+                      try {
+                        await updateKeywordManual(kw.id, { status: next ? "enabled" : "paused" });
+                        void invalidateEntityStateQueries(queryClient, "keyword");
+                      } catch (error) {
+                        revertOptimisticEntityState(queryClient, "keyword", kw.id, previous);
+                        throw error;
+                      }
+                    }}
+                  />
+                </View>
                 <TouchableOpacity
                   activeOpacity={0.75}
                   accessibilityRole="button"
@@ -1106,14 +1129,9 @@ export default function CampaignDetail() {
                         {formatMatchTypeLabel(kw.match_type)}
                       </Text>
                       {kw.match_type ? " · " : ""}
-                      {formatInt(kw.total_clicks)} clicks · {formatInt(kw.total_orders)} orders
+                      {statusLabel(kw.status)}
                     </Text>
-                  </View>
-                  <View style={{ alignItems: "flex-end", marginLeft: spacing.sm }}>
-                    <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>ACoS</Text>
-                    <Text style={[t.typography.callout, { color: toneColor(acosTone(Number(kw.total_acos)), t.colors), fontVariant: ["tabular-nums"] }]}>
-                      {kw.total_sales > 0 ? formatPercent(Number(kw.total_acos)) : "—"}
-                    </Text>
+                    <DenseMetricLine items={campaignTargetMetricItems(kw, primaryCurrency, t)} />
                   </View>
                   <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
                 </TouchableOpacity>
@@ -1156,6 +1174,7 @@ export default function CampaignDetail() {
                 primaryCurrency={primaryCurrency}
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
+                viewAsOtherUser={viewAsOtherUser}
                 onOpenTarget={(targetId) => router.push(`/target/${targetId}` as any)}
                 onEditBid={(opts) => {
                   const bid = readTargetBid(pt, resolveInheritedBid(pt.ad_group_id));
@@ -1211,6 +1230,7 @@ export default function CampaignDetail() {
                 primaryCurrency={primaryCurrency}
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
+                viewAsOtherUser={viewAsOtherUser}
                 onOpenTarget={(targetId) => router.push(`/target/${targetId}` as any)}
                 onEditBid={(opts) => {
                   const bid = readTargetBid(pt, resolveInheritedBid(pt.ad_group_id));
@@ -1560,12 +1580,30 @@ function PlacementBlock({
   return <View style={wrapStyle}>{body}</View>;
 }
 
+function campaignTargetMetricItems(item: any, currency: string, t: any) {
+  const spend = Number(item.total_spend) || 0;
+  const sales = Number(item.total_sales) || 0;
+  const acos = Number(item.total_acos) || safeDivide(spend, sales) * 100;
+  return [
+    { label: "Spend", value: formatCurrency(spend, currency) },
+    { label: "Impr", value: formatInt(Number(item.total_impressions) || 0) },
+    { label: "Clicks", value: formatInt(Number(item.total_clicks) || 0) },
+    { label: "Orders", value: formatInt(Number(item.total_orders) || 0) },
+    {
+      label: "ACoS",
+      value: sales > 0 ? formatPercent(acos) : "—",
+      color: sales > 0 ? toneColor(acosTone(acos), t.colors) : t.colors.text_secondary,
+    },
+  ];
+}
+
 function ProductTargetRow({
   pt,
   isLast,
   primaryCurrency,
   inheritedDefaultBid,
   t,
+  viewAsOtherUser,
   onOpenTarget,
   onEditBid,
   variant = "product",
@@ -1575,22 +1613,38 @@ function ProductTargetRow({
   primaryCurrency: string;
   inheritedDefaultBid?: number;
   t: any;
+  viewAsOtherUser: boolean;
   onOpenTarget: (targetId: string) => void;
   onEditBid: (opts?: { forceCooldown?: boolean }) => void;
   variant?: "auto" | "product";
 }) {
+  const queryClient = useQueryClient();
   const target = describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression);
   const fallbackCover = fallbackAsinCoverUrl(target.asin);
   const title = variant === "auto" ? target.label : productTargetHeading(pt);
-  const spend = Number(pt.total_spend ?? 0);
-  const sales = Number(pt.total_sales ?? 0);
-  const orders = Number(pt.total_orders ?? 0);
-  const acos = safeDivide(spend, sales) * 100;
   const bid = readTargetBid(pt, inheritedDefaultBid);
   const stateText = statusLabel(pt.state);
 
   return (
     <View style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth }]}>
+      <View onStartShouldSetResponder={() => true} onTouchEnd={(event) => event.stopPropagation()} style={{ marginRight: 8 }}>
+        <EntityStateSwitch
+          testID={`campaign-target-state-${pt.id}`}
+          enabled={matchesEntityStateFilter(pt.state, "enabled")}
+          noun="target"
+          onChange={async (next) => {
+            assertNotViewingAsOtherUser(viewAsOtherUser);
+            const previous = applyOptimisticEntityState(queryClient, "product_target", pt.id, next);
+            try {
+              await updateProductTargetManual(pt.id, { state: next ? "enabled" : "paused" });
+              void invalidateEntityStateQueries(queryClient, "product_target");
+            } catch (error) {
+              revertOptimisticEntityState(queryClient, "product_target", pt.id, previous);
+              throw error;
+            }
+          }}
+        />
+      </View>
       <TouchableOpacity
         activeOpacity={0.82}
         accessibilityRole="button"
@@ -1622,10 +1676,11 @@ function ProductTargetRow({
               </Text>
             )}
             {variant === "auto" ? null : " · "}
-            {[stateText, target.asin, formatCurrency(spend, primaryCurrency), formatInt(orders), sales > 0 ? formatPercent(acos) : null]
+            {[stateText, target.asin]
               .filter(Boolean)
               .join(" · ")}
           </Text>
+          <DenseMetricLine items={campaignTargetMetricItems(pt, primaryCurrency, t)} />
         </View>
         <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
       </TouchableOpacity>

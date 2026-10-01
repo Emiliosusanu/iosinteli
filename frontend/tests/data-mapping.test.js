@@ -15,6 +15,7 @@ import { describeProductTarget, extractTargetAsin, fallbackAsinCoverUrl, formatM
 
 const queriesSource = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
 const overviewSource = readFileSync(new URL("../app/(tabs)/index.tsx", import.meta.url), "utf8");
+const overviewFinanceTrendSource = readFileSync(new URL("../src/lib/overviewFinanceTrend.ts", import.meta.url), "utf8");
 const campaignsSource = readFileSync(new URL("../app/(tabs)/campaigns.tsx", import.meta.url), "utf8");
 const campaignDetailSource = readFileSync(new URL("../app/campaign/[id].tsx", import.meta.url), "utf8");
 const searchTermsSource = readFileSync(new URL("../app/more/search-terms.tsx", import.meta.url), "utf8");
@@ -116,7 +117,8 @@ test("kdp royalties prefer explicit profile links over legacy profile fields", (
 
 test("dashboard finance widgets use imported KDP data instead of a manual royalty-rate fallback", () => {
   assert.equal(overviewSource.includes("kdpRoyaltiesOnDate"), true);
-  assert.equal(overviewSource.includes("publisherNetForPeriod"), true);
+  assert.equal(overviewSource.includes("buildOverviewFinanceTrend"), true);
+  assert.equal(overviewFinanceTrendSource.includes("netRoyalties"), true);
   assert.equal(overviewSource.includes("royaltyRate: 0"), true);
   assert.equal(overviewSource.includes("royaltyRate,"), false);
   assert.equal(overviewSource.includes("fallbackRoyalties"), false);
@@ -379,7 +381,7 @@ test("overview presents royalties minus spend without implying a full pnl", () =
 test("overview does not present missing KDP royalties as a verified zero profit", () => {
   assert.equal(overviewSource.includes("const kdpReady = !!royaltyRange?.hasKdpData"), true);
   assert.equal(overviewSource.includes("const financeComplete = kdpReady && adsReady"), true);
-  assert.equal(overviewSource.includes("publisherNetForPeriod"), true);
+  assert.equal(overviewSource.includes("buildOverviewFinanceTrend"), true);
   assert.equal(overviewSource.includes("kdpRoyaltiesAreKnown"), true);
   assert.equal(overviewSource.includes("const netKnown ="), true);
   assert.equal(overviewSource.includes("heroNet != null"), true);
@@ -387,7 +389,7 @@ test("overview does not present missing KDP royalties as a verified zero profit"
   assert.match(overviewSource, /const royaltiesDisplay = !royaltiesKnown/);
   assert.match(overviewSource, /netRoyalties\(\{ kdpRoyalties: heroRoyalties, adsSpend: heroSpend \}\)/);
   assert.equal(overviewSource.includes("netKnown && netSeries.length > 1"), true);
-  assert.equal(overviewSource.includes("if (!kdpReady) return []"), true);
+  assert.equal(overviewFinanceTrendSource.includes("if (!input.kdpReady) return []"), true);
 });
 
 test("book campaign drilldown remains read-only and uses all link paths", () => {

@@ -333,10 +333,10 @@ test("client bounds transient AI failure and leaves Amazon rows usable", async (
 });
 
 test("relevance retry budgets stay bounded for an interactive picker", async () => {
-  const { RELEVANCE_SOFT_RETRY_GAPS_MS, AI_FAILED_SOFT_RECOVER_DELAYS_MS } =
-    await import("../src/lib/amazonCampaignSuggestions.ts");
+  const { RELEVANCE_SOFT_RETRY_GAPS_MS } = await import(
+    "../src/lib/amazonCampaignSuggestions.ts"
+  );
   assert.deepEqual([...RELEVANCE_SOFT_RETRY_GAPS_MS], [800]);
-  assert.deepEqual([...AI_FAILED_SOFT_RECOVER_DELAYS_MS], [0]);
 });
 
 test("isTransientRelevanceError treats timeouts/429/TPM as retryable", async () => {

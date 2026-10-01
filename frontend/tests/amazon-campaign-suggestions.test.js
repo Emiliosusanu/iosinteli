@@ -34,6 +34,7 @@ import {
   resolveSuggestionBid,
   sortProductSuggestionsByTitleSimilarity,
   SUGGESTION_RELEVANCE_DEFAULT_MODE,
+  suggestionRelevanceNeedsUserConfirm,
   suggestionAgeMonths,
   suggestionStockCaption,
   titleFromAmazonRetailHtml,
@@ -49,6 +50,14 @@ test("amazonRetailHostForCountry maps marketplace country to exact retail host",
   assert.equal(amazonRetailHostForCountry("UK"), "www.amazon.co.uk");
   assert.equal(amazonRetailHostForCountry("DE"), "www.amazon.de");
   assert.equal(amazonRetailHostForCountry(null), "www.amazon.com");
+});
+
+test("failed or empty AI filtering requires explicit user choice", () => {
+  assert.equal(suggestionRelevanceNeedsUserConfirm({ grokPending: true }), false);
+  assert.equal(suggestionRelevanceNeedsUserConfirm({ relevanceOutcome: "filtered" }), false);
+  assert.equal(suggestionRelevanceNeedsUserConfirm({ relevanceOutcome: "failed_unfiltered" }), true);
+  assert.equal(suggestionRelevanceNeedsUserConfirm({ relevanceOutcome: "restored_empty" }), true);
+  assert.equal(suggestionRelevanceNeedsUserConfirm({ relevanceOutcome: "user_accepted_unfiltered" }), false);
 });
 
 test("tokenizeTitle drops stop words and punctuation", () => {
