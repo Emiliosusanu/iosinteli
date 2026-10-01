@@ -15,6 +15,7 @@ import { runKdpIosHelperTick } from "@/src/lib/kdp/importer";
 import {
   attachKdpWebView,
   getKdpHelperStatus,
+  hydrateKdpRuntimeFromPersistence,
   kdpTemplatesReady,
   subscribeKdpHelperStatus,
 } from "@/src/lib/kdp/runtime";
@@ -32,7 +33,10 @@ export default function KdpHelperScreen() {
   const [status, setStatus] = useState(getKdpHelperStatus());
   const enabled = isIosHelperEnabled(kdpRoyaltySource);
 
-  useEffect(() => subscribeKdpHelperStatus(setStatus), []);
+  useEffect(() => {
+    void hydrateKdpRuntimeFromPersistence();
+    return subscribeKdpHelperStatus(setStatus);
+  }, []);
 
   useLayoutEffect(() => {
     setKdpHelperScreenFocused(true);
@@ -52,17 +56,23 @@ export default function KdpHelperScreen() {
   const startedAfterLogin = useRef(false);
 
   useEffect(() => {
-    if (!enabled || !status.loggedIn || status.running || startedAfterLogin.current) return;
+    if (!enabled || (!status.loggedIn && !status.savedSession) || status.running || startedAfterLogin.current) return;
     if (!kdpTemplatesReady()) return;
     startedAfterLogin.current = true;
     void runKdpIosHelperTick("manual", { force: true, profileIds: selectedProfileIds });
-  }, [enabled, status.loggedIn, status.running, status.templates, selectedProfileIds]);
+  }, [enabled, status.loggedIn, status.savedSession, status.running, status.templates, selectedProfileIds]);
 
   const onSync = () => {
     void runKdpIosHelperTick("manual", { force: true, profileIds: selectedProfileIds });
   };
 
-  const statusLabel = status.loggedIn ? "Signed in" : "Waiting for sign-in";
+  const statusLabel = status.loggedIn
+    ? "Signed in"
+    : !status.sessionChecked
+      ? "Checking saved session…"
+      : status.savedSession
+        ? "Saved session · background ready"
+        : "Sign in required";
   const captureValue = captured.length ? captured.join(", ") : "Not yet";
 
   return (
@@ -76,8 +86,8 @@ export default function KdpHelperScreen() {
           <SettingsRow
             label="KDP session"
             value={statusLabel}
-            symbol={status.loggedIn ? "checkmark.circle.fill" : "person.crop.circle"}
-            symbolColor={status.loggedIn ? t.colors.tone_good : t.colors.tone_inactive}
+            symbol={status.loggedIn || status.savedSession ? "checkmark.circle.fill" : "person.crop.circle"}
+            symbolColor={status.loggedIn || status.savedSession ? t.colors.tone_good : t.colors.tone_inactive}
           />
           <SettingsRow
             label="Report capture"
@@ -110,7 +120,7 @@ export default function KdpHelperScreen() {
           <PrimaryButton
             label={status.running ? "Importing…" : kdpTemplatesReady() ? "Import now" : "Capture and import"}
             onPress={onSync}
-            disabled={!enabled || status.running || !status.loggedIn}
+            disabled={!enabled || status.running || (!status.loggedIn && !status.savedSession)}
           />
           <View style={{ height: 10 }} />
           <SecondaryButton

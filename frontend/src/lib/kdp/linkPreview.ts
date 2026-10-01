@@ -20,7 +20,7 @@ export { summarizeLinkPreview };
 
 const BOOK_CAP = 24;
 
-async function loadKdpBooks(accountId: string): Promise<LinkPreviewBook[]> {
+export async function fetchKdpAccountBooks(accountId: string): Promise<LinkPreviewBook[]> {
   const byAsin = new Map<string, LinkPreviewBook>();
   const pageSize = 500;
   let from = 0;
@@ -117,7 +117,7 @@ export async function fetchKdpAdsLinkPreview(opts: {
   const allProfiles = await fetchAmazonProfiles(opts.userId).catch(() => []);
   const adsIds = amazonAdsProfileIdsForSelection(allProfiles, opts.selectedProfileIds);
 
-  const kdpBooks = helperAccountId ? await loadKdpBooks(helperAccountId) : [];
+  const kdpBooks = helperAccountId ? await fetchKdpAccountBooks(helperAccountId) : [];
   const adsByProfile = await loadAdsBooks(adsIds);
 
   const adsProfiles: LinkPreviewProfile[] = adsIds.map((profileId) => {

@@ -1458,8 +1458,24 @@ export async function updateProfileNickname(profileId: string, nickname: string)
 }
 
 export async function fetchKdpAccounts() {
-  const data = await nestApiJson<{ accounts?: KdpAccountSummary[] }>("/kdp/accounts", { method: "GET" }, "Couldn't load KDP accounts.");
+  return fetchKdpAccountsForUser(null);
+}
+
+export async function fetchKdpAccountsForUser(filterUserId?: string | null) {
+  const data = await nestApiJson<{ accounts?: KdpAccountSummary[] }>(
+    `/kdp/accounts${qs({ filterUserId })}`,
+    { method: "GET" },
+    "Couldn't load KDP accounts.",
+  );
   return data.accounts ?? [];
+}
+
+export async function updateKdpAccountName(kdpAccountId: string, name: string) {
+  return nestApiJson<KdpAccountSummary>(
+    `/kdp/accounts/${encodeURIComponent(kdpAccountId)}`,
+    { method: "PATCH", body: JSON.stringify({ name: name.trim() }) },
+    "Couldn't rename KDP account.",
+  );
 }
 
 export async function setKdpLinkedProfiles(kdpAccountId: string, amazonProfileIds: string[]) {

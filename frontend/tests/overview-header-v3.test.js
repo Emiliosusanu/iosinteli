@@ -107,18 +107,18 @@ test("OverviewHeaderV3 expanded shell matches build 209 stadium chrome", () => {
   assert.match(header, /chrome\.colors\.background_secondary/);
 });
 
-test("OverviewHeaderV3 market pill uses overlapping circular flag discs", () => {
+test("OverviewHeaderV3 market pill uses separated circular flag discs", () => {
   assert.match(header, /from "@\/src\/components\/MarketPill"/);
   assert.match(header, /<MarketPill/);
   assert.match(header, /home-market-pill/);
   assert.match(header, /marketCountries/);
   assert.match(header, /hasMarketPill \? \(/);
-  // Glass + overlapping discs live in shared MarketPill.
+  // Glass + separated discs live in shared MarketPill.
   assert.match(marketPill, /MarketFlagStack/);
   assert.match(marketPill, /multi-country-flags/);
   assert.match(marketPill, /marketFlagDisc/);
-  assert.match(marketPill, /MARKET_FLAG_OVERLAP/);
-  assert.match(marketPill, /marginLeft: index > 0 \? MARKET_FLAG_OVERLAP/);
+  assert.match(marketPill, /MARKET_FLAG_GAP/);
+  assert.match(marketPill, /marginLeft: index > 0 \? MARKET_FLAG_GAP/);
   assert.match(marketPill, /zIndex: index \+ 1/);
   assert.match(marketPill, /borderRadius: MARKET_FLAG_SIZE \/ 2/);
   assert.match(marketPill, /market_pill_flag_rim/);

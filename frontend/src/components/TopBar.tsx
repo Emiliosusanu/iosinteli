@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   View,
   Text,
@@ -15,6 +16,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import { useRouter, type Href } from "expo-router";
+import { BookCover } from "./BookCover";
+import { fetchKdpAccountBooks } from "../lib/kdp/linkPreview";
+import {
+  fetchAmazonProfileBooks,
+  fetchKdpAccountsForUser,
+  updateKdpAccountName,
+  type AmazonProfileBookPreview,
+  type KdpAccountSummary,
+} from "../lib/mutations";
 import { useApp } from "../contexts/AppContext";
 import { dashboard, density, layout, useTheme } from "../lib/theme";
 import { formatDateRangeLabel, rangePresets, shortDateRangeContextLabel } from "../lib/format";
@@ -336,6 +346,54 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
   const viewingUser = adminUsers.find((user) => user.id === adminFilterUserId);
   const [profileOpen, setProfileOpen] = useState(false);
   const [listMode, setListMode] = useState<ProfileSheetMode>("ready");
+  const [bookAccount, setBookAccount] = useState<KdpAccountSummary | null>(null);
+
+  const kdpAccountsQ = useQuery({
+    queryKey: ["profile-picker-kdp-accounts", adminFilterUserId ?? "self"],
+    queryFn: () => fetchKdpAccountsForUser(adminFilterUserId),
+    enabled: profileOpen && listMode === "kdp_ads",
+    staleTime: 60_000,
+  });
+  const kdpBooksQ = useQuery({
+    queryKey: ["profile-picker-kdp-books", bookAccount?.id, adminFilterUserId ?? "self"],
+    queryFn: async () => {
+      const linked = bookAccount?.linked_amazon_profile_ids ?? [];
+      const [kdpRows, adsRows] = await Promise.all([
+        bookAccount ? fetchKdpAccountBooks(bookAccount.id) : Promise.resolve([]),
+        Promise.all(
+        linked.map((profileId) =>
+          fetchAmazonProfileBooks(profileId, { filterUserId: adminFilterUserId }),
+        ),
+        ),
+      ]);
+      type PickerBook = AmazonProfileBookPreview & { inKdp: boolean; inAds: boolean };
+      const byAsin = new Map<string, PickerBook>();
+      for (const row of kdpRows) {
+        byAsin.set(row.asin, {
+          asin: row.asin,
+          title: row.title,
+          coverUrl: row.imageUrl,
+          inKdp: true,
+          inAds: false,
+        });
+      }
+      for (const row of adsRows.flat()) {
+        const previous = byAsin.get(row.asin);
+        byAsin.set(row.asin, {
+          asin: row.asin,
+          title: row.title || previous?.title || null,
+          coverUrl: row.coverUrl || previous?.coverUrl || null,
+          inKdp: previous?.inKdp ?? false,
+          inAds: true,
+        });
+      }
+      return [...byAsin.values()].sort((a, b) =>
+        (a.title || a.asin).localeCompare(b.title || b.asin),
+      );
+    },
+    enabled: !!bookAccount,
+    staleTime: 60_000,
+  });
 
   const visibleProfiles = useMemo(
     () => filterProfilesBySheetMode(profiles, listMode),
@@ -353,7 +411,10 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
     () => profiles.filter((p) => (p.kdp_account_count ?? 0) > 0).length,
     [profiles],
   );
-  const adsOnlyCount = profiles.length - kdpAdsCount;
+  const adsOnlyCount = useMemo(
+    () => filterProfilesBySheetMode(profiles, "ads_only").length,
+    [profiles],
+  );
   const enabledProfiles = useMemo(
     () => profiles.filter((p) => profileEnabled(p)),
     [profiles],
@@ -403,6 +464,117 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
     toggleProfile(profileId);
   }
 
+  function renameKdpAccount(account: KdpAccountSummary) {
+    if (adminFilterUserId) return;
+    Alert.prompt(
+      "Rename KDP account",
+      "This name is shown only in InteliAds.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Save",
+          onPress: (value?: string) => {
+            const name = String(value || "").trim();
+            if (!name || name === account.name) return;
+            void updateKdpAccountName(account.id, name)
+              .then(() => kdpAccountsQ.refetch())
+              .catch((error) => Alert.alert("Couldn't rename KDP account", error instanceof Error ? error.message : String(error)));
+          },
+        },
+      ],
+      "plain-text",
+      account.name,
+    );
+  }
+
+  function renderProfileToggle(p: (typeof profiles)[number], groupItems: (typeof profiles)) {
+    const selected = profileInView(p, selectedProfileIds);
+    const nestOn = profileEnabled(p);
+    const displayName = profileDisplayName(p);
+    const association = profileAssociationHint(p, groupItems);
+    const switchDisabled = !nestOn && !selected;
+    return (
+      <TouchableOpacity
+        key={p.id}
+        testID={`profile-row-${p.profile_id}`}
+        style={[styles.profileRow, { borderBottomColor: t.colors.separator, opacity: switchDisabled ? 0.55 : 1 }]}
+        onPress={() => onViewToggle(p.id)}
+        activeOpacity={0.6}
+      >
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={1}>
+            {countryFlagEmoji(p.country_code)} {displayName}
+          </Text>
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
+            {[p.country_code, p.currency_code, nestOn ? null : "Off in InteliAds"].filter(Boolean).join(" · ")}
+          </Text>
+          {association ? (
+            <Text testID={`profile-assoc-${p.profile_id}`} style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}>
+              {association}
+            </Text>
+          ) : null}
+          <Text style={[t.typography.caption2, { color: selected ? t.colors.tone_primary : t.colors.text_tertiary, marginTop: 2, fontWeight: "600" }]}>
+            {viewStatusLabel(selected)}
+          </Text>
+        </View>
+        <Switch
+          value={selected}
+          onValueChange={() => onViewToggle(p.id)}
+          disabled={switchDisabled}
+          trackColor={{ false: t.colors.background_tertiary, true: t.colors.tone_primary }}
+          ios_backgroundColor={t.colors.background_tertiary}
+          accessibilityLabel={viewSwitchAccessibilityLabel(displayName, selected)}
+          accessibilityHint={selected ? VIEW_SWITCH_HINT_ON : VIEW_SWITCH_HINT_OFF}
+          accessibilityValue={{ text: viewStatusLabel(selected) }}
+          testID={`profile-view-toggle-${p.profile_id}`}
+        />
+      </TouchableOpacity>
+    );
+  }
+
+  function renderKdpGroups() {
+    if (kdpAccountsQ.isPending) {
+      return <Text style={[t.typography.body, { color: t.colors.text_secondary, padding: 16 }]}>Loading KDP groups…</Text>;
+    }
+    if (kdpAccountsQ.isError) {
+      return (
+        <TouchableOpacity onPress={() => void kdpAccountsQ.refetch()} style={{ padding: 16 }}>
+          <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Retry KDP groups</Text>
+        </TouchableOpacity>
+      );
+    }
+    const accounts = kdpAccountsQ.data ?? [];
+    if (!accounts.length) {
+      return <Text style={[t.typography.body, { color: t.colors.text_secondary, padding: 16 }]}>No linked KDP accounts.</Text>;
+    }
+    return accounts.map((account) => {
+      const linked = new Set(account.linked_amazon_profile_ids.map(String));
+      const items = profiles.filter((profile) => linked.has(String(profile.profile_id)) || linked.has(String(profile.id)));
+      if (!items.length) return null;
+      return (
+        <View key={account.id} testID={`profile-kdp-group-${account.id}`} style={[styles.kdpGroup, { borderColor: t.colors.separator, backgroundColor: t.colors.background_secondary }]}>
+          <View style={styles.kdpGroupHeader}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={1}>{account.name || "KDP account"}</Text>
+              <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
+                {items.length} Ads marketplace{items.length === 1 ? "" : "s"} · {account.book_count ?? 0} books
+              </Text>
+            </View>
+            {!adminFilterUserId ? (
+              <TouchableOpacity testID={`rename-kdp-${account.id}`} onPress={() => renameKdpAccount(account)} hitSlop={8}>
+                <SFSymbol name="pencil" size={16} color={t.colors.tone_primary} />
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity testID={`view-kdp-books-${account.id}`} onPress={() => setBookAccount(account)} style={[styles.kdpBooksButton, { backgroundColor: t.colors.tone_primary + "16" }]}>
+              <Text style={[t.typography.caption1, { color: t.colors.tone_primary, fontWeight: "700" }]}>Books</Text>
+            </TouchableOpacity>
+          </View>
+          {items.map((profile) => renderProfileToggle(profile, items))}
+        </View>
+      );
+    });
+  }
+
   function renderProfileRows() {
     if (profiles.length === 0) {
       return (
@@ -439,70 +611,7 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
         >
           {adsAccountGroupHeading(group)}
         </Text>
-        {group.items.map((p) => {
-          const selected = profileInView(p, selectedProfileIds);
-          const nestOn = profileEnabled(p);
-          const displayName = profileDisplayName(p);
-          const association = profileAssociationHint(p, group.items);
-          const switchDisabled = !nestOn && !selected;
-          return (
-            <TouchableOpacity
-              key={p.id}
-              testID={`profile-row-${p.profile_id}`}
-              style={[
-                styles.profileRow,
-                {
-                  borderBottomColor: t.colors.separator,
-                  opacity: switchDisabled ? 0.55 : 1,
-                },
-              ]}
-              onPress={() => onViewToggle(p.id)}
-              activeOpacity={0.6}
-            >
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={1}>
-                  {countryFlagEmoji(p.country_code)} {displayName}
-                </Text>
-                <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                  {[p.country_code, p.currency_code, nestOn ? null : "Off in InteliAds"]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </Text>
-                {association ? (
-                  <Text
-                    testID={`profile-assoc-${p.profile_id}`}
-                    style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}
-                  >
-                    {association}
-                  </Text>
-                ) : null}
-                <Text
-                  style={[
-                    t.typography.caption2,
-                    {
-                      color: selected ? t.colors.tone_primary : t.colors.text_tertiary,
-                      marginTop: 2,
-                      fontWeight: "600",
-                    },
-                  ]}
-                >
-                  {viewStatusLabel(selected)}
-                </Text>
-              </View>
-              <Switch
-                value={selected}
-                onValueChange={() => onViewToggle(p.id)}
-                disabled={switchDisabled}
-                trackColor={{ false: t.colors.background_tertiary, true: t.colors.tone_primary }}
-                ios_backgroundColor={t.colors.background_tertiary}
-                accessibilityLabel={viewSwitchAccessibilityLabel(displayName, selected)}
-                accessibilityHint={selected ? VIEW_SWITCH_HINT_ON : VIEW_SWITCH_HINT_OFF}
-                accessibilityValue={{ text: viewStatusLabel(selected) }}
-                testID={`profile-view-toggle-${p.profile_id}`}
-              />
-            </TouchableOpacity>
-          );
-        })}
+        {group.items.map((p) => renderProfileToggle(p, group.items))}
       </View>
     ));
   }
@@ -726,7 +835,7 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                   })}
                 </View>
               ) : null}
-              {renderProfileRows()}
+              {listMode === "kdp_ads" ? renderKdpGroups() : renderProfileRows()}
             </ScrollView>
           </View>
         ) : (
@@ -764,10 +873,56 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                   </Text>
                 </TouchableOpacity>
               </View>
-              <ScrollView style={{ maxHeight: 480 }}>{renderProfileRows()}</ScrollView>
+              <ScrollView style={{ maxHeight: 480 }}>{listMode === "kdp_ads" ? renderKdpGroups() : renderProfileRows()}</ScrollView>
             </Pressable>
           </Pressable>
         )}
+      </Modal>
+
+      <Modal
+        visible={!!bookAccount}
+        animationType="slide"
+        presentationStyle={Platform.OS === "ios" ? "pageSheet" : undefined}
+        transparent={Platform.OS !== "ios"}
+        onRequestClose={() => setBookAccount(null)}
+      >
+        <View style={[styles.sheetFill, { backgroundColor: t.colors.background_secondary }]}>
+          <View style={styles.sheetHeader}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[t.typography.title3, { color: t.colors.text_primary }]} numberOfLines={1}>{bookAccount?.name || "KDP books"}</Text>
+              <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
+                Books advertised across linked marketplaces
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setBookAccount(null)} hitSlop={10}>
+              <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
+            {kdpBooksQ.isPending ? (
+              <Text style={[t.typography.body, { color: t.colors.text_secondary, paddingVertical: 20 }]}>Loading books…</Text>
+            ) : kdpBooksQ.isError ? (
+              <TouchableOpacity onPress={() => void kdpBooksQ.refetch()} style={{ paddingVertical: 20 }}>
+                <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Retry books</Text>
+              </TouchableOpacity>
+            ) : (kdpBooksQ.data ?? []).length ? (
+              (kdpBooksQ.data ?? []).map((book) => (
+                <View key={book.asin} style={[styles.bookRow, { borderBottomColor: t.colors.separator }]}>
+                  <BookCover uri={book.coverUrl} asin={book.asin} size="sm" recyclingKey={book.asin} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[t.typography.body, { color: t.colors.text_primary }]} numberOfLines={2}>{book.title || book.asin}</Text>
+                    <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>{book.asin}</Text>
+                    <Text style={[t.typography.caption2, { color: book.inKdp && book.inAds ? t.colors.tone_good : t.colors.text_tertiary, marginTop: 2, fontWeight: "600" }]}>
+                      {book.inKdp && book.inAds ? "KDP + Ads" : book.inKdp ? "KDP" : "Ads"}
+                    </Text>
+                  </View>
+                </View>
+              ))
+            ) : (
+              <Text style={[t.typography.body, { color: t.colors.text_secondary, paddingVertical: 20 }]}>No advertised books found for the linked marketplaces.</Text>
+            )}
+          </ScrollView>
+        </View>
       </Modal>
 
     </>
@@ -908,6 +1063,36 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  kdpGroup: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: dashboard.cardRadius,
+    borderCurve: "continuous",
+    overflow: "hidden",
+  },
+  kdpGroupHeader: {
+    minHeight: 62,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  kdpBooksButton: {
+    minHeight: 32,
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    borderCurve: "continuous",
+  },
+  bookRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   dateInput: {
