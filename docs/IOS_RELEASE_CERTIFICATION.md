@@ -69,7 +69,7 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Clean build 343 archived at `/tmp/InteliAds-343.xcarchive`; executable SHA-256 `c37e7db397939f042f8cb12e3a5af544318af30aec1a272402a2a97f9afacfba`.
 - [x] Build 343 installed in place on the physical iPhone 14 Pro, preserving the signed-in session.
 - [x] Live device verification opened real ASIN `B0F1G3QVF5` and rendered its canonical title, cover, KDP royalties, Ads spend, Net, impressions, clicks, orders, and five campaigns from production data.
-- [x] App Store Connect accepted the build 343 upload and began processing it.
+- [x] App Store Connect processed build 343 successfully; status is `Ready to Submit` and the `Intelyads` TestFlight group is attached.
 
 ## Release invariants
 
