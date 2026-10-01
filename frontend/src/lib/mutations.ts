@@ -103,6 +103,18 @@ export interface KdpAccountSummary {
   last_synced_at?: string | null;
 }
 
+export interface DeleteKdpBookResult {
+  account_id: string;
+  asin: string;
+  deleted_titles: number;
+  deleted_formats: number;
+  deleted_books: number;
+  deleted_daily_rows: number;
+  deleted_fact_rows: number;
+  deleted_pricing_rows: number;
+  rebuilt_days: number;
+}
+
 export interface BidRecommendation {
   id: string;
   currentVersionId?: string;
@@ -1310,7 +1322,7 @@ export async function fetchAmazonProfileBooks(
     const asin = String(book.asin || "").trim();
     const coverUrl =
       String(book.coverUrl || book.amazonImageUrl || "").trim() || null;
-    if (!asin || !coverUrl) continue;
+    if (!asin) continue;
     books.push({ asin, title: book.title ?? null, coverUrl });
   }
   return books;
@@ -1475,6 +1487,14 @@ export async function updateKdpAccountName(kdpAccountId: string, name: string) {
     `/kdp/accounts/${encodeURIComponent(kdpAccountId)}`,
     { method: "PATCH", body: JSON.stringify({ name: name.trim() }) },
     "Couldn't rename KDP account.",
+  );
+}
+
+export async function deleteKdpBook(kdpAccountId: string, asin: string) {
+  return nestApiJson<DeleteKdpBookResult>(
+    `/kdp/accounts/${encodeURIComponent(kdpAccountId)}/books/${encodeURIComponent(asin)}`,
+    { method: "DELETE" },
+    "Couldn't delete the KDP book.",
   );
 }
 

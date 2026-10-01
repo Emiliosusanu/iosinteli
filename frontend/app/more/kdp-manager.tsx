@@ -1,0 +1,204 @@
+import React, { useMemo, useState } from "react";
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type Href, useRouter } from "expo-router";
+import { BookCover } from "@/src/components/BookCover";
+import { EmptyState, RetryState, SecondaryButton } from "@/src/components/Primitives";
+import { SubScreen } from "@/src/components/SubScreen";
+import { useApp } from "@/src/contexts/AppContext";
+import { countryFlagEmoji, profileDisplayName } from "@/src/lib/accountsUi";
+import { fetchKdpAccountBooks } from "@/src/lib/kdp/linkPreview";
+import { mergeKdpAndAdsBooks } from "@/src/lib/kdpManager";
+import {
+  deleteKdpBook,
+  fetchAmazonProfileBooks,
+  fetchKdpAccounts,
+  updateKdpAccountName,
+  type KdpAccountSummary,
+} from "@/src/lib/mutations";
+import { useTheme } from "@/src/lib/theme";
+
+export default function KdpManagerScreen() {
+  const t = useTheme();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const { profiles } = useApp();
+  const [selectedAccount, setSelectedAccount] = useState<KdpAccountSummary | null>(null);
+
+  const accountsQ = useQuery({
+    queryKey: ["kdp-manager-accounts"],
+    queryFn: fetchKdpAccounts,
+    staleTime: 30_000,
+  });
+  const booksQ = useQuery({
+    queryKey: ["kdp-manager-books", selectedAccount?.id],
+    enabled: !!selectedAccount,
+    staleTime: 30_000,
+    queryFn: async () => {
+      if (!selectedAccount) return [];
+      const linked = selectedAccount.linked_amazon_profile_ids ?? [];
+      const [kdpBooks, adsGroups] = await Promise.all([
+        fetchKdpAccountBooks(selectedAccount.id),
+        Promise.all(linked.map(async (profileId) => ({
+          profileId,
+          books: await fetchAmazonProfileBooks(profileId),
+        }))),
+      ]);
+      return mergeKdpAndAdsBooks(kdpBooks, adsGroups);
+    },
+  });
+
+  const linkedProfiles = useMemo(() => {
+    const linked = new Set((selectedAccount?.linked_amazon_profile_ids ?? []).map(String));
+    return profiles.filter((profile) => linked.has(String(profile.id)) || linked.has(String(profile.profile_id)));
+  }, [profiles, selectedAccount]);
+
+  const renameMutation = useMutation({
+    mutationFn: ({ accountId, name }: { accountId: string; name: string }) => updateKdpAccountName(accountId, name),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["kdp-manager-accounts"] });
+      await queryClient.invalidateQueries({ queryKey: ["profile-picker-kdp-accounts"] });
+    },
+    onError: (error) => Alert.alert("Rename failed", error instanceof Error ? error.message : "Couldn't rename KDP account."),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: ({ accountId, asin }: { accountId: string; asin: string }) => deleteKdpBook(accountId, asin),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["kdp-manager-books"] }),
+        queryClient.invalidateQueries({ queryKey: ["kdp-manager-accounts"] }),
+        queryClient.invalidateQueries({ queryKey: ["profile-picker-kdp-books"] }),
+        queryClient.invalidateQueries({ queryKey: ["profile-picker-kdp-accounts"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["kdp"] }),
+      ]);
+    },
+    onError: (error) => Alert.alert("Delete failed", error instanceof Error ? error.message : "Couldn't delete the KDP book."),
+  });
+
+  function rename(account: KdpAccountSummary) {
+    if (Platform.OS !== "ios") return;
+    Alert.prompt("Rename KDP account", undefined, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Save",
+        onPress: (value?: string) => {
+          const name = String(value || "").trim();
+          if (name && name !== account.name) renameMutation.mutate({ accountId: account.id, name });
+        },
+      },
+    ], "plain-text", account.name);
+  }
+
+  function confirmDelete(accountId: string, asin: string, title: string) {
+    Alert.alert(
+      "Delete KDP book data?",
+      `${title}\n\nThis permanently removes ${asin}, its KDP pricing, royalties, orders, and KENP history from this account. Amazon Ads campaigns and products stay unchanged.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: () => deleteMutation.mutate({ accountId, asin }) },
+      ],
+    );
+  }
+
+  if (selectedAccount) {
+    return (
+      <SubScreen title={selectedAccount.name || "KDP books"}>
+        <ScrollView contentContainerStyle={styles.content}>
+          <SecondaryButton label="All KDP accounts" onPress={() => setSelectedAccount(null)} full />
+          <View style={[styles.accountSummary, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.separator }]}>
+            <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>Linked marketplaces</Text>
+            <View style={styles.chips}>
+              {linkedProfiles.length ? linkedProfiles.map((profile) => (
+                <View key={profile.id || profile.profile_id} style={[styles.chip, { backgroundColor: t.colors.tone_primary + "14" }]}>
+                  <Text style={[t.typography.caption1, { color: t.colors.text_primary }]}>
+                    {countryFlagEmoji(profile.country_code)} {profileDisplayName(profile)}
+                  </Text>
+                </View>
+              )) : <Text style={[t.typography.footnote, { color: t.colors.text_secondary }]}>No Ads marketplace linked</Text>}
+            </View>
+            <SecondaryButton label="Manage links" onPress={() => router.push("/more/accounts" as Href)} full />
+          </View>
+
+          {booksQ.isLoading ? <ActivityIndicator color={t.colors.tone_primary} style={{ marginTop: 32 }} /> :
+            booksQ.isError ? <RetryState title="Couldn't load books" onRetry={() => void booksQ.refetch()} retrying={booksQ.isFetching} /> :
+            (booksQ.data ?? []).length ? (booksQ.data ?? []).map((book) => {
+              const adProfiles = book.adsProfileIds.map((id) => profiles.find((p) => p.id === id || p.profile_id === id)).filter(Boolean);
+              const deleting = deleteMutation.isPending && deleteMutation.variables?.asin === book.asin;
+              return (
+                <View key={book.asin} testID={`kdp-manager-book-${book.asin}`} style={[styles.bookRow, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.separator }]}>
+                  <BookCover uri={book.coverUrl} asin={book.asin} size="sm" recyclingKey={book.asin} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[t.typography.body, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={2}>{book.title || book.asin}</Text>
+                    <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>{book.asin}</Text>
+                    <View style={[styles.chips, { marginTop: 6 }]}>
+                      {book.inKdp ? <View style={[styles.chip, { backgroundColor: t.colors.tone_good + "18" }]}><Text style={[t.typography.caption2, { color: t.colors.tone_good }]}>KDP</Text></View> : null}
+                      {adProfiles.map((profile) => profile ? (
+                        <View key={profile.id || profile.profile_id} style={[styles.chip, { backgroundColor: t.colors.tone_primary + "14" }]}>
+                          <Text style={[t.typography.caption2, { color: t.colors.text_primary }]}>{countryFlagEmoji(profile.country_code)} {profileDisplayName(profile)}</Text>
+                        </View>
+                      ) : null)}
+                    </View>
+                  </View>
+                  {book.inKdp ? (
+                    <TouchableOpacity
+                      testID={`delete-kdp-book-${book.asin}`}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Delete ${book.title || book.asin} KDP data`}
+                      disabled={deleteMutation.isPending}
+                      onPress={() => confirmDelete(selectedAccount.id, book.asin, book.title || book.asin)}
+                      style={styles.deleteButton}
+                    >
+                      {deleting ? <ActivityIndicator size="small" color={t.colors.tone_danger} /> : <Ionicons name="trash-outline" size={19} color={t.colors.tone_danger} />}
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              );
+            }) : <EmptyState title="No KDP books" subtitle="The next completed KDP import will populate this account." />}
+        </ScrollView>
+      </SubScreen>
+    );
+  }
+
+  return (
+    <SubScreen title="KDP Manager">
+      <ScrollView contentContainerStyle={styles.content}>
+        {accountsQ.isLoading ? <ActivityIndicator color={t.colors.tone_primary} style={{ marginTop: 32 }} /> :
+          accountsQ.isError ? <RetryState title="Couldn't load KDP accounts" onRetry={() => void accountsQ.refetch()} retrying={accountsQ.isFetching} /> :
+          (accountsQ.data ?? []).length ? (accountsQ.data ?? []).map((account) => {
+            const linked = new Set((account.linked_amazon_profile_ids ?? []).map(String));
+            const markets = profiles.filter((p) => linked.has(String(p.id)) || linked.has(String(p.profile_id)));
+            return (
+              <Pressable key={account.id} testID={`kdp-manager-account-${account.id}`} onPress={() => setSelectedAccount(account)} style={[styles.accountCard, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.separator }]}>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={1}>{account.name || "KDP account"}</Text>
+                  <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 3 }]}>{account.book_count ?? 0} books · {markets.length} Ads marketplace{markets.length === 1 ? "" : "s"}</Text>
+                  <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 5 }]} numberOfLines={2}>
+                    {markets.length ? markets.map((p) => `${countryFlagEmoji(p.country_code)} ${profileDisplayName(p)}`).join("  ·  ") : "No linked Ads marketplace"}
+                  </Text>
+                </View>
+                <TouchableOpacity testID={`rename-kdp-manager-${account.id}`} onPress={(event) => { event.stopPropagation(); rename(account); }} hitSlop={10} style={styles.editButton}>
+                  <Ionicons name="pencil" size={18} color={t.colors.tone_primary} />
+                </TouchableOpacity>
+                <Ionicons name="chevron-forward" size={18} color={t.colors.text_tertiary} />
+              </Pressable>
+            );
+          }) : <EmptyState title="No KDP accounts" subtitle="Import KDP once from the Chrome extension or iPhone helper." />}
+      </ScrollView>
+    </SubScreen>
+  );
+}
+
+const styles = StyleSheet.create({
+  content: { padding: 16, paddingBottom: 40, gap: 12 },
+  accountCard: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, padding: 16, flexDirection: "row", alignItems: "center", gap: 12 },
+  accountSummary: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, padding: 16, gap: 12 },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  chip: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5 },
+  editButton: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
+  bookRow: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, padding: 12, flexDirection: "row", alignItems: "center", gap: 12 },
+  deleteButton: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+});
