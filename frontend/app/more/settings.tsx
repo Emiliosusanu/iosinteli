@@ -209,7 +209,7 @@ export default function SettingsScreenRoute() {
             value={guestMode ? undefined : profileValue}
             symbol="building.2.fill"
             symbolColor={t.colors.tone_primary}
-            onPress={() => router.push("/more/accounts" as Href)}
+            onPress={() => router.push("/more/kdp-manager" as Href)}
             accessibilityLabel={
               guestMode ? AMAZON_ACCOUNTS_ROW_LABEL : `${AMAZON_ACCOUNTS_ROW_LABEL}. ${profileValue}`
             }
@@ -244,7 +244,7 @@ export default function SettingsScreenRoute() {
             symbolColor={t.colors.tone_primary}
             onPress={() => router.push("/more/accounts" as Href)}
             accessibilityLabel={KDP_ACCOUNTS_ROW_LABEL}
-            accessibilityHint="Opens Amazon Accounts to link KDP."
+            accessibilityHint="Opens KDP Manager with linked marketplaces and books."
           />
           <SettingsNavigationRow
             testID="settings-kdp-helper"

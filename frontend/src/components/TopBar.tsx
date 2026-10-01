@@ -18,11 +18,11 @@ import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import { useRouter, type Href } from "expo-router";
 import { BookCover } from "./BookCover";
 import { fetchKdpAccountBooks } from "../lib/kdp/linkPreview";
+import { mergeKdpAndAdsBooks } from "../lib/kdpManager";
 import {
   fetchAmazonProfileBooks,
   fetchKdpAccountsForUser,
   updateKdpAccountName,
-  type AmazonProfileBookPreview,
   type KdpAccountSummary,
 } from "../lib/mutations";
 import { useApp } from "../contexts/AppContext";
@@ -366,29 +366,9 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
         ),
         ),
       ]);
-      type PickerBook = AmazonProfileBookPreview & { inKdp: boolean; inAds: boolean };
-      const byAsin = new Map<string, PickerBook>();
-      for (const row of kdpRows) {
-        byAsin.set(row.asin, {
-          asin: row.asin,
-          title: row.title,
-          coverUrl: row.imageUrl,
-          inKdp: true,
-          inAds: false,
-        });
-      }
-      for (const row of adsRows.flat()) {
-        const previous = byAsin.get(row.asin);
-        byAsin.set(row.asin, {
-          asin: row.asin,
-          title: row.title || previous?.title || null,
-          coverUrl: row.coverUrl || previous?.coverUrl || null,
-          inKdp: previous?.inKdp ?? false,
-          inAds: true,
-        });
-      }
-      return [...byAsin.values()].sort((a, b) =>
-        (a.title || a.asin).localeCompare(b.title || b.asin),
+      return mergeKdpAndAdsBooks(
+        kdpRows,
+        adsRows.map((books, index) => ({ profileId: linked[index], books })),
       );
     },
     enabled: !!bookAccount,
@@ -550,7 +530,6 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
     return accounts.map((account) => {
       const linked = new Set(account.linked_amazon_profile_ids.map(String));
       const items = profiles.filter((profile) => linked.has(String(profile.profile_id)) || linked.has(String(profile.id)));
-      if (!items.length) return null;
       return (
         <View key={account.id} testID={`profile-kdp-group-${account.id}`} style={[styles.kdpGroup, { borderColor: t.colors.separator, backgroundColor: t.colors.background_secondary }]}>
           <View style={styles.kdpGroupHeader}>
@@ -569,7 +548,9 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
               <Text style={[t.typography.caption1, { color: t.colors.tone_primary, fontWeight: "700" }]}>Books</Text>
             </TouchableOpacity>
           </View>
-          {items.map((profile) => renderProfileToggle(profile, items))}
+          {items.length ? items.map((profile) => renderProfileToggle(profile, items)) : (
+            <Text style={[t.typography.footnote, { color: t.colors.text_secondary, paddingHorizontal: 14, paddingBottom: 12 }]}>No linked Ads marketplaces</Text>
+          )}
         </View>
       );
     });
@@ -912,9 +893,17 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Text style={[t.typography.body, { color: t.colors.text_primary }]} numberOfLines={2}>{book.title || book.asin}</Text>
                     <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>{book.asin}</Text>
-                    <Text style={[t.typography.caption2, { color: book.inKdp && book.inAds ? t.colors.tone_good : t.colors.text_tertiary, marginTop: 2, fontWeight: "600" }]}>
-                      {book.inKdp && book.inAds ? "KDP + Ads" : book.inKdp ? "KDP" : "Ads"}
+                    <Text style={[t.typography.caption2, { color: book.inKdp && book.adsProfileIds.length ? t.colors.tone_good : t.colors.text_tertiary, marginTop: 2, fontWeight: "600" }]}>
+                      {book.inKdp && book.adsProfileIds.length ? "KDP + Ads" : book.inKdp ? "KDP" : "Ads"}
                     </Text>
+                    {book.adsProfileIds.length ? (
+                      <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 3 }]} numberOfLines={2}>
+                        {book.adsProfileIds.map((id) => {
+                          const profile = profiles.find((p) => p.id === id || p.profile_id === id);
+                          return profile ? `${countryFlagEmoji(profile.country_code)} ${profileDisplayName(profile)}` : id;
+                        }).join("  ·  ")}
+                      </Text>
+                    ) : null}
                   </View>
                 </View>
               ))

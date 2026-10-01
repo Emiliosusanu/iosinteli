@@ -30,7 +30,8 @@ export async function fetchKdpAccountBooks(accountId: string): Promise<LinkPrevi
       .select("asin, title, cover_url, amazon_image_url")
       .eq("account_id", accountId)
       .range(from, from + pageSize - 1);
-    if (error || !data?.length) break;
+    if (error) throw new Error(`kdp_titles: ${error.message}`);
+    if (!data?.length) break;
     for (const row of data as Array<{
       asin?: string;
       title?: string | null;
@@ -49,6 +50,60 @@ export async function fetchKdpAccountBooks(accountId: string): Promise<LinkPrevi
     }
     if (data.length < pageSize) break;
     from += pageSize;
+  }
+
+  // kdp_titles is enrichment, not the catalog authority. Keep formats that
+  // have not received title/cover enrichment yet so the manager never hides
+  // a real imported book.
+  const formatRows: Array<{ asin: string; book_id: string }> = [];
+  from = 0;
+  for (;;) {
+    const { data, error } = await supabase
+      .from("kdp_book_formats")
+      .select("asin, book_id")
+      .eq("account_id", accountId)
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`kdp_book_formats: ${error.message}`);
+    if (!data?.length) break;
+    for (const row of data as Array<{ asin?: string; book_id?: string }>) {
+      const asin = normalizeAsin(row.asin);
+      const bookId = String(row.book_id || "").trim();
+      if (asin && bookId) formatRows.push({ asin, book_id: bookId });
+    }
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+
+  const bookById = new Map<string, { title: string | null; imageUrl: string | null }>();
+  const bookIds = [...new Set(formatRows.map((row) => row.book_id))];
+  for (let i = 0; i < bookIds.length; i += 100) {
+    const { data, error } = await supabase
+      .from("kdp_books")
+      .select("id, display_title, cover_url")
+      .eq("account_id", accountId)
+      .in("id", bookIds.slice(i, i + 100));
+    if (error) throw new Error(`kdp_books: ${error.message}`);
+    for (const row of (data ?? []) as Array<{
+      id?: string;
+      display_title?: string | null;
+      cover_url?: string | null;
+    }>) {
+      const id = String(row.id || "").trim();
+      if (!id) continue;
+      bookById.set(id, {
+        title: String(row.display_title || "").trim() || null,
+        imageUrl: pickUsableCoverUrl(row.cover_url),
+      });
+    }
+  }
+  for (const format of formatRows) {
+    const previous = byAsin.get(format.asin);
+    const book = bookById.get(format.book_id);
+    byAsin.set(format.asin, {
+      asin: format.asin,
+      title: previous?.title || book?.title || null,
+      imageUrl: pickUsableCoverUrl(previous?.imageUrl, book?.imageUrl),
+    });
   }
   return [...byAsin.values()].sort((a, b) =>
     (a.title || a.asin).localeCompare(b.title || b.asin),
