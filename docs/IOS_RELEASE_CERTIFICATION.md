@@ -25,9 +25,11 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Gross, Net, and Ad Spend trend points share the same calendar dates and preserve missing-data semantics.
 - [x] Focused unit tests pass.
 - [x] Full unit suite (962 tests) and TypeScript pass.
-- [ ] Clean build 340 archive contains the expected Overview stadium chrome.
-- [ ] Device smoke on iPhone 14 Pro.
-- [ ] TestFlight upload and Apple processing verified.
+- [x] Clean build 340 archive contains the expected Overview stadium chrome.
+- [x] Build 340 installed over the existing app on the iPhone 14 Pro without deleting local data.
+- [ ] Visual device smoke remains blocked by the iOS 26 remote-debug launch service; the installed app was not removed.
+- [x] TestFlight upload accepted by App Store Connect.
+- [ ] Apple processing completed and build 340 visible in TestFlight.
 
 ## Release invariants
 
