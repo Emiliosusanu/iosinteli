@@ -137,6 +137,7 @@ import { FirstReveal, HorizonPane, PressableScale, VerifiedAmount, VerifiedValue
 import { GestureDetector } from "react-native-gesture-handler";
 import { GlassPanel } from "@/src/components/GlassPanel";
 import { syncChrome } from "@/src/lib/motion";
+import { isActiveProfileSyncStale } from "@/src/lib/syncContract";
 import { playHaptic } from "@/src/lib/hapticPolicy";
 import { loadScopedKdpFreshness } from "@/src/lib/kdpIngestMonitor";
 import {
@@ -1531,14 +1532,15 @@ export default function OverviewScreen() {
   const lastSync = syncRows[0];
   const latestSyncStatus = lastSync?.status?.toLowerCase();
   const recentCompletedSync = syncRows.find((row) => row.status?.toLowerCase() === "completed");
-  const lastSyncStartedAt = lastSync?.started_at ? new Date(lastSync.started_at).getTime() : 0;
-  const lastSyncAgeMs = lastSyncStartedAt > 0 ? Date.now() - lastSyncStartedAt : Number.POSITIVE_INFINITY;
   const latestStatusIsActive =
     latestSyncStatus === "pending" ||
     latestSyncStatus === "running" ||
     latestSyncStatus === "processing" ||
     latestSyncStatus === "in_progress";
-  const syncStale = latestStatusIsActive && lastSyncAgeMs > 45 * 60_000;
+  const syncStale = isActiveProfileSyncStale({
+    status: latestSyncStatus,
+    startedAt: lastSync?.started_at,
+  });
   const syncWarning =
     syncStale ||
     latestSyncStatus === "failed" ||
