@@ -47,6 +47,17 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Physical iPhone 14 Pro smoke: campaign creation, ad group creation, add keywords, add products, AI filtering, keyword/product/auto controls, and KDP Manager. Production certification created campaign `175315280777532` and ad group `49109730195577` paused; readback shows one keyword and one product ad. The exact 120+80 phrase AI batches both returned 201, and device Campaign Creation/Add Keywords showed filtered selections without an unavailable fallback.
 - [x] Clean build 341 archived at `/tmp/InteliAds-341.xcarchive`, installed over the existing app without removing local data, and accepted for TestFlight processing.
 
+## Build 342 — honest large-profile sync freshness
+
+- [x] Starts from the merged build 341 release candidate; the active Cursor checkout remains untouched.
+- [x] iOS active-sync freshness now matches the server's 120-minute worker ownership window instead of labeling a valid large-profile hourly run stale after 45 minutes.
+- [x] Live `emisusanu98` evidence captured the original mismatch: five profiles completed while the large profile remained legitimately pending at 59 minutes.
+- [x] Boundary coverage verifies active at 119:59, stale after 120:00, and completed runs never stale.
+- [x] Full iOS unit suite (969 tests) and TypeScript pass.
+- [x] Clean build 342 archived at `/tmp/InteliAds-342.xcarchive`; bundle `io.inteliads.app`, version `1.0.1 (342)`.
+- [x] Build 342 installed on the physical iPhone 14 Pro with the signed-in session and financial data preserved. The false Stale badge disappeared while Gross `$33.86`, Net `$16.04`, Ad Spend `$17.82`, Clicks `17`, and Orders `1` stayed unchanged.
+- [x] App Store Connect accepted the build 342 upload and began processing it.
+
 ## Release invariants
 
 - No fake zero, placeholder metric, stale total, or silent unfiltered fallback.
