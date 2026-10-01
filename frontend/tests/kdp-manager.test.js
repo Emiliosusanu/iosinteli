@@ -28,6 +28,8 @@ test("dedicated manager exposes rename, books, marketplaces, and confirmed delet
   assert.match(screen, /Linked marketplaces/);
   assert.match(screen, /Delete KDP book data\?/);
   assert.match(screen, /Amazon Ads campaigns and products stay unchanged/);
+  assert.match(screen, /A later full KDP sync can import the book again/);
+  assert.doesNotMatch(screen, /permanently removes/);
   assert.match(screen, /invalidateQueries\(\{ queryKey: \["dashboard"\]/);
 });
 
