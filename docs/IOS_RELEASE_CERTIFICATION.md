@@ -41,11 +41,11 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Book deletion requires explicit destructive confirmation and preserves Amazon Ads entities.
 - [x] Server deletion is one owned transaction and rebuilds affected Gross/Net source rollups.
 - [x] Overview queries are invalidated after deletion; no stale financial total remains on screen.
-- [x] Campaign AI filtering has production provider fallback across xAI, Groq, and OpenAI and fails closed when all providers fail.
-- [ ] Server PR merged, migration deployed, and production endpoint verified without deleting a live book.
+- [x] Campaign AI filtering has production provider fallback across xAI, Groq, and OpenAI, strict Groq JSON Schema output, and fails closed when every provider fails.
+- [x] Server PR #598 merged, production deploy passed, and the owned delete endpoint returns the expected authorization guard without deleting a live book.
 - [x] Full iOS unit suite (968 tests) and TypeScript pass.
-- [ ] Physical iPhone 14 Pro smoke: campaign creation, ad group creation, add keywords, add products, AI filtering, keyword/product/auto controls, KDP Manager.
-- [ ] Clean build 341 archived, installed without removing local data, and uploaded to TestFlight.
+- [x] Physical iPhone 14 Pro smoke: campaign creation, ad group creation, add keywords, add products, AI filtering, keyword/product/auto controls, and KDP Manager. Production certification created campaign `175315280777532` and ad group `49109730195577` paused; readback shows one keyword and one product ad. The exact 120+80 phrase AI batches both returned 201, and device Campaign Creation/Add Keywords showed filtered selections without an unavailable fallback.
+- [x] Clean build 341 archived at `/tmp/InteliAds-341.xcarchive`, installed over the existing app without removing local data, and accepted for TestFlight processing.
 
 ## Release invariants
 
