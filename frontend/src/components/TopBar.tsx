@@ -16,11 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import { useRouter, type Href } from "expo-router";
-import { BookCover } from "./BookCover";
-import { fetchKdpAccountBooks } from "../lib/kdp/linkPreview";
-import { mergeKdpAndAdsBooks } from "../lib/kdpManager";
 import {
-  fetchAmazonProfileBooks,
   fetchKdpAccountsForUser,
   updateKdpAccountName,
   type KdpAccountSummary,
@@ -62,6 +58,7 @@ interface TopBarProps {
   title?: string;
   showProfileSelector?: boolean;
   showDateRange?: boolean;
+  showKdpAccountGroups?: boolean;
   rightAction?: { icon: keyof typeof Ionicons.glyphMap; onPress: () => void; testID?: string };
 }
 
@@ -329,7 +326,13 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
   );
 }
 
-export function TopBar({ title, showProfileSelector = true, showDateRange = true, rightAction }: TopBarProps) {
+export function TopBar({
+  title,
+  showProfileSelector = true,
+  showDateRange = true,
+  showKdpAccountGroups = true,
+  rightAction,
+}: TopBarProps) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -346,32 +349,12 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
   const viewingUser = adminUsers.find((user) => user.id === adminFilterUserId);
   const [profileOpen, setProfileOpen] = useState(false);
   const [listMode, setListMode] = useState<ProfileSheetMode>("ready");
-  const [bookAccount, setBookAccount] = useState<KdpAccountSummary | null>(null);
+  const [pendingKdpAccountId, setPendingKdpAccountId] = useState<string | null>(null);
 
   const kdpAccountsQ = useQuery({
     queryKey: ["profile-picker-kdp-accounts", adminFilterUserId ?? "self"],
     queryFn: () => fetchKdpAccountsForUser(adminFilterUserId),
     enabled: profileOpen && listMode === "kdp_ads",
-    staleTime: 60_000,
-  });
-  const kdpBooksQ = useQuery({
-    queryKey: ["profile-picker-kdp-books", bookAccount?.id, adminFilterUserId ?? "self"],
-    queryFn: async () => {
-      const linked = bookAccount?.linked_amazon_profile_ids ?? [];
-      const [kdpRows, adsRows] = await Promise.all([
-        bookAccount ? fetchKdpAccountBooks(bookAccount.id) : Promise.resolve([]),
-        Promise.all(
-        linked.map((profileId) =>
-          fetchAmazonProfileBooks(profileId, { filterUserId: adminFilterUserId }),
-        ),
-        ),
-      ]);
-      return mergeKdpAndAdsBooks(
-        kdpRows,
-        adsRows.map((books, index) => ({ profileId: linked[index], books })),
-      );
-    },
-    enabled: !!bookAccount,
     staleTime: 60_000,
   });
 
@@ -467,6 +450,23 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
     );
   }
 
+  function openKdpManager(account: KdpAccountSummary) {
+    if (Platform.OS === "ios" && profileOpen) {
+      setPendingKdpAccountId(account.id);
+      setProfileOpen(false);
+      return;
+    }
+    setProfileOpen(false);
+    router.push({ pathname: "/more/kdp-manager", params: { accountId: account.id } });
+  }
+
+  function finishProfileDismiss() {
+    if (!pendingKdpAccountId) return;
+    const accountId = pendingKdpAccountId;
+    setPendingKdpAccountId(null);
+    router.push({ pathname: "/more/kdp-manager", params: { accountId } });
+  }
+
   function renderProfileToggle(p: (typeof profiles)[number], groupItems: (typeof profiles)) {
     const selected = profileInView(p, selectedProfileIds);
     const nestOn = profileEnabled(p);
@@ -544,7 +544,7 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                 <SFSymbol name="pencil" size={16} color={t.colors.tone_primary} />
               </TouchableOpacity>
             ) : null}
-            <TouchableOpacity testID={`view-kdp-books-${account.id}`} onPress={() => setBookAccount(account)} style={[styles.kdpBooksButton, { backgroundColor: t.colors.tone_primary + "16" }]}>
+            <TouchableOpacity testID={`view-kdp-books-${account.id}`} onPress={() => openKdpManager(account)} style={[styles.kdpBooksButton, { backgroundColor: t.colors.tone_primary + "16" }]}>
               <Text style={[t.typography.caption1, { color: t.colors.tone_primary, fontWeight: "700" }]}>Books</Text>
             </TouchableOpacity>
           </View>
@@ -684,6 +684,7 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
         presentationStyle={Platform.OS === "ios" ? "pageSheet" : undefined}
         transparent={Platform.OS !== "ios"}
         onRequestClose={() => setProfileOpen(false)}
+        onDismiss={finishProfileDismiss}
       >
         {Platform.OS === "ios" ? (
           <View style={[styles.sheetFill, { backgroundColor: t.colors.background_secondary }]}>
@@ -722,28 +723,30 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                   {readyCount ? ` (${readyCount})` : ""}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                testID="profiles-filter-kdp-ads"
-                onPress={() => setListMode("kdp_ads")}
-                style={[
-                  styles.filterChip,
-                  {
-                    backgroundColor: listMode === "kdp_ads" ? t.colors.tone_primary + "1A" : t.colors.background_tertiary,
-                  },
-                ]}
-              >
-                <Text
+              {showKdpAccountGroups ? (
+                <TouchableOpacity
+                  testID="profiles-filter-kdp-ads"
+                  onPress={() => setListMode("kdp_ads")}
                   style={[
-                    t.typography.caption1,
+                    styles.filterChip,
                     {
-                      color: listMode === "kdp_ads" ? t.colors.tone_primary : t.colors.text_secondary,
-                      fontWeight: "700",
+                      backgroundColor: listMode === "kdp_ads" ? t.colors.tone_primary + "1A" : t.colors.background_tertiary,
                     },
                   ]}
                 >
-                  {PROFILE_LIST_KDP_ADS_LABEL} ({kdpAdsCount})
-                </Text>
-              </TouchableOpacity>
+                  <Text
+                    style={[
+                      t.typography.caption1,
+                      {
+                        color: listMode === "kdp_ads" ? t.colors.tone_primary : t.colors.text_secondary,
+                        fontWeight: "700",
+                      },
+                    ]}
+                  >
+                    {PROFILE_LIST_KDP_ADS_LABEL} ({kdpAdsCount})
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity
                 testID="profiles-filter-ads-only"
                 onPress={() => setListMode("ads_only")}
@@ -838,11 +841,13 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                     {PROFILE_LIST_READY_LABEL}
                   </Text>
                 </TouchableOpacity>
-                <TouchableOpacity testID="profiles-filter-kdp-ads" onPress={() => setListMode("kdp_ads")}>
-                  <Text style={{ color: listMode === "kdp_ads" ? t.colors.tone_primary : t.colors.text_secondary }}>
-                    {PROFILE_LIST_KDP_ADS_LABEL} ({kdpAdsCount})
-                  </Text>
-                </TouchableOpacity>
+                {showKdpAccountGroups ? (
+                  <TouchableOpacity testID="profiles-filter-kdp-ads" onPress={() => setListMode("kdp_ads")}>
+                    <Text style={{ color: listMode === "kdp_ads" ? t.colors.tone_primary : t.colors.text_secondary }}>
+                      {PROFILE_LIST_KDP_ADS_LABEL} ({kdpAdsCount})
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
                 <TouchableOpacity testID="profiles-filter-ads-only" onPress={() => setListMode("ads_only")}>
                   <Text style={{ color: listMode === "ads_only" ? t.colors.tone_primary : t.colors.text_secondary }}>
                     {PROFILE_LIST_ADS_ONLY_LABEL} ({adsOnlyCount})
@@ -858,79 +863,6 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
             </Pressable>
           </Pressable>
         )}
-      </Modal>
-
-      <Modal
-        visible={!!bookAccount}
-        animationType="slide"
-        presentationStyle={Platform.OS === "ios" ? "pageSheet" : undefined}
-        transparent={Platform.OS !== "ios"}
-        onRequestClose={() => setBookAccount(null)}
-      >
-        <View style={[styles.sheetFill, { backgroundColor: t.colors.background_secondary }]}>
-          <View style={styles.sheetHeader}>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={[t.typography.title3, { color: t.colors.text_primary }]} numberOfLines={1}>{bookAccount?.name || "KDP books"}</Text>
-              <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                Books advertised across linked marketplaces
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => setBookAccount(null)} hitSlop={10}>
-              <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Done</Text>
-            </TouchableOpacity>
-          </View>
-          <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32 }}>
-            {kdpBooksQ.isPending ? (
-              <Text style={[t.typography.body, { color: t.colors.text_secondary, paddingVertical: 20 }]}>Loading books…</Text>
-            ) : kdpBooksQ.isError ? (
-              <TouchableOpacity onPress={() => void kdpBooksQ.refetch()} style={{ paddingVertical: 20 }}>
-                <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Retry books</Text>
-              </TouchableOpacity>
-            ) : (kdpBooksQ.data ?? []).length ? (
-              (kdpBooksQ.data ?? []).map((book) => (
-                <TouchableOpacity
-                  key={book.asin}
-                  testID={`open-profile-kdp-book-${book.asin}`}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Open ${book.title || book.asin}`}
-                  accessibilityHint="Opens book details"
-                  onPress={() => {
-                    setBookAccount(null);
-                    router.push({
-                      pathname: "/product/[asin]",
-                      params: {
-                        asin: book.asin,
-                        title: book.title || "",
-                        imageUrl: book.coverUrl || "",
-                      },
-                    });
-                  }}
-                  style={[styles.bookRow, { borderBottomColor: t.colors.separator }]}
-                >
-                  <BookCover uri={book.coverUrl} asin={book.asin} size="sm" recyclingKey={book.asin} />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={[t.typography.body, { color: t.colors.text_primary }]} numberOfLines={2}>{book.title || book.asin}</Text>
-                    <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>{book.asin}</Text>
-                    <Text style={[t.typography.caption2, { color: book.inKdp && book.adsProfileIds.length ? t.colors.tone_good : t.colors.text_tertiary, marginTop: 2, fontWeight: "600" }]}>
-                      {book.inKdp && book.adsProfileIds.length ? "KDP + Ads" : book.inKdp ? "KDP" : "Ads"}
-                    </Text>
-                    {book.adsProfileIds.length ? (
-                      <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 3 }]} numberOfLines={2}>
-                        {book.adsProfileIds.map((id) => {
-                          const profile = profiles.find((p) => p.id === id || p.profile_id === id);
-                          return profile ? `${countryFlagEmoji(profile.country_code)} ${profileDisplayName(profile)}` : id;
-                        }).join("  ·  ")}
-                      </Text>
-                    ) : null}
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={t.colors.text_tertiary} />
-                </TouchableOpacity>
-              ))
-            ) : (
-              <Text style={[t.typography.body, { color: t.colors.text_secondary, paddingVertical: 20 }]}>No advertised books found for the linked marketplaces.</Text>
-            )}
-          </ScrollView>
-        </View>
       </Modal>
 
     </>

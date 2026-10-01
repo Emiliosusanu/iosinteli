@@ -2794,6 +2794,17 @@ export default function OverviewScreen() {
                   <SFSymbol name={blurBooks ? "eye.slash" : "eye"} size={18} color={blurBooks ? t.colors.tone_primary : t.colors.text_tertiary} />
                 </TouchableOpacity>
                 <TouchableOpacity
+                  testID="home-kdp-manager"
+                  onPress={() => router.push("/more/kdp-manager" as Href)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Manage KDP accounts and books"
+                  accessibilityHint="Opens KDP Manager to view or delete imported book data"
+                  hitSlop={8}
+                  style={{ minWidth: t.layout.minTap, minHeight: t.layout.minTap, alignItems: "center", justifyContent: "center" }}
+                >
+                  <SFSymbol name="gearshape" size={17} color={t.colors.tone_primary} />
+                </TouchableOpacity>
+                <TouchableOpacity
                   onPress={openBooksTab}
                   accessibilityRole="button"
                   accessibilityLabel="View all books"

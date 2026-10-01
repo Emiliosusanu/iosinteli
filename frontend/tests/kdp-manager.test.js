@@ -9,6 +9,8 @@ const screen = readFileSync(new URL("../app/more/kdp-manager.tsx", import.meta.u
 const topBar = readFileSync(new URL("../src/components/TopBar.tsx", import.meta.url), "utf8");
 const linkPreview = readFileSync(new URL("../src/lib/kdp/linkPreview.ts", import.meta.url), "utf8");
 const settings = readFileSync(new URL("../app/more/settings.tsx", import.meta.url), "utf8");
+const home = readFileSync(new URL("../app/(tabs)/index.tsx", import.meta.url), "utf8");
+const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
 
 test("KDP manager keeps books without covers and labels every linked Ads marketplace", () => {
   assert.match(mutations, /if \(!asin\) continue;/);
@@ -34,8 +36,19 @@ test("dedicated manager exposes rename, books, marketplaces, and confirmed delet
   assert.match(screen, /testID={`open-kdp-book-\$\{book\.asin\}`}/);
   assert.match(screen, /pathname: "\/product\/\[asin\]"/);
   assert.match(screen, /accessibilityHint="Opens book details"/);
-  assert.match(topBar, /testID={`open-profile-kdp-book-\$\{book\.asin\}`}/);
-  assert.match(topBar, /setBookAccount\(null\);[\s\S]*pathname: "\/product\/\[asin\]"/);
+  assert.match(topBar, /testID={`view-kdp-books-\$\{account\.id\}`}/);
+  assert.match(topBar, /setProfileOpen\(false\);[\s\S]*pathname: "\/more\/kdp-manager"/);
+  assert.match(topBar, /onDismiss={finishProfileDismiss}/);
+  assert.match(screen, /useLocalSearchParams<\{ accountId\?/);
+  assert.match(screen, /accountsQ\.data\.find\(\(row\) => row\.id === requestedAccountId\)/);
+});
+
+test("Home exposes KDP Manager while Targets keeps its profile picker Ads-scoped", () => {
+  assert.match(home, /testID="home-kdp-manager"/);
+  assert.match(home, /router\.push\("\/more\/kdp-manager" as Href\)/);
+  assert.match(home, /Manage KDP accounts and books/);
+  assert.match(targeting, /<TopBar showKdpAccountGroups=\{false\} \/>/);
+  assert.match(topBar, /showKdpAccountGroups \? \(/);
 });
 
 test("catalog read includes format rows and surfaces read errors", () => {
