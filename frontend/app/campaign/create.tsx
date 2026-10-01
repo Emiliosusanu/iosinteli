@@ -65,8 +65,6 @@ import {
   suggestionRelevanceNeedsUserConfirm,
   uniqueProductMatchTypes,
   uniqueReasonKeys,
-  AI_FAILED_SOFT_RECOVER_DELAYS_MS,
-  AI_FAILED_SOFT_RECOVER_MAX,
   type AsinDisplayMeta,
   type BidMode,
   type KeywordMatchType,
@@ -1817,68 +1815,6 @@ export default function CreateCampaignScreen() {
     }
   }, [preview?.keywords, preview?.productTargets, targeting]);
 
-  // Multi-shot UI soft-recover if AI still latched failed_unfiltered after
-  // in-filter soft-retry (TPM cool-down / Nest warm). Keeps Amazon rows; flips
-  // chrome to Filtering… then refetches. After AI_FAILED_SOFT_RECOVER_MAX
-  // still-fail → auto-accept Amazon unfiltered (never sticky AI unavailable).
-  const aiFailedSoftRecoverAttemptRef = useRef(0);
-  const aiFailedSoftRecoverScopeRef = useRef<string | null>(null);
-  useEffect(() => {
-    aiFailedSoftRecoverAttemptRef.current = 0;
-    aiFailedSoftRecoverScopeRef.current = null;
-  }, [book?.asin, adsProfileId, targeting]);
-  useEffect(() => {
-    if (preview?.keywordCounts?.relevanceOutcome !== "failed_unfiltered") {
-      return;
-    }
-    const scope = `${adsProfileId || profileId}|${book?.asin ?? ""}|${targeting}`;
-    if (aiFailedSoftRecoverScopeRef.current !== scope) {
-      aiFailedSoftRecoverScopeRef.current = scope;
-      aiFailedSoftRecoverAttemptRef.current = 0;
-    }
-    const attempt = aiFailedSoftRecoverAttemptRef.current;
-    if (attempt >= AI_FAILED_SOFT_RECOVER_MAX) {
-      acceptAmazonUnfiltered();
-      return;
-    }
-    const delay =
-      AI_FAILED_SOFT_RECOVER_DELAYS_MS[attempt] ??
-      AI_FAILED_SOFT_RECOVER_DELAYS_MS[
-        AI_FAILED_SOFT_RECOVER_DELAYS_MS.length - 1
-      ]!;
-    const timer = setTimeout(() => {
-      setPreview((prev) => {
-        if (!prev?.keywordCounts) return prev;
-        if (prev.keywordCounts.relevanceOutcome !== "failed_unfiltered") {
-          return prev;
-        }
-        return {
-          ...prev,
-          keywordCounts: {
-            ...prev.keywordCounts,
-            grokPending: true,
-            relevanceOutcome: "pending",
-          },
-        };
-      });
-      aiFailedSoftRecoverAttemptRef.current = attempt + 1;
-      previewM.mutate(undefined, {
-        onSettled: () => {
-          // Effect re-runs on next failed_unfiltered; if attempts exhausted,
-          // the guard above auto-accepts.
-        },
-      });
-    }, delay);
-    return () => clearTimeout(timer);
-    // Intentionally omit previewM.isPending — including it cancelled timers.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- multi-shot soft recover
-  }, [
-    preview?.keywordCounts?.relevanceOutcome,
-    adsProfileId,
-    profileId,
-    book?.asin,
-    targeting,
-  ]);
   const productReasonKeys = useMemo(
     () => uniqueReasonKeys(rankedProductSuggestions),
     [rankedProductSuggestions],

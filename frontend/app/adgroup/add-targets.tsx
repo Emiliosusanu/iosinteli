@@ -56,8 +56,6 @@ import {
   suggestionRelevanceNeedsUserConfirm,
   uniqueKeywordMatchTypes,
   uniqueProductMatchTypes,
-  AI_FAILED_SOFT_RECOVER_DELAYS_MS,
-  AI_FAILED_SOFT_RECOVER_MAX,
   type BidMode,
 } from "@/src/lib/amazonCampaignSuggestions";
 import { SuggestionAiFilterChrome } from "@/src/components/SuggestionAiFilterChrome";
@@ -507,68 +505,6 @@ export default function AddAdGroupTargetsScreen() {
       );
     }
   };
-
-  // Multi-shot UI soft-recover when AI latched failed_unfiltered (Nest/Groq TPM).
-  // Do not gate on isFetching (that cancelled timers). Latch attempt inside the
-  // timer; after AI_FAILED_SOFT_RECOVER_MAX still-fail → auto-accept Amazon.
-  const aiFailedSoftRecoverAttemptRef = useRef(0);
-  const aiFailedSoftRecoverScopeRef = useRef<string | null>(null);
-  useEffect(() => {
-    aiFailedSoftRecoverAttemptRef.current = 0;
-    aiFailedSoftRecoverScopeRef.current = null;
-  }, [adGroupId, mode]);
-  useEffect(() => {
-    if (
-      suggestionsQ.data?.keywordCounts?.relevanceOutcome !== "failed_unfiltered"
-    ) {
-      return;
-    }
-    const scope = `${adGroupId}|${mode}`;
-    if (aiFailedSoftRecoverScopeRef.current !== scope) {
-      aiFailedSoftRecoverScopeRef.current = scope;
-      aiFailedSoftRecoverAttemptRef.current = 0;
-    }
-    const attempt = aiFailedSoftRecoverAttemptRef.current;
-    if (attempt >= AI_FAILED_SOFT_RECOVER_MAX) {
-      acceptAmazonUnfiltered();
-      return;
-    }
-    const delay =
-      AI_FAILED_SOFT_RECOVER_DELAYS_MS[attempt] ??
-      AI_FAILED_SOFT_RECOVER_DELAYS_MS[
-        AI_FAILED_SOFT_RECOVER_DELAYS_MS.length - 1
-      ]!;
-    const timer = setTimeout(() => {
-      const current = queryClient.getQueryData<typeof suggestionsQ.data>(
-        suggestionsQueryKey,
-      );
-      if (current?.keywordCounts?.relevanceOutcome !== "failed_unfiltered") {
-        return;
-      }
-      aiFailedSoftRecoverAttemptRef.current = attempt + 1;
-      queryClient.setQueryData(suggestionsQueryKey, {
-        ...current,
-        keywordCounts: {
-          ...current.keywordCounts,
-          grokPending: true,
-          relevanceOutcome: "pending",
-        },
-      });
-      void suggestionsQ.refetch().then(() => {
-        const after = queryClient.getQueryData<typeof suggestionsQ.data>(
-          suggestionsQueryKey,
-        );
-        if (
-          after?.keywordCounts?.relevanceOutcome === "failed_unfiltered" &&
-          aiFailedSoftRecoverAttemptRef.current >= AI_FAILED_SOFT_RECOVER_MAX
-        ) {
-          acceptAmazonUnfiltered();
-        }
-      });
-    }, delay);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- multi-shot soft recover
-  }, [suggestionsQ.data?.keywordCounts?.relevanceOutcome, adGroupId, mode]);
 
   // After Step 2 AI filter finishes, pre-select the kept set (not raw Amazon).
   // Skip auto-select when AI failed / empty-restored until user confirms.

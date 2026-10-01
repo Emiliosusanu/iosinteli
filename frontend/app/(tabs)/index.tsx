@@ -153,7 +153,6 @@ import {
 import { iosRolling7Range, webIsoWeekRange } from "@/src/lib/acosContract";
 import {
   kdpRoyaltiesOnDate,
-  publisherNetForPeriod,
 } from "@/src/lib/homePeriod";
 import {
   ADS_ENGINE_FUNNEL_TIMEOUT_MS,
@@ -195,6 +194,7 @@ import {
   netRoyaltiesKnown,
   netRoyaltiesVoiceOver,
 } from "@/src/lib/netRoyalties";
+import { buildOverviewFinanceTrend } from "@/src/lib/overviewFinanceTrend";
 import {
   knownKdpRoyaltyTotal,
   isKdpOnlySessionScope,
@@ -1291,23 +1291,27 @@ export default function OverviewScreen() {
     impressions: pctDelta(totals.impressions, prevTotals.impressions),
   };
 
-  // Net profit sparkline — union Ads + KDP days so royalty-only days still inspect.
-  const netSeries = useMemo(() => {
-    if (!kdpReady) return [];
-    const dates = new Set<string>([
-      ...daily.map((m) => m.date),
-      ...kdpDays.map((d) => String((d as { date?: string }).date ?? "")).filter(Boolean),
-    ]);
-    return [...dates]
-      .sort((a, b) => a.localeCompare(b))
-      .flatMap((date) => {
-        const m = daily.find((row) => row.date === date);
-        const spend = m?.spend ?? 0;
-        const sales = m?.sales ?? 0;
-        const net = publisherNetForPeriod(royaltiesForDate(date), spend);
-        return net == null ? [] : [{ value: net, label: formatDateShort(date), date, sales }];
-      });
-  }, [daily, kdpDays, royaltiesForDate, kdpReady]);
+  // One date-aligned source drives Gross, Net and Ads spend. This prevents the
+  // overlay lines from pairing different calendar days when KDP has a
+  // royalty-only day or Ads has no activity row.
+  const financeTrend = useMemo(
+    () => buildOverviewFinanceTrend({
+      adsDaily: daily,
+      kdpDates: kdpDays.map((day) => String((day as { date?: string }).date ?? "")),
+      royaltiesForDate,
+      kdpReady,
+    }),
+    [daily, kdpDays, royaltiesForDate, kdpReady],
+  );
+  const netSeries = useMemo(
+    () => financeTrend.map((day) => ({
+      value: day.net,
+      label: formatDateShort(day.date),
+      date: day.date,
+      sales: day.sales,
+    })),
+    [financeTrend],
+  );
 
   const ordersSeries = useMemo(() => daily.slice(-14).map((m) => ({ value: m.orders, label: formatDateShort(m.date) })), [daily]);
 
@@ -1322,27 +1326,20 @@ export default function OverviewScreen() {
 
   // Hero overlay lines (royalties + ad spend, shown alongside net profit)
   const btRoyalties = useMemo(
-    () => kdpReady
-      ? [...new Set([
-          ...daily.map((m) => m.date),
-          ...kdpDays.map((d) => String((d as { date?: string }).date ?? "")).filter(Boolean),
-        ])]
-          .sort((a, b) => a.localeCompare(b))
-          .flatMap((date) => {
-            const value = royaltiesForDate(date);
-            return value == null ? [] : [{ value, label: formatDateShort(date), date }];
-          })
-      : [],
-    [daily, kdpDays, royaltiesForDate, kdpReady],
+    () => financeTrend.map((day) => ({
+      value: day.royalties,
+      label: formatDateShort(day.date),
+      date: day.date,
+    })),
+    [financeTrend],
   );
   const btSpend = useMemo(
-    () => kdpReady
-      ? daily.flatMap((m) => {
-          const net = publisherNetForPeriod(royaltiesForDate(m.date), m.spend);
-          return net == null ? [] : [{ value: m.spend, label: formatDateShort(m.date), date: m.date }];
-        })
-      : [],
-    [daily, royaltiesForDate, kdpReady],
+    () => financeTrend.map((day) => ({
+      value: day.spend,
+      label: formatDateShort(day.date),
+      date: day.date,
+    })),
+    [financeTrend],
   );
 
   type ChartDayFinance = {

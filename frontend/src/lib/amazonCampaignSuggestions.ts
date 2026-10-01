@@ -567,16 +567,6 @@ export function isTransientRelevanceError(error: unknown): boolean {
 /** In-filter soft-retry gaps (ms) for transient Nest/Groq TPM/timeouts. */
 export const RELEVANCE_SOFT_RETRY_GAPS_MS = [800] as const;
 
-/**
- * UI soft-recover delays after `failed_unfiltered` latches. After the last
- * attempt still fails, screens auto-accept Amazon unfiltered so chrome never
- * sticks on "AI unavailable" without a way forward.
- */
-// Kept as a typed sentinel for the existing recovery effect. MAX=0 makes it
-// accept the real Amazon rows immediately without scheduling another request.
-export const AI_FAILED_SOFT_RECOVER_DELAYS_MS = [0] as const;
-export const AI_FAILED_SOFT_RECOVER_MAX = 0;
-
 async function withRelevanceSoftRetry<T>(run: () => Promise<T>): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt < RELEVANCE_SOFT_RETRY_GAPS_MS.length; attempt += 1) {
@@ -1307,16 +1297,16 @@ export function formatKeywordSuggestionCountLabel(
 }
 
 /**
- * Only an empty AI result needs confirmation. Provider failure keeps the real
- * Amazon set usable; users can review and select it without an unavailable
- * dead-end.
+ * Raw Amazon rows remain visible after provider failure, but they are not an AI
+ * result. Keep selection blocked until the user retries or explicitly chooses
+ * the unfiltered Amazon set.
  */
 export function suggestionRelevanceNeedsUserConfirm(
   stats: KeywordSuggestionCountStats | null | undefined,
 ): boolean {
   if (!stats || stats.grokPending) return false;
   const outcome = stats.relevanceOutcome;
-  return outcome === "restored_empty";
+  return outcome === "failed_unfiltered" || outcome === "restored_empty";
 }
 
 export function uniqueKeywordMatchTypes(
