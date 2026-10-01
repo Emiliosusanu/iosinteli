@@ -96,7 +96,7 @@ export default function KdpManagerScreen() {
   function confirmDelete(accountId: string, asin: string, title: string) {
     Alert.alert(
       "Delete KDP book data?",
-      `${title}\n\nThis permanently removes ${asin}, its KDP pricing, royalties, orders, and KENP history from this account. Amazon Ads campaigns and products stay unchanged.`,
+      `${title}\n\nThis removes the currently imported data for ${asin}: KDP pricing, royalties, orders, and KENP history. A later full KDP sync can import the book again. Amazon Ads campaigns and products stay unchanged.`,
       [
         { text: "Cancel", style: "cancel" },
         { text: "Delete", style: "destructive", onPress: () => deleteMutation.mutate({ accountId, asin }) },
