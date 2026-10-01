@@ -130,19 +130,36 @@ export default function KdpManagerScreen() {
               const deleting = deleteMutation.isPending && deleteMutation.variables?.asin === book.asin;
               return (
                 <View key={book.asin} testID={`kdp-manager-book-${book.asin}`} style={[styles.bookRow, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.separator }]}>
-                  <BookCover uri={book.coverUrl} asin={book.asin} size="sm" recyclingKey={book.asin} />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={[t.typography.body, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={2}>{book.title || book.asin}</Text>
-                    <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>{book.asin}</Text>
-                    <View style={[styles.chips, { marginTop: 6 }]}>
-                      {book.inKdp ? <View style={[styles.chip, { backgroundColor: t.colors.tone_good + "18" }]}><Text style={[t.typography.caption2, { color: t.colors.tone_good }]}>KDP</Text></View> : null}
-                      {adProfiles.map((profile) => profile ? (
-                        <View key={profile.id || profile.profile_id} style={[styles.chip, { backgroundColor: t.colors.tone_primary + "14" }]}>
-                          <Text style={[t.typography.caption2, { color: t.colors.text_primary }]}>{countryFlagEmoji(profile.country_code)} {profileDisplayName(profile)}</Text>
-                        </View>
-                      ) : null)}
+                  <Pressable
+                    testID={`open-kdp-book-${book.asin}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open ${book.title || book.asin}`}
+                    accessibilityHint="Opens book details"
+                    onPress={() => router.push({
+                      pathname: "/product/[asin]",
+                      params: {
+                        asin: book.asin,
+                        title: book.title || "",
+                        imageUrl: book.coverUrl || "",
+                      },
+                    })}
+                    style={styles.bookOpen}
+                  >
+                    <BookCover uri={book.coverUrl} asin={book.asin} size="sm" recyclingKey={book.asin} />
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[t.typography.body, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={2}>{book.title || book.asin}</Text>
+                      <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>{book.asin}</Text>
+                      <View style={[styles.chips, { marginTop: 6 }]}>
+                        {book.inKdp ? <View style={[styles.chip, { backgroundColor: t.colors.tone_good + "18" }]}><Text style={[t.typography.caption2, { color: t.colors.tone_good }]}>KDP</Text></View> : null}
+                        {adProfiles.map((profile) => profile ? (
+                          <View key={profile.id || profile.profile_id} style={[styles.chip, { backgroundColor: t.colors.tone_primary + "14" }]}>
+                            <Text style={[t.typography.caption2, { color: t.colors.text_primary }]}>{countryFlagEmoji(profile.country_code)} {profileDisplayName(profile)}</Text>
+                          </View>
+                        ) : null)}
+                      </View>
                     </View>
-                  </View>
+                    <Ionicons name="chevron-forward" size={18} color={t.colors.text_tertiary} />
+                  </Pressable>
                   {book.inKdp ? (
                     <TouchableOpacity
                       testID={`delete-kdp-book-${book.asin}`}
@@ -200,5 +217,6 @@ const styles = StyleSheet.create({
   chip: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5 },
   editButton: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   bookRow: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, padding: 12, flexDirection: "row", alignItems: "center", gap: 12 },
+  bookOpen: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 12 },
   deleteButton: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
 });
