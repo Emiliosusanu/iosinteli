@@ -58,6 +58,19 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Build 342 installed on the physical iPhone 14 Pro with the signed-in session and financial data preserved. The false Stale badge disappeared while Gross `$33.86`, Net `$16.04`, Ad Spend `$17.82`, Clicks `17`, and Orders `1` stayed unchanged.
 - [x] App Store Connect accepted the build 342 upload and began processing it.
 
+## Build 343 — KDP book navigation
+
+- [x] Starts from the exact merged build 342 release candidate; the active Cursor checkout remains untouched.
+- [x] Books in the dedicated KDP Manager open the canonical `/product/[asin]` detail using the real ASIN, title, and cover.
+- [x] Books in the profile KDP-account popup open the same product detail and close the popup before navigation.
+- [x] The dedicated manager keeps book deletion as a separate destructive action, so opening a book cannot delete it.
+- [x] Regression coverage verifies both navigation surfaces and their real route parameters.
+- [x] Full iOS unit suite (969 tests) and TypeScript pass.
+- [x] Clean build 343 archived at `/tmp/InteliAds-343.xcarchive`; executable SHA-256 `c37e7db397939f042f8cb12e3a5af544318af30aec1a272402a2a97f9afacfba`.
+- [x] Build 343 installed in place on the physical iPhone 14 Pro, preserving the signed-in session.
+- [x] Live device verification opened real ASIN `B0F1G3QVF5` and rendered its canonical title, cover, KDP royalties, Ads spend, Net, impressions, clicks, orders, and five campaigns from production data.
+- [x] App Store Connect accepted the build 343 upload and began processing it.
+
 ## Release invariants
 
 - No fake zero, placeholder metric, stale total, or silent unfiltered fallback.
