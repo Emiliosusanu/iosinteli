@@ -9,7 +9,7 @@ import { SubScreen } from "@/src/components/SubScreen";
 import { useApp } from "@/src/contexts/AppContext";
 import { countryFlagEmoji, profileDisplayName } from "@/src/lib/accountsUi";
 import { fetchKdpAccountBooks } from "@/src/lib/kdp/linkPreview";
-import { mergeKdpAndAdsBooks } from "@/src/lib/kdpManager";
+import { splitKdpAndAdsBooks } from "@/src/lib/kdpManager";
 import {
   deleteKdpBook,
   fetchAmazonProfileBooks,
@@ -46,7 +46,7 @@ export default function KdpManagerScreen() {
     enabled: !!selectedAccount,
     staleTime: 30_000,
     queryFn: async () => {
-      if (!selectedAccount) return [];
+      if (!selectedAccount) return { kdpBooks: [], advertisedOnly: [] };
       const linked = selectedAccount.linked_amazon_profile_ids ?? [];
       const [kdpBooks, adsGroups] = await Promise.all([
         fetchKdpAccountBooks(selectedAccount.id),
@@ -55,7 +55,29 @@ export default function KdpManagerScreen() {
           books: await fetchAmazonProfileBooks(profileId),
         }))),
       ]);
-      return mergeKdpAndAdsBooks(kdpBooks, adsGroups);
+      return splitKdpAndAdsBooks(kdpBooks, adsGroups);
+    },
+  });
+
+  const overlapsQ = useQuery({
+    queryKey: ["kdp-manager-overlaps", selectedAccount?.id, accountsQ.data?.map((row) => row.id).join(",")],
+    enabled: !!selectedAccount && !!accountsQ.data?.length,
+    staleTime: 30_000,
+    queryFn: async () => {
+      if (!selectedAccount || !accountsQ.data) return new Map<string, string[]>();
+      const catalogs = await Promise.all(accountsQ.data.map(async (account) => ({
+        account,
+        books: await fetchKdpAccountBooks(account.id),
+      })));
+      const owners = new Map<string, string[]>();
+      for (const { account, books } of catalogs) {
+        for (const book of books) {
+          const asin = String(book.asin || "").trim().toUpperCase();
+          if (!asin) continue;
+          owners.set(asin, [...(owners.get(asin) ?? []), account.name || "KDP account"]);
+        }
+      }
+      return new Map([...owners].filter(([, names]) => names.length > 1));
     },
   });
 
@@ -135,9 +157,12 @@ export default function KdpManagerScreen() {
 
           {booksQ.isLoading ? <ActivityIndicator color={t.colors.tone_primary} style={{ marginTop: 32 }} /> :
             booksQ.isError ? <RetryState title="Couldn't load books" onRetry={() => void booksQ.refetch()} retrying={booksQ.isFetching} /> :
-            (booksQ.data ?? []).length ? (booksQ.data ?? []).map((book) => {
+            (booksQ.data?.kdpBooks ?? []).length ? <>
+              <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>KDP catalog</Text>
+              {(booksQ.data?.kdpBooks ?? []).map((book) => {
               const adProfiles = book.adsProfileIds.map((id) => profiles.find((p) => p.id === id || p.profile_id === id)).filter(Boolean);
               const deleting = deleteMutation.isPending && deleteMutation.variables?.asin === book.asin;
+              const overlappingAccounts = overlapsQ.data?.get(book.asin) ?? [];
               return (
                 <View key={book.asin} testID={`kdp-manager-book-${book.asin}`} style={[styles.bookRow, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.separator }]}>
                   <Pressable
@@ -161,6 +186,7 @@ export default function KdpManagerScreen() {
                       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>{book.asin}</Text>
                       <View style={[styles.chips, { marginTop: 6 }]}>
                         {book.inKdp ? <View style={[styles.chip, { backgroundColor: t.colors.tone_good + "18" }]}><Text style={[t.typography.caption2, { color: t.colors.tone_good }]}>KDP</Text></View> : null}
+                        {overlappingAccounts.length > 1 ? <View style={[styles.chip, { backgroundColor: t.colors.tone_danger + "18" }]}><Text style={[t.typography.caption2, { color: t.colors.tone_danger }]}>Also stored in {overlappingAccounts.filter((name) => name !== selectedAccount.name).join(", ")}</Text></View> : null}
                         {adProfiles.map((profile) => profile ? (
                           <View key={profile.id || profile.profile_id} style={[styles.chip, { backgroundColor: t.colors.tone_primary + "14" }]}>
                             <Text style={[t.typography.caption2, { color: t.colors.text_primary }]}>{countryFlagEmoji(profile.country_code)} {profileDisplayName(profile)}</Text>
@@ -184,7 +210,30 @@ export default function KdpManagerScreen() {
                   ) : null}
                 </View>
               );
-            }) : <EmptyState title="No KDP books" subtitle="The next completed KDP import will populate this account." />}
+              })}
+            </> : <EmptyState title="No KDP books" subtitle="The next completed KDP import will populate this account." />}
+
+          {(booksQ.data?.advertisedOnly ?? []).length ? <View style={styles.section}>
+            <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>Advertised in linked marketplaces</Text>
+            <Text style={[t.typography.footnote, { color: t.colors.text_secondary }]}>These products belong to linked Ads profiles and are not stored in this KDP catalog.</Text>
+            {(booksQ.data?.advertisedOnly ?? []).map((book) => {
+              const adProfiles = book.adsProfileIds.map((id) => profiles.find((p) => p.id === id || p.profile_id === id)).filter(Boolean);
+              return <Pressable
+                key={`ads-${book.asin}`}
+                testID={`kdp-manager-advertised-book-${book.asin}`}
+                onPress={() => router.push({ pathname: "/product/[asin]", params: { asin: book.asin, title: book.title || "", imageUrl: book.coverUrl || "" } })}
+                style={[styles.bookRow, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.separator }]}
+              >
+                <BookCover uri={book.coverUrl} asin={book.asin} size="sm" recyclingKey={`ads-${book.asin}`} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[t.typography.body, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={2}>{book.title || book.asin}</Text>
+                  <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>{book.asin}</Text>
+                  <View style={[styles.chips, { marginTop: 6 }]}>{adProfiles.map((profile) => profile ? <View key={profile.id || profile.profile_id} style={[styles.chip, { backgroundColor: t.colors.tone_primary + "14" }]}><Text style={[t.typography.caption2, { color: t.colors.text_primary }]}>{countryFlagEmoji(profile.country_code)} {profileDisplayName(profile)}</Text></View> : null)}</View>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={t.colors.text_tertiary} />
+              </Pressable>;
+            })}
+          </View> : null}
         </ScrollView>
       </SubScreen>
     );
@@ -229,4 +278,5 @@ const styles = StyleSheet.create({
   bookRow: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 18, padding: 12, flexDirection: "row", alignItems: "center", gap: 12 },
   bookOpen: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 12 },
   deleteButton: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+  section: { gap: 10, marginTop: 10 },
 });
