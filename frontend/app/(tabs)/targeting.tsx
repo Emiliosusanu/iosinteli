@@ -1685,7 +1685,7 @@ export default function TargetingScreen() {
   if (selectedProfileIds.length === 0) {
     return (
       <AppScreen>
-        <TopBar />
+        <TopBar showKdpAccountGroups={false} />
         <EmptyState
           icon="business-outline"
           title={isAdminViewer ? "No Amazon account" : "No account connected"}
@@ -1724,7 +1724,7 @@ export default function TargetingScreen() {
 
   return (
     <AppScreen>
-      {topChromeVisible ? <TopBar /> : null}
+      {topChromeVisible ? <TopBar showKdpAccountGroups={false} /> : null}
 
       {topChromeVisible ? (
       <View

@@ -1,8 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type Href, useRouter } from "expo-router";
+import { type Href, useLocalSearchParams, useRouter } from "expo-router";
 import { BookCover } from "@/src/components/BookCover";
 import { EmptyState, RetryState, SecondaryButton } from "@/src/components/Primitives";
 import { SubScreen } from "@/src/components/SubScreen";
@@ -22,15 +22,25 @@ import { useTheme } from "@/src/lib/theme";
 export default function KdpManagerScreen() {
   const t = useTheme();
   const router = useRouter();
+  const params = useLocalSearchParams<{ accountId?: string | string[] }>();
   const queryClient = useQueryClient();
   const { profiles } = useApp();
   const [selectedAccount, setSelectedAccount] = useState<KdpAccountSummary | null>(null);
+  const initialAccountHandled = useRef(false);
 
   const accountsQ = useQuery({
     queryKey: ["kdp-manager-accounts"],
     queryFn: fetchKdpAccounts,
     staleTime: 30_000,
   });
+  const requestedAccountId = Array.isArray(params.accountId) ? params.accountId[0] : params.accountId;
+
+  useEffect(() => {
+    if (initialAccountHandled.current || !requestedAccountId || !accountsQ.data) return;
+    initialAccountHandled.current = true;
+    const account = accountsQ.data.find((row) => row.id === requestedAccountId);
+    if (account) setSelectedAccount(account);
+  }, [accountsQ.data, requestedAccountId]);
   const booksQ = useQuery({
     queryKey: ["kdp-manager-books", selectedAccount?.id],
     enabled: !!selectedAccount,

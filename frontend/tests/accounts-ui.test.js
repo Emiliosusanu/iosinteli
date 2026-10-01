@@ -135,8 +135,9 @@ test("KDP + Ads and Ads-only filters use bridge-enriched KDP counts", () => {
   assert.match(topBar, /view-kdp-books-/);
   assert.match(topBar, /rename-kdp-/);
   assert.match(topBar, /fetchKdpAccountsForUser/);
-  assert.match(topBar, /fetchKdpAccountBooks/);
-  assert.match(topBar, /KDP \+ Ads/);
+  assert.match(topBar, /pathname: "\/more\/kdp-manager"/);
+  assert.match(topBar, /showKdpAccountGroups \? \(/);
+  assert.match(topBar, /PROFILE_LIST_KDP_ADS_LABEL/);
 });
 
 test("select-all includes every Nest-enabled marketplace and skips Nest-off profiles", () => {
