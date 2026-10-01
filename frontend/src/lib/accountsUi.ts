@@ -273,7 +273,11 @@ export function filterProfilesBySheetMode(
     return profiles.filter((profile) => (profile.kdp_account_count ?? 0) > 0);
   }
   if (mode === "ads_only") {
-    return profiles.filter((profile) => (profile.kdp_account_count ?? 0) === 0);
+    return profiles.filter(
+      (profile) =>
+        (profile.kdp_account_count ?? 0) === 0 &&
+        (profile.campaigns_enabled_count ?? 0) > 0,
+    );
   }
   const ready = profiles.filter(matchesReadyDefaultFilter);
   const keepKeys = new Set(ready.map((profile) => adsAccountGroupKey(profile)));

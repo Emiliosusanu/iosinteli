@@ -462,7 +462,7 @@ export default function AmazonAccountsScreen() {
 
   const readyCount = profiles.filter((p) => isReadyToEnable(p) || profileEnabled(p)).length;
   const kdpAdsCount = profiles.filter((p) => (p.kdp_account_count ?? 0) > 0).length;
-  const adsOnlyCount = profiles.length - kdpAdsCount;
+  const adsOnlyCount = filterProfilesBySheetMode(profiles, "ads_only").length;
   const enabledCount = profiles.filter((p) => profileEnabled(p)).length;
   const viewCount = selectedProfileIds.length;
   const totalCount = profiles.length;

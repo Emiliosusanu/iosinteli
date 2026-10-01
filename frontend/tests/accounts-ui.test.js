@@ -117,8 +117,9 @@ test("ready default uses campaigns_enabled_count, not total campaign_count alone
 test("KDP + Ads and Ads-only filters use bridge-enriched KDP counts", () => {
   const profiles = [
     { id: "linked", profile_id: "linked", kdp_account_count: 2 },
-    { id: "ads", profile_id: "ads", kdp_account_count: 0 },
-    { id: "unknown", profile_id: "unknown" },
+    { id: "ads", profile_id: "ads", kdp_account_count: 0, campaigns_enabled_count: 2 },
+    { id: "inactive", profile_id: "inactive", kdp_account_count: 0, campaigns_enabled_count: 0 },
+    { id: "unknown", profile_id: "unknown", campaigns_enabled_count: 1 },
   ];
   assert.deepEqual(
     filterProfilesBySheetMode(profiles, "kdp_ads").map((p) => p.id),
@@ -130,6 +131,12 @@ test("KDP + Ads and Ads-only filters use bridge-enriched KDP counts", () => {
   );
   assert.match(topBar, /profiles-filter-kdp-ads/);
   assert.match(topBar, /profiles-filter-ads-only/);
+  assert.match(topBar, /profile-kdp-group-/);
+  assert.match(topBar, /view-kdp-books-/);
+  assert.match(topBar, /rename-kdp-/);
+  assert.match(topBar, /fetchKdpAccountsForUser/);
+  assert.match(topBar, /fetchKdpAccountBooks/);
+  assert.match(topBar, /KDP \+ Ads/);
 });
 
 test("select-all includes every Nest-enabled marketplace and skips Nest-off profiles", () => {

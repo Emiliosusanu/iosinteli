@@ -11,9 +11,9 @@ import {
 import { useTheme } from "@/src/lib/theme";
 
 const MARKET_FLAG_SIZE = 21;
-const MARKET_FLAG_OVERLAP = -7;
+const MARKET_FLAG_GAP = 4;
 
-/** Overlapping glossy circular flag discs for the market pill. */
+/** Separated glossy circular flag discs for a centered, readable market pill. */
 export function MarketFlagStack({
   countries,
   rimColor,
@@ -36,7 +36,7 @@ export function MarketFlagStack({
           style={[
             styles.marketFlagDisc,
             {
-              marginLeft: index > 0 ? MARKET_FLAG_OVERLAP : 0,
+              marginLeft: index > 0 ? MARKET_FLAG_GAP : 0,
               zIndex: index + 1,
               borderColor: rimColor,
               backgroundColor: fillColor,

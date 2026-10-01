@@ -17,6 +17,7 @@ import {
   mergeSessionFromCaptureHeaders,
   mergeSessionMeta,
 } from "./session.ts";
+import { loadHelperTemplates } from "./persist.ts";
 
 type FetchWaiter = {
   resolve: (value: PageFetchResult) => void;
@@ -27,6 +28,8 @@ type FetchWaiter = {
 export type KdpHelperStatus = {
   ready: boolean;
   loggedIn: boolean;
+  savedSession: boolean;
+  sessionChecked: boolean;
   currentUrl: string;
   templates: Partial<Record<KdpTemplateType, KdpCapturedTemplate>>;
   lastError: string | null;
@@ -51,6 +54,8 @@ const listeners = new Set<StatusListener>();
 let status: KdpHelperStatus = {
   ready: false,
   loggedIn: false,
+  savedSession: false,
+  sessionChecked: false,
   currentUrl: "",
   templates: {},
   lastError: null,
@@ -59,6 +64,35 @@ let status: KdpHelperStatus = {
   pricingAuthRequired: false,
   pricingAuthBookId: null,
 };
+
+let hydrationPromise: Promise<KdpHelperStatus> | null = null;
+
+/**
+ * Restore only persisted request templates and the presence of an Amazon
+ * cookie. A stored cookie is not labelled "Signed in" until Amazon proves it
+ * through live navigation or a successful replay; it can still power the
+ * native background fetch without forcing the user through the WebView again.
+ */
+export function hydrateKdpRuntimeFromPersistence(): Promise<KdpHelperStatus> {
+  if (hydrationPromise) return hydrationPromise;
+  hydrationPromise = Promise.all([loadHelperTemplates(), loadKdpWebSession()])
+    .then(([templates, session]) => {
+      status = {
+        ...status,
+        templates: { ...templates, ...status.templates },
+        savedSession: Boolean(session?.cookies?.trim()),
+        sessionChecked: true,
+      };
+      emit();
+      return status;
+    })
+    .catch(() => {
+      status = { ...status, sessionChecked: true };
+      emit();
+      return status;
+    });
+  return hydrationPromise;
+}
 
 export function getKdpHelperStatus(): KdpHelperStatus {
   return status;
@@ -159,10 +193,13 @@ export function handleKdpWebViewMessage(raw: string) {
   }
 
   if (data.kind === "NAV" && typeof data.url === "string") {
+    const loggedIn = inferLoggedIn(data.url);
     status = {
       ...status,
       currentUrl: data.url,
-      loggedIn: inferLoggedIn(data.url),
+      loggedIn,
+      savedSession: loggedIn ? true : status.savedSession,
+      sessionChecked: true,
     };
     emit();
     return;
@@ -184,7 +221,11 @@ export function handleKdpWebViewMessage(raw: string) {
       p.requestHeaders && typeof p.requestHeaders === "object"
         ? (p.requestHeaders as Record<string, string>)
         : undefined;
-    void mergeSessionFromCaptureHeaders(requestHeaders);
+    void mergeSessionFromCaptureHeaders(requestHeaders).then((session) => {
+      if (!session?.cookies?.trim()) return;
+      status = { ...status, savedSession: true, sessionChecked: true };
+      emit();
+    });
     status = {
       ...status,
       templates: mergeCapturedTemplate(status.templates, {
@@ -373,6 +414,8 @@ export function resetKdpRuntime() {
   status = {
     ready: status.ready,
     loggedIn: false,
+    savedSession: false,
+    sessionChecked: false,
     currentUrl: "",
     templates: {},
     lastError: null,
@@ -381,5 +424,6 @@ export function resetKdpRuntime() {
     pricingAuthRequired: false,
     pricingAuthBookId: null,
   };
+  hydrationPromise = null;
   emit();
 }

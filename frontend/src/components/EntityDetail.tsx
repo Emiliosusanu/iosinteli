@@ -196,6 +196,7 @@ export function EntityPerformance({
   const roas = safeDivide(sales, spend);
   const perf = {
     impressions: daily.map((row) => ({ value: row.impressions, label: formatDateShort(row.date) })),
+    clicks: daily.map((row) => ({ value: row.clicks, label: formatDateShort(row.date) })),
     spend: daily.map((row) => ({ value: row.spend, label: formatDateShort(row.date) })),
     orders: daily.map((row) => ({ value: row.orders, label: formatDateShort(row.date) })),
     acos: daily.map((row) => ({
@@ -268,6 +269,7 @@ export function EntityPerformance({
         <SectionCard title="Daily performance">
           <CampaignDailyChart
             impressionsData={perf.impressions}
+            clicksData={perf.clicks}
             spendData={perf.spend}
             ordersData={perf.orders}
             acosData={perf.acos}

@@ -309,6 +309,7 @@ export default function CampaignDetail() {
 
   const perf = useMemo(() => ({
     impressions: daily.map((m) => ({ value: m.impressions, label: formatDateShort(m.date) })),
+    clicks:      daily.map((m) => ({ value: m.clicks, label: formatDateShort(m.date) })),
     spend:       daily.map((m) => ({ value: m.spend, label: formatDateShort(m.date) })),
     orders:      daily.map((m) => ({ value: m.orders, label: formatDateShort(m.date) })),
     acos:        daily.map((m) => ({ value: m.sales > 0 ? (m.spend / m.sales) * 100 : 0, label: formatDateShort(m.date) })),
@@ -892,6 +893,7 @@ export default function CampaignDetail() {
           <SectionCard title="Daily performance">
             <CampaignDailyChart
               impressionsData={perf.impressions}
+              clicksData={perf.clicks}
               spendData={perf.spend}
               ordersData={perf.orders}
               acosData={perf.acos}
@@ -902,6 +904,10 @@ export default function CampaignDetail() {
               <View style={styles.legendItem}>
                 <View style={[styles.dot, { backgroundColor: t.colors.chart_grid }]} />
                 <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>Impressions</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.dot, { backgroundColor: t.colors.tone_placement }]} />
+                <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>Clicks</Text>
               </View>
               <View style={styles.legendItem}>
                 <View style={[styles.dot, { backgroundColor: t.colors.tone_warning }]} />
@@ -1471,6 +1477,7 @@ function PlacementBlock({
     row ? `Spend ${formatCurrency(row.spend, primaryCurrency)}` : null,
     row ? `${formatInt(row.impressions)} impressions` : null,
     row ? `${formatInt(row.clicks)} clicks` : null,
+    row ? `${formatInt(row.orders)} orders` : null,
     row ? `ACoS ${row.sales > 0 ? formatPercent(row.acos) : "none"}` : null,
     onEdit ? "Edit placement" : null,
   ].filter(Boolean).join(". ");
@@ -1502,6 +1509,12 @@ function PlacementBlock({
             <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>Clicks</Text>
             <Text style={[t.typography.callout, { color: t.colors.text_primary, fontVariant: ["tabular-nums"] }]}>
               {formatInt(row.clicks)}
+            </Text>
+          </View>
+          <View style={styles.placementFact}>
+            <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>Orders</Text>
+            <Text style={[t.typography.callout, { color: t.colors.text_primary, fontVariant: ["tabular-nums"] }]}>
+              {formatInt(row.orders)}
             </Text>
           </View>
           <View style={styles.placementFact}>

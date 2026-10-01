@@ -1500,10 +1500,11 @@ export function KdpFormatRoyaltiesChart({
   );
 }
 
-// Campaign daily chart — impressions as background bars + spend / orders / ACoS lines.
+// Campaign daily chart — impressions as background bars + clicks / spend / orders / ACoS lines.
 // Each line is normalized to its own max so all are readable at once.
 interface CampaignDailyChartProps {
   impressionsData: ChartPoint[];
+  clicksData: ChartPoint[];
   spendData: ChartPoint[];
   ordersData: ChartPoint[];
   acosData: ChartPoint[];
@@ -1511,7 +1512,7 @@ interface CampaignDailyChartProps {
   currency?: string;
 }
 
-export function CampaignDailyChart({ impressionsData, spendData, ordersData, acosData, width = 320, currency }: CampaignDailyChartProps) {
+export function CampaignDailyChart({ impressionsData, clicksData, spendData, ordersData, acosData, width = 320, currency }: CampaignDailyChartProps) {
   const t = useTheme();
   const chartWidth = innerChartWidth(width, 0);
   const chartHeight = 175;
@@ -1521,6 +1522,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
   const baseY = chartHeight - inset;
 
   const maxImpr   = Math.max(...impressionsData.map((d) => d.value), 1);
+  const maxClicks = Math.max(...clicksData.map((d) => d.value), 1);
   const maxSpend  = Math.max(...spendData.map((d) => d.value), 1);
   const maxOrders = Math.max(...ordersData.map((d) => d.value), 1);
   const maxAcos   = Math.max(...acosData.map((d) => d.value), 1);
@@ -1537,6 +1539,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
   }
 
   const imprPts   = scale(impressionsData, maxImpr);
+  const clickPts  = scale(clicksData, maxClicks);
   const spendPts  = scale(spendData, maxSpend);
   const orderPts  = scale(ordersData, maxOrders);
   const acosPts   = scale(acosData, maxAcos);
@@ -1546,6 +1549,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
   const barW = clamp(barStep * 0.55, 2, 14);
 
   const colSpend = t.colors.tone_warning;
+  const colClicks = t.colors.tone_placement;
   const colOrders = t.colors.tone_primary;
   const colAcos = t.colors.tone_good;
 
@@ -1555,7 +1559,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
       <View style={chartStyles.tooltipRow}>
         <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{impressionsData[i]?.label ?? "—"}</Text>
         <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={1}>
-          {formatCompact(impressionsData[i]?.value ?? 0)} impr · {formatCurrency(spendData[i]?.value ?? 0, currency, { compact: true })} · {formatInt(ordersData[i]?.value ?? 0)} ord · {formatPercent(acosData[i]?.value ?? 0)}
+          {formatCompact(impressionsData[i]?.value ?? 0)} impr · {formatInt(clicksData[i]?.value ?? 0)} clk · {formatCurrency(spendData[i]?.value ?? 0, currency, { compact: true })} · {formatInt(ordersData[i]?.value ?? 0)} ord · {formatPercent(acosData[i]?.value ?? 0)} ACoS
         </Text>
       </View>
       <Svg width={chartWidth} height={chartHeight + 30}>
@@ -1566,7 +1570,8 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
           <Rect key={idx} x={p.x - barW / 2} y={p.y} width={barW} height={Math.max(1, baseY - p.y)} rx={2} fill={t.colors.chart_grid} opacity={idx === i ? 0.9 : 0.4} />
         ))}
 
-        {/* Spend / Orders / ACoS lines */}
+        {/* Clicks / Spend / Orders / ACoS lines */}
+        <Path d={makeSmoothPath(clickPts)} stroke={colClicks} strokeWidth={2.5} fill="none" strokeLinecap="round" />
         <Path d={makeSmoothPath(spendPts)} stroke={colSpend} strokeWidth={2.5} fill="none" strokeLinecap="round" />
         <Path d={makeSmoothPath(orderPts)} stroke={colOrders} strokeWidth={2.5} fill="none" strokeLinecap="round" />
         <Path d={makeSmoothPath(acosPts)} stroke={colAcos} strokeWidth={2.5} fill="none" strokeLinecap="round" />
@@ -1575,6 +1580,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
         {imprPts[i] && (
           <>
             <Line x1={imprPts[i].x} y1={inset} x2={imprPts[i].x} y2={baseY} stroke={t.colors.text_tertiary} strokeWidth={1} opacity={0.3} />
+            <Circle cx={clickPts[i].x} cy={clickPts[i].y} r={4} fill={colClicks} />
             <Circle cx={spendPts[i].x} cy={spendPts[i].y} r={4} fill={colSpend} />
             <Circle cx={orderPts[i].x} cy={orderPts[i].y} r={4} fill={colOrders} />
             <Circle cx={acosPts[i].x} cy={acosPts[i].y} r={4} fill={colAcos} />
