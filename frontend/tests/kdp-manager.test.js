@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mergeKdpAndAdsBooks } from "../src/lib/kdpManager.ts";
+import { mergeKdpAndAdsBooks, splitKdpAndAdsBooks } from "../src/lib/kdpManager.ts";
 
 const mutations = readFileSync(new URL("../src/lib/mutations.ts", import.meta.url), "utf8");
 const model = readFileSync(new URL("../src/lib/kdpManager.ts", import.meta.url), "utf8");
@@ -75,4 +75,19 @@ test("book merge retains every marketplace sharing the same ASIN", () => {
   assert.equal(rows[0].inKdp, true);
   assert.deepEqual(rows[0].adsProfileIds, ["us", "ca"]);
   assert.equal(rows[0].coverUrl, "https://cover");
+});
+
+test("KDP manager separates exact account catalog from Ads-only products", () => {
+  const result = splitKdpAndAdsBooks(
+    [{ asin: "B012345678", title: "KDP book", imageUrl: null }],
+    [{ profileId: "us", books: [
+      { asin: "B012345678", title: "KDP book", coverUrl: null },
+      { asin: "B087654321", title: "Ads only", coverUrl: null },
+    ] }],
+  );
+  assert.deepEqual(result.kdpBooks.map((row) => row.asin), ["B012345678"]);
+  assert.deepEqual(result.advertisedOnly.map((row) => row.asin), ["B087654321"]);
+  assert.match(screen, /Advertised in linked marketplaces/);
+  assert.match(screen, /not stored in this KDP catalog/);
+  assert.match(screen, /Also stored in/);
 });

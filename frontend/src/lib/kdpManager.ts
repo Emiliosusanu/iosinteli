@@ -6,6 +6,11 @@ export type ManagedKdpBook = AmazonProfileBookPreview & {
   adsProfileIds: string[];
 };
 
+export type ManagedKdpCatalog = {
+  kdpBooks: ManagedKdpBook[];
+  advertisedOnly: ManagedKdpBook[];
+};
+
 export function mergeKdpAndAdsBooks(
   kdpRows: readonly LinkPreviewBook[],
   adsRowsByProfile: readonly { profileId: string; books: readonly AmazonProfileBookPreview[] }[],
@@ -41,4 +46,15 @@ export function mergeKdpAndAdsBooks(
   return [...byAsin.values()].sort((a, b) =>
     Number(b.inKdp) - Number(a.inKdp) || (a.title || a.asin).localeCompare(b.title || b.asin),
   );
+}
+
+export function splitKdpAndAdsBooks(
+  kdpRows: readonly LinkPreviewBook[],
+  adsRowsByProfile: readonly { profileId: string; books: readonly AmazonProfileBookPreview[] }[],
+): ManagedKdpCatalog {
+  const rows = mergeKdpAndAdsBooks(kdpRows, adsRowsByProfile);
+  return {
+    kdpBooks: rows.filter((row) => row.inKdp),
+    advertisedOnly: rows.filter((row) => !row.inKdp),
+  };
 }
