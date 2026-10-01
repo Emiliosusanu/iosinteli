@@ -888,7 +888,25 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
               </TouchableOpacity>
             ) : (kdpBooksQ.data ?? []).length ? (
               (kdpBooksQ.data ?? []).map((book) => (
-                <View key={book.asin} style={[styles.bookRow, { borderBottomColor: t.colors.separator }]}>
+                <TouchableOpacity
+                  key={book.asin}
+                  testID={`open-profile-kdp-book-${book.asin}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open ${book.title || book.asin}`}
+                  accessibilityHint="Opens book details"
+                  onPress={() => {
+                    setBookAccount(null);
+                    router.push({
+                      pathname: "/product/[asin]",
+                      params: {
+                        asin: book.asin,
+                        title: book.title || "",
+                        imageUrl: book.coverUrl || "",
+                      },
+                    });
+                  }}
+                  style={[styles.bookRow, { borderBottomColor: t.colors.separator }]}
+                >
                   <BookCover uri={book.coverUrl} asin={book.asin} size="sm" recyclingKey={book.asin} />
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Text style={[t.typography.body, { color: t.colors.text_primary }]} numberOfLines={2}>{book.title || book.asin}</Text>
@@ -905,7 +923,8 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                       </Text>
                     ) : null}
                   </View>
-                </View>
+                  <Ionicons name="chevron-forward" size={18} color={t.colors.text_tertiary} />
+                </TouchableOpacity>
               ))
             ) : (
               <Text style={[t.typography.body, { color: t.colors.text_secondary, paddingVertical: 20 }]}>No advertised books found for the linked marketplaces.</Text>

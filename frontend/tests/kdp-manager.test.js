@@ -31,6 +31,11 @@ test("dedicated manager exposes rename, books, marketplaces, and confirmed delet
   assert.match(screen, /A later full KDP sync can import the book again/);
   assert.doesNotMatch(screen, /permanently removes/);
   assert.match(screen, /invalidateQueries\(\{ queryKey: \["dashboard"\]/);
+  assert.match(screen, /testID={`open-kdp-book-\$\{book\.asin\}`}/);
+  assert.match(screen, /pathname: "\/product\/\[asin\]"/);
+  assert.match(screen, /accessibilityHint="Opens book details"/);
+  assert.match(topBar, /testID={`open-profile-kdp-book-\$\{book\.asin\}`}/);
+  assert.match(topBar, /setBookAccount\(null\);[\s\S]*pathname: "\/product\/\[asin\]"/);
 });
 
 test("catalog read includes format rows and surfaces read errors", () => {
