@@ -71,6 +71,21 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Live device verification opened real ASIN `B0F1G3QVF5` and rendered its canonical title, cover, KDP royalties, Ads spend, Net, impressions, clicks, orders, and five campaigns from production data.
 - [x] App Store Connect processed build 343 successfully; status is `Ready to Submit` and the `Intelyads` TestFlight group is attached.
 
+## Build 344 — KDP Manager navigation and Ads-scoped Targeting
+
+- [x] Starts from the exact merged build 343 release candidate; the active Cursor checkout remains untouched.
+- [x] Fixes the iOS nested-modal defect that made the KDP-account `Books` button appear inactive.
+- [x] Dismisses the profile picker before opening KDP Manager and preselects the requested KDP account.
+- [x] Home exposes KDP Manager from Top Books for account, marketplace, and book inspection.
+- [x] Targeting keeps its profile selector Ads-scoped and no longer displays the KDP-account grouping.
+- [x] KDP Manager shows each real book, opens canonical book detail, and requires confirmation before removing its KDP pricing, royalties, orders, and KENP data; Amazon Ads entities stay unchanged.
+- [x] Live freshness verification confirmed that `Mary KDP` recovered from a genuine KDP-ingest gap with a new write at `2026-10-01 17:12:26 UTC`; both linked Ads profiles completed at `17:10 UTC`.
+- [x] Full iOS unit suite (970 tests), TypeScript, and diff validation pass.
+- [x] Clean build 344 archived at `/tmp/InteliAds-344.xcarchive`; executable SHA-256 `bd4857d55ab5a57cda1b1cb2f75ba29292049f820304361be917ebcc7bfb8227`.
+- [x] Build 344 installed in place on the physical iPhone 14 Pro with the signed-in session preserved.
+- [x] Physical-device evidence shows current Home financials and orders, the requested KDP account with real books and delete controls, and functional Targeting metrics and mutations. No InteliAds JavaScript error, crash, RedBox, or book-read error appeared in the device smoke log.
+- [x] App Store Connect accepted the build 344 upload and began processing it.
+
 ## Release invariants
 
 - No fake zero, placeholder metric, stale total, or silent unfiltered fallback.
