@@ -2,7 +2,7 @@
 // Admin JWTs cannot see another user's rows in Supabase RLS.
 
 import { nestApiJson } from "./rulesApi";
-import type { Campaign, CampaignMetric, Keyword, MetricsTotals, ProductTarget } from "./types";
+import type { Campaign, CampaignMetric, Keyword, MetricsTotals, ProductTarget, SearchTerm } from "./types";
 import type { BookCampaignRow, KdpRoyaltyRange, TopBookRow, TopCampaignRow } from "./queries";
 import type { MobileHomeSnapshot } from "./mobileHomeSnapshot";
 import { netRoyaltiesKnown } from "./netRoyalties";
@@ -610,6 +610,84 @@ export function mapNestProductTarget(row: unknown): ProductTarget {
         ? n(r.bidPreviousValue ?? r.bid_previous_value)
         : null,
     ...metricTotals(r),
+  };
+}
+
+export function mapNestSearchTerm(row: unknown): SearchTerm {
+  const r = asRecord(row);
+  return {
+    id: str(r.id),
+    campaign_id: str(r.campaignId ?? r.campaign_id),
+    ad_group_id: r.adGroupId != null || r.ad_group_id != null ? str(r.adGroupId ?? r.ad_group_id) : null,
+    keyword_id: r.keywordId != null || r.keyword_id != null ? str(r.keywordId ?? r.keyword_id) : null,
+    search_term: str(r.term ?? r.searchTerm ?? r.search_term),
+    match_type: (r.matchType ?? r.match_type ?? null) as string | null,
+    status: (r.status ?? null) as string | null,
+    term_type: (r.termType ?? r.term_type ?? null) as string | null,
+    campaign_name: (r.campaignName ?? r.campaign_name ?? null) as string | null,
+    ad_group_name: (r.adGroupName ?? r.ad_group_name ?? null) as string | null,
+    created_at: str(r.createdAt ?? r.created_at),
+    updated_at: str(r.updatedAt ?? r.updated_at),
+    is_targeted: Boolean(r.isTargeted ?? r.is_targeted),
+    ...metricTotals(r),
+  };
+}
+
+export type NestSearchTermsPage = {
+  data: SearchTerm[];
+  total: number;
+  page: number;
+  per_page: number;
+  totalPages: number;
+  hasNextPage: boolean;
+};
+
+export async function fetchNestSearchTermsPage(params: {
+  profileIds: string[];
+  filterUserId?: string | null;
+  startDate: string;
+  endDate: string;
+  search?: string;
+  performanceFilter?: "converting" | "wasted";
+  sortBy: "total_orders" | "total_acos" | "total_spend" | "total_clicks" | "total_impressions";
+  page: number;
+  perPage?: number;
+  signal?: AbortSignal;
+}): Promise<NestSearchTermsPage> {
+  const raw = await nestApiJson<{
+    data?: unknown[];
+    total?: number;
+    page?: number;
+    per_page?: number;
+    totalPages?: number;
+    hasNextPage?: boolean;
+  }>(
+    `/search-terms/page${qs({
+      filterUserId: params.filterUserId,
+      amazonProfileIds: params.profileIds.join(","),
+      startDate: params.startDate,
+      endDate: params.endDate,
+      search: params.search?.trim() || undefined,
+      performanceFilter: params.performanceFilter,
+      sortBy: params.sortBy,
+      sortOrder: "desc",
+      page: params.page,
+      per_page: params.perPage ?? 100,
+    })}`,
+    { method: "GET", signal: params.signal },
+    "Couldn't load search terms.",
+  );
+  const page = Number(raw.page) || params.page;
+  const perPage = Number(raw.per_page) || params.perPage || 100;
+  const total = Math.max(0, Number(raw.total) || 0);
+  const totalPages = Math.max(0, Number(raw.totalPages) || Math.ceil(total / perPage));
+  return {
+    data: (raw.data ?? []).map(mapNestSearchTerm),
+    total,
+    page,
+    per_page: perPage,
+    totalPages,
+    hasNextPage: raw.hasNextPage ?? page < totalPages,
   };
 }
 

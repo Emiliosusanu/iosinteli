@@ -102,6 +102,20 @@ never from `main`, and never from the active Cursor checkout.
 - [x] App Store Connect shows build 345 as `Testing` in the internal `Intelyads` group after processing completed on October 2, 2026.
 - [x] Server PR #604 deployed at merge `21d3b7c` with green production CI and health checks. Delivery tests prove that each new-order notification uses the complete current-day order total across all enabled Ads profiles, includes unchanged profiles, omits invalid cross-currency money totals, and retries instead of sending a partial total. No synthetic live order was created for certification.
 
+## Build 346 — Search Terms global page and final device audit
+
+- [x] Starts from the exact merged build 345 release candidate; the active Cursor checkout remains untouched.
+- [x] Search Terms no longer waits for a full account-wide PostgREST scan before first paint.
+- [x] Selected profiles, date range, text search, converting/no-order filters, and every metric sort execute on the complete server scope before pagination.
+- [x] ACoS, orders, spend, clicks, and impressions sort high-to-low globally; subsequent pages preserve server order and exact total count.
+- [x] Missing ACoS is labeled `N/A`, never rendered as a fake value or bare dash.
+- [x] Search Terms has a finite 20-second terminal timeout and a retry path instead of an indefinite spinner.
+- [x] Release stress scripts validate the current nullable KDP contract, current Targeting scope name, the installed app version, and the shared device runtime.
+- [x] Server Search Terms tests, server build, iOS TypeScript, full 972-test suite, and tab stress audit pass.
+- [x] Server migration `20261002083000_mobile_search_terms_global_page.sql` deployed once with release `64ba2c9`; backend, frontend, and worker report the same SHA and healthy state. Live `emisusanu98` reads covered 19,674 terms plus US/CA scopes, converting, wasted, text search, five metric sorts, and the page 1→2 boundary. Warm responses measured 0.27–1.13 seconds; the first cold request measured 3.11 seconds. Every response was HTTP 200 and globally monotonic.
+- [ ] Build 346 archived, installed in place on the iPhone 14 Pro, and Search Terms/device regression matrix completed.
+- [ ] App Store Connect accepts and processes build 346.
+
 ## Release invariants
 
 - No fake zero, placeholder metric, stale total, or silent unfiltered fallback.

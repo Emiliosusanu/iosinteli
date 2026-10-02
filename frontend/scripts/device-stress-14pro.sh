@@ -15,6 +15,8 @@ echo "OUT=$OUT UDID=$UDID"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ -x "$ROOT/.venv-device/bin/python" ]]; then
   PYMD=("$ROOT/.venv-device/bin/python" -m pymobiledevice3)
+elif [[ -x "/private/tmp/inteliads-pmd311/bin/python" ]]; then
+  PYMD=(/private/tmp/inteliads-pmd311/bin/python -m pymobiledevice3)
 else
   PYMD=(pymobiledevice3)
 fi
@@ -23,25 +25,36 @@ env_dev() { env -u PYMOBILEDEVICE3_UDID "$@"; }
 # Pin every call to $UDID so multi-device USB (14 Pro + 17 Pro Max) cannot race.
 # Hard-timeout each call — apps push/pull and DVT occasionally hang on iOS 26 tunnels.
 pmd() {
-  python3 - "$UDID" "${PYMD[@]}" "$@" <<'PY' || true
+  python3 - "$UDID" "${PYMD[@]}" "$@" <<'PY'
 import subprocess, sys
 udid = sys.argv[1]
 cmd = sys.argv[2:] + ["--udid", udid]
 import os
 env = {k: v for k, v in os.environ.items() if k != "PYMOBILEDEVICE3_UDID"}
 try:
-    subprocess.run(cmd, env=env, timeout=45, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    result = subprocess.run(
+        cmd, env=env, timeout=45, stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE, text=True,
+    )
+    if result.returncode:
+        detail = (result.stderr or "").strip().splitlines()[-4:]
+        print(f"[stress] FAIL ({result.returncode}): {' '.join(cmd[:8])}", file=sys.stderr)
+        if detail:
+            print("\n".join(detail), file=sys.stderr)
+    raise SystemExit(result.returncode)
 except subprocess.TimeoutExpired:
-    print(f"[stress] TIMEOUT after 45s: {' '.join(cmd[:8])}", flush=True)
+    print(f"[stress] TIMEOUT after 45s: {' '.join(cmd[:8])}", file=sys.stderr, flush=True)
+    raise SystemExit(124)
 except Exception as e:
-    print(f"[stress] ERR: {e}", flush=True)
+    print(f"[stress] ERR: {e}", file=sys.stderr, flush=True)
+    raise SystemExit(1)
 PY
 }
 # Long-lived syslog must NOT use the timeout wrapper.
 pmd_bg() { env_dev "${PYMD[@]}" "$@" --udid "$UDID"; }
 
 kill_app() {
-  pmd developer dvt pkill InteliAds
+  pmd developer dvt pkill InteliAds || true
 }
 
 launch() {
@@ -96,6 +109,34 @@ PY
   done
 }
 
+verify_qa_ack() {
+  local expected="$1"
+  local local_as
+  local_as="$(pull_as)"
+  python3 - "$local_as" "$expected" <<'PY'
+import json, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+expected = sys.argv[2]
+manifest_path = root / "manifest.json"
+if not manifest_path.exists():
+    raise SystemExit(f"QA ACK failed: missing {manifest_path}")
+manifest = json.loads(manifest_path.read_text())
+value = manifest.get("inteliads.qa.ack")
+for _ in range(3):
+    if not isinstance(value, str):
+        break
+    try:
+        value = json.loads(value)
+    except Exception:
+        break
+if value != expected:
+    raise SystemExit(f"QA ACK failed: expected {expected!r}, received {value!r}")
+print(f"[stress] ACK {expected}")
+PY
+}
+
 # Syslog
 pmd_bg syslog live -pn InteliAds --out "$OUT/logs/process.log" >/dev/null 2>"$OUT/logs/s1.err" &
 SP1=$!
@@ -110,16 +151,20 @@ run_case() {
   echo "==> $id $*" | tee -a "$OUT/logs/steps.txt"
   push_qa "$*"
   launch
+  verify_qa_ack "$id"
   shot "$id"
 }
 
-# Version check
-python3 - <<PY | tee "$OUT/logs/version.txt"
-import re,subprocess
-r=subprocess.run(['$ROOT/.venv-device/bin/python','-m','pymobiledevice3','apps','list','--udid','$UDID'],capture_output=True,text=True)
-m=re.search(r'"io\\.inteliads\\.app".*?"CFBundleShortVersionString"\\s*:\\s*"([^"]+)".*?"CFBundleVersion"\\s*:\\s*"([^"]+)"',r.stdout,re.S)
-print('installed', m.groups() if m else 'unknown')
-PY
+# Version check. Use the same discovered pymobiledevice3 runtime as every other
+# device command; hardcoding a worktree-local venv made clean checkouts fail.
+env_dev "${PYMD[@]}" apps list --udid "$UDID" | python3 -c '
+import json, sys
+apps = json.load(sys.stdin)
+app = apps.get("io.inteliads.app")
+if not app:
+    raise SystemExit("io.inteliads.app is not installed")
+print("installed", (app.get("CFBundleShortVersionString"), app.get("CFBundleVersion")))
+' | tee "$OUT/logs/version.txt"
 
 # Period / tab matrix (focused, not full 90-day every tab)
 run_case ov-month '{"id":"ov-month","route":"/(tabs)","periodMode":"month"}'
@@ -173,6 +218,7 @@ shot ov-final-settle
 # Extra settle shot on keywords with ACoS filter after longer wait
 push_qa '{"id":"tgt-kw-settle","route":"/(tabs)/targeting","dateLabel":"This month","targetsSegment":"keywords","targetsPerf":"high_acos","targetsSort":"acos"}'
 launch
+verify_qa_ack "tgt-kw-settle"
 sleep 8
 shot tgt-kw-settle
 
