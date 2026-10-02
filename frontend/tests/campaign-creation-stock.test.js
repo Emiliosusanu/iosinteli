@@ -307,10 +307,12 @@ test("empty productTargets with recommendationsAvailable false stays empty", () 
   assert.equal(preview.recommendationsAvailable, false);
 });
 
-test("parseCustomAsins accepts only B0 paperbacks", () => {
+test("parseCustomAsins accepts modern and legacy ten-character Amazon ASINs", () => {
   assert.deepEqual(
-    parseCustomAsins("B0G1C3XP9J\nbogus\nB0HFCPQMS8, B0G1C3XP9J"),
-    ["B0G1C3XP9J", "B0HFCPQMS8"],
+    parseCustomAsins(
+      "B0G1C3XP9J\nbogus\nB0HFCPQMS8, B0G1C3XP9J; 156695536X 156695536x B0123456789",
+    ),
+    ["B0G1C3XP9J", "B0HFCPQMS8", "156695536X"],
   );
 });
 

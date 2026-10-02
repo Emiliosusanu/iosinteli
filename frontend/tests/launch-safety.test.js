@@ -56,6 +56,6 @@ test("InteliAdsNativeSync is optional at module load", () => {
   assert.doesNotMatch(nativeSync, /requireNativeModule\("InteliAdsNativeSync"\)/);
 });
 
-test("shipping build number is 348", () => {
-  assert.match(appJson, /"buildNumber": "348"/);
+test("shipping build number is 349", () => {
+  assert.match(appJson, /"buildNumber": "349"/);
 });

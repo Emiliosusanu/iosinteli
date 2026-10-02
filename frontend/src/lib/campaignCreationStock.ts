@@ -1176,7 +1176,9 @@ export function parseCustomAsins(value: string): string[] {
     .split(/[\n,;\s]+/)
     .map((asin) => asin.trim().toUpperCase())
     .filter((asin) => {
-      if (!/^B0[A-Z0-9]{8}$/.test(asin) || seen.has(asin)) return false;
+      // Amazon has both modern B0 ASINs and legacy ten-character ISBN-derived
+      // ASINs (for example 156695536X). Product targeting accepts either.
+      if (!/^[A-Z0-9]{10}$/.test(asin) || seen.has(asin)) return false;
       seen.add(asin);
       return true;
     })
