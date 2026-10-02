@@ -14,6 +14,8 @@ export const NEST_TARGETING_LIST_BUDGET_MS = TARGETING_QUERY_TIMEOUT_MS;
 export const TARGETING_PAGE_METRICS_BUDGET_MS = TARGETING_QUERY_TIMEOUT_MS;
 /** Keyword / search-term funnel reads many entity pages — longer than a Home KPI. */
 export const ADS_ENGINE_FUNNEL_TIMEOUT_MS = 45_000;
+/** One globally ranked Search Terms page; never leave the screen spinning indefinitely. */
+export const SEARCH_TERMS_PAGE_TIMEOUT_MS = 20_000;
 /**
  * Book detail → campaigns list. Must fail closed to RetryState — never spin forever
  * while product_ads / placement / metric pages crawl a long date range.

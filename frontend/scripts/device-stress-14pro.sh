@@ -118,10 +118,12 @@ run_case() {
 # Version check. Use the same discovered pymobiledevice3 runtime as every other
 # device command; hardcoding a worktree-local venv made clean checkouts fail.
 env_dev "${PYMD[@]}" apps list --udid "$UDID" | python3 -c '
-import re, sys
-s = sys.stdin.read()
-m = re.search(r"\"io\\.inteliads\\.app\".*?\"CFBundleShortVersionString\"\s*:\s*\"([^\"]+)\".*?\"CFBundleVersion\"\s*:\s*\"([^\"]+)\"", s, re.S)
-print("installed", m.groups() if m else "unknown")
+import json, sys
+apps = json.load(sys.stdin)
+app = apps.get("io.inteliads.app")
+if not app:
+    raise SystemExit("io.inteliads.app is not installed")
+print("installed", (app.get("CFBundleShortVersionString"), app.get("CFBundleVersion")))
 ' | tee "$OUT/logs/version.txt"
 
 # Period / tab matrix (focused, not full 90-day every tab)

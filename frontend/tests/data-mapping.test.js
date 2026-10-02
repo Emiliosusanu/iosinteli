@@ -22,6 +22,7 @@ const searchTermsSource = readFileSync(new URL("../app/more/search-terms.tsx", i
 const targetingSource = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
 const adGroupDetailSource = readFileSync(new URL("../app/more/ad-group/[id].tsx", import.meta.url), "utf8");
 const dynamicIslandSource = readFileSync(new URL("../src/components/DynamicIsland.tsx", import.meta.url), "utf8");
+const dashboardApiSource = readFileSync(new URL("../src/lib/dashboardApi.ts", import.meta.url), "utf8");
 
 test("critical calculation helpers handle safe division and money formatting", () => {
   assert.equal(safeDivide(10, 2), 5);
@@ -347,6 +348,14 @@ test("search terms and ad group detail avoid fixed pagination gaps", () => {
   assert.equal(queriesSource.includes("fetchAllPages<ProductTarget>"), true);
   assert.equal(queriesSource.includes("adGroupId?: string"), true);
   assert.equal(searchTermsSource.includes("limit: 200"), false);
+  assert.equal(searchTermsSource.includes("useInfiniteQuery"), true);
+  assert.equal(searchTermsSource.includes("fetchNestSearchTermsPage"), true);
+  assert.equal(searchTermsSource.includes("fetchSearchTerms(selectedProfileIds"), false);
+  assert.equal(searchTermsSource.includes("getNextPageParam"), true);
+  assert.equal(searchTermsSource.includes("onEndReached"), true);
+  assert.equal(dashboardApiSource.includes("/search-terms/page"), true);
+  assert.equal(dashboardApiSource.includes('sortOrder: "desc"'), true);
+  assert.equal(dashboardApiSource.includes('amazonProfileIds: params.profileIds.join(",")'), true);
   // Targets uses server-ranked full catalog (mobile_targeting_page_v1), not a client 500-cap footer.
   assert.equal(targetingSource.includes("fetchMobileTargetingPage"), true);
   assert.equal(targetingSource.includes("loadNextCatalogPage"), true);

@@ -153,6 +153,8 @@ export interface SearchTerm extends MetricsTotals {
   ad_group_name?: string | null;
   created_at: string;
   updated_at: string;
+  /** Server truth: this term already exists as a positive keyword/product target. */
+  is_targeted?: boolean;
 }
 
 export interface NegativeKeyword {
