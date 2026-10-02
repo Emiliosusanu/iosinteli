@@ -72,6 +72,83 @@ export function prepareKeywordAdds(
   return { keywords, skippedDuplicate, skippedBid };
 }
 
+export type ProductTargetBidInput = {
+  asin: string;
+  matchType?: "exact" | "expanded";
+  bid: number;
+  source: "suggested" | "custom";
+};
+
+/** Identity for Amazon product-target uniqueness: ASIN + match type. */
+export function productTargetDedupeKey(
+  asin: string,
+  matchType?: string | null,
+): string {
+  const normalizedMatch =
+    String(matchType ?? "exact").trim().toLowerCase() === "expanded"
+      ? "expanded"
+      : "exact";
+  return `${String(asin || "").trim().toUpperCase()}::${normalizedMatch}`;
+}
+
+/**
+ * Drop malformed/duplicate product targets and identities already present on
+ * the destination ad group. The returned length is the exact request count.
+ */
+export function prepareProductTargetAdds(
+  inputs: readonly ProductTargetBidInput[],
+  existing: readonly {
+    asin?: string | null;
+    match_type?: string | null;
+    expression_type?: string | null;
+  }[] = [],
+): {
+  productTargets: ProductTargetBidInput[];
+  skippedDuplicate: number;
+  skippedBid: number;
+  skippedAsin: number;
+} {
+  const existingKeys = new Set(
+    existing.map((row) =>
+      productTargetDedupeKey(
+        String(row.asin ?? ""),
+        row.match_type ?? row.expression_type ?? "exact",
+      ),
+    ),
+  );
+  const seen = new Set<string>();
+  const productTargets: ProductTargetBidInput[] = [];
+  let skippedDuplicate = 0;
+  let skippedBid = 0;
+  let skippedAsin = 0;
+  for (const row of inputs) {
+    const asin = String(row.asin || "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{10}$/.test(asin)) {
+      skippedAsin += 1;
+      continue;
+    }
+    const bid = Number(row.bid);
+    if (!Number.isFinite(bid) || bid < 0.02) {
+      skippedBid += 1;
+      continue;
+    }
+    const matchType = row.matchType === "expanded" ? "expanded" : "exact";
+    const key = productTargetDedupeKey(asin, matchType);
+    if (existingKeys.has(key) || seen.has(key)) {
+      skippedDuplicate += 1;
+      continue;
+    }
+    seen.add(key);
+    productTargets.push({
+      asin,
+      matchType,
+      bid,
+      source: row.source === "custom" ? "custom" : "suggested",
+    });
+  }
+  return { productTargets, skippedDuplicate, skippedBid, skippedAsin };
+}
+
 export type AdGroupCreateTargeting = "auto" | "keywords" | "products";
 
 /** Which create options a campaign targeting_type allows. */

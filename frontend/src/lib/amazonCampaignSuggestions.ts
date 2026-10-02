@@ -874,6 +874,33 @@ export type BidMode = "default" | "custom";
 export type KeywordMatchType = "broad" | "phrase" | "exact";
 
 /**
+ * Return only selected indexes that are still eligible for submission.
+ * Suggestions can be re-ranked, removed as duplicates, or hidden after an
+ * asynchronous existing-entity read. Counts and payloads must share this
+ * exact ordered set so the UI never promises more rows than it sends.
+ */
+export function selectedEligibleSuggestionIndexes(
+  selected: ReadonlySet<number>,
+  eligibleIndexes: Iterable<number>,
+): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const index of eligibleIndexes) {
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      seen.has(index) ||
+      !selected.has(index)
+    ) {
+      continue;
+    }
+    seen.add(index);
+    out.push(index);
+  }
+  return out;
+}
+
+/**
  * Normalize Amazon / Nest keyword match codes. Never drop a keyword for an
  * unknown code — CA/UK payloads sometimes omit or send BROAD_MATCH-style enums.
  */
@@ -1106,12 +1133,18 @@ export function offerKeywordMatchCompanions<
   if (!rows.length) return rows;
   const typesByPhrase = new Map<string, Set<KeywordMatchType>>();
   const templateByPhrase = new Map<string, T>();
+  const uniqueRows: T[] = [];
+  const seenEntities = new Set<string>();
   for (const row of rows) {
     const key = String(row.keyword ?? "")
       .trim()
       .toLowerCase();
     if (!key) continue;
     const match = normalizeKeywordMatchType(row.matchType);
+    const entityKey = `${key}::${match}`;
+    if (seenEntities.has(entityKey)) continue;
+    seenEntities.add(entityKey);
+    uniqueRows.push({ ...row, matchType: match });
     if (!typesByPhrase.has(key)) {
       typesByPhrase.set(key, new Set());
       templateByPhrase.set(key, { ...row, matchType: match });
@@ -1127,7 +1160,7 @@ export function offerKeywordMatchCompanions<
       companions.push({ ...template, matchType: match });
     }
   }
-  return companions.length ? [...rows, ...companions] : rows;
+  return companions.length ? [...uniqueRows, ...companions] : uniqueRows;
 }
 
 /** Unique keyword phrases (case-insensitive), for honest UI counts. */

@@ -32,6 +32,7 @@ import {
   publicationYearFromTitle,
   recommendationBidMajorUnits,
   resolveSuggestionBid,
+  selectedEligibleSuggestionIndexes,
   sortProductSuggestionsByTitleSimilarity,
   SUGGESTION_RELEVANCE_DEFAULT_MODE,
   suggestionRelevanceNeedsUserConfirm,
@@ -58,6 +59,15 @@ test("failed or empty AI filtering requires explicit user choice", () => {
   assert.equal(suggestionRelevanceNeedsUserConfirm({ relevanceOutcome: "failed_unfiltered" }), true);
   assert.equal(suggestionRelevanceNeedsUserConfirm({ relevanceOutcome: "restored_empty" }), true);
   assert.equal(suggestionRelevanceNeedsUserConfirm({ relevanceOutcome: "user_accepted_unfiltered" }), false);
+});
+
+test("selected suggestion indexes keep only current eligible rows in display order", () => {
+  const selected = new Set([0, 2, 4, 99]);
+  assert.deepEqual(
+    selectedEligibleSuggestionIndexes(selected, [4, 2, 2, 1]),
+    [4, 2],
+  );
+  assert.deepEqual(selectedEligibleSuggestionIndexes(new Set(), [0, 1]), []);
 });
 
 test("tokenizeTitle drops stop words and punctuation", () => {
@@ -272,6 +282,17 @@ test("create UX offers Broad/Phrase/Exact companions for thin CA keyword phrases
   assert.ok(rows.some((row) => row.keyword === "alaska cruise" && row.matchType === "phrase"));
   assert.ok(
     rows.some((row) => row.keyword === "alaska travel guide" && row.matchType === "exact"),
+  );
+});
+
+test("keyword companion expansion removes duplicate keyword-match identities", () => {
+  const rows = offerKeywordMatchCompanions([
+    { keyword: "rome guide", matchType: "broad", suggestedBid: 0.4 },
+    { keyword: " Rome Guide ", matchType: "broad", suggestedBid: 0.5 },
+  ]);
+  assert.deepEqual(
+    rows.map((row) => `${row.keyword.trim().toLowerCase()}:${row.matchType}`),
+    ["rome guide:broad", "rome guide:phrase", "rome guide:exact"],
   );
 });
 

@@ -25,14 +25,18 @@ export type SuggestionMatchBidRow = {
 export function AdGroupSuggestionControls({
   filteredCount,
   selectedFilteredCount,
+  selectedTotalCount = selectedFilteredCount,
   onToggleSelectAll,
+  onClearSelection,
   matchChips,
   matchBidRows,
   defaultBidPlaceholder,
 }: {
   filteredCount: number;
   selectedFilteredCount: number;
+  selectedTotalCount?: number;
   onToggleSelectAll: () => void;
+  onClearSelection?: () => void;
   matchChips: SuggestionMatchChip[];
   matchBidRows: SuggestionMatchBidRow[];
   defaultBidPlaceholder: string;
@@ -78,15 +82,35 @@ export function AdGroupSuggestionControls({
               : `Select all · ${filteredCount}`}
           </Text>
         </Pressable>
-        {selectedFilteredCount > 0 && !allSelected ? (
+        {selectedTotalCount > 0 ? (
           <Text
             style={[
               t.typography.caption1,
               { color: t.colors.text_secondary, fontWeight: "600" },
             ]}
           >
-            {selectedFilteredCount} selected
+            {selectedTotalCount} selected
+            {selectedTotalCount > selectedFilteredCount
+              ? ` · ${selectedTotalCount - selectedFilteredCount} outside filter`
+              : ""}
           </Text>
+        ) : null}
+        {selectedTotalCount > 0 && onClearSelection ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Clear ${selectedTotalCount} selected suggestions`}
+            onPress={onClearSelection}
+            hitSlop={8}
+          >
+            <Text
+              style={[
+                t.typography.caption1,
+                { color: t.colors.tone_primary, fontWeight: "700" },
+              ]}
+            >
+              Clear
+            </Text>
+          </Pressable>
         ) : null}
       </View>
 

@@ -58,6 +58,7 @@ import {
   recommendationBidMajorUnits,
   resolveSuggestionBid,
   rowMatchesReasonKey,
+  selectedEligibleSuggestionIndexes,
   sortProductSuggestionsByTitleSimilarity,
   uniqueKeywordMatchTypes,
   uniqueKeywordPhraseCount,
@@ -114,6 +115,12 @@ import {
   type LiveAsinStock,
 } from "@/src/lib/campaignCreationStock";
 import { formatCurrency } from "@/src/lib/format";
+import {
+  keywordDedupeKey,
+  prepareKeywordAdds,
+  prepareProductTargetAdds,
+  productTargetDedupeKey,
+} from "@/src/lib/adGroupTargets";
 import {
   createCampaign,
   fetchCampaignCreationBooks,
@@ -721,21 +728,10 @@ export default function CreateCampaignScreen() {
       suggestionRetailAttemptedRef.current = new Set();
       setPreview(result);
       setVisibleSuggestionCount(SUGGESTION_PAGE_SIZE);
-      // Never auto-select raw Amazon after AI failure / empty-restore.
-      const needsConfirm = suggestionRelevanceNeedsUserConfirm(
-        result.keywordCounts,
-      );
-      if (needsConfirm) {
-        setSelectedKeywords(new Set());
-        setSelectedProducts(new Set());
-      } else {
-        setSelectedKeywords(
-          new Set((result.keywords ?? []).map((_, index) => index)),
-        );
-        setSelectedProducts(
-          new Set((result.productTargets ?? []).map((_, index) => index)),
-        );
-      }
+      // Suggestions are recommendations, not user intent. A completed AI
+      // filter must never silently choose rows on the seller's behalf.
+      setSelectedKeywords(new Set());
+      setSelectedProducts(new Set());
       setProductBidModes({});
       setProductCustomBids({});
       setGlobalProductBidMode("default");
@@ -976,72 +972,63 @@ export default function CreateCampaignScreen() {
         requestId: requestId(),
         keywords:
           targeting === "keywords"
-            ? [
-                ...keywordSuggestionRows
-                  .map((row, index) => ({ row, index }))
-                  .filter(({ index }) => selectedKeywords.has(index))
-                  .map(({ row, index }) => {
-                    const mode = keywordBidModes[index] ?? globalKeywordBidMode;
-                    const customRaw = Number(
-                      String(keywordCustomBids[index] ?? "").replace(",", "."),
-                    );
-                    return {
-                      keyword: row.keyword,
-                      matchType: row.matchType,
-                      bid: resolveSuggestionBid({
-                        mode,
-                        customBid: Number.isFinite(customRaw) ? customRaw : null,
-                        suggestedBid: recommendationBidMajorUnits(row.suggestedBid),
-                        defaultBid: bid,
-                        useSuggestedBids,
-                      }),
-                      source: "suggested" as const,
-                    };
-                  }),
+            ? prepareKeywordAdds([
+                ...selectedKeywordIndexes.map((index) => {
+                  const row = keywordSuggestionRows[index];
+                  const mode = keywordBidModes[index] ?? globalKeywordBidMode;
+                  const customRaw = Number(
+                    String(keywordCustomBids[index] ?? "").replace(",", "."),
+                  );
+                  return {
+                    keyword: row.keyword,
+                    matchType: row.matchType,
+                    bid: resolveSuggestionBid({
+                      mode,
+                      customBid: Number.isFinite(customRaw) ? customRaw : null,
+                      suggestedBid: recommendationBidMajorUnits(row.suggestedBid),
+                      defaultBid: bid,
+                      useSuggestedBids,
+                    }),
+                    source: "suggested" as const,
+                  };
+                }),
                 ...parseCustomKeywords(customKeywordText).map((keyword) => ({
                   keyword,
                   matchType: customKeywordMatch,
                   bid,
                   source: "custom" as const,
                 })),
-              ]
+              ]).keywords
             : undefined,
         productTargets:
           targeting === "products"
-            ? [
-                ...(preview?.productTargets ?? [])
-                  .map((row, index) => ({ row, index }))
-                  .filter(({ index }) => {
-                    if (!selectedProducts.has(index)) return false;
-                    // Never create with client-hidden stale/OOS suggestions.
-                    return rankedProductSuggestions.some(
-                      (ranked) => ranked.originalIndex === index,
-                    );
-                  })
-                  .map(({ row, index }) => {
-                    const mode = productBidModes[index] ?? globalProductBidMode;
-                    const customRaw = Number(
-                      String(productCustomBids[index] ?? "").replace(",", "."),
-                    );
-                    return {
-                      asin: row.asin,
-                      matchType: normalizeProductMatchType(row.matchType),
-                      bid: resolveSuggestionBid({
-                        mode,
-                        customBid: Number.isFinite(customRaw) ? customRaw : null,
-                        suggestedBid: recommendationBidMajorUnits(row.suggestedBid),
-                        defaultBid: bid,
-                        useSuggestedBids,
-                      }),
-                      source: "suggested" as const,
-                    };
-                  }),
+            ? prepareProductTargetAdds([
+                ...selectedProductIndexes.map((index) => {
+                  const row = preview!.productTargets[index];
+                  const mode = productBidModes[index] ?? globalProductBidMode;
+                  const customRaw = Number(
+                    String(productCustomBids[index] ?? "").replace(",", "."),
+                  );
+                  return {
+                    asin: row.asin,
+                    matchType: normalizeProductMatchType(row.matchType),
+                    bid: resolveSuggestionBid({
+                      mode,
+                      customBid: Number.isFinite(customRaw) ? customRaw : null,
+                      suggestedBid: recommendationBidMajorUnits(row.suggestedBid),
+                      defaultBid: bid,
+                      useSuggestedBids,
+                    }),
+                    source: "suggested" as const,
+                  };
+                }),
                 ...customAsins.map((asin) => ({
                   asin,
+                  matchType: "exact" as const,
                   bid,
                   source: "custom" as const,
                 })),
-              ]
+              ]).productTargets
             : undefined,
       });
     },
@@ -1749,7 +1736,7 @@ export default function CreateCampaignScreen() {
       withMeta,
       book?.title ?? preview.book?.title ?? "",
       titleByAsin,
-    );
+    ).filter((row) => /^[A-Z0-9]{10}$/.test(String(row.asin).toUpperCase()));
   }, [
     targeting,
     preview?.productTargets,
@@ -1762,22 +1749,57 @@ export default function CreateCampaignScreen() {
     targeting === "products"
       ? rankedProductSuggestions.length
       : suggestionRows.length;
-  const selectedProductVisibleCount = useMemo(() => {
-    if (targeting !== "products") return selectedProducts.size;
-    const visible = new Set(
-      rankedProductSuggestions.map((row) => row.originalIndex),
+  const selectedKeywordIndexes = useMemo(
+    () =>
+      selectedEligibleSuggestionIndexes(
+        selectedKeywords,
+        keywordSuggestionRows.map((_, index) => index),
+      ),
+    [selectedKeywords, keywordSuggestionRows],
+  );
+  const selectedProductIndexes = useMemo(
+    () =>
+      selectedEligibleSuggestionIndexes(
+        selectedProducts,
+        rankedProductSuggestions.map((row) => row.originalIndex),
+      ),
+    [selectedProducts, rankedProductSuggestions],
+  );
+  const selectedKeywordIdentityCount = useMemo(() => {
+    const keys = new Set(
+      selectedKeywordIndexes.map((index) => {
+        const row = keywordSuggestionRows[index];
+        return keywordDedupeKey(row.keyword, row.matchType);
+      }),
     );
-    let count = 0;
-    for (const index of selectedProducts) {
-      if (visible.has(index)) count += 1;
+    for (const keyword of customKeywords) {
+      keys.add(keywordDedupeKey(keyword, customKeywordMatch));
     }
-    return count;
-  }, [targeting, selectedProducts, rankedProductSuggestions]);
+    return keys.size;
+  }, [
+    selectedKeywordIndexes,
+    keywordSuggestionRows,
+    customKeywords,
+    customKeywordMatch,
+  ]);
+  const selectedProductIdentityCount = useMemo(() => {
+    const keys = new Set(
+      selectedProductIndexes.map((index) => {
+        const row = preview?.productTargets[index];
+        return productTargetDedupeKey(row?.asin ?? "", row?.matchType);
+      }),
+    );
+    for (const asin of customAsins) {
+      keys.add(productTargetDedupeKey(asin, "exact"));
+    }
+    return keys.size;
+  }, [selectedProductIndexes, preview?.productTargets, customAsins]);
+  const selectedProductVisibleCount = selectedProductIndexes.length;
   const selectedTargetCount =
     targeting === "keywords"
-      ? selectedKeywords.size + customKeywords.length
+      ? selectedKeywordIdentityCount
       : targeting === "products"
-        ? selectedProductVisibleCount + customAsins.length
+        ? selectedProductIdentityCount
         : 0;
   const hasTargets = targeting === "auto" || selectedTargetCount > 0;
   const aiFilterPending = Boolean(preview?.keywordCounts?.grokPending);
@@ -1805,15 +1827,11 @@ export default function CreateCampaignScreen() {
       };
     });
     if (targeting === "keywords") {
-      setSelectedKeywords(
-        new Set((preview?.keywords ?? []).map((_, index) => index)),
-      );
+      setSelectedKeywords(new Set());
     } else if (targeting === "products") {
-      setSelectedProducts(
-        new Set((preview?.productTargets ?? []).map((_, index) => index)),
-      );
+      setSelectedProducts(new Set());
     }
-  }, [preview?.keywords, preview?.productTargets, targeting]);
+  }, [targeting]);
 
   const productReasonKeys = useMemo(
     () => uniqueReasonKeys(rankedProductSuggestions),
@@ -1978,24 +1996,24 @@ export default function CreateCampaignScreen() {
       setGlobalKeywordBidMode("custom");
       setKeywordBidModes((old) => {
         const next = { ...old };
-        for (const index of selectedKeywords) next[index] = "custom";
+        for (const index of selectedKeywordIndexes) next[index] = "custom";
         return next;
       });
       setKeywordCustomBids((old) => {
         const next = { ...old };
-        for (const index of selectedKeywords) next[index] = amountText;
+        for (const index of selectedKeywordIndexes) next[index] = amountText;
         return next;
       });
     } else {
       setGlobalProductBidMode("custom");
       setProductBidModes((old) => {
         const next = { ...old };
-        for (const index of selectedProducts) next[index] = "custom";
+        for (const index of selectedProductIndexes) next[index] = "custom";
         return next;
       });
       setProductCustomBids((old) => {
         const next = { ...old };
-        for (const index of selectedProducts) next[index] = amountText;
+        for (const index of selectedProductIndexes) next[index] = amountText;
         return next;
       });
     }
@@ -2999,21 +3017,24 @@ export default function CreateCampaignScreen() {
                         accessibilityRole="button"
                         accessibilityState={{
                           selected:
-                            selectedKeywords.size > 0 &&
-                            selectedKeywords.size === keywordSuggestionRows.length,
+                            selectedKeywordIndexes.length > 0 &&
+                            selectedKeywordIndexes.length ===
+                              keywordSuggestionRows.length,
                         }}
                         onPress={toggleSelectAllSuggestions}
                         style={({ pressed }) => [
                           styles.choice,
                           {
                             borderColor:
-                              selectedKeywords.size > 0 &&
-                              selectedKeywords.size === keywordSuggestionRows.length
+                              selectedKeywordIndexes.length > 0 &&
+                              selectedKeywordIndexes.length ===
+                                keywordSuggestionRows.length
                                 ? t.colors.tone_primary
                                 : t.colors.separator,
                             backgroundColor:
-                              selectedKeywords.size > 0 &&
-                              selectedKeywords.size === keywordSuggestionRows.length
+                              selectedKeywordIndexes.length > 0 &&
+                              selectedKeywordIndexes.length ===
+                                keywordSuggestionRows.length
                                 ? t.colors.tone_primary
                                 : t.colors.background_secondary,
                             opacity: pressed ? 0.88 : 1,
@@ -3025,8 +3046,8 @@ export default function CreateCampaignScreen() {
                             t.typography.caption1,
                             {
                               color:
-                                selectedKeywords.size > 0 &&
-                                selectedKeywords.size ===
+                                selectedKeywordIndexes.length > 0 &&
+                                selectedKeywordIndexes.length ===
                                   keywordSuggestionRows.length
                                   ? t.colors.text_inverse
                                   : t.colors.text_primary,
@@ -3034,21 +3055,23 @@ export default function CreateCampaignScreen() {
                             },
                           ]}
                         >
-                          {selectedKeywords.size > 0 &&
-                          selectedKeywords.size === keywordSuggestionRows.length
+                          {selectedKeywordIndexes.length > 0 &&
+                          selectedKeywordIndexes.length ===
+                            keywordSuggestionRows.length
                             ? `Deselect all · ${keywordSuggestionRows.length}`
                             : `Select all · ${keywordSuggestionRows.length}`}
                         </Text>
                       </Pressable>
-                      {selectedKeywords.size > 0 &&
-                      selectedKeywords.size < keywordSuggestionRows.length ? (
+                      {selectedKeywordIndexes.length > 0 &&
+                      selectedKeywordIndexes.length <
+                        keywordSuggestionRows.length ? (
                         <Text
                           style={[
                             t.typography.caption1,
                             { color: t.colors.text_secondary, fontWeight: "600" },
                           ]}
                         >
-                          {selectedKeywords.size} selected
+                          {selectedKeywordIndexes.length} selected
                         </Text>
                       ) : null}
                     </View>
@@ -3072,7 +3095,7 @@ export default function CreateCampaignScreen() {
                           const allOn =
                             indexes.length > 0 &&
                             indexes.every((index) => selectedKeywords.has(index)) &&
-                            selectedKeywords.size === indexes.length;
+                            selectedKeywordIndexes.length === indexes.length;
                           return (
                             <Pressable
                               key={key}

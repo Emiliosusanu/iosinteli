@@ -48,6 +48,7 @@ import {
   productMatchSelectLabel,
   recommendationBidMajorUnits,
   resolveSuggestionBid,
+  selectedEligibleSuggestionIndexes,
   suggestionRelevanceNeedsUserConfirm,
   uniqueKeywordMatchTypes,
   uniqueProductMatchTypes,
@@ -56,7 +57,11 @@ import {
 import { SuggestionAiFilterChrome } from "@/src/components/SuggestionAiFilterChrome";
 import {
   allowedAdGroupTargetings,
+  keywordDedupeKey,
   parseCustomKeywords,
+  prepareKeywordAdds,
+  prepareProductTargetAdds,
+  productTargetDedupeKey,
   type AdGroupCreateTargeting,
 } from "@/src/lib/adGroupTargets";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
@@ -294,7 +299,7 @@ export default function CreateAdGroupScreen() {
             })),
           ),
         ),
-      ),
+      ).filter((row) => /^[A-Z0-9]{10}$/.test(String(row.asin).toUpperCase())),
     [suggestionsQ.data?.productTargets],
   );
   const suggestionProfileIds = useMemo(() => {
@@ -374,10 +379,60 @@ export default function CreateAdGroupScreen() {
   );
   const customAsins = useMemo(() => parseCustomAsins(customAsinText), [customAsinText]);
 
-  const selectedKeywordCount =
-    selectedKeywords.size + (effectiveTargeting === "keywords" ? customKeywords.length : 0);
-  const selectedProductCount =
-    selectedProducts.size + (effectiveTargeting === "products" ? customAsins.length : 0);
+  const selectedKeywordIndexes = useMemo(
+    () =>
+      selectedEligibleSuggestionIndexes(
+        selectedKeywords,
+        keywordRows.map((_, index) => index),
+      ),
+    [selectedKeywords, keywordRows],
+  );
+  const selectedProductIndexes = useMemo(
+    () =>
+      selectedEligibleSuggestionIndexes(
+        selectedProducts,
+        productRows.map((_, index) => index),
+      ),
+    [selectedProducts, productRows],
+  );
+  const selectedKeywordCount = useMemo(() => {
+    if (effectiveTargeting !== "keywords") return 0;
+    const keys = new Set(
+      selectedKeywordIndexes.map((index) => {
+        const row = keywordRows[index];
+        return keywordDedupeKey(row.keyword, row.matchType);
+      }),
+    );
+    for (const keyword of customKeywords) {
+      keys.add(keywordDedupeKey(keyword, customKeywordMatch));
+    }
+    return keys.size;
+  }, [
+    effectiveTargeting,
+    selectedKeywordIndexes,
+    keywordRows,
+    customKeywords,
+    customKeywordMatch,
+  ]);
+  const selectedProductCount = useMemo(() => {
+    if (effectiveTargeting !== "products") return 0;
+    const keys = new Set(
+      selectedProductIndexes.map((index) => {
+        const row = productRows[index];
+        return productTargetDedupeKey(row.asin, row.matchType);
+      }),
+    );
+    for (const asin of customAsins) {
+      keys.add(productTargetDedupeKey(asin, customProductMatch));
+    }
+    return keys.size;
+  }, [
+    effectiveTargeting,
+    selectedProductIndexes,
+    productRows,
+    customAsins,
+    customProductMatch,
+  ]);
 
   const canSubmit =
     !!campaignId &&
@@ -490,19 +545,12 @@ export default function CreateAdGroupScreen() {
         relevanceError: undefined,
       },
     });
-    if (effectiveTargeting === "keywords" && filteredKeywordRows.length) {
-      setSelectedKeywords(
-        new Set(filteredKeywordRows.map(({ index }) => index)),
-      );
-    } else if (effectiveTargeting === "products" && filteredProductRows.length) {
-      setSelectedProducts(
-        new Set(filteredProductRows.map(({ index }) => index)),
-      );
-    }
+    setSelectedKeywords(new Set());
+    setSelectedProducts(new Set());
   };
 
-  // After Step 2 AI filter finishes, pre-select the kept set (not raw Amazon).
-  // Skip auto-select when AI failed / empty-restored until user confirms.
+  // A new AI result invalidates any prior index selection. Recommendations
+  // remain unselected until the seller explicitly chooses rows.
   useEffect(() => {
     const seedKey = `${campaignId}|${effectiveTargeting}|${suggestionsQ.data?.fetchedAt ?? ""}|${suggestionsQ.data?.keywordCounts?.relevanceOutcome ?? ""}`;
     if (aiFilterPending || aiFilterNeedsConfirm) {
@@ -514,25 +562,17 @@ export default function CreateAdGroupScreen() {
     if (!suggestionsQ.data || showSuggestionsSpinner) return;
     if (filteredSelectionSeedRef.current === seedKey) return;
     filteredSelectionSeedRef.current = seedKey;
-    if (effectiveTargeting === "keywords" && filteredKeywordRows.length) {
-      setSelectedKeywords(
-        new Set(filteredKeywordRows.map(({ index }) => index)),
-      );
-    } else if (effectiveTargeting === "products" && filteredProductRows.length) {
-      setSelectedProducts(
-        new Set(filteredProductRows.map(({ index }) => index)),
-      );
-    }
+    setSelectedKeywords(new Set());
+    setSelectedProducts(new Set());
   }, [
     aiFilterPending,
     aiFilterNeedsConfirm,
     showSuggestionsSpinner,
     campaignId,
     effectiveTargeting,
+    suggestionsQ.data,
     suggestionsQ.data?.fetchedAt,
     suggestionsQ.data?.keywordCounts?.relevanceOutcome,
-    filteredKeywordRows,
-    filteredProductRows,
   ]);
 
   const onSubmit = async () => {
@@ -542,8 +582,8 @@ export default function CreateAdGroupScreen() {
     try {
       const keywords =
         effectiveTargeting === "keywords"
-          ? [
-              ...[...selectedKeywords].map((index) => {
+          ? prepareKeywordAdds([
+              ...selectedKeywordIndexes.map((index) => {
                 const row = keywordRows[index];
                 const mode = keywordBidModes[index] ?? "default";
                 const custom = Number(
@@ -568,12 +608,12 @@ export default function CreateAdGroupScreen() {
                 bid: defaultBidAmount,
                 source: "custom" as const,
               })),
-            ]
+            ]).keywords
           : undefined;
       const productTargets =
         effectiveTargeting === "products"
-          ? [
-              ...[...selectedProducts].map((index) => {
+          ? prepareProductTargetAdds([
+              ...selectedProductIndexes.map((index) => {
                 const row = productRows[index];
                 const mode = productBidModes[index] ?? "default";
                 const custom = Number(
@@ -598,7 +638,7 @@ export default function CreateAdGroupScreen() {
                 bid: defaultBidAmount,
                 source: "custom" as const,
               })),
-            ]
+            ]).productTargets
           : undefined;
 
       const result = await createAdGroup({
@@ -873,6 +913,15 @@ export default function CreateAdGroupScreen() {
                   <AdGroupSuggestionControls
                     filteredCount={filteredSuggestionRows.length}
                     selectedFilteredCount={selectedFilteredCount}
+                    selectedTotalCount={
+                      effectiveTargeting === "keywords"
+                        ? selectedKeywordIndexes.length
+                        : selectedProductIndexes.length
+                    }
+                    onClearSelection={() => {
+                      setSelectedKeywords(new Set());
+                      setSelectedProducts(new Set());
+                    }}
                     onToggleSelectAll={() => {
                       if (aiFilterBlocksSelect) return;
                       if (effectiveTargeting === "keywords") {
@@ -912,7 +961,7 @@ export default function CreateAdGroupScreen() {
                             const allSelected =
                               indexes.length > 0 &&
                               indexes.every((index) => selectedKeywords.has(index)) &&
-                              selectedKeywords.size === indexes.length;
+                              selectedKeywordIndexes.length === indexes.length;
                             return {
                               key,
                               label: key[0].toUpperCase() + key.slice(1),
@@ -935,7 +984,7 @@ export default function CreateAdGroupScreen() {
                             const allSelected =
                               indexes.length > 0 &&
                               indexes.every((index) => selectedProducts.has(index)) &&
-                              selectedProducts.size === indexes.length;
+                              selectedProductIndexes.length === indexes.length;
                             return {
                               key,
                               label: productMatchSelectLabel(key),
