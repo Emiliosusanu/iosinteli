@@ -123,7 +123,7 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Every daily chart uses the same edge-aware date-label rule: compact ranges use available trailing space, while full ranges retain the right-edge anchor.
 - [x] Regression coverage verifies both the two-day compact case and the full-month case.
 - [x] Full iOS unit suite (973 tests), TypeScript, diff validation, and tab stress audit pass.
-- [ ] Clean build 347 archive is created without overwriting build 346.
+- [x] Clean archive `/tmp/InteliAds-347.xcarchive` is `io.inteliads.app` version `1.0.1 (347)`, preserves `/tmp/InteliAds-346.xcarchive`, and has executable SHA-256 `523fcc000f1f7fd0e9a26329d8ba4a9132d3dc4146615df2aeeca7d7fbd2b226`. The App Store export is production-signed with APNs production entitlement and IPA SHA-256 `38ad69b3a248110204347beb6d3e39f72f4cebb71e9348e7f0c1a2096d81318c`.
 - [ ] Build 347 is installed in place on the iPhone 14 Pro; Overview labels, Search Terms global sorting, and the device regression matrix pass with the session preserved.
 - [ ] App Store Connect accepts and processes build 347.
 
