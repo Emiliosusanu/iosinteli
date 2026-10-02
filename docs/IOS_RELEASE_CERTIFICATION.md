@@ -111,8 +111,8 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Missing ACoS is labeled `N/A`, never rendered as a fake value or bare dash.
 - [x] Search Terms has a finite 20-second terminal timeout and a retry path instead of an indefinite spinner.
 - [x] Release stress scripts validate the current nullable KDP contract, current Targeting scope name, the installed app version, and the shared device runtime.
-- [x] Server Search Terms tests, server build, iOS TypeScript, full 971-test suite, and tab stress audit pass.
-- [ ] Server migration deployed and live profile/date/filter/sort latency measured.
+- [x] Server Search Terms tests, server build, iOS TypeScript, full 972-test suite, and tab stress audit pass.
+- [x] Server migration `20261002083000_mobile_search_terms_global_page.sql` deployed once with release `64ba2c9`; backend, frontend, and worker report the same SHA and healthy state. Live `emisusanu98` reads covered 19,674 terms plus US/CA scopes, converting, wasted, text search, five metric sorts, and the page 1→2 boundary. Warm responses measured 0.27–1.13 seconds; the first cold request measured 3.11 seconds. Every response was HTTP 200 and globally monotonic.
 - [ ] Build 346 archived, installed in place on the iPhone 14 Pro, and Search Terms/device regression matrix completed.
 - [ ] App Store Connect accepts and processes build 346.
 
