@@ -86,6 +86,22 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Physical-device evidence shows current Home financials and orders, the requested KDP account with real books and delete controls, and functional Targeting metrics and mutations. No InteliAds JavaScript error, crash, RedBox, or book-read error appeared in the device smoke log.
 - [x] App Store Connect accepted the build 344 upload and began processing it.
 
+## Build 345 — exact KDP scope and complete campaign creation
+
+- [x] Starts from merged build 344 plus PRs #48 and #49 on `feat/ios-release-candidate`; the active Cursor checkout remains untouched.
+- [x] KDP Manager reads each KDP catalog by its exact `account_id`, separates advertised-only ASINs, shows linked marketplaces, exposes duplicate-account evidence, and never deletes Ads entities.
+- [x] Live account detail and canonical product navigation open on the physical iPhone 14 Pro. Real ASIN `B0F3JYJ9MT` rendered its title, cover, financial data, and campaigns.
+- [x] The live overlap audit found historical shared ASINs across KDP accounts. No automatic deletion or guessed reassignment was performed; cleanup remains an explicit account-and-ASIN action.
+- [x] KDP helper account switching preserves the InteliAds session, rejects account-mismatched captures, prunes only after a complete non-empty account snapshot, and leaves partial or empty captures untouched.
+- [x] US and CA campaign creation loaded real Amazon keyword and product suggestions with metadata. US returned 546 keywords and 128 metadata-complete products; CA returned 576 keywords and 71 metadata-complete products.
+- [x] Existing ad-group flows completed with AI-selected data: Keywords kept 87 of 600 match rows; Products evaluated 235 ASINs / 470 Exact+Expanded rows and kept 34, with real title, subtitle, cover, and bid data.
+- [x] Live write certification remains paused-by-default and already covered US and CA campaign creation, keyword insertion, and product-target insertion without an invented fallback.
+- [x] Focused release checks passed (183 tests); full iOS suite passed (971 tests) together with TypeScript.
+- [x] Clean archive `/tmp/InteliAds-345.xcarchive` is `io.inteliads.app` version `1.0.1 (345)`; archive SHA-256 is `491e8a6e1dbeeb0222a407cf5eb69684cb818afe1cd1117af7f9c4decaa34a34`.
+- [x] Build 345 installed in place on the physical iPhone 14 Pro with the signed-in session preserved, and App Store Connect accepted the upload.
+- [x] App Store Connect shows build 345 as `Testing` in the internal `Intelyads` group after processing completed on October 2, 2026.
+- [x] Server PR #604 deployed at merge `21d3b7c` with green production CI and health checks. Delivery tests prove that each new-order notification uses the complete current-day order total across all enabled Ads profiles, includes unchanged profiles, omits invalid cross-currency money totals, and retries instead of sending a partial total. No synthetic live order was created for certification.
+
 ## Release invariants
 
 - No fake zero, placeholder metric, stale total, or silent unfiltered fallback.
