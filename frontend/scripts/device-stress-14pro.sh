@@ -15,6 +15,8 @@ echo "OUT=$OUT UDID=$UDID"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ -x "$ROOT/.venv-device/bin/python" ]]; then
   PYMD=("$ROOT/.venv-device/bin/python" -m pymobiledevice3)
+elif [[ -x "/private/tmp/inteliads-pmd311/bin/python" ]]; then
+  PYMD=(/private/tmp/inteliads-pmd311/bin/python -m pymobiledevice3)
 else
   PYMD=(pymobiledevice3)
 fi
@@ -113,13 +115,14 @@ run_case() {
   shot "$id"
 }
 
-# Version check
-python3 - <<PY | tee "$OUT/logs/version.txt"
-import re,subprocess
-r=subprocess.run(['$ROOT/.venv-device/bin/python','-m','pymobiledevice3','apps','list','--udid','$UDID'],capture_output=True,text=True)
-m=re.search(r'"io\\.inteliads\\.app".*?"CFBundleShortVersionString"\\s*:\\s*"([^"]+)".*?"CFBundleVersion"\\s*:\\s*"([^"]+)"',r.stdout,re.S)
-print('installed', m.groups() if m else 'unknown')
-PY
+# Version check. Use the same discovered pymobiledevice3 runtime as every other
+# device command; hardcoding a worktree-local venv made clean checkouts fail.
+env_dev "${PYMD[@]}" apps list --udid "$UDID" | python3 -c '
+import re, sys
+s = sys.stdin.read()
+m = re.search(r"\"io\\.inteliads\\.app\".*?\"CFBundleShortVersionString\"\s*:\s*\"([^\"]+)\".*?\"CFBundleVersion\"\s*:\s*\"([^\"]+)\"", s, re.S)
+print("installed", m.groups() if m else "unknown")
+' | tee "$OUT/logs/version.txt"
 
 # Period / tab matrix (focused, not full 90-day every tab)
 run_case ov-month '{"id":"ov-month","route":"/(tabs)","periodMode":"month"}'

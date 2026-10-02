@@ -38,7 +38,7 @@ check "overview timeout handling" "isHomeQueryTimeout|homeWidgetStatus" "app/(ta
 check "overview inteliads logs" "\\[inteliads:perf\\]|markPerf" "app/(tabs)/index.tsx"
 check "campaigns retry" "RetryState|Couldn't load" "app/(tabs)/campaigns.tsx"
 check "targets retry + timeout copy" "RetryState|isHomeQueryTimeout|This range took too long" "app/(tabs)/targeting.tsx"
-check "targets segment prefetch" "enabled: selectedProfileIds.length > 0" "app/(tabs)/targeting.tsx"
+check "targets segment prefetch" "enabled: (scopeProfiles|selectedProfileIds)\\.length > 0" "app/(tabs)/targeting.tsx"
 forbid "targets segment-gated fetch" "enabled:[^\n]*segment" "app/(tabs)/targeting.tsx"
 check "targets debug channel" "\\[inteliads:targeting\\]" "app/(tabs)/targeting.tsx"
 check "books retry path" "RetryState|Couldn't load|ScreenSpinner" "app/(tabs)/products.tsx"
