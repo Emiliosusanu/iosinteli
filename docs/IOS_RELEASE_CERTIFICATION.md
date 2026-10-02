@@ -135,7 +135,7 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Filtered selections disclose how many remain outside the current filter and provide an explicit Clear action.
 - [x] Add-to-existing results report the confirmed Amazon count against the exact submitted count instead of implying that every selected row succeeded.
 - [x] TypeScript, lint with zero errors, the full 977-test suite, and tab stress audit pass.
-- [ ] Clean archive `/tmp/InteliAds-348.xcarchive` is produced from the merged release candidate without overwriting build 347.
+- [x] Clean archive `/tmp/InteliAds-348.xcarchive` is produced from the merged release candidate without overwriting build 347. It is `io.inteliads.app` version `1.0.1 (348)` with executable SHA-256 `c1d1b602f0046840b8baa71ea017e8f66e2a5bac011f00710f6ed0fb488dcbdc`; its App Store export is signed by `Apple Distribution: Emilian Susanu (AQ5FWX4K8Y)`, has the APNs production entitlement, and IPA SHA-256 `0f6d54dcb0afd19d10be4b10fc4dd462c0998b2a278bf9e8f00c4b86fe6a934b`.
 - [ ] Build 348 is installed in place on the iPhone 14 Pro; campaign, ad-group, keyword, and product-target selection counts match the confirmed writes with the session preserved.
 - [ ] App Store Connect accepts and processes build 348.
 
