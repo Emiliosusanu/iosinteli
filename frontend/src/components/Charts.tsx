@@ -9,7 +9,7 @@ import Svg, { Path, Circle, Rect, Line, Text as SvgText, Defs, LinearGradient, S
 import { useTheme, toneColor } from "../lib/theme";
 import { formatCompact, formatInt, formatPercent, safeDivide, formatCurrency } from "../lib/format";
 import { hasAuthoritativeBreakEven } from "../lib/kdpTitlePresentation";
-import { dayBarStep, dayXLayout } from "../lib/chartLayout";
+import { dayBarStep, dayLabelTextAnchor, dayXLayout } from "../lib/chartLayout";
 import { resolveChartDayFinance } from "../lib/chartDayFinance";
 import { useOverviewPeriodSwipeGesture } from "./OverviewPeriodSwipe";
 import { useOverviewWidgetPageSwipeGesture } from "./OverviewWidgetPageSwipe";
@@ -501,7 +501,7 @@ export function PerformanceChart({ spendData, salesData, width = 320, currency, 
 
         {/* X-axis labels */}
         {xAxisLabels(spendData).map(({ index, label, key }) => (
-          <SvgText key={key} x={spendPoints[index]?.x ?? inset} y={chartHeight + 20} textAnchor={index === 0 ? "start" : index === spendData.length - 1 ? "end" : "middle"} fontSize={11} fill={t.colors.text_tertiary}>
+          <SvgText key={key} x={spendPoints[index]?.x ?? inset} y={chartHeight + 20} textAnchor={dayLabelTextAnchor(index, spendData.length, spendPoints[index]?.x ?? inset, chartWidth - inset)} fontSize={11} fill={t.colors.text_tertiary}>
             {label}
           </SvgText>
         ))}
@@ -953,7 +953,7 @@ export function NetProfitChart({
 
           {xLabels.map(({ index, label, key }) => {
             const x = leftGutter + (points[index]?.x ?? inset);
-            const anchor = index === 0 ? "start" : index === data.length - 1 ? "end" : "middle";
+            const anchor = dayLabelTextAnchor(index, data.length, x, leftGutter + plotWidth);
             const active = selectedIndex === index;
             return (
               <SvgText
@@ -1341,7 +1341,7 @@ export function AdsEngineChart({
               key={key}
               x={clickPoints[index]?.x ?? inset}
               y={chartHeight + 20}
-              textAnchor={index === 0 ? "start" : index === impressionsData.length - 1 ? "end" : "middle"}
+              textAnchor={dayLabelTextAnchor(index, impressionsData.length, clickPoints[index]?.x ?? inset, chartWidth - inset)}
               fontSize={11}
               fill={t.colors.text_tertiary}
             >
@@ -1487,7 +1487,7 @@ export function KdpFormatRoyaltiesChart({
               key={key}
               x={points[index]?.x ?? inset}
               y={chartHeight + 20}
-              textAnchor={index === 0 ? "start" : index === days.length - 1 ? "end" : "middle"}
+              textAnchor={dayLabelTextAnchor(index, days.length, points[index]?.x ?? inset, chartWidth - inset)}
               fontSize={11}
               fill={t.colors.text_tertiary}
             >
@@ -1588,7 +1588,7 @@ export function CampaignDailyChart({ impressionsData, clicksData, spendData, ord
         )}
 
         {xAxisLabels(impressionsData).map(({ index, label, key }) => (
-          <SvgText key={key} x={imprPts[index]?.x ?? inset} y={chartHeight + 20} textAnchor={index === 0 ? "start" : index === impressionsData.length - 1 ? "end" : "middle"} fontSize={11} fill={t.colors.text_tertiary}>
+          <SvgText key={key} x={imprPts[index]?.x ?? inset} y={chartHeight + 20} textAnchor={dayLabelTextAnchor(index, impressionsData.length, imprPts[index]?.x ?? inset, chartWidth - inset)} fontSize={11} fill={t.colors.text_tertiary}>
             {label}
           </SvgText>
         ))}
@@ -1716,7 +1716,7 @@ export function BusinessTrendChart({ royaltiesData, spendData, netData, organicO
         )}
 
         {xAxisLabels(royaltiesData).map(({ index, label, key }) => (
-          <SvgText key={key} x={royaltiesPoints[index]?.x ?? inset} y={chartHeight + 20} textAnchor={index === 0 ? "start" : index === royaltiesData.length - 1 ? "end" : "middle"} fontSize={11} fill={t.colors.text_tertiary}>
+          <SvgText key={key} x={royaltiesPoints[index]?.x ?? inset} y={chartHeight + 20} textAnchor={dayLabelTextAnchor(index, royaltiesData.length, royaltiesPoints[index]?.x ?? inset, chartWidth - inset)} fontSize={11} fill={t.colors.text_tertiary}>
             {label}
           </SvgText>
         ))}
