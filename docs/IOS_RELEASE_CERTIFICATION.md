@@ -102,7 +102,7 @@ never from `main`, and never from the active Cursor checkout.
 - [x] App Store Connect shows build 345 as `Testing` in the internal `Intelyads` group after processing completed on October 2, 2026.
 - [x] Server PR #604 deployed at merge `21d3b7c` with green production CI and health checks. Delivery tests prove that each new-order notification uses the complete current-day order total across all enabled Ads profiles, includes unchanged profiles, omits invalid cross-currency money totals, and retries instead of sending a partial total. No synthetic live order was created for certification.
 
-## Build 346 — Search Terms global page and final device audit
+## Build 346 — Search Terms global page candidate
 
 - [x] Starts from the exact merged build 345 release candidate; the active Cursor checkout remains untouched.
 - [x] Search Terms no longer waits for a full account-wide PostgREST scan before first paint.
@@ -113,8 +113,19 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Release stress scripts validate the current nullable KDP contract, current Targeting scope name, the installed app version, and the shared device runtime.
 - [x] Server Search Terms tests, server build, iOS TypeScript, full 972-test suite, and tab stress audit pass.
 - [x] Server migration `20261002083000_mobile_search_terms_global_page.sql` deployed once with release `64ba2c9`; backend, frontend, and worker report the same SHA and healthy state. Live `emisusanu98` reads covered 19,674 terms plus US/CA scopes, converting, wasted, text search, five metric sorts, and the page 1→2 boundary. Warm responses measured 0.27–1.13 seconds; the first cold request measured 3.11 seconds. Every response was HTTP 200 and globally monotonic.
-- [ ] Build 346 archived, installed in place on the iPhone 14 Pro, and Search Terms/device regression matrix completed.
-- [ ] App Store Connect accepts and processes build 346.
+- [x] Clean archive `/tmp/InteliAds-346.xcarchive` is `io.inteliads.app` version `1.0.1 (346)`; executable SHA-256 is `e896cabcbc02742c50dd1725ee8994770295bf0b8a47be92c34df3560cff623a`.
+- [x] Build 346 installed in place on the physical iPhone 14 Pro with its signed-in session preserved. Overview rendered live Gross `$168`, Net `$77.46`, Ad Spend `$90.50`, ACoS `30.3%`, and Margin `46%`.
+- [x] Device visual review found the two-day x-axis labels overlapping because the final label anchored back over the first one. Build 346 was therefore not uploaded and is superseded by 347.
+
+## Build 347 — short-range chart labels and final device audit
+
+- [x] Starts from the exact merged build 346 release-candidate commit; the active Cursor checkout remains untouched.
+- [x] Every daily chart uses the same edge-aware date-label rule: compact ranges use available trailing space, while full ranges retain the right-edge anchor.
+- [x] Regression coverage verifies both the two-day compact case and the full-month case.
+- [x] Full iOS unit suite (973 tests), TypeScript, diff validation, and tab stress audit pass.
+- [ ] Clean build 347 archive is created without overwriting build 346.
+- [ ] Build 347 is installed in place on the iPhone 14 Pro; Overview labels, Search Terms global sorting, and the device regression matrix pass with the session preserved.
+- [ ] App Store Connect accepts and processes build 347.
 
 ## Release invariants
 
