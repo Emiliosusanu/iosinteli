@@ -204,8 +204,15 @@ test("all Amazon suggestions remain accessible without rendering an unbounded li
   assert.match(screen, /Select all ·/);
   assert.match(screen, /toggleSelectAllSuggestions/);
   assert.match(screen, /Show \$\{Math\.min\(SUGGESTION_PAGE_SIZE/);
-  assert.match(screen, /new Set\(\(result\.keywords \?\? \[\]\)\.map\(\(_, index\) => index\)\)/);
-  assert.match(screen, /new Set\(\(result\.productTargets \?\? \[\]\)\.map\(\(_, index\) => index\)\)/);
+  assert.doesNotMatch(
+    screen,
+    /new Set\(\(result\.keywords \?\? \[\]\)\.map\(\(_, index\) => index\)\)/,
+  );
+  assert.doesNotMatch(
+    screen,
+    /new Set\(\(result\.productTargets \?\? \[\]\)\.map\(\(_, index\) => index\)\)/,
+  );
+  assert.match(screen, /Suggestions are recommendations, not user intent/);
   assert.doesNotMatch(screen, /100 target limit/);
 });
 

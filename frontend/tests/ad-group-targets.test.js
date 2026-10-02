@@ -5,6 +5,7 @@ import {
   allowedAdGroupTargetings,
   parseCustomKeywords,
   prepareKeywordAdds,
+  prepareProductTargetAdds,
   resolveAdGroupAddMode,
 } from "../src/lib/adGroupTargets.ts";
 
@@ -65,5 +66,24 @@ describe("adGroupTargets helpers", () => {
       prepared.keywords.map((row) => `${row.keyword}:${row.matchType}:${row.source}`),
       ["italy:exact:suggested", "italy:phrase:custom"],
     );
+  });
+
+  it("prepareProductTargetAdds matches UI identity and excludes existing targets", () => {
+    const prepared = prepareProductTargetAdds(
+      [
+        { asin: "B012345678", matchType: "exact", bid: 0.8, source: "suggested" },
+        { asin: "b012345678", matchType: "exact", bid: 0.9, source: "custom" },
+        { asin: "B012345678", matchType: "expanded", bid: 0.7, source: "suggested" },
+        { asin: "B087654321", matchType: "exact", bid: 0.6, source: "suggested" },
+        { asin: "bad", matchType: "exact", bid: 0.6, source: "custom" },
+      ],
+      [{ asin: "B087654321", match_type: "exact" }],
+    );
+    assert.deepEqual(
+      prepared.productTargets.map((row) => `${row.asin}:${row.matchType}:${row.source}`),
+      ["B012345678:exact:suggested", "B012345678:expanded:suggested"],
+    );
+    assert.equal(prepared.skippedDuplicate, 2);
+    assert.equal(prepared.skippedAsin, 1);
   });
 });

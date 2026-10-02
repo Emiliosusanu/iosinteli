@@ -17,6 +17,10 @@ const addTargets = readFileSync(
   join(root, "app/adgroup/add-targets.tsx"),
   "utf8",
 );
+const campaignCreate = readFileSync(
+  join(root, "app/campaign/create.tsx"),
+  "utf8",
+);
 
 test("clusterKeywordSuggestionsByPhrase keeps phrase groups adjacent Broad→Phrase→Exact", () => {
   const rows = [
@@ -79,6 +83,19 @@ test("Add targets wires select-all controls + suggested bids default on", () => 
   assert.match(addTargets, /clusterKeywordSuggestionsByPhrase/);
   assert.match(addTargets, /useState\(true\)/);
   assert.match(addTargets, /!asinResolving/);
+});
+
+test("AI suggestions start unselected and counts share the eligible submission set", () => {
+  for (const screen of [campaignCreate, adGroupCreate, addTargets]) {
+    assert.match(screen, /selectedEligibleSuggestionIndexes/);
+    assert.doesNotMatch(
+      screen,
+      /setSelected(?:Keywords|Products)\(\s*new Set\(filtered(?:Keyword|Product)Rows/,
+    );
+  }
+  assert.match(addTargets, /availableKeywordRows/);
+  assert.match(addTargets, /availableProductRows/);
+  assert.match(addTargets, /prepareProductTargetAdds/);
 });
 
 test("suggestion screens keep one bounded retry owner", () => {

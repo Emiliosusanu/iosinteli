@@ -123,9 +123,21 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Every daily chart uses the same edge-aware date-label rule: compact ranges use available trailing space, while full ranges retain the right-edge anchor.
 - [x] Regression coverage verifies both the two-day compact case and the full-month case.
 - [x] Full iOS unit suite (973 tests), TypeScript, diff validation, and tab stress audit pass.
-- [ ] Clean build 347 archive is created without overwriting build 346.
-- [ ] Build 347 is installed in place on the iPhone 14 Pro; Overview labels, Search Terms global sorting, and the device regression matrix pass with the session preserved.
-- [ ] App Store Connect accepts and processes build 347.
+- [x] Clean archive `/tmp/InteliAds-347.xcarchive` is `io.inteliads.app` version `1.0.1 (347)`, preserves `/tmp/InteliAds-346.xcarchive`, and has executable SHA-256 `523fcc000f1f7fd0e9a26329d8ba4a9132d3dc4146615df2aeeca7d7fbd2b226`. The App Store export is production-signed with APNs production entitlement and IPA SHA-256 `38ad69b3a248110204347beb6d3e39f72f4cebb71e9348e7f0c1a2096d81318c`.
+- [x] Build 347 was not installed or uploaded. A suggestion-selection count defect was found before release, so the archive remains preserved and is superseded by build 348.
+
+## Build 348 — exact campaign target selection
+
+- [x] Starts from the exact merged build 347 release candidate; the active Cursor checkout and its local edits remain untouched.
+- [x] Create Campaign, New Ad Group, and Add to Existing Ad Group no longer preselect Amazon or AI suggestions. Zero user selections produce zero suggested targets.
+- [x] Visible selection, total selection, custom entries, existing entities, duplicate identities, and the Amazon request use the same eligible keyword/product identity set.
+- [x] Existing keywords and product targets are excluded before selection; async entity reads cannot leave stale hidden selections in the displayed count or payload.
+- [x] Filtered selections disclose how many remain outside the current filter and provide an explicit Clear action.
+- [x] Add-to-existing results report the confirmed Amazon count against the exact submitted count instead of implying that every selected row succeeded.
+- [x] TypeScript, lint with zero errors, the full 977-test suite, and tab stress audit pass.
+- [ ] Clean archive `/tmp/InteliAds-348.xcarchive` is produced from the merged release candidate without overwriting build 347.
+- [ ] Build 348 is installed in place on the iPhone 14 Pro; campaign, ad-group, keyword, and product-target selection counts match the confirmed writes with the session preserved.
+- [ ] App Store Connect accepts and processes build 348.
 
 ## Release invariants
 
