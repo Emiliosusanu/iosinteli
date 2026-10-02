@@ -11,6 +11,7 @@ import type { TargetingAdvancedFilters } from "./targetingFilters.ts";
 import type { DateRange } from "./types.ts";
 
 export const QA_COMMAND_KEY = "inteliads.qa.command";
+export const QA_ACK_KEY = "inteliads.qa.ack";
 
 export type QaRoute =
   | "/(tabs)"
