@@ -35,7 +35,6 @@ function OpsCardShell({
   toneWash: string;
   testID?: string;
 }) {
-  const t = useTheme();
   // Below-fold: card glass (lighter blur) — chrome stacks caused Overview scroll jank.
   return (
     <StaggerReveal index={staggerIndex}>
@@ -46,7 +45,7 @@ function OpsCardShell({
           marginTop: dashboard.sectionGap,
           borderRadius: dashboard.cardRadius,
           borderCurve: "continuous",
-          borderColor: t.colors.glass_stroke,
+          borderWidth: 0,
           overflow: "hidden",
         }}
         contentStyle={{ padding: 0 }}
@@ -58,7 +57,7 @@ function OpsCardShell({
           end={{ x: 1, y: 1 }}
           style={StyleSheet.absoluteFill}
         />
-        <View style={{ padding: dashboard.cardPadding }}>{children}</View>
+        <View style={{ padding: Math.max(12, dashboard.cardPadding - 2) }}>{children}</View>
       </GlassPanel>
     </StaggerReveal>
   );
@@ -292,7 +291,7 @@ export function OverviewBudgetTodayCard({
           spent={todaySynced ? spent : 0}
           budget={budget}
           currency={currency}
-          size={108}
+          size={96}
         />
         <View style={styles.budgetCopy}>
           <Text style={[t.typography.metric_compact, { color: t.colors.text_primary }]} numberOfLines={1}>
@@ -441,7 +440,7 @@ export function OverviewBidBotCard({
             style={{
               borderRadius: dashboard.cardRadius,
               borderCurve: "continuous",
-              borderColor: t.colors.glass_stroke,
+              borderWidth: 0,
               overflow: "hidden",
             }}
             contentStyle={{ padding: 0 }}
@@ -451,7 +450,7 @@ export function OverviewBidBotCard({
               style={[StyleSheet.absoluteFill, { backgroundColor: accent, opacity: live ? 0.08 : 0.04 }]}
             />
             <View style={[styles.accentEdge, { backgroundColor: accent }]} />
-            <View style={{ padding: dashboard.cardPadding, paddingLeft: dashboard.cardPadding + 4 }}>
+            <View style={{ padding: Math.max(12, dashboard.cardPadding - 2), paddingLeft: dashboard.cardPadding + 2 }}>
               <OverviewCardHeader title="BidBot" icon="bidBot" />
               {statusError ? (
                 <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 10 }]}>
@@ -537,7 +536,7 @@ export function OverviewAutomationCard({
             style={{
               borderRadius: dashboard.cardRadius,
               borderCurve: "continuous",
-              borderColor: t.colors.glass_stroke,
+              borderWidth: 0,
               overflow: "hidden",
             }}
             contentStyle={{ padding: 0 }}
@@ -549,7 +548,7 @@ export function OverviewAutomationCard({
               end={{ x: 1, y: 1 }}
               style={StyleSheet.absoluteFill}
             />
-            <View style={{ padding: dashboard.cardPadding }}>
+            <View style={{ padding: Math.max(12, dashboard.cardPadding - 2) }}>
               <OverviewCardHeader
                 title="Automation"
                 icon="automation"
@@ -564,7 +563,6 @@ export function OverviewAutomationCard({
                       styles.autoTile,
                       {
                         backgroundColor: t.scheme === "dark" ? "#FFFFFF0A" : "#FFFFFFCC",
-                        borderColor: t.colors.border,
                       },
                     ]}
                   >
@@ -601,19 +599,19 @@ const styles = StyleSheet.create({
   budgetBody: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 14,
-    marginTop: 12,
+    gap: 10,
+    marginTop: 8,
   },
   budgetCopy: {
     flex: 1,
     minWidth: 0,
   },
   forecastRows: {
-    marginTop: 10,
+    marginTop: 7,
     gap: 3,
   },
   marketRow: {
-    minHeight: 54,
+    minHeight: 48,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
@@ -630,14 +628,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 6,
-    marginTop: 10,
+    marginTop: 7,
   },
   chip: {
     paddingHorizontal: 9,
-    paddingVertical: 5,
+    paddingVertical: 4,
     borderRadius: dashboard.chipRadius,
     borderCurve: "continuous",
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 0,
   },
   accentEdge: {
     position: "absolute",
@@ -678,16 +676,16 @@ const styles = StyleSheet.create({
   autoGrid: {
     flexDirection: "row",
     gap: 8,
-    marginTop: 12,
+    marginTop: 8,
   },
   autoTile: {
     flex: 1,
     borderRadius: dashboard.metricChipRadius,
     borderCurve: "continuous",
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 0,
     paddingHorizontal: 10,
-    paddingVertical: 12,
-    minHeight: 96,
+    paddingVertical: 9,
+    minHeight: 82,
   },
   autoIconWell: {
     width: 28,

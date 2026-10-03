@@ -33,3 +33,14 @@ test("ad group detail and add-target screens load one scoped group", () => {
   assert.doesNotMatch(addTargets, /fetchAdGroups\(selectedProfileIds/);
   assert.match(queries, /fetchAdGroupAutomationHistory[\s\S]*fetchAdGroupById\(adGroupId, profileIds\)/);
 });
+
+test("ad group mutations paint the cache immediately and reconcile in background", () => {
+  assert.match(detail, /applyOptimisticEntityBid/);
+  assert.match(detail, /revertOptimisticEntityBid/);
+  assert.match(detail, /patchEntityInQueryData/);
+  assert.match(detail, /setKeywordBid\(null\);[\s\S]*updateKeywordManual/);
+  assert.match(detail, /setTargetBid\(null\);[\s\S]*updateProductTargetManual/);
+  assert.match(detail, /void invalidateAds/);
+  assert.doesNotMatch(detail, /await keywordsQ\.refetch\(\)/);
+  assert.doesNotMatch(detail, /await targetsQ\.refetch\(\)/);
+});

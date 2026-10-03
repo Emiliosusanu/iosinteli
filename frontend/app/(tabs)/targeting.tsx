@@ -1755,11 +1755,11 @@ export default function TargetingScreen() {
           <PressableScale
             testID="targeting-select-btn"
             accessibilityRole="button"
-            accessibilityLabel={selectMode ? "Done selecting" : "Bulk select"}
+            accessibilityLabel={selectMode ? "Done selecting" : `Select all ${visibleWriteCount} loaded rows`}
             hitSlop={8}
             onPress={() => {
               if (selectMode) clearSelection();
-              else setSelectMode(true);
+              else selectAllVisible();
             }}
             style={{
               minWidth: 44,
@@ -1778,7 +1778,7 @@ export default function TargetingScreen() {
                 },
               ]}
             >
-              {selectMode ? "Done" : "Select"}
+              {selectMode ? "Done" : "Select all"}
             </Text>
           </PressableScale>
           <FilterIconButton

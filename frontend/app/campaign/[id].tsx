@@ -35,6 +35,7 @@ import {
   formatOptionalPercent,
   formatInt,
   formatDateShort,
+  formatDateRangeLabel,
   safeDivide,
 } from "@/src/lib/format";
 import { DenseMetricLine, EmptyState, ToneDot, SectionCard, MetricStrip, RetryState, ScreenSpinner } from "@/src/components/Primitives";
@@ -370,6 +371,29 @@ export default function CampaignDetail() {
       ),
     [activeChildrenOnly, keywordsQ.data],
   );
+  const campaignChildPreviewByAdGroup = useMemo(() => {
+    const previews = new Map<string, { keywordCount: number; targetCount: number; labels: string[] }>();
+    const ensure = (id: string) => {
+      const current = previews.get(id) ?? { keywordCount: 0, targetCount: 0, labels: [] };
+      previews.set(id, current);
+      return current;
+    };
+    for (const keyword of visibleKeywords) {
+      if (!keyword.ad_group_id) continue;
+      const preview = ensure(String(keyword.ad_group_id));
+      preview.keywordCount += 1;
+      const label = String(keyword.keyword_text ?? "").trim();
+      if (label && preview.labels.length < 3 && !preview.labels.includes(label)) preview.labels.push(label);
+    }
+    for (const target of visibleProductTargets) {
+      if (!target.ad_group_id) continue;
+      const preview = ensure(String(target.ad_group_id));
+      preview.targetCount += 1;
+      const label = productTargetHeading(target).trim();
+      if (label && preview.labels.length < 3 && !preview.labels.includes(label)) preview.labels.push(label);
+    }
+    return previews;
+  }, [visibleKeywords, visibleProductTargets]);
   const visibleProductAds = useMemo(
     () =>
       [...(productAdsQ.data ?? []).filter((pa) => activeChildrenOnly
@@ -605,6 +629,8 @@ export default function CampaignDetail() {
     !hasKeywords &&
     !hasProductTargets &&
     (keywordsQ.isError || productTargetsQ.isError);
+  const childPreviewLoading = awaitingChildScope || keywordsQ.isLoading || productTargetsQ.isLoading;
+  const childPreviewFailed = keywordsQ.isError || productTargetsQ.isError;
 
   return (
     <SubScreen title={c.name} showDateRange>
@@ -965,6 +991,9 @@ export default function CampaignDetail() {
             },
           }}
         >
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginBottom: spacing.sm }]}>
+            Performance metrics · {formatDateRangeLabel(dateRange)}
+          </Text>
           {adGroupsQ.isError && visibleAdGroups.length === 0 ? (
             <RetryState
               title="Couldn't load ad groups"
@@ -980,6 +1009,14 @@ export default function CampaignDetail() {
               const agSales = Number(ag.total_sales);
               const defaultBid = readTargetBid(ag as any);
               const bidChipValue = defaultBid ?? campaignFallbackDefaultBid ?? null;
+              const childPreview = campaignChildPreviewByAdGroup.get(String(ag.id));
+              const childCountLabel = childPreview
+                ? `${childPreview.keywordCount} keywords · ${childPreview.targetCount} product targets`
+                : childPreviewLoading
+                  ? "Loading targets"
+                  : childPreviewFailed
+                    ? "Targets unavailable"
+                    : "No targets";
               return (
                 <View
                   key={ag.id}
@@ -1036,6 +1073,9 @@ export default function CampaignDetail() {
                       </View>
                       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginLeft: 16, marginTop: 3 }]} numberOfLines={1}>
                         {statusLabel(ag.state)} · {formatCurrency(Number(ag.total_spend), primaryCurrency)} spend · {formatInt(Number(ag.total_impressions))} impr · {formatInt(Number(ag.total_clicks))} clicks · {formatInt(Number(ag.total_orders))} orders
+                      </Text>
+                      <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginLeft: 16, marginTop: 2 }]} numberOfLines={1}>
+                        {childCountLabel}{childPreview?.labels.length ? ` · ${childPreview.labels.join(" · ")}` : ""}
                       </Text>
                     </View>
                     <View style={{ alignItems: "flex-end", marginLeft: spacing.sm }}>

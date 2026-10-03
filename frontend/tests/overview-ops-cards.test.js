@@ -16,6 +16,9 @@ test("Overview ops cards use glass + stagger + status affordances", () => {
   assert.match(cards, /Not synced|Waiting for sync/);
   assert.doesNotMatch(cards, /withRepeat/);
   assert.match(cards, /Almost gone|% used/);
+  assert.match(cards, /size=\{96\}/);
+  assert.match(cards, /minHeight: 82/);
+  assert.match(cards, /borderWidth: 0/);
 });
 
 test("Home wires the redesigned ops cards without prior-day budget fallback", () => {

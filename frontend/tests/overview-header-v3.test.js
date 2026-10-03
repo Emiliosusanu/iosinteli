@@ -43,7 +43,8 @@ test("OverviewHeaderV3 uses lateral stadium glow instead of wide Refreshing pill
   assert.match(header, /StadiumLateralGlow/);
   assert.match(header, /home-header-refresh-glow/);
   assert.match(header, /showRefreshGlow/);
-  assert.match(header, /syncChipGhost/);
+  assert.match(header, /home-sync-loading/);
+  assert.match(header, /home-sync-ready/);
   assert.match(header, /suppressRefreshingCaption/);
   assert.match(header, /expo-linear-gradient/);
   // Quiet primary edge shadow, not neon wash / warning-success animation.
@@ -60,20 +61,23 @@ test("OverviewHeaderV3 uses lateral stadium glow instead of wide Refreshing pill
   assert.doesNotMatch(header, /\$\{mid\}E6/);
   assert.doesNotMatch(header, /shadowOpacity:\s*0\.85/);
   // Busy sync must not paint the orange "Refreshing"/"Syncing" label chip.
-  assert.match(header, /syncBusy \? \(/);
+  assert.match(header, /showRefreshGlow \|\| syncReadyVisible \? \(/);
   assert.doesNotMatch(
-    header.slice(header.indexOf("syncBusy ? ("), header.indexOf(") : (", header.indexOf("syncBusy ? (")) + 40),
+    header.slice(header.indexOf("showRefreshGlow || syncReadyVisible ? ("), header.indexOf(") : (", header.indexOf("showRefreshGlow || syncReadyVisible ? (")) + 40),
     /\{syncCompact\}/,
   );
 });
 
-test("OverviewHeaderV3 stadium glow stays subtle and uses the primary color", () => {
+test("OverviewHeaderV3 moves from primary loading glow to brief green ready state", () => {
   assert.match(header, /color=\{t\.colors\.tone_primary\}/);
+  assert.match(header, /successColor=\{t\.colors\.tone_good\}/);
   assert.match(header, /failedOrStale/);
   assert.match(header, /home-header-glow-primary/);
+  assert.match(header, /home-header-glow-ready/);
+  assert.match(header, /setTimeout\(\(\) => setSyncReadyVisible\(false\), reduceMotion \? 700 : 1150\)/);
   assert.match(header, /StadiumSideGlow/);
   assert.match(header, /EASE_GLOW/);
-  assert.doesNotMatch(header, /warningColor|successColor|greenMix|home-header-glow-amber|home-header-glow-green/);
+  assert.doesNotMatch(header, /warningColor|greenMix|home-header-glow-amber/);
   assert.match(header, /hexWithAlpha\(color, 0\.48\)/);
   assert.doesNotMatch(header, /hexWithAlpha\(color, 1\)/);
 });

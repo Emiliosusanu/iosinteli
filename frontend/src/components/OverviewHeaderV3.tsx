@@ -262,24 +262,28 @@ function StadiumSideGlow({
 }
 
 /**
- * Quiet primary-color edge shadow while a refresh is active. It fades directly
- * to rest: no orange warning pulse, green success flash, or neon outline.
+ * Quiet edge shadow while a refresh is active, followed by a short green
+ * confirmation before returning to rest. No warning pulse or neon outline.
  */
 function StadiumLateralGlow({
   busy,
+  ready,
   failedOrStale,
   color,
+  successColor,
 }: {
   busy: boolean;
+  ready: boolean;
   failedOrStale: boolean;
   color: string;
+  successColor: string;
 }) {
   const reduceMotion = useReduceMotion();
   const breath = useSharedValue(0);
   const visible = useSharedValue(0);
 
   useEffect(() => {
-    if (busy && !failedOrStale) {
+    if ((busy || ready) && !failedOrStale) {
       cancelAnimation(breath);
       cancelAnimation(visible);
       visible.set(withTiming(1, { duration: reduceMotion ? 100 : 260, easing: EASE_SOFT }));
@@ -288,14 +292,14 @@ function StadiumLateralGlow({
         return;
       }
       breath.set(0);
-      breath.set(withRepeat(withTiming(1, { duration: 2100, easing: EASE_GLOW }), -1, true));
+      breath.set(ready ? withTiming(0.72, { duration: 220, easing: EASE_SOFT }) : withRepeat(withTiming(1, { duration: 2100, easing: EASE_GLOW }), -1, true));
       return () => cancelAnimation(breath);
     }
     cancelAnimation(breath);
     cancelAnimation(visible);
     visible.set(withTiming(0, { duration: reduceMotion ? 100 : 360, easing: EASE_SOFT }));
     breath.set(withTiming(0, { duration: reduceMotion ? 100 : 360, easing: EASE_SOFT }));
-  }, [busy, failedOrStale, breath, visible, reduceMotion]);
+  }, [busy, ready, failedOrStale, breath, visible, reduceMotion]);
 
   const edgeStyle = useAnimatedStyle(() => ({
     opacity: visible.get() * interpolate(breath.get(), [0, 1], [0.08, 0.22]),
@@ -316,10 +320,10 @@ function StadiumLateralGlow({
       <Animated.View
         pointerEvents="none"
         style={[StyleSheet.absoluteFill, edgeStyle]}
-        testID="home-header-glow-primary"
+        testID={ready ? "home-header-glow-ready" : "home-header-glow-primary"}
       >
-        <StadiumSideGlow color={color} side="left" bloomStyle={bloomStyle} />
-        <StadiumSideGlow color={color} side="right" bloomStyle={bloomStyle} />
+        <StadiumSideGlow color={ready ? successColor : color} side="left" bloomStyle={bloomStyle} />
+        <StadiumSideGlow color={ready ? successColor : color} side="right" bloomStyle={bloomStyle} />
       </Animated.View>
     </View>
   );
@@ -1085,6 +1089,28 @@ export function OverviewHeaderV3({
   /** Busy refresh uses lateral stadium glow — not the wide orange "Refreshing" pill. */
   const showRefreshGlow = syncBusy || periodRefreshing;
   const syncFailedOrStale = syncCompact === "Failed" || syncCompact === "Stale";
+  const [syncReadyVisible, setSyncReadyVisible] = useState(false);
+  const wasRefreshBusy = useRef(false);
+  const readyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (readyTimer.current) clearTimeout(readyTimer.current);
+    if (showRefreshGlow) {
+      wasRefreshBusy.current = true;
+      setSyncReadyVisible(false);
+      return;
+    }
+    if (wasRefreshBusy.current && !syncFailedOrStale) {
+      wasRefreshBusy.current = false;
+      setSyncReadyVisible(true);
+      readyTimer.current = setTimeout(() => setSyncReadyVisible(false), reduceMotion ? 700 : 1150);
+    } else {
+      wasRefreshBusy.current = false;
+      setSyncReadyVisible(false);
+    }
+    return () => {
+      if (readyTimer.current) clearTimeout(readyTimer.current);
+    };
+  }, [showRefreshGlow, syncFailedOrStale, reduceMotion]);
   const syncNeedsLabel =
     !syncBusy &&
     (syncFailedOrStale ||
@@ -1198,15 +1224,31 @@ export function OverviewHeaderV3({
               </>
             )}
 
-            {syncBusy ? (
+            {showRefreshGlow || syncReadyVisible ? (
               <PressableScale
                 onPress={onSyncPress}
                 accessibilityRole="button"
                 accessibilityLabel={syncA11y}
-                accessibilityValue={{ text: "Updating" }}
+                accessibilityValue={{ text: syncReadyVisible ? "Ready" : "Updating" }}
                 hitSlop={6}
-                style={styles.syncChipGhost}
-              />
+                style={[
+                  styles.syncChip,
+                  styles.syncChipDot,
+                  {
+                    borderColor: (syncReadyVisible ? t.colors.tone_good : t.colors.tone_primary) + "44",
+                    backgroundColor: (syncReadyVisible ? t.colors.tone_good : t.colors.tone_primary) + "16",
+                    marginLeft: "auto",
+                    ...chrome.shadow.stadium,
+                  },
+                ]}
+                testID={syncReadyVisible ? "home-sync-ready" : "home-sync-loading"}
+              >
+                {syncReadyVisible ? (
+                  <SFSymbol name="checkmark" size={15} color={t.colors.tone_good} />
+                ) : (
+                  <SyncDot color={t.colors.tone_primary} active />
+                )}
+              </PressableScale>
             ) : (
               <PressableScale
                 onPress={onSyncPress}
@@ -1265,8 +1307,10 @@ export function OverviewHeaderV3({
         </GlassPanel>
         <StadiumLateralGlow
           busy={showRefreshGlow}
+          ready={syncReadyVisible}
           failedOrStale={syncFailedOrStale}
           color={t.colors.tone_primary}
+          successColor={t.colors.tone_good}
         />
       </View>
 
@@ -1392,12 +1436,6 @@ const styles = StyleSheet.create({
   },
   lateralGlowCoreRight: {
     right: 0,
-  },
-  syncChipGhost: {
-    marginLeft: "auto",
-    width: 46,
-    minHeight: 46,
-    opacity: 0,
   },
   shellInner: {
     paddingHorizontal: 12,

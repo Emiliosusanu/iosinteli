@@ -25,3 +25,16 @@ test("campaign keyword, product and auto rows label every performance metric", (
   assert.match(campaign, /DenseMetricLine items=\{campaignTargetMetricItems\(pt/);
   assert.match(campaign, /variant="auto"/);
 });
+
+test("campaign child previews and metrics stay scoped to the selected period", () => {
+  assert.match(campaign, /campaign-keywords[\s\S]*dateRange\.start, dateRange\.end/);
+  assert.match(campaign, /campaign-product-targets[\s\S]*dateRange\.start, dateRange\.end/);
+  assert.match(campaign, /start: dateRange\.start/);
+  assert.match(campaign, /end: dateRange\.end/);
+  assert.match(campaign, /campaignChildPreviewByAdGroup/);
+  assert.match(campaign, /keywordCount/);
+  assert.match(campaign, /targetCount/);
+  assert.match(campaign, /childPreviewLoading[\s\S]*Loading targets/);
+  assert.match(campaign, /childPreviewFailed[\s\S]*Targets unavailable/);
+  assert.match(campaign, /Performance metrics · \{formatDateRangeLabel\(dateRange\)\}/);
+});

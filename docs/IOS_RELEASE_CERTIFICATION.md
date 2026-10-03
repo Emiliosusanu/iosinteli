@@ -194,6 +194,18 @@ never from `main`, and never from the active Cursor checkout.
 - [x] The physical-device Overview displayed current all-portfolio totals for October 1–3: Gross `$361`, Net `$174.59`, Ad Spend `$186`, ACoS `34.6%`, and Margin `48%`.
 - [x] App Store Connect accepted and processed the public upload. Build 354 was added to the external **Intelyads** group (3 testers) with automatic notification and tester notes covering freshness, complete order totals, targeting suggestions, AI filtering, exact selection counts, metadata, timeouts, and KDP isolation. Its status is **Testing** as of October 3, 2026.
 
+## Next release candidate — premium live mutations and dense campaign context
+
+- [x] Starts from the exact merged build 354 release candidate in the isolated `codex/ios-premium-live-mutations` worktree; the active Cursor checkout remains untouched.
+- [x] Overview sync chrome shows a circular loading state, a short green completion state, then returns to rest. Failed or stale syncs never show the green confirmation.
+- [x] Keyword, product-target, and ad-group bid/state writes patch flat, `{ rows }`, and infinite `{ pages }` caches immediately, then reconcile active queries with Amazon in the background. A permanent failure restores the confirmed value.
+- [x] Targeting exposes one-tap `Select all` for every loaded Keywords, ASIN, Auto, Category, and Placement result while retaining honest loaded/global counts.
+- [x] Campaign detail labels the selected performance period and previews keyword/product-target counts and names inside each ad group. Spend, impressions, clicks, orders, and ACoS remain date-range scoped.
+- [x] Overview operational cards remove redundant borders and padding while preserving all verified values; dense widget rows add orders and clicks without inventing missing metrics.
+- [x] Full 984-test iOS unit suite, TypeScript, lint with zero errors, and stress validation pass.
+- [ ] Implementation is committed, pushed, reviewed, and merged into `feat/ios-release-candidate`.
+- [ ] A clean next-numbered archive is installed and smoke-tested on the physical iPhone 14 Pro before any TestFlight upload.
+
 ## Release invariants
 
 - No fake zero, placeholder metric, stale total, or silent unfiltered fallback.

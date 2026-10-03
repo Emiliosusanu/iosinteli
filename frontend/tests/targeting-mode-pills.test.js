@@ -53,7 +53,8 @@ test("Targets tab: unbundled chrome; status in filter sheet; tertiary Select", (
   assert.doesNotMatch(targeting, /FilterChrome/);
   assert.match(targeting, /testID="targeting-state-filter"/);
   assert.match(targeting, /testID="targeting-select-btn"/);
-  assert.match(targeting, /\{selectMode \? "Done" : "Select"\}/);
+  assert.match(targeting, /\{selectMode \? "Done" : "Select all"\}/);
+  assert.match(targeting, /else selectAllVisible\(\)/);
   assert.doesNotMatch(
     targeting,
     /ActiveFilterChip\s*\n\s*testID="targeting-select-btn"/,
