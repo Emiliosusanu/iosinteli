@@ -9,7 +9,7 @@ import { ParentLinks, targetingPerfStatus } from "@/src/components/EntityDetail"
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { acosTone, layout, radii, spacing, toneColor, useTheme } from "@/src/lib/theme";
-import { applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityState } from "@/src/lib/invalidateAds";
+import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, patchEntityInQueryData, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { updateAdGroupManual, updateAdGroupState, updateKeywordManual, updateProductTargetManual } from "@/src/lib/mutations";
 import { fetchAdGroupAutomationHistory, fetchAdGroupById, fetchKeywords, fetchProductTargets, fetchSearchTerms } from "@/src/lib/queries";
 import { shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
@@ -32,6 +32,7 @@ export default function AdGroupDetailScreen() {
   const t = useTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const invalidateAds = useInvalidateAds();
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, defaultExactBid } = useApp();
   const { user, guestMode } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
@@ -550,8 +551,26 @@ export default function AdGroupDetailScreen() {
         kind="money"
         onClose={() => setBidOpen(false)}
         onSave={async (next) => {
-          await updateAdGroupManual(id, { defaultBid: next }, (targetsQ.data ?? []).filter((pt: any) => describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression).isAuto).map((pt: any) => pt.id));
-          await Promise.all([adGroupsQ.refetch(), targetsQ.refetch(), keywordsQ.refetch()]);
+          const previous = group?.default_bid == null ? null : Number(group.default_bid);
+          queryClient.setQueriesData(
+            { predicate: (query) => String(query.queryKey[0] ?? "").startsWith("ad-group") || String(query.queryKey[0] ?? "").startsWith("campaign") },
+            (old) => patchEntityInQueryData(old, id, (row) => ({ ...row, default_bid: next })),
+          );
+          setBidOpen(false);
+          try {
+            await updateAdGroupManual(id, { defaultBid: next }, (targetsQ.data ?? []).filter((pt: any) => describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression).isAuto).map((pt: any) => pt.id));
+            void invalidateAds(["ad-group-detail", "campaign-ad-groups", "campaign-keywords", "campaign-product-targets"]);
+          } catch (error) {
+            if (previous != null && Number.isFinite(previous)) {
+              queryClient.setQueriesData(
+                { predicate: (query) => String(query.queryKey[0] ?? "").startsWith("ad-group") || String(query.queryKey[0] ?? "").startsWith("campaign") },
+                (old) => patchEntityInQueryData(old, id, (row) => ({ ...row, default_bid: previous })),
+              );
+            } else {
+              void adGroupsQ.refetch();
+            }
+            throw error;
+          }
         }}
       />
       <BidBudgetEditor
@@ -564,9 +583,16 @@ export default function AdGroupDetailScreen() {
         onSave={async (next) => {
           if (!keywordBid) return;
           assertNotViewingAsOtherUser(viewAsOtherUser);
-          await updateKeywordManual(keywordBid.id, { bid: next });
+          const edit = keywordBid;
+          const previous = applyOptimisticEntityBid(queryClient, "keyword", edit.id, next);
           setKeywordBid(null);
-          await keywordsQ.refetch();
+          try {
+            await updateKeywordManual(edit.id, { bid: next });
+            void invalidateAds(["ad-group-keywords", "campaign-keywords"]);
+          } catch (error) {
+            revertOptimisticEntityBid(queryClient, "keyword", edit.id, previous);
+            throw error;
+          }
         }}
       />
       <BidBudgetEditor
@@ -579,9 +605,16 @@ export default function AdGroupDetailScreen() {
         onSave={async (next) => {
           if (!targetBid) return;
           assertNotViewingAsOtherUser(viewAsOtherUser);
-          await updateProductTargetManual(targetBid.id, { bid: next });
+          const edit = targetBid;
+          const previous = applyOptimisticEntityBid(queryClient, "product_target", edit.id, next);
           setTargetBid(null);
-          await targetsQ.refetch();
+          try {
+            await updateProductTargetManual(edit.id, { bid: next });
+            void invalidateAds(["ad-group-product-targets", "campaign-product-targets"]);
+          } catch (error) {
+            revertOptimisticEntityBid(queryClient, "product_target", edit.id, previous);
+            throw error;
+          }
         }}
       />
     </SubScreen>

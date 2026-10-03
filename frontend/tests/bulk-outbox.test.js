@@ -7,6 +7,7 @@ import {
   isTransientBulkError,
   AMAZON_MIN_BID,
 } from "../src/lib/bulkOutboxContract.ts";
+import { patchEntityInQueryData } from "../src/lib/entityCachePatch.ts";
 
 const targeting = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
 const outbox = readFileSync(new URL("../src/lib/bulkOutbox.ts", import.meta.url), "utf8");
@@ -67,7 +68,8 @@ test("bid edits stay honest until Amazon confirms — revert + alert on permanen
 test("targeting exposes bulk select, durable queue, and expanded filters", () => {
   assert.match(targeting, /targeting-bulk-bar/);
   assert.match(targeting, /bottom: t\.layout\.tabClearance/);
-  assert.match(targeting, /\{selectMode \? "Done" : "Select"\}/);
+  assert.match(targeting, /\{selectMode \? "Done" : "Select all"\}/);
+  assert.match(targeting, /else selectAllVisible\(\)/);
   assert.match(targeting, /min=\{0\.01\}/);
   assert.match(targeting, /targeting-bulk-increase/);
   assert.match(targeting, /targeting-bulk-decrease/);
@@ -142,4 +144,22 @@ test("entity enable/disable paints cache immediately and soft-refreshes active q
     targeting,
     /await updateKeywordManual\(item\.id, \{ status: next \? "enabled" : "paused" \}\);\s*await invalidateAds\(\)/,
   );
+});
+
+test("optimistic entity patches reach flat, paged, and targeting row caches", () => {
+  const source = {
+    pages: [
+      { rows: [{ id: "kw-1", bid_amount: 0.42 }, { id: "kw-2", bid_amount: 0.51 }] },
+    ],
+  };
+  const patched = patchEntityInQueryData(source, "kw-2", (row) => ({ ...row, bid_amount: 0.77 }));
+  assert.notEqual(patched, source);
+  assert.equal(patched.pages[0].rows[0], source.pages[0].rows[0]);
+  assert.equal(patched.pages[0].rows[1].bid_amount, 0.77);
+  assert.equal(source.pages[0].rows[1].bid_amount, 0.51);
+
+  const untouched = patchEntityInQueryData(source, "missing", (row) => ({ ...row, bid_amount: 1 }));
+  assert.equal(untouched, source);
+  assert.match(invalidateAds, /mobile-targeting-page-v1/);
+  assert.match(invalidateAds, /patchEntityInQueryData/);
 });

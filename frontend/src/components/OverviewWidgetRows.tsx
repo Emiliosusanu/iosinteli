@@ -16,8 +16,8 @@ const ROW = StyleSheet.create({
   row: {
     flexDirection: "row",
     alignItems: "center",
-    minHeight: 44,
-    paddingVertical: 8,
+    minHeight: 40,
+    paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
 });
@@ -40,7 +40,7 @@ export function KeywordWidgetRow({
   onPress,
   isLast,
 }: {
-  row: { id: string; keyword_text?: string | null; match_type?: string | null; total_spend?: number; total_acos?: number; total_orders?: number; total_sales?: number };
+  row: { id: string; keyword_text?: string | null; match_type?: string | null; total_spend?: number; total_acos?: number; total_orders?: number; total_clicks?: number; total_sales?: number };
   currency: string;
   t: Theme;
   onPress: () => void;
@@ -62,7 +62,7 @@ export function KeywordWidgetRow({
           {row.keyword_text || "Keyword"}
         </Text>
         <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}>
-          {formatCurrency(spend, currency, { compact: true })} spend{match ? ` · ${match}` : ""}
+          {formatCurrency(spend, currency, { compact: true })} · {formatInt(Number(row.total_orders))} orders · {formatInt(Number(row.total_clicks))} clicks{match ? ` · ${match}` : ""}
         </Text>
       </View>
       <View style={{ alignItems: "flex-end" }}>
@@ -108,7 +108,7 @@ export function SearchTermWidgetRow({
           {label}
         </Text>
         <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]} numberOfLines={1}>
-          {formatCurrency(spend, currency, { compact: true })} spend · {formatInt(Number(row.total_orders))} orders
+          {formatCurrency(spend, currency, { compact: true })} · {formatInt(Number(row.total_orders))} orders · {formatInt(Number(row.total_clicks))} clicks
         </Text>
       </View>
       <View style={{ alignItems: "flex-end" }}>
@@ -156,7 +156,7 @@ export function CampaignWidgetRow({
           {campaign.name}
         </Text>
         <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]} numberOfLines={1}>
-          {formatCurrency(campaign.spend, currency, { compact: true })} spend · {formatInt(campaign.orders)} orders
+          {formatCurrency(campaign.spend, currency, { compact: true })} · {formatInt(campaign.orders)} orders · {formatInt(campaign.clicks)} clicks
         </Text>
         {showPlacement ? <PlacementShareLine item={campaign} t={t} /> : null}
       </View>
@@ -205,7 +205,7 @@ export function AdGroupWidgetRow({
           {row.name}
         </Text>
         <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]} numberOfLines={1}>
-          {formatCurrency(spend, currency, { compact: true })} spend
+          {formatCurrency(spend, currency, { compact: true })} · {formatInt(row.total_orders)} orders · {formatInt(row.total_clicks)} clicks
         </Text>
       </View>
       <Text style={[t.typography.metric_compact, { color: hasSales ? toneColor(acosTone(acos), t.colors) : t.colors.text_secondary }]}>
@@ -277,7 +277,7 @@ export function BookWidgetRow({
         </View>
         <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 2 }]}>
           {bookKdpAvailable ? `${formatCurrency(book.royalties!, currency, { compact: true })} · ` : ""}
-          {formatCurrency(book.spend, currency, { compact: true })} ·{" "}
+          {formatCurrency(book.spend, currency, { compact: true })} · {formatInt(book.orders)} orders · {formatInt(book.clicks)} clicks ·{" "}
           <Text style={{ color: book.sales > 0 ? toneColor(hasAuthoritativeBreakEven(book.breakeven_acos) ? acosTone(book.acos, book.breakeven_acos) : "inactive", t.colors) : t.colors.text_secondary }}>
             {book.sales > 0 ? formatPercent(book.acos) : "—"}
           </Text>
