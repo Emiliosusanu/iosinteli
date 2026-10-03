@@ -9,6 +9,14 @@ const runtime = readFileSync(new URL("../src/lib/kdp/runtime.ts", import.meta.ur
 const notifications = readFileSync(new URL("../src/lib/notifications.ts", import.meta.url), "utf8");
 const importer = readFileSync(new URL("../src/lib/kdp/importer.ts", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src/contexts/AppContext.tsx", import.meta.url), "utf8");
+const nativeSwift = readFileSync(
+  new URL("../modules/inteliads-native-sync/ios/InteliAdsNativeSyncModule.swift", import.meta.url),
+  "utf8",
+);
+const nativeJs = readFileSync(
+  new URL("../modules/inteliads-native-sync/src/index.ts", import.meta.url),
+  "utf8",
+);
 
 test("applySessionToHeaders fills Cookie and User-Agent when missing", () => {
   const out = applySessionToHeaders(
@@ -53,4 +61,14 @@ test("Keychain session uses AfterFirstUnlock and wires into capture/replay", () 
   assert.match(notifications, /registerNativeMetronome/);
   assert.match(importer, /ensureBackgroundRefreshRegistered/);
   assert.match(app, /ensureBackgroundRefreshRegistered/);
+});
+
+test("iOS persists real WKWebView HttpOnly cookies and clears rejected sessions", () => {
+  assert.match(nativeSwift, /WKWebsiteDataStore\.default\(\)\.httpCookieStore\.getAllCookies/);
+  assert.match(nativeSwift, /getCookieHeaderAsync/);
+  assert.match(nativeJs, /getNativeCookieHeader/);
+  assert.match(sessionSrc, /refreshKdpWebSessionFromNativeCookies/);
+  assert.match(runtime, /refreshKdpWebSessionFromNativeCookies/);
+  assert.match(runtime, /invalidateSavedKdpSession/);
+  assert.doesNotMatch(runtime, /savedSession: loggedIn \? true/);
 });

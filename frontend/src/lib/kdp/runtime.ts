@@ -13,9 +13,11 @@ import {
 } from "./templates.ts";
 import {
   applySessionToHeaders,
+  clearKdpWebSession,
   loadKdpWebSession,
   mergeSessionFromCaptureHeaders,
   mergeSessionMeta,
+  refreshKdpWebSessionFromNativeCookies,
 } from "./session.ts";
 import { loadHelperTemplates } from "./persist.ts";
 
@@ -172,6 +174,17 @@ function inferLoggedIn(url: string): boolean {
   return u.includes("kdpreports.amazon.com") || u.includes("kdp.amazon.com");
 }
 
+function isAmazonSignInUrl(url: string): boolean {
+  const value = String(url || "").toLowerCase();
+  return value.includes("/ap/signin") || value.includes("signin.amazon") || value.includes("/ap/mfa");
+}
+
+function invalidateSavedKdpSession() {
+  void clearKdpWebSession();
+  status = { ...status, loggedIn: false, savedSession: false, sessionChecked: true };
+  emit();
+}
+
 export function handleKdpWebViewMessage(raw: string) {
   let data: {
     channel?: string;
@@ -194,14 +207,25 @@ export function handleKdpWebViewMessage(raw: string) {
 
   if (data.kind === "NAV" && typeof data.url === "string") {
     const loggedIn = inferLoggedIn(data.url);
+    const signingIn = isAmazonSignInUrl(data.url);
     status = {
       ...status,
       currentUrl: data.url,
       loggedIn,
-      savedSession: loggedIn ? true : status.savedSession,
+      savedSession: signingIn ? false : status.savedSession,
       sessionChecked: true,
     };
     emit();
+    if (signingIn) {
+      void clearKdpWebSession();
+    } else if (loggedIn) {
+      const navigatedUrl = data.url;
+      void refreshKdpWebSessionFromNativeCookies(navigatedUrl).then((session) => {
+        if (status.currentUrl !== navigatedUrl || !status.loggedIn) return;
+        status = { ...status, savedSession: Boolean(session?.cookies?.trim()), sessionChecked: true };
+        emit();
+      });
+    }
     return;
   }
 
@@ -262,6 +286,15 @@ export function handleKdpWebViewMessage(raw: string) {
       finalUrl: p.finalUrl,
       redirected: p.redirected,
     });
+    if (looksLoggedOut({
+      ok: Boolean(p.ok),
+      status: Number(p.status || 0),
+      text: String(p.text || ""),
+      finalUrl: p.finalUrl,
+      redirected: p.redirected,
+    })) {
+      invalidateSavedKdpSession();
+    }
   }
 }
 
@@ -329,9 +362,10 @@ function mergeCookieHeader(
 }
 
 function looksLoggedOut(result: PageFetchResult): boolean {
-  if (result.status === 401 || result.status === 403) return true;
-  const text = String(result.text || "").slice(0, 400).toLowerCase();
-  return text.includes("ap/signin") || text.includes("sign-in") || text.includes("<html");
+  if (result.status === 401) return true;
+  if (isAmazonSignInUrl(result.finalUrl || "")) return true;
+  const text = String(result.text || "").slice(0, 1200).toLowerCase();
+  return text.includes("/ap/signin") || text.includes("signin.amazon");
 }
 
 export async function kdpPageFetch(req: {
@@ -340,7 +374,9 @@ export async function kdpPageFetch(req: {
   headers: Record<string, string>;
   body: string | null;
 }): Promise<PageFetchResult> {
-  const session = await loadKdpWebSession();
+  const session =
+    (await refreshKdpWebSessionFromNativeCookies(req.url).catch(() => null)) ||
+    (await loadKdpWebSession());
   const headers = applySessionToHeaders(req.headers, session);
 
   // Prefer native Keychain replay (works in background without WKWebView).
@@ -348,6 +384,7 @@ export async function kdpPageFetch(req: {
     try {
       const native = await kdpNativeFetch({ ...req, headers });
       if (!looksLoggedOut(native)) return native;
+      invalidateSavedKdpSession();
       // Fall through to WebView when attached so the user can re-auth.
       if (!injectFn) return native;
     } catch (err) {

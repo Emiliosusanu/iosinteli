@@ -33,6 +33,19 @@ export default function KdpManagerScreen() {
     queryFn: fetchKdpAccounts,
     staleTime: 30_000,
   });
+  const accountIds = (accountsQ.data ?? []).map((account) => account.id).join(",");
+  const catalogCountsQ = useQuery({
+    queryKey: ["kdp-manager-catalog-counts", accountIds],
+    enabled: !!accountsQ.data?.length,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const entries = await Promise.all((accountsQ.data ?? []).map(async (account) => [
+        account.id,
+        (await fetchKdpAccountBooks(account.id)).length,
+      ] as const));
+      return new Map(entries);
+    },
+  });
   const requestedAccountId = Array.isArray(params.accountId) ? params.accountId[0] : params.accountId;
 
   useEffect(() => {
@@ -101,6 +114,7 @@ export default function KdpManagerScreen() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["kdp-manager-books"] }),
         queryClient.invalidateQueries({ queryKey: ["kdp-manager-accounts"] }),
+        queryClient.invalidateQueries({ queryKey: ["kdp-manager-catalog-counts"] }),
         queryClient.invalidateQueries({ queryKey: ["profile-picker-kdp-books"] }),
         queryClient.invalidateQueries({ queryKey: ["profile-picker-kdp-accounts"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
@@ -247,11 +261,14 @@ export default function KdpManagerScreen() {
           (accountsQ.data ?? []).length ? (accountsQ.data ?? []).map((account) => {
             const linked = new Set((account.linked_amazon_profile_ids ?? []).map(String));
             const markets = profiles.filter((p) => linked.has(String(p.id)) || linked.has(String(p.profile_id)));
+            const authoritativeBookCount = catalogCountsQ.data?.get(account.id);
             return (
               <Pressable key={account.id} testID={`kdp-manager-account-${account.id}`} onPress={() => setSelectedAccount(account)} style={[styles.accountCard, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.separator }]}>
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={1}>{account.name || "KDP account"}</Text>
-                  <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 3 }]}>{account.book_count ?? 0} books · {markets.length} Ads marketplace{markets.length === 1 ? "" : "s"}</Text>
+                  <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 3 }]}>
+                    {authoritativeBookCount == null ? "" : `${authoritativeBookCount} books · `}{markets.length} Ads marketplace{markets.length === 1 ? "" : "s"}
+                  </Text>
                   <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 5 }]} numberOfLines={2}>
                     {markets.length ? markets.map((p) => `${countryFlagEmoji(p.country_code)} ${profileDisplayName(p)}`).join("  ·  ") : "No linked Ads marketplace"}
                   </Text>

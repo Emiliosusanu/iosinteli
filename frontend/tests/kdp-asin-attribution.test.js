@@ -64,12 +64,14 @@ test("same KDP account keeps all catalog ASINs with the matched Ads profile", ()
   assert.deepEqual(eligible, ["ads_ok"]);
 });
 
-test("importer resolves helper account before writing royalties", () => {
+test("importer keeps an owned explicit helper account before writing royalties", () => {
   const importer = readFileSync(new URL("../src/lib/kdp/importer.ts", import.meta.url), "utf8");
   const accounts = readFileSync(new URL("../src/lib/kdp/accounts.ts", import.meta.url), "utf8");
   assert.match(importer, /resolveHelperAccountId/);
   assert.match(importer, /async function resolveAccountId/);
-  assert.match(importer, /accountLinkedToProfiles/);
+  assert.match(importer, /\.eq\("user_id", userId\)/);
+  assert.match(importer, /if \(owned\?\.id\) return cached/);
+  assert.doesNotMatch(importer, /accountLinkedToProfiles\(cached, profileIds\)/);
   assert.match(importer, /saveHelperAccountId/);
   assert.match(accounts, /export async function resolveHelperAccountId/);
   assert.match(accounts, /fetchKdpAccounts/);

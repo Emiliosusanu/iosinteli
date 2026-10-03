@@ -9,7 +9,7 @@
  * from cloud coverage holes.
  */
 import { supabase } from "../supabase.ts";
-import { accountLinkedToProfiles, resolveHelperAccountId } from "./accounts.ts";
+import { resolveHelperAccountId } from "./accounts.ts";
 import { orderDaysForWake, reopenOnboardingIfIncomplete } from "./coverage.ts";
 import { addDaysYmd, eachYmd, ymdInTz } from "./dates.ts";
 import {
@@ -58,6 +58,7 @@ import { isIosHelperEnabled, type KdpRoyaltySource } from "./source.ts";
 import { loadKdpWebSession } from "./session.ts";
 import { KDP_CAPTURE_PAGES } from "./templates.ts";
 import { writeKdpCatalog, writeKdpDay } from "./upsert.ts";
+import { runShelfHeal } from "./runShelfHeal.ts";
 import { buildKdpFromJsons, buildTitlesRows, extractBooksObj } from "./vendor/kdpVendor.generated.js";
 
 const CAPTURE_WAIT_MS = 28_000;
@@ -239,9 +240,13 @@ async function syncOneDay(
 async function resolveAccountId(userId: string, profileIds: string[]): Promise<string> {
   const cached = await loadHelperAccountId();
   if (cached) {
-    if (!profileIds.length || (await accountLinkedToProfiles(cached, profileIds))) {
-      return cached;
-    }
+    const { data: owned } = await supabase
+      .from("kdp_accounts")
+      .select("id")
+      .eq("id", cached)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (owned?.id) return cached;
   }
   const resolved = await resolveHelperAccountId({ userId, profileIds });
   await saveHelperAccountId(resolved.accountId);
@@ -348,6 +353,12 @@ export async function runKdpIosHelperTick(
         bookRows: shelf.bookRows,
         formatRows: shelf.formatRows,
         titleRows: shelf.titleRows,
+      });
+      await runShelfHeal({
+        userId,
+        liveHelperAccountId: accountId,
+        liveHelperCatalogAsins: shelf.formatRows.map((row) => String(row.asin || "")),
+        pauseFullyQuarantinedJoins: false,
       });
     }
 
