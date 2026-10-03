@@ -33,6 +33,21 @@ test("campaign creation uses server-verified KDP and Amazon Ads identity", () =>
   assert.doesNotMatch(screen, /name match/i);
 });
 
+test("disabled marketplaces require exact live stock and explicit enable confirmation", () => {
+  assert.match(mutations, /includeDisabled=true/);
+  assert.match(screen + stock, /confirmedDisabledMarketplacesForBook/);
+  assert.match(screen, /disabledConfirmedMarketplaces/);
+  assert.match(screen, /toggleAmazonProfile/);
+  assert.match(screen, /Enable & choose/);
+  assert.match(screen, /Enable & use/);
+  assert.match(
+    screen,
+    /is confirmed sponsorable on \$\{country\} through \$\{account\}/,
+  );
+  assert.match(stock, /profile\.is_enabled === false/);
+  assert.match(stock, /amazonAdsStockConfirmed/);
+});
+
 test("book-first flow confirms Ads stock and live-gates soft product ads", () => {
   assert.match(screen, /title="Book"/);
   assert.match(screen, /title="Marketplace"/);

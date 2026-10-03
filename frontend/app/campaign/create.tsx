@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -94,6 +95,7 @@ import {
   CAMPAIGN_CREATION_BOOKS_QUERY_KEY,
   CAMPAIGN_CREATION_SELECTED_BOOK_KEY,
   createPaperbackSearchEmptyMessage,
+  confirmedDisabledMarketplacesForBook,
   ineligibleOutOfStockPaperbacks,
   isKindleAsinOnPrintWork,
   isPaperbackCreateCandidate,
@@ -126,6 +128,8 @@ import {
   fetchCampaignCreationMarketplaces,
   previewCampaignCreation,
   resolveCreationProfileId,
+  toggleAmazonProfile,
+  triggerSync,
   type CampaignCreationBook,
   type CampaignCreationMarketplace,
   type CampaignCreationPreview,
@@ -454,17 +458,41 @@ export default function CreateCampaignScreen() {
     prefTargetingRaw === "products"
       ? prefTargetingRaw
       : null;
-  const { profiles, adminFilterUserId } = useApp();
+  const { profiles, adminFilterUserId, refetchProfiles } = useApp();
   const { guestMode, user } = useAuth();
   const viewAsOtherUser = Boolean(
     adminFilterUserId && adminFilterUserId !== user?.id,
   );
+  const [locallyEnabledProfileIds, setLocallyEnabledProfileIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [marketplaceChooserOpen, setMarketplaceChooserOpen] = useState(false);
+  const [enablingMarketplaceId, setEnablingMarketplaceId] = useState<string | null>(null);
+  const promptedMarketplaceAsinsRef = useRef<Set<string>>(new Set());
   const availableProfiles = useMemo(() => {
     // Create campaign must see every enabled Ads profile the seller owns —
     // selected Overview filters must not hide the only profile that carries
     // this paperback.
-    return profiles.filter(profileEnabled);
-  }, [profiles]);
+    return profiles.filter(
+      (profile) =>
+        profileEnabled(profile) ||
+        locallyEnabledProfileIds.has(profile.id) ||
+        locallyEnabledProfileIds.has(profile.profile_id),
+    );
+  }, [profiles, locallyEnabledProfileIds]);
+
+  useEffect(() => {
+    if (!locallyEnabledProfileIds.size) return;
+    setLocallyEnabledProfileIds((current) => {
+      const next = new Set(current);
+      for (const profile of profiles) {
+        if (!profileEnabled(profile)) continue;
+        next.delete(profile.id);
+        next.delete(profile.profile_id);
+      }
+      return next.size === current.size ? current : next;
+    });
+  }, [profiles, locallyEnabledProfileIds.size]);
   const [profileId, setProfileId] = useState(prefProfileId);
   const [adsProfileId, setAdsProfileId] = useState(prefProfileId);
   const [book, setBook] = useState<CampaignCreationBook | null>(null);
@@ -1332,6 +1360,39 @@ export default function CreateCampaignScreen() {
     returnedMarketplaces,
     { allowSoftFallback },
   );
+  const disabledConfirmedMarketplaces = confirmedDisabledMarketplacesForBook(
+    profiles,
+    returnedMarketplaces,
+  ).filter(
+    (marketplace) =>
+      !locallyEnabledProfileIds.has(marketplace.id) &&
+      !locallyEnabledProfileIds.has(marketplace.profileId),
+  );
+  const marketplaceChoices = [
+    ...displayMarketplaces,
+    ...disabledConfirmedMarketplaces.filter(
+      (candidate) =>
+        !displayMarketplaces.some(
+          (enabled) => enabled.profileId === candidate.profileId,
+        ),
+    ),
+  ];
+  const marketplaceChoiceKey = marketplaceChoices
+    .map((marketplace) => marketplace.profileId)
+    .join("|");
+
+  useEffect(() => {
+    if (!book?.asin || !liveFinished || !disabledConfirmedMarketplaces.length) return;
+    const asin = String(book.asin).toUpperCase();
+    if (promptedMarketplaceAsinsRef.current.has(asin)) return;
+    promptedMarketplaceAsinsRef.current.add(asin);
+    setMarketplaceChooserOpen(true);
+  }, [
+    book?.asin,
+    liveFinished,
+    marketplaceChoiceKey,
+    disabledConfirmedMarketplaces.length,
+  ]);
   const usingFallbackMarketplaces =
     Boolean(book) &&
     liveFinished &&
@@ -1366,6 +1427,77 @@ export default function CreateCampaignScreen() {
   const confirmedMarketplaceKey = displayMarketplaces
     .map((marketplace) => marketplace.profileId)
     .join("|");
+
+  async function enableAndChooseMarketplace(
+    marketplace: CampaignCreationMarketplace,
+  ) {
+    if (blockIfCannotWriteAmazon({ guestMode, viewAsOtherUser })) return;
+    const local = matchLocalProfileForCreationMarketplace(profiles, marketplace);
+    if (!local) {
+      Alert.alert(
+        "Marketplace unavailable",
+        "This Ads marketplace is no longer connected to this account.",
+      );
+      return;
+    }
+    const pendingKey = marketplace.profileId || marketplace.id;
+    setEnablingMarketplaceId(pendingKey);
+    try {
+      await toggleAmazonProfile(marketplace.profileId, true, {
+        rowId: local.id,
+        adsProfileId: marketplace.profileId,
+      });
+      setLocallyEnabledProfileIds((current) => {
+        const next = new Set(current);
+        next.add(local.id);
+        next.add(marketplace.profileId);
+        return next;
+      });
+      setMarketplaceChooserOpen(false);
+      resetAfterMarketplace(marketplace);
+      void refetchProfiles();
+      void triggerSync().catch(() => {});
+    } catch (error) {
+      alertMutationError(error, "Couldn't enable this Ads marketplace.");
+    } finally {
+      setEnablingMarketplaceId(null);
+    }
+  }
+
+  function chooseMarketplace(marketplace: CampaignCreationMarketplace) {
+    const needsEnable = disabledConfirmedMarketplaces.some(
+      (candidate) => candidate.profileId === marketplace.profileId,
+    );
+    if (!needsEnable) {
+      setMarketplaceChooserOpen(false);
+      resetAfterMarketplace(marketplace);
+      return;
+    }
+    const local = matchLocalProfileForCreationMarketplace(profiles, marketplace);
+    const country = String(
+      marketplace.countryCode || local?.country_code || "this market",
+    ).toUpperCase();
+    const account = local
+      ? profileDisplayName({
+          nickname:
+            (local as { nickname?: string | null }).nickname ?? null,
+          account_name:
+            (local as { account_name?: string | null }).account_name ?? null,
+        })
+      : "Amazon Ads";
+    setMarketplaceChooserOpen(false);
+    Alert.alert(
+      `Enable ${country}?`,
+      `${book?.title || "This book"} is confirmed sponsorable on ${country} through ${account}. Enable this Ads marketplace and use it for the new campaign?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Enable & choose",
+          onPress: () => void enableAndChooseMarketplace(marketplace),
+        },
+      ],
+    );
+  }
   // Drop a previously selected profile the moment the book no longer lists it
   // (e.g. Aruba/US Emilian Susanu must not stick after picking Puerto Rico).
   // Wait until live marketplace rows settle — clearing mid-fetch wiped
@@ -2339,17 +2471,21 @@ export default function CreateCampaignScreen() {
                 }}
               />
               <View style={styles.stickyActionRow}>
-                {displayMarketplaces.length > 1 ? (
+                {marketplaceChoices.length > 1 ? (
                   <ScrollView
                     horizontal
                     showsHorizontalScrollIndicator={false}
                     contentContainerStyle={styles.stickyMarketRow}
                   >
-                    {displayMarketplaces.map(
+                    {marketplaceChoices.map(
                       (marketplace: CampaignCreationMarketplace) => {
                         const local = matchLocalProfileForCreationMarketplace(
-                          availableProfiles,
+                          profiles,
                           marketplace,
+                        );
+                        const needsEnable = disabledConfirmedMarketplaces.some(
+                          (candidate) =>
+                            candidate.profileId === marketplace.profileId,
                         );
                         const selected =
                           profileId === marketplace.id ||
@@ -2361,7 +2497,8 @@ export default function CreateCampaignScreen() {
                           <CreateScalePressable
                             key={`${marketplace.profileId}-${marketplace.id}`}
                             hapticSelect
-                            onPress={() => resetAfterMarketplace(marketplace)}
+                            disabled={enablingMarketplaceId === marketplace.profileId}
+                            onPress={() => chooseMarketplace(marketplace)}
                             style={[
                               styles.stickyMarketChip,
                               {
@@ -2391,7 +2528,7 @@ export default function CreateCampaignScreen() {
                                 },
                               ]}
                             >
-                              {label}
+                              {label}{needsEnable ? " · Enable" : ""}
                             </Text>
                           </CreateScalePressable>
                         );
@@ -2754,23 +2891,27 @@ export default function CreateCampaignScreen() {
           <CreateReveal delay={40}>
           <ListCard compact>
             <StepHeader step={2} title="Marketplace" />
-            {marketplacesQ.isPending && !displayMarketplaces.length ? (
+            {marketplacesQ.isPending && !marketplaceChoices.length ? (
               <ScreenSpinner />
-            ) : displayMarketplaces.length ? (
+            ) : marketplaceChoices.length ? (
               <>
                 <View style={[styles.wrap, { marginTop: 10 }]}>
-                  {displayMarketplaces.map(
+                  {marketplaceChoices.map(
                     (marketplace: CampaignCreationMarketplace) => {
                       const local = matchLocalProfileForCreationMarketplace(
-                        availableProfiles,
+                        profiles,
                         marketplace,
+                      );
+                      const needsEnable = disabledConfirmedMarketplaces.some(
+                        (candidate) =>
+                          candidate.profileId === marketplace.profileId,
                       );
                       const label = local
                         ? `${countryFlagEmoji(local.country_code)} ${String(local.country_code || "").toUpperCase() || "Ads"} · ${profileDisplayName({
                             nickname: (local as { nickname?: string | null }).nickname ?? null,
                             account_name:
                               (local as { account_name?: string | null }).account_name ?? null,
-                          })} · ${marketplace.currencyCode || local.currency_code || "—"}`
+                            })} · ${marketplace.currencyCode || local.currency_code || "—"}${needsEnable ? " · Enable" : ""}`
                         : `${countryFlagEmoji(marketplace.countryCode)} ${String(marketplace.countryCode || "").toUpperCase() || "Ads"} · ${marketplace.currencyCode || "—"}`;
                       return (
                         <Choice
@@ -2780,7 +2921,8 @@ export default function CreateCampaignScreen() {
                             profileId === marketplace.id ||
                             adsProfileId === marketplace.profileId
                           }
-                          onPress={() => resetAfterMarketplace(marketplace)}
+                          disabled={enablingMarketplaceId === marketplace.profileId}
+                          onPress={() => chooseMarketplace(marketplace)}
                         />
                       );
                     },
@@ -4142,6 +4284,141 @@ export default function CreateCampaignScreen() {
         ) : null}
       </View>
       </KeyboardAvoidingView>
+      <Modal
+        visible={marketplaceChooserOpen && marketplaceChoices.length > 0}
+        transparent
+        animationType="slide"
+        presentationStyle="overFullScreen"
+        onRequestClose={() => setMarketplaceChooserOpen(false)}
+      >
+        <View style={styles.marketplaceModalBackdrop}>
+          <Pressable
+            accessibilityLabel="Close marketplace chooser"
+            style={StyleSheet.absoluteFill}
+            onPress={() => setMarketplaceChooserOpen(false)}
+          />
+          <View
+            style={[
+              styles.marketplaceModalCard,
+              {
+                paddingBottom: Math.max(insets.bottom, 18),
+                backgroundColor: t.colors.background_secondary,
+                borderColor: t.colors.separator,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.marketplaceModalHandle,
+                { backgroundColor: t.colors.text_tertiary },
+              ]}
+            />
+            <Text
+              style={[
+                t.typography.title3,
+                { color: t.colors.text_primary, fontWeight: "800" },
+              ]}
+            >
+              Choose a marketplace
+            </Text>
+            <Text
+              style={[
+                t.typography.footnote,
+                { color: t.colors.text_secondary, lineHeight: 20 },
+              ]}
+            >
+              {book?.title || "This book"} can be sponsored in these confirmed
+              Amazon Ads marketplaces. A marketplace that is off will be enabled
+              only after you approve it.
+            </Text>
+            <ScrollView
+              style={styles.marketplaceModalList}
+              contentContainerStyle={{ gap: 8 }}
+              showsVerticalScrollIndicator={false}
+            >
+              {marketplaceChoices.map((marketplace) => {
+                const local = matchLocalProfileForCreationMarketplace(
+                  profiles,
+                  marketplace,
+                );
+                const needsEnable = disabledConfirmedMarketplaces.some(
+                  (candidate) => candidate.profileId === marketplace.profileId,
+                );
+                const pending = enablingMarketplaceId === marketplace.profileId;
+                const country = String(
+                  marketplace.countryCode || local?.country_code || "Ads",
+                ).toUpperCase();
+                const currency =
+                  marketplace.currencyCode || local?.currency_code || "";
+                return (
+                  <CreateScalePressable
+                    key={`modal-${marketplace.profileId}-${marketplace.id}`}
+                    testID={`campaign-create-market-${marketplace.profileId}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${country} ${currency}${needsEnable ? ", enable marketplace" : ", choose marketplace"}`}
+                    disabled={pending}
+                    hapticSelect
+                    onPress={() => chooseMarketplace(marketplace)}
+                    style={[
+                      styles.marketplaceModalChoice,
+                      {
+                        backgroundColor: t.colors.background_tertiary,
+                        borderColor: needsEnable
+                          ? t.colors.tone_primary
+                          : t.colors.separator,
+                        opacity: pending ? 0.55 : 1,
+                      },
+                    ]}
+                  >
+                    <Text style={styles.marketplaceModalFlag}>
+                      {countryFlagEmoji(country)}
+                    </Text>
+                    <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          t.typography.callout,
+                          { color: t.colors.text_primary, fontWeight: "700" },
+                        ]}
+                      >
+                        {country}{currency ? ` · ${currency}` : ""}
+                      </Text>
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          t.typography.caption1,
+                          { color: t.colors.text_secondary },
+                        ]}
+                      >
+                        {local
+                          ? profileDisplayName({
+                              nickname:
+                                (local as { nickname?: string | null })
+                                  .nickname ?? null,
+                              account_name:
+                                (local as { account_name?: string | null })
+                                  .account_name ?? null,
+                            })
+                          : "Amazon Ads"}
+                      </Text>
+                    </View>
+                    <Pill
+                      label={pending ? "Enabling…" : needsEnable ? "Enable & use" : "Choose"}
+                      tone={needsEnable ? "primary" : "good"}
+                      size="sm"
+                    />
+                  </CreateScalePressable>
+                );
+              })}
+            </ScrollView>
+            <SecondaryButton
+              label="Keep current marketplace"
+              full
+              onPress={() => setMarketplaceChooserOpen(false)}
+            />
+          </View>
+        </View>
+      </Modal>
     </SubScreen>
   );
 }
@@ -4317,4 +4594,39 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 10,
   },
+  marketplaceModalBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.48)",
+  },
+  marketplaceModalCard: {
+    maxHeight: "78%",
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  marketplaceModalHandle: {
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    alignSelf: "center",
+    opacity: 0.45,
+  },
+  marketplaceModalList: { flexGrow: 0 },
+  marketplaceModalChoice: {
+    minHeight: 64,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 15,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  marketplaceModalFlag: { fontSize: 25 },
 });

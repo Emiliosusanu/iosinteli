@@ -33,6 +33,7 @@ import {
   softListedAwaitingLiveConfirm,
   workFamilyKey,
   classifyCreationCampaignTargeting,
+  confirmedDisabledMarketplacesForBook,
 } from "../src/lib/campaignCreationStock.ts";
 
 const profiles = [
@@ -463,6 +464,85 @@ test("shared ATVPD marketplace id must not relabel VP2 as Emilian Susanu", () =>
   const local = matchLocalProfileForCreationMarketplace(profiles, display[0]);
   assert.equal(local?.profile_id, VP2);
   assert.notEqual(local?.profile_id, EMILIAN);
+});
+
+test("disabled marketplace suggestion requires exact owned profile and live in-stock evidence", () => {
+  const DISABLED_CA = "3896545512891020";
+  const OTHER_US = "2543611550477751";
+  const rows = confirmedDisabledMarketplacesForBook(
+    [
+      {
+        id: "uuid-ca",
+        profile_id: DISABLED_CA,
+        country_code: "CA",
+        currency_code: "CAD",
+        marketplace_id: "A2EUQ1WTGCTBG2",
+        is_enabled: false,
+      },
+      {
+        id: "uuid-us",
+        profile_id: OTHER_US,
+        country_code: "US",
+        currency_code: "USD",
+        marketplace_id: "ATVPDKIKX0DER",
+        is_enabled: true,
+      },
+    ],
+    [
+      {
+        id: DISABLED_CA,
+        profileId: DISABLED_CA,
+        countryCode: "CA",
+        currencyCode: "CAD",
+        marketplaceId: "A2EUQ1WTGCTBG2",
+        availabilityEvidence: "in_stock",
+        stockStatus: "IN_STOCK",
+      },
+      {
+        // Same US marketplace id as the owned account, but a different Ads
+        // profile: this must never be relabelled or offered.
+        id: "unowned-us",
+        profileId: "unowned-us",
+        countryCode: "US",
+        currencyCode: "USD",
+        marketplaceId: "ATVPDKIKX0DER",
+        availabilityEvidence: "in_stock",
+        stockStatus: "IN_STOCK",
+      },
+    ],
+  );
+  assert.deepEqual(rows.map((row) => row.profileId), [DISABLED_CA]);
+});
+
+test("disabled marketplace suggestion rejects soft and out-of-stock evidence", () => {
+  const profile = {
+    id: "uuid-ca",
+    profile_id: "ca-disabled",
+    country_code: "CA",
+    currency_code: "CAD",
+    marketplace_id: "A2EUQ1WTGCTBG2",
+    is_enabled: false,
+  };
+  const rows = confirmedDisabledMarketplacesForBook([profile], [
+    {
+      id: "ca-disabled",
+      profileId: "ca-disabled",
+      countryCode: "CA",
+      currencyCode: "CAD",
+      marketplaceId: "A2EUQ1WTGCTBG2",
+      availabilityEvidence: "existing_product_ad",
+    },
+    {
+      id: "ca-disabled",
+      profileId: "ca-disabled",
+      countryCode: "CA",
+      currencyCode: "CAD",
+      marketplaceId: "A2EUQ1WTGCTBG2",
+      availabilityEvidence: "amazon_catalog",
+      stockStatus: "OUT_OF_STOCK",
+    },
+  ]);
+  assert.deepEqual(rows, []);
 });
 
 test("Kindle DIGITAL ASIN is not a paperback create candidate", () => {

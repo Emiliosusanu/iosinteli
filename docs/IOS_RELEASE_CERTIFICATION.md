@@ -211,6 +211,17 @@ never from `main`, and never from the active Cursor checkout.
 - [x] The physical Targeting stress covered Keywords, ASIN, Auto, Category, Placement, bid ceiling, ACoS range, and impression filters with no crash, RedBox, or `HOME_QUERY_TIMEOUT`. The ASIN page displayed the real globally ranked metric rows at first paint and filled real titles in the visible viewport in the background.
 - [x] Build-number PR #74 was merged at `7998101a`. Build 357 remains a device-certified release candidate and has not been uploaded to TestFlight.
 
+## Next release candidate — confirmed disabled-market campaign creation
+
+- [x] Starts from release-candidate certification commit `8156abdf` in the isolated `codex/ios-create-other-marketplaces` worktree; the active Cursor checkout remains untouched.
+- [x] Create Campaign requests the exact-ASIN marketplace probe with disabled connected Ads profiles included.
+- [x] A disabled marketplace is offered only when Amazon Ads returns live `in_stock` evidence for that exact owned `profile_id`. Country, currency, shared marketplace ids, stale book links, and catalog-only or historical-product-ad evidence cannot create a choice.
+- [x] The seller sees one marketplace chooser for the selected book. Disabled rows are labelled `Enable & use` and require a second explicit confirmation before the profile is enabled or selected.
+- [x] Campaign preview and creation remain gated by the server's enabled-profile check. The app updates its local profile scope only after the Nest enable mutation succeeds, then starts Ads sync and reconciles the profile cache.
+- [x] iOS TypeScript, lint with zero errors, the focused cross-account/stock suite, and the full 987-test suite pass.
+- [ ] Server `includeDisabled` marketplace discovery is merged and deployed with its focused Nest tests green.
+- [ ] The next clean archive is installed on the physical iPhone 14 Pro and the chooser is verified with a real disabled marketplace before TestFlight upload.
+
 ## Release invariants
 
 - No fake zero, placeholder metric, stale total, or silent unfiltered fallback.
