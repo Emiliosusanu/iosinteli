@@ -1,13 +1,11 @@
 /**
- * Digest money scope: Overview selection ∩ activated profiles (match Home).
- * Fall back to all activated only when the header selection is empty.
+ * Digest money scope: every activated profile, matching Home's financial
+ * portfolio. The profile/market picker only narrows Ads Engine views; it must
+ * never silently narrow the total shown in a notification.
  */
 
 import { profileEnabled } from "./accountsUi.ts";
-import {
-  adsProfileIdsForSelection,
-  uniqueProfileIds,
-} from "./notificationScope.ts";
+import { uniqueProfileIds } from "./notificationScope.ts";
 
 export type AuthorityProfile = {
   id: string;
@@ -60,13 +58,10 @@ export function groupActivatedProfilesByCurrency<T extends AuthorityProfile>(
  * the header has a selection; otherwise all activated.
  */
 export function digestMoneyAdsProfileIds(
-  selectedIds: readonly string[],
+  _selectedIds: readonly string[],
   profiles: readonly AuthorityProfile[],
 ): string[] {
-  const activated = new Set(activatedAdsProfileIds(profiles));
-  const selectedAds = adsProfileIdsForSelection(selectedIds, profiles as any);
-  const scoped = selectedAds.filter((id) => activated.has(id));
-  return scoped.length ? scoped : [...activated];
+  return activatedAdsProfileIds(profiles);
 }
 
 /**

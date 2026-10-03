@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 const notifications = readFileSync(new URL("../src/lib/notifications.ts", import.meta.url), "utf8");
 const digest = readFileSync(new URL("../src/lib/notificationDigest.ts", import.meta.url), "utf8");
 
-test("runAlertCheck uses Overview∩activated money scope + FX USD rollup and honest totals", () => {
+test("runAlertCheck uses full activated money scope + FX USD rollup and honest totals", () => {
   assert.match(notifications, /digestMoneyAdsProfileIds/);
   assert.match(notifications, /digestFetchGroupsForMoney/);
   assert.match(notifications, /nestMoneyHiddenForDigest/);
@@ -16,7 +16,7 @@ test("runAlertCheck uses Overview∩activated money scope + FX USD rollup and ho
   assert.match(notifications, /countFreshCompletedProfiles/);
   assert.match(notifications, /digestCoverageLine/);
   assert.match(notifications, /fetchMobileOverview/);
-  // Soft fallback keeps Overview selection helpers — never all profiles.
+  // A metadata failure keeps a selected-scope fallback instead of mixing UUIDs.
   assert.match(notifications, /adsProfileIdsForSelection/);
   // Per-currency-only grouping (no FX) must not drive digests anymore.
   assert.doesNotMatch(notifications, /groupActivatedProfilesByCurrency/);

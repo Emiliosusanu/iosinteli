@@ -92,7 +92,7 @@ test("KDP net on selected US+CA still uses US royalties only", () => {
   assert.deepEqual(caOnly.profileIds, ["ads-ca", "uuid-ca"]);
 });
 
-test("alerts and background refresh expand selected profiles before Nest totals", () => {
+test("alerts and background refresh use the full activated portfolio for totals", () => {
   assert.match(notifications, /adsProfileIdsForSelection/);
   assert.match(notifications, /digestMoneyAdsProfileIds/);
   assert.match(notifications, /digestFetchGroupsForMoney/);
@@ -102,6 +102,8 @@ test("alerts and background refresh expand selected profiles before Nest totals"
   assert.match(background, /parseSelectedProfileIds/);
   assert.match(background, /mergeBackgroundScope/);
   assert.match(background, /adsProfileIdsForSelection/);
+  assert.match(background, /activatedAdsProfileIds/);
+  assert.match(background, /activatedProfileIds/);
   assert.match(background, /selectKdpRoyaltyScopeForSelection/);
   assert.doesNotMatch(background, /storage\.getItem<string\[\]>\(PROFILES_KEY, \[\]\)/);
 });

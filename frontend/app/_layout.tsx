@@ -5,7 +5,7 @@ import * as Notifications from "expo-notifications";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import * as SplashScreen from "expo-splash-screen";
 import { AuthProvider, useAuth } from "@/src/contexts/AuthContext";
 import { AppProvider } from "@/src/contexts/AppContext";
@@ -18,6 +18,7 @@ import { isSafeNotificationHref, parseNotificationPayload, routeForNotification 
 import { resolveDeepLinkHref } from "@/src/lib/deepLinkContract";
 import { markPerf } from "@/src/lib/perf";
 import { debugIngest } from "@/src/lib/debugIngest";
+import { appQueryClient } from "@/src/lib/queryClient";
 import * as Linking from "expo-linking";
 import { ThemeProvider, useTheme } from "@/src/lib/theme";
 
@@ -32,20 +33,9 @@ const MIN_SPLASH_MS = 400;
 // Survives RouteGuard remounts so a consumed tap cannot replay on token refresh.
 const handledNotificationIds = new Set<string>();
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      // Same-key hits stay instant via memory + AsyncStorage hydrate.
-      // Do NOT reuse a prior query's rows under a new period/profile key —
-      // that paints Week numbers under Month labels and wrong entities.
-      staleTime: 45_000,
-      gcTime: 1000 * 60 * 60 * 6,
-      retry: 1,
-      // RN has no window focus; AppState handler below refetches on foreground.
-      refetchOnWindowFocus: false,
-    },
-  },
-});
+// One cache for the provider, background prefetch, Create and Books. A second
+// QueryClient made successful background warming invisible to mounted screens.
+const queryClient = appQueryClient;
 
 /** Pull latest financial reality when returning from background — no stale paint. */
 function FinancialForegroundRefetch() {
