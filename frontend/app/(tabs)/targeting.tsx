@@ -715,6 +715,10 @@ export default function TargetingScreen() {
             perf,
             advanced: advancedForRpc,
             signal,
+            // The RPC result is authoritative and must paint immediately.
+            // Title/cover metadata is filled for the visible viewport below;
+            // never hold the ranked page behind optional catalog lookups.
+            skipDisplayEnrich: true,
           }),
           TARGETING_QUERY_TIMEOUT_MS,
           signal,

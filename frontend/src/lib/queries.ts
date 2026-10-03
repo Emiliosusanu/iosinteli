@@ -22,6 +22,7 @@ import {
   NEST_TARGETING_LIST_BUDGET_MS,
   TARGETING_PAGE_DISPLAY_ENRICH_MS,
   TARGETING_PAGE_METRICS_BUDGET_MS,
+  isHomeQueryTimeout,
   withQueryTimeout,
 } from "./queryTimeout";
 import { createReadQueue } from "./readRequest";
@@ -296,8 +297,11 @@ export async function fetchMobileTargetingPage(input: {
       }
     } catch (error) {
       // Soft-degrade: keep ranked page rows even if title/cover lookup flakes/times out.
-      // eslint-disable-next-line no-console
-      console.warn("[inteliads:targeting] page display enrichment failed", error);
+      // A display-only budget expiry is an expected handoff to the post-paint
+      // viewport enrichment, not a failed data read and not a warning/error.
+      if (!isHomeQueryTimeout(error) && (error as Error)?.name !== "AbortError") {
+        console.warn("[inteliads:targeting] page display enrichment failed", error);
+      }
     }
   }
 
