@@ -204,7 +204,12 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Overview operational cards remove redundant borders and padding while preserving all verified values; dense widget rows add orders and clicks without inventing missing metrics.
 - [x] Full 984-test iOS unit suite, TypeScript, lint with zero errors, and stress validation pass.
 - [x] Implementation commit `bed27fc0` was pushed, reviewed, and merged through PR #68 at release-candidate commit `5dcb726a`.
-- [ ] A clean next-numbered archive is installed and smoke-tested on the physical iPhone 14 Pro before any TestFlight upload.
+- [x] The healthy idle header no longer restores the previous permanent green dot after the transient completion state. The focused regression test and TypeScript pass; PR #71 was merged before the final archive.
+- [x] Targeting paints the authoritative globally ranked page before optional ASIN display enrichment. Visible-row titles and covers fill in after first paint without changing global sort, filters, metrics, or entity identity; display-only timeout handoff is silent while real failures remain observable. The full 984-test suite, TypeScript, lint with zero errors, and stress validation pass; PR #73 was merged before the final archive.
+- [x] Clean Release archive `/tmp/InteliAds-357.xcarchive` is `io.inteliads.app` version `1.0.1 (357)` from release-candidate commit `7998101a4d95dbdc7c93cdd6afea8e7b5fe8bc23`; executable SHA-256 is `dbafb0eca157afe0262fa51c7ba5b2e0a42c61bdae6d7f45daa58292c935e019` and code signing verifies successfully.
+- [x] Build 357 was installed in place on the physical iPhone 14 Pro with the signed-in session and cached account data preserved. Home shows current Gross `$361`, Net `$173.95`, Ad Spend `$187`, ACoS `34.8%`, and Margin `48%` for October 1–3, with no idle sync indicator.
+- [x] The physical Targeting stress covered Keywords, ASIN, Auto, Category, Placement, bid ceiling, ACoS range, and impression filters with no crash, RedBox, or `HOME_QUERY_TIMEOUT`. The ASIN page displayed the real globally ranked metric rows at first paint and filled real titles in the visible viewport in the background.
+- [x] Build-number PR #74 was merged at `7998101a`. Build 357 remains a device-certified release candidate and has not been uploaded to TestFlight.
 
 ## Release invariants
 
