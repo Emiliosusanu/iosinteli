@@ -569,13 +569,15 @@ export const RELEVANCE_SOFT_RETRY_GAPS_MS = [800] as const;
 
 async function withRelevanceSoftRetry<T>(run: () => Promise<T>): Promise<T> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < RELEVANCE_SOFT_RETRY_GAPS_MS.length; attempt += 1) {
+  // `gaps.length` is the number of retries, so total attempts are +1. The old
+  // `< gaps.length` loop exited after the first failure and never retried.
+  for (let attempt = 0; attempt <= RELEVANCE_SOFT_RETRY_GAPS_MS.length; attempt += 1) {
     try {
       return await run();
     } catch (error) {
       lastError = error;
       if (!isTransientRelevanceError(error)) throw error;
-      if (attempt === RELEVANCE_SOFT_RETRY_GAPS_MS.length - 1) break;
+      if (attempt >= RELEVANCE_SOFT_RETRY_GAPS_MS.length) break;
       const gap = RELEVANCE_SOFT_RETRY_GAPS_MS[attempt] ?? 1_200;
       await new Promise((resolve) => setTimeout(resolve, gap));
     }
@@ -597,7 +599,8 @@ async function withRelevanceSoftRetry<T>(run: () => Promise<T>): Promise<T> {
  *   auto-select / claim AI curated). Empty AI keep → Amazon restore with
  *   `restored_empty` (honest label). Edit prompts in suggestionRelevancePrompt.ts.
  *   The server already retries provider rate limits. The client performs one
- *   bounded attempt, then keeps the real Amazon rows available for selection;
+ *   bounded retry after the initial bounded attempt, then keeps the real Amazon
+ *   rows available for selection;
  *   it never starts a minutes-long retry chain or invents replacement rows.
  */
 export async function filterSuggestionsForBookRelevance<
@@ -632,31 +635,64 @@ export async function filterSuggestionsForBookRelevance<
 
   const finishGrokKeep = (
     filtered: FilterableSuggestions<K, P>,
+    source: FilterableSuggestions<K, P> = suggestions,
   ): SuggestionRelevanceResult<K, P> => {
+    // A product with neither a real title nor an Amazon correlation theme has
+    // insufficient metadata for a safe AI rejection. Keep it for the seller to
+    // decide instead of letting a model guess from an ASIN alone.
+    const filteredProductKeys = new Set(
+      filtered.productTargets.map((row) =>
+        `${String(row.asin ?? "").trim().toUpperCase()}::${String(
+          row.matchType ?? "exact",
+        )
+          .trim()
+          .toLowerCase()}`,
+      ),
+    );
+    const protectedUnknownProducts = source.productTargets.filter((row) => {
+      const asin = String(row.asin ?? "").trim().toUpperCase();
+      const key = `${asin}::${String(row.matchType ?? "exact")
+        .trim()
+        .toLowerCase()}`;
+      const hasThemes = (row.themes ?? []).some((theme) => String(theme).trim());
+      return (
+        productTitleNeedsEnrichment(row.title, asin) &&
+        !hasThemes &&
+        !filteredProductKeys.has(key)
+      );
+    });
+    const safeFiltered = protectedUnknownProducts.length
+      ? {
+          ...filtered,
+          productTargets: [
+            ...filtered.productTargets,
+            ...protectedUnknownProducts,
+          ],
+        }
+      : filtered;
     const finalizedKw = finalizeKeywordRelevanceKeep(
-      suggestions.keywords,
-      filtered.keywords,
+      source.keywords,
+      safeFiltered.keywords,
     );
     const finalizedProducts = finalizeProductRelevanceKeep(
-      suggestions.productTargets,
-      filtered.productTargets,
+      source.productTargets,
+      safeFiltered.productTargets,
     );
     const kwOutcome = outcomeAfterKeywordKeep(
-      suggestions.keywords.length,
+      source.keywords.length,
       finalizedKw.keywords.length,
       finalizedKw.restoredEmpty,
     );
     // Products-only: drive outcome from product keep. Mixed: prefer keyword
     // outcome when keywords existed (create KW chrome); products still curated.
     const productOnly =
-      suggestions.keywords.length === 0 &&
-      suggestions.productTargets.length > 0;
+      source.keywords.length === 0 && source.productTargets.length > 0;
     let relevanceOutcome: SuggestionRelevanceOutcome = kwOutcome;
     if (productOnly) {
       if (finalizedProducts.restoredEmpty) relevanceOutcome = "restored_empty";
       else if (
         finalizedProducts.productTargets.length <
-        suggestions.productTargets.length
+        source.productTargets.length
       ) {
         relevanceOutcome = "filtered";
       } else {
@@ -707,9 +743,21 @@ export async function filterSuggestionsForBookRelevance<
       }
     }
     try {
-      // Skip retail scrape before Groq — Nest titles + themes are enough for
-      // the keep-list; UI fills missing titles via useProductSuggestionAsinMeta.
-      // (Retail enrich was adding tens of seconds for little keep quality.)
+      // Give every product ASIN a bounded metadata pass before Groq. The hard
+      // budget keeps the picker responsive; unresolved ASIN-only rows are
+      // protected above and cannot be rejected by the model without evidence.
+      const enrichedProductTargets = await enrichProductTargetsForRelevanceFilter(
+        suggestions.productTargets,
+        {
+          countryCode: context.countryCode,
+          maxRetail: suggestions.productTargets.length,
+          budgetMs: 2_500,
+        },
+      );
+      const relevanceInput: FilterableSuggestions<K, P> = {
+        keywords: suggestions.keywords,
+        productTargets: enrichedProductTargets,
+      };
       const preferGroqEnv =
         String(process.env.EXPO_PUBLIC_SUGGESTION_PREFER_GROQ ?? "")
           .trim()
@@ -727,11 +775,12 @@ export async function filterSuggestionsForBookRelevance<
             "./suggestionRelevanceGrok.ts"
           );
           return filterSuggestionsWithGrok(
-            suggestions,
+            relevanceInput,
             context,
             preferGroqEnv ? { preferGroq: true } : undefined,
           );
         }),
+        relevanceInput,
       );
     } catch (error) {
       return failUnfiltered(error);

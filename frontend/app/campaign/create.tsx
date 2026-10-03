@@ -58,7 +58,6 @@ import {
   recommendationBidMajorUnits,
   resolveSuggestionBid,
   rowMatchesReasonKey,
-  selectedEligibleSuggestionIndexes,
   sortProductSuggestionsByTitleSimilarity,
   uniqueKeywordMatchTypes,
   uniqueKeywordPhraseCount,
@@ -487,10 +486,12 @@ export default function CreateCampaignScreen() {
   );
   const [prefillApplied, setPrefillApplied] = useState(false);
   const [preview, setPreview] = useState<CampaignCreationPreview | null>(null);
-  const [selectedKeywords, setSelectedKeywords] = useState<Set<number>>(
+  // Stable entity identities prevent an AI/meta re-rank from moving a checkmark
+  // onto a different keyword or ASIN before Create is pressed.
+  const [selectedKeywords, setSelectedKeywords] = useState<Set<string>>(
     new Set(),
   );
-  const [selectedProducts, setSelectedProducts] = useState<Set<number>>(
+  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(
     new Set(),
   );
   const [visibleSuggestionCount, setVisibleSuggestionCount] =
@@ -1751,19 +1752,23 @@ export default function CreateCampaignScreen() {
       : suggestionRows.length;
   const selectedKeywordIndexes = useMemo(
     () =>
-      selectedEligibleSuggestionIndexes(
-        selectedKeywords,
-        keywordSuggestionRows.map((_, index) => index),
-      ),
+      keywordSuggestionRows
+        .map((row, index) => ({ row, index }))
+        .filter(({ row }) =>
+          selectedKeywords.has(keywordDedupeKey(row.keyword, row.matchType)),
+        )
+        .map(({ index }) => index),
     [selectedKeywords, keywordSuggestionRows],
   );
   const selectedProductIndexes = useMemo(
     () =>
-      selectedEligibleSuggestionIndexes(
-        selectedProducts,
-        rankedProductSuggestions.map((row) => row.originalIndex),
-      ),
-    [selectedProducts, rankedProductSuggestions],
+      (preview?.productTargets ?? [])
+        .map((row, index) => ({ row, index }))
+        .filter(({ row }) =>
+          selectedProducts.has(productTargetDedupeKey(row.asin, row.matchType)),
+        )
+        .map(({ index }) => index),
+    [selectedProducts, preview?.productTargets],
   );
   const selectedKeywordIdentityCount = useMemo(() => {
     const keys = new Set(
@@ -1914,15 +1919,25 @@ export default function CreateCampaignScreen() {
   function toggleSuggestion(index: number, kind: "keywords" | "products") {
     // Block selecting raw Amazon rows while Step 2 is pending or needs confirm.
     if (aiFilterBlocksSelect) return;
-    const setter =
-      kind === "keywords" ? setSelectedKeywords : setSelectedProducts;
+    const key =
+      kind === "keywords"
+        ? (() => {
+            const row = keywordSuggestionRows[index];
+            return row ? keywordDedupeKey(row.keyword, row.matchType) : null;
+          })()
+        : (() => {
+            const row = preview?.productTargets[index];
+            return row ? productTargetDedupeKey(row.asin, row.matchType) : null;
+          })();
+    if (!key) return;
+    const setter = kind === "keywords" ? setSelectedKeywords : setSelectedProducts;
     setter((old) => {
       const next = new Set(old);
-      if (next.has(index)) {
-        next.delete(index);
+      if (next.has(key)) {
+        next.delete(key);
         return next;
       }
-      next.add(index);
+      next.add(key);
       return next;
     });
   }
@@ -1930,9 +1945,11 @@ export default function CreateCampaignScreen() {
   /** Exclusive: select all of this match type, deselect other types. */
   function selectKeywordsByMatchType(match: KeywordMatchType) {
     if (aiFilterBlocksSelect) return;
-    const next = new Set<number>();
-    keywordSuggestionRows.forEach((row, index) => {
-      if (row.matchType === match) next.add(index);
+    const next = new Set<string>();
+    keywordSuggestionRows.forEach((row) => {
+      if (row.matchType === match) {
+        next.add(keywordDedupeKey(row.keyword, row.matchType));
+      }
     });
     setSelectedKeywords(next);
   }
@@ -1942,27 +1959,29 @@ export default function CreateCampaignScreen() {
     // or while failure/empty-restore still needs an explicit confirm.
     if (aiFilterBlocksSelect) return;
     if (targeting === "keywords") {
-      const indexes = keywordSuggestionRows.map((_, index) => index);
+      const keys = keywordSuggestionRows.map((row) =>
+        keywordDedupeKey(row.keyword, row.matchType),
+      );
       const allOn =
-        indexes.length > 0 &&
-        indexes.every((index) => selectedKeywords.has(index));
-      setSelectedKeywords(allOn ? new Set() : new Set(indexes));
+        keys.length > 0 && keys.every((key) => selectedKeywords.has(key));
+      setSelectedKeywords(allOn ? new Set() : new Set(keys));
       return;
     }
     if (targeting === "products") {
-      const indexes = rankedProductSuggestions.map((row) => row.originalIndex);
+      const keys = rankedProductSuggestions.map((row) =>
+        productTargetDedupeKey(row.asin, row.matchType),
+      );
       const allOn =
-        indexes.length > 0 &&
-        indexes.every((index) => selectedProducts.has(index));
-      setSelectedProducts(allOn ? new Set() : new Set(indexes));
+        keys.length > 0 && keys.every((key) => selectedProducts.has(key));
+      setSelectedProducts(allOn ? new Set() : new Set(keys));
     }
   }
 
   function selectProductsByMatchType(match: ProductMatchType) {
-    const next = new Set<number>();
+    const next = new Set<string>();
     for (const row of rankedProductSuggestions) {
       if (normalizeProductMatchType(row.matchType) === match) {
-        next.add(row.originalIndex);
+        next.add(productTargetDedupeKey(row.asin, row.matchType));
       }
     }
     setSelectedProducts(next);
@@ -1972,7 +1991,9 @@ export default function CreateCampaignScreen() {
     setSelectedProducts((old) => {
       const next = new Set(old);
       for (const row of rankedProductSuggestions) {
-        if (rowMatchesReasonKey(row.themes, key)) next.add(row.originalIndex);
+        if (rowMatchesReasonKey(row.themes, key)) {
+          next.add(productTargetDedupeKey(row.asin, row.matchType));
+        }
       }
       return next;
     });
@@ -1982,7 +2003,9 @@ export default function CreateCampaignScreen() {
     setSelectedProducts((old) => {
       const next = new Set(old);
       for (const row of rankedProductSuggestions) {
-        if (rowMatchesReasonKey(row.themes, key)) next.delete(row.originalIndex);
+        if (rowMatchesReasonKey(row.themes, key)) {
+          next.delete(productTargetDedupeKey(row.asin, row.matchType));
+        }
       }
       return next;
     });
@@ -3088,14 +3111,15 @@ export default function CreateCampaignScreen() {
                       </Text>
                       <View style={styles.wrap}>
                         {keywordMatchKeys.map((key) => {
-                          const indexes = keywordSuggestionRows
-                            .map((row, index) => ({ row, index }))
-                            .filter(({ row }) => row.matchType === key)
-                            .map(({ index }) => index);
+                          const keys = keywordSuggestionRows
+                            .filter((row) => row.matchType === key)
+                            .map((row) =>
+                              keywordDedupeKey(row.keyword, row.matchType),
+                            );
                           const allOn =
-                            indexes.length > 0 &&
-                            indexes.every((index) => selectedKeywords.has(index)) &&
-                            selectedKeywordIndexes.length === indexes.length;
+                            keys.length > 0 &&
+                            keys.every((identity) => selectedKeywords.has(identity)) &&
+                            selectedKeywordIndexes.length === keys.length;
                           return (
                             <Pressable
                               key={key}
@@ -3126,7 +3150,7 @@ export default function CreateCampaignScreen() {
                                 ]}
                               >
                                 {key}
-                                {indexes.length ? ` · ${indexes.length}` : ""}
+                                {keys.length ? ` · ${keys.length}` : ""}
                               </Text>
                             </Pressable>
                           );
@@ -3353,16 +3377,18 @@ export default function CreateCampaignScreen() {
                       </Text>
                       <View style={styles.wrap}>
                         {productMatchKeys.map((key) => {
-                          const indexes = rankedProductSuggestions
+                          const keys = rankedProductSuggestions
                             .filter(
                               (row) =>
                                 normalizeProductMatchType(row.matchType) === key,
                             )
-                            .map((row) => row.originalIndex);
+                            .map((row) =>
+                              productTargetDedupeKey(row.asin, row.matchType),
+                            );
                           const allOn =
-                            indexes.length > 0 &&
-                            indexes.every((index) => selectedProducts.has(index)) &&
-                            selectedProductVisibleCount === indexes.length;
+                            keys.length > 0 &&
+                            keys.every((identity) => selectedProducts.has(identity)) &&
+                            selectedProductVisibleCount === keys.length;
                           return (
                             <Pressable
                               key={key}
@@ -3392,7 +3418,7 @@ export default function CreateCampaignScreen() {
                                 ]}
                               >
                                 {productMatchSelectLabel(key)}
-                                {indexes.length ? ` · ${indexes.length}` : ""}
+                                {keys.length ? ` · ${keys.length}` : ""}
                               </Text>
                             </Pressable>
                           );
@@ -3412,12 +3438,14 @@ export default function CreateCampaignScreen() {
                       </Text>
                       <View style={styles.wrap}>
                         {productReasonKeys.map((key) => {
-                          const indexes = rankedProductSuggestions
+                          const keys = rankedProductSuggestions
                             .filter((row) => rowMatchesReasonKey(row.themes, key))
-                            .map((row) => row.originalIndex);
+                            .map((row) =>
+                              productTargetDedupeKey(row.asin, row.matchType),
+                            );
                           const allOn =
-                            indexes.length > 0 &&
-                            indexes.every((index) => selectedProducts.has(index));
+                            keys.length > 0 &&
+                            keys.every((identity) => selectedProducts.has(identity));
                           return (
                             <Pressable
                               key={key}
@@ -3451,7 +3479,7 @@ export default function CreateCampaignScreen() {
                                 ]}
                               >
                                 {reasonSelectLabel(key)}
-                                {indexes.length ? ` · ${indexes.length}` : ""}
+                                {keys.length ? ` · ${keys.length}` : ""}
                               </Text>
                             </Pressable>
                           );
@@ -3645,7 +3673,9 @@ export default function CreateCampaignScreen() {
                               key={`${row.keyword}-${row.matchType}-${index}`}
                               keyword={row.keyword}
                               matchType={row.matchType}
-                              selected={selectedKeywords.has(index)}
+                              selected={selectedKeywords.has(
+                                keywordDedupeKey(row.keyword, row.matchType),
+                              )}
                               suggestedBid={suggested}
                               defaultBid={defaultBidAmount}
                               currency={currency}
@@ -3694,7 +3724,9 @@ export default function CreateCampaignScreen() {
                             coverUrl={meta?.coverUrl ?? row.coverUrl ?? null}
                             themes={row.themes ?? []}
                             matchType={row.matchType}
-                            selected={selectedProducts.has(index)}
+                            selected={selectedProducts.has(
+                              productTargetDedupeKey(row.asin, row.matchType),
+                            )}
                             suggestedBid={suggested}
                             defaultBid={defaultBidAmount}
                             currency={currency}

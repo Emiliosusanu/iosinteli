@@ -300,7 +300,7 @@ test("grok mode uses injected filter and falls back to heuristic on throw", asyn
   assert.ok(fellBack.productTargets.some((p) => p.asin === "B0ICE00001"));
 });
 
-test("client bounds transient AI failure and leaves Amazon rows usable", async () => {
+test("client retries one transient AI failure and uses the successful result", async () => {
   const keywords = Array.from({ length: 12 }, (_, i) => ({
     keyword: i === 0 ? "iceland roads" : `filler kw ${i}`,
     matchType: "broad",
@@ -326,10 +326,43 @@ test("client bounds transient AI failure and leaves Amazon rows usable", async (
       },
     },
   );
-  assert.equal(calls, 1);
-  assert.equal(out.relevanceOutcome, "failed_unfiltered");
-  assert.equal(out.keywords.length, 12);
+  assert.equal(calls, 2);
+  assert.equal(out.relevanceOutcome, "filtered");
+  assert.equal(out.keywords.length, 3);
   assert.equal(out.keywords[0].keyword, "iceland roads");
+});
+
+test("AI cannot reject ASIN-only products that have no metadata evidence", async () => {
+  const unknown = {
+    asin: "B0UNKNOWN1",
+    title: null,
+    subtitle: null,
+    themes: [],
+    matchType: "exact",
+  };
+  const known = {
+    asin: "B0KNOWN001",
+    title: "Iceland Travel Guide",
+    subtitle: null,
+    themes: ["similar readership"],
+    matchType: "exact",
+  };
+  const out = await filterSuggestionsForBookRelevance(
+    { keywords: [], productTargets: [unknown, known] },
+    { bookTitle: "Iceland Road Trip Guide", advertisedAsin: "B0BOOK0001" },
+    {
+      mode: "grok",
+      grokFilter: async (rows) =>
+        applyGrokRelevanceSelection(rows, {
+          keywordIndexes: [],
+          productIndexes: [1],
+        }),
+    },
+  );
+  assert.deepEqual(
+    out.productTargets.map((row) => row.asin),
+    ["B0KNOWN001", "B0UNKNOWN1"],
+  );
 });
 
 test("relevance retry budgets stay bounded for an interactive picker", async () => {
