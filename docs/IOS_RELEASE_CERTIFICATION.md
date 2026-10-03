@@ -203,7 +203,7 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Campaign detail labels the selected performance period and previews keyword/product-target counts and names inside each ad group. Spend, impressions, clicks, orders, and ACoS remain date-range scoped.
 - [x] Overview operational cards remove redundant borders and padding while preserving all verified values; dense widget rows add orders and clicks without inventing missing metrics.
 - [x] Full 984-test iOS unit suite, TypeScript, lint with zero errors, and stress validation pass.
-- [ ] Implementation is committed, pushed, reviewed, and merged into `feat/ios-release-candidate`.
+- [x] Implementation commit `bed27fc0` was pushed, reviewed, and merged through PR #68 at release-candidate commit `5dcb726a`.
 - [ ] A clean next-numbered archive is installed and smoke-tested on the physical iPhone 14 Pro before any TestFlight upload.
 
 ## Release invariants
