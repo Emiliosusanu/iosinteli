@@ -175,6 +175,14 @@ never from `main`, and never from the active Cursor checkout.
 - [ ] A physical tap/write pass still needs Apple UI automation to become available on this iOS 26 device before claiming that a tapped selection count exactly matches a new Amazon write. XCUITest installed but timed out while enabling automation mode; the same count/payload invariant is covered by the 981-test suite and the previous paused production write certification.
 - [x] Implementation commit `0889ddeb` was pushed and merged through PR #60 at release-candidate commit `39335003`. The tested archive was exported with Apple Distribution, production APNs and `get-task-allow=false`; IPA SHA-256 is `c4d7f5ee58970ea1a803d4ad6577afcf22807529cca074caf5212cbeb45aaf1e`. App Store Connect processed build 352 successfully; its status is **Testing** in the internal **Intelyads** group as of October 3, 2026.
 
+## Build 353 — external TestFlight distribution
+
+- [x] Starts from the exact merged build 352 release candidate; no application code or certified behavior changed. Only the five authoritative build-number references advanced from 352 to 353, and the active Cursor checkout remained untouched.
+- [x] TypeScript, build-number launch safety, diff validation, and the full 981-test suite pass.
+- [x] Clean Release archive `/tmp/InteliAds-353.xcarchive` is `io.inteliads.app` version `1.0.1 (353)` with executable SHA-256 `a61d36d94e456ce867c394a02c1ee6d085de80ebf703a4dd147df359c68aa932`. The public TestFlight export is signed for App Store distribution with production APNs and `get-task-allow=false`; IPA SHA-256 is `8d915bfdaa6c912e3ff2b359c619ad025ba99c7229dee63e3c4e01b282a1971b`.
+- [x] Build-number commit `af33efba` was pushed and merged through PR #63 at release-candidate commit `5505908e`.
+- [x] App Store Connect accepted and processed the public upload. Build 353 was added to the external **Intelyads** group with tester notes covering campaign/ad-group targeting, AI suggestion filtering, selection counts, dashboard freshness, background refresh, and order notifications; its status is **Testing** as of October 3, 2026.
+
 ## Release invariants
 
 - No fake zero, placeholder metric, stale total, or silent unfiltered fallback.
