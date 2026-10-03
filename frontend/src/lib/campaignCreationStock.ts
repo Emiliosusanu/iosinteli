@@ -84,6 +84,7 @@ type ProfileLike = {
   country_code: string | null;
   currency_code: string | null;
   marketplace_id: string | null;
+  is_enabled?: boolean;
 };
 
 function normalizeStatus(value: unknown): string {
@@ -1088,6 +1089,48 @@ export function marketplacesFromBookProfiles(
       verificationSource: hit?.verificationSource,
     };
   });
+}
+
+/**
+ * Disabled Ads profiles that Amazon has live-confirmed for this exact ASIN.
+ *
+ * This is intentionally stricter than the normal picker fallback: a disabled
+ * profile is never suggested from country/currency, shared marketplace id, or
+ * stale book.marketplaceIds. The user may enable it only when the per-ASIN
+ * probe returned in_stock for that exact owned Amazon Ads profile id.
+ */
+export function confirmedDisabledMarketplacesForBook(
+  profiles: ProfileLike[],
+  live: CreationMarketplace[] = [],
+): CreationMarketplace[] {
+  const disabledProfiles = profiles.filter((profile) => profile.is_enabled === false);
+  if (!disabledProfiles.length || !live.length) return [];
+
+  const seen = new Set<string>();
+  const rows: CreationMarketplace[] = [];
+  for (const marketplace of live) {
+    if (!amazonAdsStockConfirmed(marketplace)) continue;
+    const profile = matchLocalProfileForCreationMarketplace(
+      disabledProfiles,
+      marketplace,
+    );
+    if (!profile) continue;
+    const adsId = String(profile.profile_id || profile.id).trim();
+    if (!adsId || seen.has(adsId)) continue;
+    seen.add(adsId);
+    rows.push({
+      id: profile.id,
+      profileId: adsId,
+      countryCode: marketplace.countryCode ?? profile.country_code,
+      currencyCode: marketplace.currencyCode ?? profile.currency_code,
+      marketplaceId: marketplace.marketplaceId ?? profile.marketplace_id,
+      availabilityEvidence: marketplace.availabilityEvidence,
+      stockStatus: marketplace.stockStatus,
+      sku: marketplace.sku,
+      verificationSource: marketplace.verificationSource,
+    });
+  }
+  return rows;
 }
 
 /** @deprecated Prefer marketplacesFromBookProfiles. */

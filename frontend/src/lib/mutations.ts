@@ -356,7 +356,7 @@ export async function fetchCampaignCreationMarketplaces(
 ): Promise<ReturnType<typeof normalizeCampaignCreationMarketplaces>> {
   const normalizedAsin = String(asin ?? "").trim().toUpperCase();
   const raw = await nestApiJson<unknown>(
-    `/campaigns/creation/marketplaces?asin=${encodeURIComponent(normalizedAsin)}`,
+    `/campaigns/creation/marketplaces?asin=${encodeURIComponent(normalizedAsin)}&includeDisabled=true`,
     { method: "GET" },
     "Couldn't verify Amazon marketplaces.",
   );
