@@ -147,6 +147,21 @@ never from `main`, and never from the active Cursor checkout.
 - [ ] Build 349 is installed in place on the iPhone 14 Pro; campaign, ad-group, keyword, and product-target selection counts match confirmed Amazon writes with the session preserved.
 - [ ] App Store Connect accepts and processes build 349.
 
+## Build 351 — KDP account integrity and durable helper session
+
+- [x] Starts from the exact build 349 certification commit in the isolated `codex/ios-kdp-integrity` worktree; the active Cursor checkout remains untouched.
+- [x] The iPhone KDP helper uses an explicit owned KDP account as its import destination. Ads profile and marketplace filters cannot switch that destination, and ambiguous account resolution fails closed until the user chooses an account.
+- [x] KDP format rows define the current catalog after a full import; title rows only enrich title and cover metadata. Legacy accounts without format rows keep their title catalog.
+- [x] Historical cross-account ASIN overlaps are quarantined to one visible owner instead of being deleted or displayed in several KDP accounts. The live audit found 17 historical overlapping ASINs and no overlap left visible in more than one account.
+- [x] KDP Manager card totals come from the same authoritative, quarantined catalog shown in account detail. Live counts are 17 for `emi usd 2`, 24 for `vp Test 1`, 24 for `VP 2`, and 18 for `Mary KDP`.
+- [x] Book rows open canonical product detail and keep destructive KDP-data deletion as a separate confirmed control. A physical-device read opened ASIN `B0F3JYJ9MT` with its real cover, September royalties, Ads spend, Net, impressions, clicks, orders, and campaigns.
+- [x] Native WebKit cookie-store access preserves HttpOnly Amazon KDP cookies for background replay. A generic HTTP 403 no longer falsely destroys the saved session; a real 401 or Amazon sign-in redirect does.
+- [x] The helper retries one transient capture failure once and keeps account-specific coverage/deferred state from leaking across a deliberate account switch.
+- [x] TypeScript, diff validation, focused KDP coverage, and the full 980-test suite pass.
+- [x] Clean Release archive `/tmp/InteliAds-351.xcarchive` is `io.inteliads.app` version `1.0.1 (351)` with executable SHA-256 `7e0fe0d6b0177e6e9eeade8d4cd28b320feab1a4e4f131b6fd9eaf80613c2dc0`.
+- [x] Build 351 is installed in place on the physical iPhone 14 Pro with the signed-in session preserved. Overview shows Gross `$5.2K`, Net `$2,366.13`, Ad Spend `$2.9K`, ACoS `36.5%`, and Margin `45%`; KDP Manager and two isolated account catalogs render without a JavaScript exception, crash, RedBox, or book-read error.
+- [ ] Commit, push, review, and TestFlight upload remain release gates.
+
 ## Release invariants
 
 - No fake zero, placeholder metric, stale total, or silent unfiltered fallback.

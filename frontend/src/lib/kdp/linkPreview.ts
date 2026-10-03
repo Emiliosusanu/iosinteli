@@ -14,6 +14,12 @@ import {
   summarizeLinkPreview,
 } from "./linkPreviewCompare.ts";
 import { loadHelperAccountId } from "./persist.ts";
+import { authoritativeKdpCatalog } from "./catalogAuthority.ts";
+import { isQuarantined } from "./shelfHeal.ts";
+import {
+  loadKdpAsinQuarantineEntries,
+  resolveQuarantineUserId,
+} from "./shelfHealStore.ts";
 
 export type { KdpAdsLinkPreview, LinkPreviewBook, LinkPreviewProfile };
 export { summarizeLinkPreview };
@@ -21,7 +27,7 @@ export { summarizeLinkPreview };
 const BOOK_CAP = 24;
 
 export async function fetchKdpAccountBooks(accountId: string): Promise<LinkPreviewBook[]> {
-  const byAsin = new Map<string, LinkPreviewBook>();
+  const titleByAsin = new Map<string, LinkPreviewBook>();
   const pageSize = 500;
   let from = 0;
   for (;;) {
@@ -41,8 +47,8 @@ export async function fetchKdpAccountBooks(accountId: string): Promise<LinkPrevi
       const asin = normalizeAsin(row.asin);
       if (!asin) continue;
       const imageUrl = pickUsableCoverUrl(row.cover_url, row.amazon_image_url);
-      const prev = byAsin.get(asin);
-      byAsin.set(asin, {
+      const prev = titleByAsin.get(asin);
+      titleByAsin.set(asin, {
         asin,
         title: String(row.title || prev?.title || "").trim() || null,
         imageUrl: pickUsableCoverUrl(prev?.imageUrl, imageUrl),
@@ -52,9 +58,9 @@ export async function fetchKdpAccountBooks(accountId: string): Promise<LinkPrevi
     from += pageSize;
   }
 
-  // kdp_titles is enrichment, not the catalog authority. Keep formats that
-  // have not received title/cover enrichment yet so the manager never hides
-  // a real imported book.
+  // kdp_titles is enrichment, not the catalog authority. Format rows define
+  // the current shelf once available; otherwise legacy accounts fall back to
+  // their title rows.
   const formatRows: Array<{ asin: string; book_id: string }> = [];
   from = 0;
   for (;;) {
@@ -96,18 +102,25 @@ export async function fetchKdpAccountBooks(accountId: string): Promise<LinkPrevi
       });
     }
   }
+  const formatByAsin = new Map<string, LinkPreviewBook>();
   for (const format of formatRows) {
-    const previous = byAsin.get(format.asin);
+    const previous = formatByAsin.get(format.asin);
     const book = bookById.get(format.book_id);
-    byAsin.set(format.asin, {
+    formatByAsin.set(format.asin, {
       asin: format.asin,
       title: previous?.title || book?.title || null,
       imageUrl: pickUsableCoverUrl(previous?.imageUrl, book?.imageUrl),
     });
   }
-  return [...byAsin.values()].sort((a, b) =>
-    (a.title || a.asin).localeCompare(b.title || b.asin),
+
+  const catalog = authoritativeKdpCatalog(
+    [...titleByAsin.values()],
+    [...formatByAsin.values()],
   );
+  const userId = await resolveQuarantineUserId();
+  if (!userId) return catalog;
+  const quarantine = await loadKdpAsinQuarantineEntries(userId);
+  return catalog.filter((book) => !isQuarantined(accountId, book.asin, quarantine));
 }
 
 async function loadAdsBooks(profileIds: string[]): Promise<Map<string, LinkPreviewBook[]>> {

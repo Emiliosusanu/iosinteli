@@ -1,10 +1,42 @@
 import ExpoModulesCore
 import Foundation
+import WebKit
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
 
 public class InteliAdsNativeSyncModule: Module {
+  @MainActor
+  private func cookieHeader(for urlString: String) async -> String {
+    guard let url = URL(string: urlString),
+          let host = url.host?.lowercased() else {
+      return ""
+    }
+
+    let cookies: [HTTPCookie] = await withCheckedContinuation { continuation in
+      WKWebsiteDataStore.default().httpCookieStore.getAllCookies { values in
+        continuation.resume(returning: values)
+      }
+    }
+    let now = Date()
+    let requestPath = url.path.isEmpty ? "/" : url.path
+    let secureRequest = url.scheme?.lowercased() == "https"
+
+    return cookies
+      .filter { cookie in
+        let domain = cookie.domain
+          .lowercased()
+          .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let domainMatches = host == domain || host.hasSuffix(".\(domain)")
+        let pathMatches = requestPath.hasPrefix(cookie.path.isEmpty ? "/" : cookie.path)
+        let isCurrent = cookie.expiresDate.map { $0 > now } ?? true
+        return domainMatches && pathMatches && isCurrent && (!cookie.isSecure || secureRequest)
+      }
+      .sorted { $0.path.count > $1.path.count }
+      .map { "\($0.name)=\($0.value)" }
+      .joined(separator: "; ")
+  }
+
   private func normalizedApnsEnvironment(_ value: Any?) -> String? {
     guard let raw = value as? String else { return nil }
     switch raw.lowercased() {
@@ -65,6 +97,12 @@ public class InteliAdsNativeSyncModule: Module {
 
     AsyncFunction("getApnsEnvironmentAsync") { () -> String in
       self.signedApnsEnvironment()
+    }
+
+    // WKWebView's native cookie store is the only reliable source for
+    // HttpOnly Amazon session cookies. Page JavaScript cannot read them.
+    AsyncFunction("getCookieHeaderAsync") { (url: String) async -> String in
+      await self.cookieHeader(for: url)
     }
 
     AsyncFunction("getStoreProductsAsync") { () async throws -> [[String: Any]] in

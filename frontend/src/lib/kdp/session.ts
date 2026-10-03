@@ -5,11 +5,13 @@
  * background tick can attach Cookie / User-Agent to reconstructed requests
  * even when WKWebView cookie access is flaky.
  *
- * Cookies are harvested from captured XHR/fetch request headers (includes
- * HttpOnly values the page JS cannot read via document.cookie).
+ * Request metadata is harvested from captured XHR/fetch calls. HttpOnly
+ * cookies come from WKHTTPCookieStore through the native module because page
+ * JavaScript cannot observe browser-added Cookie headers.
  */
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
+import { getNativeCookieHeader } from "inteliads-native-sync";
 import {
   applySessionToHeaders,
   headerLookup,
@@ -94,6 +96,24 @@ export async function mergeSessionFromCaptureHeaders(
   return next;
 }
 
+/** Persist the exact cookie header WKWebView would send to a KDP URL. */
+export async function refreshKdpWebSessionFromNativeCookies(
+  url: string,
+): Promise<KdpWebSession | null> {
+  const cookies = await getNativeCookieHeader(url);
+  const prev = await loadKdpWebSession();
+  if (!cookies) return prev;
+  const next: KdpWebSession = {
+    cookies,
+    userAgent: prev?.userAgent ?? "",
+    languages: prev?.languages,
+    extraHeaders: prev?.extraHeaders,
+    updatedAt: new Date().toISOString(),
+  };
+  await saveKdpWebSession(next);
+  return next;
+}
+
 export async function mergeSessionMeta(meta: {
   userAgent?: string;
   languages?: string;
@@ -103,6 +123,7 @@ export async function mergeSessionMeta(meta: {
     cookies: prev?.cookies ?? "",
     userAgent: meta.userAgent?.trim() || prev?.userAgent || "",
     languages: meta.languages?.trim() || prev?.languages,
+    extraHeaders: prev?.extraHeaders,
     updatedAt: new Date().toISOString(),
   };
   if (!next.cookies && !next.userAgent) return;

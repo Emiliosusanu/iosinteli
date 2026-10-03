@@ -20,9 +20,12 @@ export async function resolveHelperAccountId(opts: {
 
   if (profileIds.length > 0) {
     const linked = await findLinkedAccountIds(profileIds);
-    if (linked[0]) {
-      const id = linked[0];
+    if (linked.length === 1) {
+      const id = linked[0]!;
       return { accountId: id, name: nestNameFor(nestAccounts, id) || (await localAccountName(id)) || "KDP" };
+    }
+    if (linked.length > 1) {
+      throw new Error("Choose the KDP import account in iPhone KDP helper before syncing.");
     }
 
     const { data: legacy } = await supabase
@@ -55,7 +58,7 @@ export async function resolveHelperAccountId(opts: {
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
   const ownedRows = owned ?? [];
-  if (ownedRows[0]?.id) {
+  if (ownedRows.length === 1 && ownedRows[0]?.id) {
     const id = String(ownedRows[0].id);
     const name =
       nestNameFor(nestAccounts, id) ||
@@ -67,6 +70,9 @@ export async function resolveHelperAccountId(opts: {
     }
     await linkAccountToProfilesSafe(id, profileIds);
     return { accountId: id, name };
+  }
+  if (ownedRows.length > 1) {
+    throw new Error("Choose the KDP import account in iPhone KDP helper before syncing.");
   }
 
   // Last resort: create one row, preferring the Nest display name.

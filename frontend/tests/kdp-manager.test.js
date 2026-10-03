@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { mergeKdpAndAdsBooks, splitKdpAndAdsBooks } from "../src/lib/kdpManager.ts";
+import { authoritativeKdpCatalog } from "../src/lib/kdp/catalogAuthority.ts";
 
 const mutations = readFileSync(new URL("../src/lib/mutations.ts", import.meta.url), "utf8");
 const model = readFileSync(new URL("../src/lib/kdpManager.ts", import.meta.url), "utf8");
@@ -41,6 +42,9 @@ test("dedicated manager exposes rename, books, marketplaces, and confirmed delet
   assert.match(topBar, /onDismiss={finishProfileDismiss}/);
   assert.match(screen, /useLocalSearchParams<\{ accountId\?/);
   assert.match(screen, /accountsQ\.data\.find\(\(row\) => row\.id === requestedAccountId\)/);
+  assert.match(screen, /kdp-manager-catalog-counts/);
+  assert.match(screen, /authoritativeBookCount/);
+  assert.doesNotMatch(screen, /account\.book_count/);
 });
 
 test("Home exposes KDP Manager while Targets keeps its profile picker Ads-scoped", () => {
@@ -55,6 +59,24 @@ test("catalog read includes format rows and surfaces read errors", () => {
   assert.match(linkPreview, /from\("kdp_book_formats"\)/);
   assert.match(linkPreview, /throw new Error\(`kdp_book_formats:/);
   assert.match(linkPreview, /from\("kdp_books"\)/);
+  assert.match(linkPreview, /loadKdpAsinQuarantineEntries/);
+});
+
+test("format shelf excludes residual title rows while legacy shelves keep titles", () => {
+  const titleRows = [
+    { asin: "B000000001", title: "Current", imageUrl: "title-cover" },
+    { asin: "B000000002", title: "Residual", imageUrl: null },
+  ];
+  const current = authoritativeKdpCatalog(titleRows, [
+    { asin: "B000000001", title: null, imageUrl: "format-cover" },
+  ]);
+  assert.deepEqual(current, [
+    { asin: "B000000001", title: "Current", imageUrl: "title-cover" },
+  ]);
+  assert.deepEqual(
+    authoritativeKdpCatalog(titleRows, []).map((row) => row.asin),
+    ["B000000001", "B000000002"],
+  );
 });
 
 test("KDP book deletion uses the authenticated Nest endpoint", () => {

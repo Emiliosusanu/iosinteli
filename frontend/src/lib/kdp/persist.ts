@@ -56,6 +56,23 @@ export async function saveHelperAccountId(id: string): Promise<void> {
   if (!ok) throw new Error("Couldn't save KDP helper progress on this iPhone.");
 }
 
+/**
+ * Switch the explicit iPhone-helper destination without carrying another
+ * account's coverage/deferred journal into it. Templates and Amazon cookies
+ * remain available because they describe the live WebView session.
+ */
+export async function selectHelperAccountId(id: string): Promise<void> {
+  const next = String(id || "").trim();
+  if (!next) throw new Error("Choose a KDP account.");
+  const previous = await loadHelperAccountId();
+  if (previous === next) return;
+  await saveHelperAccountId(next);
+  await Promise.all([
+    storage.removeItem(STATE_KEY),
+    storage.removeItem(DEFERRED_KEY),
+  ]);
+}
+
 export async function loadHelperSyncState(): Promise<KdpSyncState> {
   try {
     const raw = await storage.getItem<string>(STATE_KEY, "");

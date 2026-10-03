@@ -9,6 +9,7 @@ import {
   SettingsSection,
 } from "@/src/components/settings/SettingsPrimitives";
 import { useApp } from "@/src/contexts/AppContext";
+import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "@/src/lib/theme";
 import { setKdpHelperScreenFocused } from "@/src/lib/kdp/helperUi";
 import { runKdpIosHelperTick } from "@/src/lib/kdp/importer";
@@ -21,6 +22,8 @@ import {
 } from "@/src/lib/kdp/runtime";
 import { KDP_CAPTURE_PAGES } from "@/src/lib/kdp/templates";
 import { isIosHelperEnabled } from "@/src/lib/kdp/source";
+import { fetchKdpAccounts } from "@/src/lib/mutations";
+import { loadHelperAccountId, selectHelperAccountId } from "@/src/lib/kdp/persist";
 import {
   KDP_HELPER_FOOTER_DISABLED,
   KDP_HELPER_FOOTER_ENABLED,
@@ -31,12 +34,27 @@ export default function KdpHelperScreen() {
   const { kdpRoyaltySource, selectedProfileIds } = useApp();
   const ref = useRef<WebView>(null);
   const [status, setStatus] = useState(getKdpHelperStatus());
+  const [helperAccountId, setHelperAccountId] = useState<string | null>(null);
   const enabled = isIosHelperEnabled(kdpRoyaltySource);
+  const accountsQ = useQuery({
+    queryKey: ["kdp-helper-accounts"],
+    queryFn: fetchKdpAccounts,
+    staleTime: 30_000,
+  });
 
   useEffect(() => {
     void hydrateKdpRuntimeFromPersistence();
+    void loadHelperAccountId().then(setHelperAccountId);
     return subscribeKdpHelperStatus(setStatus);
   }, []);
+
+  const chooseHelperAccount = async (accountId: string) => {
+    await selectHelperAccountId(accountId);
+    setHelperAccountId(accountId);
+    startedAfterLogin.current = false;
+    automaticRetryCount.current = 0;
+    setAutomaticRetryNonce((value) => value + 1);
+  };
 
   useLayoutEffect(() => {
     setKdpHelperScreenFocused(true);
@@ -54,13 +72,43 @@ export default function KdpHelperScreen() {
     [status.templates],
   );
   const startedAfterLogin = useRef(false);
+  const automaticRetryCount = useRef(0);
+  const automaticRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [automaticRetryNonce, setAutomaticRetryNonce] = useState(0);
+
+  useEffect(() => () => {
+    if (automaticRetryTimer.current) clearTimeout(automaticRetryTimer.current);
+  }, []);
 
   useEffect(() => {
-    if (!enabled || (!status.loggedIn && !status.savedSession) || status.running || startedAfterLogin.current) return;
+    if (!enabled || (!status.loggedIn && !status.savedSession)) {
+      startedAfterLogin.current = false;
+      automaticRetryCount.current = 0;
+      return;
+    }
+    if (status.running || startedAfterLogin.current) return;
     if (!kdpTemplatesReady()) return;
     startedAfterLogin.current = true;
-    void runKdpIosHelperTick("manual", { force: true, profileIds: selectedProfileIds });
-  }, [enabled, status.loggedIn, status.savedSession, status.running, status.templates, selectedProfileIds]);
+    void runKdpIosHelperTick("manual", { force: true, profileIds: selectedProfileIds }).then((result) => {
+      if (result.ok || automaticRetryCount.current >= 1) {
+        automaticRetryCount.current = 0;
+        return;
+      }
+      automaticRetryCount.current += 1;
+      automaticRetryTimer.current = setTimeout(() => {
+        startedAfterLogin.current = false;
+        setAutomaticRetryNonce((value) => value + 1);
+      }, 1_500);
+    });
+  }, [
+    enabled,
+    status.loggedIn,
+    status.savedSession,
+    status.running,
+    status.templates,
+    selectedProfileIds,
+    automaticRetryNonce,
+  ]);
 
   const onSync = () => {
     void runKdpIosHelperTick("manual", { force: true, profileIds: selectedProfileIds });
@@ -82,6 +130,29 @@ export default function KdpHelperScreen() {
         contentInsetAdjustmentBehavior="automatic"
         keyboardShouldPersistTaps="handled"
       >
+        <SettingsSection
+          title="KDP import account"
+          footer="This is the KDP account currently signed into Amazon. Ads profile and marketplace filters never change it."
+        >
+          {accountsQ.isLoading ? (
+            <SettingsRow label="Loading KDP accounts…" last />
+          ) : accountsQ.isError ? (
+            <SettingsRow label="Couldn't load KDP accounts" value="Tap to retry" onPress={() => void accountsQ.refetch()} last />
+          ) : (accountsQ.data ?? []).map((account, index, rows) => (
+            <SettingsRow
+              key={account.id}
+              testID={`kdp-helper-account-${account.id}`}
+              label={account.name || "KDP account"}
+              subtitle={helperAccountId === account.id ? "Current import destination" : "Tap to select import destination"}
+              value={helperAccountId === account.id ? "Selected" : undefined}
+              symbol={helperAccountId === account.id ? "checkmark.circle.fill" : "books.vertical"}
+              symbolColor={helperAccountId === account.id ? t.colors.tone_good : t.colors.tone_inactive}
+              onPress={() => void chooseHelperAccount(account.id)}
+              last={index === rows.length - 1}
+            />
+          ))}
+        </SettingsSection>
+
         <SettingsSection footer={enabled ? KDP_HELPER_FOOTER_ENABLED : KDP_HELPER_FOOTER_DISABLED}>
           <SettingsRow
             label="KDP session"

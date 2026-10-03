@@ -31,6 +31,7 @@ export type ApnsEnvironment = "sandbox" | "production";
 
 type NativeModule = {
   getApnsEnvironmentAsync(): Promise<string>;
+  getCookieHeaderAsync(url: string): Promise<string>;
   registerAndScheduleAsync(force: boolean): Promise<boolean>;
   scheduleIfNeededAsync(force: boolean): Promise<boolean>;
   setEnabledAsync(enabled: boolean): Promise<boolean>;
@@ -118,6 +119,17 @@ export async function getNativeApnsEnvironment(): Promise<ApnsEnvironment | null
   try {
     const environment = await NativeSync.getApnsEnvironmentAsync();
     return environment === "sandbox" || environment === "production" ? environment : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read cookies that WKWebView would send to this URL, including HttpOnly. */
+export async function getNativeCookieHeader(url: string): Promise<string | null> {
+  if (!NativeSync || !url) return null;
+  try {
+    const value = await NativeSync.getCookieHeaderAsync(url);
+    return typeof value === "string" && value.trim() ? value.trim() : null;
   } catch {
     return null;
   }
