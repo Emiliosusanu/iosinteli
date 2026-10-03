@@ -85,9 +85,12 @@ test("Add targets wires select-all controls + suggested bids default on", () => 
   assert.match(addTargets, /!asinResolving/);
 });
 
-test("AI suggestions start unselected and counts share the eligible submission set", () => {
+test("AI suggestions start unselected and selection follows stable entity identity", () => {
   for (const screen of [campaignCreate, adGroupCreate, addTargets]) {
-    assert.match(screen, /selectedEligibleSuggestionIndexes/);
+    assert.match(screen, /keywordDedupeKey/);
+    assert.match(screen, /productTargetDedupeKey/);
+    assert.match(screen, /useState<Set<string>>/);
+    assert.doesNotMatch(screen, /useState<Set<number>>/);
     assert.doesNotMatch(
       screen,
       /setSelected(?:Keywords|Products)\(\s*new Set\(filtered(?:Keyword|Product)Rows/,

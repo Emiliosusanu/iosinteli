@@ -160,7 +160,19 @@ never from `main`, and never from the active Cursor checkout.
 - [x] TypeScript, diff validation, focused KDP coverage, and the full 980-test suite pass.
 - [x] Clean Release archive `/tmp/InteliAds-351.xcarchive` is `io.inteliads.app` version `1.0.1 (351)` with executable SHA-256 `7e0fe0d6b0177e6e9eeade8d4cd28b320feab1a4e4f131b6fd9eaf80613c2dc0`. Its App Store export is signed by `Apple Distribution: Emilian Susanu (AQ5FWX4K8Y)`, has production APNs and `get-task-allow=false`, and has IPA SHA-256 `ea30485004ea264c467b3623fe74ec2ef61c43657716a2eb068a631e0326be09`.
 - [x] Build 351 is installed in place on the physical iPhone 14 Pro with the signed-in session preserved. Overview shows Gross `$5.2K`, Net `$2,366.13`, Ad Spend `$2.9K`, ACoS `36.5%`, and Margin `45%`; KDP Manager and two isolated account catalogs render without a JavaScript exception, crash, RedBox, or book-read error.
-- [x] Implementation commit `d3c7bdf9` merged through PR #58 at release-candidate commit `a31867e3`. App Store Connect accepted build 351 for internal TestFlight and began processing it on October 3, 2026.
+- [x] Implementation commit `d3c7bdf9` merged through PR #58 at release-candidate commit `a31867e3`. App Store Connect processed build 351 successfully; its status is **Testing** in the internal **Intelyads** group as of October 3, 2026.
+
+## Build 352 — exact suggestion selection and bounded AI recovery
+
+- [x] Starts from the exact merged build 351 release candidate in the isolated iOS worktree; the active Cursor checkout remains untouched.
+- [x] Create Campaign, New Ad Group, and Add to Existing Ad Group store selected targets by stable `keyword + match type` or `ASIN + match type` identity. AI ranking, metadata enrichment, filters, and existing-entity reads cannot move a checkmark to another row.
+- [x] The displayed selected count and submitted Amazon payload are derived from the same current eligible identities; a fresh or refreshed suggestion result starts with zero selected rows.
+- [x] The client relevance fallback now performs the configured bounded retry instead of stopping after its first transient timeout.
+- [x] Product suggestions receive a bounded metadata-enrichment pass before Groq. An ASIN with neither a real title nor Amazon correlation themes cannot be rejected by AI without evidence; it remains available for explicit seller selection.
+- [x] TypeScript, diff validation, 90 focused tests, and the full 981-test suite pass.
+- [ ] Clean Release archive `/tmp/InteliAds-352.xcarchive` is built without overwriting 351 and installed on the physical iPhone 14 Pro with the signed-in session preserved.
+- [ ] Physical-device smoke covers US and CA Create Campaign, New Ad Group, Add Keywords, Add Products, empty initial selection, filter changes, exact selected/submitted counts, metadata rows, AI retry/fallback, and no crash or RedBox.
+- [ ] Implementation is committed, pushed, merged into `feat/ios-release-candidate`, and the tested archive is accepted by internal TestFlight.
 
 ## Release invariants
 
