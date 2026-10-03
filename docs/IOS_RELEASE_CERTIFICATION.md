@@ -183,6 +183,17 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Build-number commit `af33efba` was pushed and merged through PR #63 at release-candidate commit `5505908e`.
 - [x] App Store Connect accepted and processed the public upload. Build 353 was added to the external **Intelyads** group with tester notes covering campaign/ad-group targeting, AI suggestion filtering, selection counts, dashboard freshness, background refresh, and order notifications; its status is **Testing** as of October 3, 2026.
 
+## Build 354 — full-portfolio notifications and shared fresh cache
+
+- [x] Starts from release-candidate commit `db6eb30fb60c73ed42a15e8b54a996e615a710f4`, which contains merged implementation PR #65 and build-number PR #66. The active Cursor checkout remained untouched.
+- [x] Background financial refresh and order notifications calculate from the complete activated Ads/KDP portfolio. The Ads Engine marketplace/profile picker no longer narrows Home financial totals or notification totals.
+- [x] The root app uses the shared `appQueryClient`, so background prefetch, Create Campaign, KDP Manager, and foreground screens read the same cache instead of issuing avoidable cold duplicate reads.
+- [x] TypeScript, release stress validation, lint with zero errors, focused notification/cache coverage, and the full 981-test suite pass.
+- [x] Clean Release archive `/tmp/InteliAds-354.xcarchive` is `io.inteliads.app` version `1.0.1 (354)` with executable SHA-256 `3a59cfb3818e61d4b6f3ebe6f376130abcea68e42fc9136eb28ce95d15f0bcc3`. The App Store export is signed by `Apple Distribution: Emilian Susanu (AQ5FWX4K8Y)`, has production APNs and `get-task-allow=false`, and its IPA SHA-256 is `83eae0b8c1e7c9977a1bed5bf2d94d941852c4ad005a749be7af163adbc74a13`.
+- [x] Build 354 was installed in place on the physical iPhone 14 Pro with the signed-in session preserved. A read-only navigation stress covered Home, Campaigns, Targeting, Products/Books, More, Settings, Accounts, KDP Helper, Sync, and Home again with zero JavaScript errors, hard errors, crashes, or RedBox.
+- [x] The physical-device Overview displayed current all-portfolio totals for October 1–3: Gross `$361`, Net `$174.59`, Ad Spend `$186`, ACoS `34.6%`, and Margin `48%`.
+- [x] App Store Connect accepted and processed the public upload. Build 354 was added to the external **Intelyads** group (3 testers) with automatic notification and tester notes covering freshness, complete order totals, targeting suggestions, AI filtering, exact selection counts, metadata, timeouts, and KDP isolation. Its status is **Testing** as of October 3, 2026.
+
 ## Release invariants
 
 - No fake zero, placeholder metric, stale total, or silent unfiltered fallback.
