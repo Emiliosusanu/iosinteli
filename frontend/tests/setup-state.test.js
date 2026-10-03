@@ -231,13 +231,16 @@ test("activated digest groups keep USD and CAD in separate buckets", () => {
   assert.equal(groups[1].profiles[0].id, "ca");
 });
 
-test("digest money scope is Overview selection ∩ activated; empty selection → all activated", () => {
+test("digest money scope stays full-portfolio when the Ads picker narrows", () => {
   const profiles = [
     { id: "us", profile_id: "ads-us", is_enabled: true, currency_code: "USD" },
     { id: "ca", profile_id: "ads-ca", is_enabled: true, currency_code: "CAD" },
     { id: "off", profile_id: "ads-off", is_enabled: false, currency_code: "GBP" },
   ];
-  assert.deepEqual(digestMoneyAdsProfileIds(["us"], profiles).sort(), ["ads-us"]);
+  assert.deepEqual(
+    digestMoneyAdsProfileIds(["us"], profiles).sort(),
+    ["ads-ca", "ads-us"].sort(),
+  );
   assert.deepEqual(
     digestMoneyAdsProfileIds(["us", "ca"], profiles).sort(),
     ["ads-ca", "ads-us"].sort(),

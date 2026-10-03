@@ -14,6 +14,7 @@ import {
   type MobileHomeCacheScope,
 } from "./mobileHomeSnapshot";
 import { adsProfileIdsForSelection, filterToEnabledProfileSelection, mergeBackgroundScope, parseSelectedProfileIds } from "./notificationScope";
+import { activatedAdsProfileIds, activatedProfileIds } from "./notificationAuthority";
 
 export const BACKGROUND_REFRESH_COOLDOWN_MS = 15 * 60_000;
 export const ADS_SYNC_TRIGGER_COOLDOWN_MS = 30 * 60_000;
@@ -93,23 +94,36 @@ export async function refreshDualSourceFinancialCache(
     const { fetchAmazonProfiles, fetchKdpRoyaltiesRange } = await import("./queries");
     const { selectKdpRoyaltyScopeForSelection } = await import("./kdpRoyaltyScope");
     const profiles = await fetchAmazonProfiles(scope.userId, scope.viewAs).catch(() => []);
-    const adsIds = adsProfileIdsForSelection(scope.profileIds, profiles);
-    const queryIds = adsIds.length ? adsIds : filterToEnabledProfileSelection(scope.profileIds, profiles);
+    // Home financials are full-portfolio. The header/profile picker only filters
+    // Ads Engine, so a background wake must not persist a narrower snapshot
+    // under a different scope and leave Home cold on the next launch.
+    const portfolioAdsIds = activatedAdsProfileIds(profiles);
+    const selectedAdsIds = adsProfileIdsForSelection(scope.profileIds, profiles);
+    const queryIds = portfolioAdsIds.length
+      ? portfolioAdsIds
+      : selectedAdsIds.length
+        ? selectedAdsIds
+        : filterToEnabledProfileSelection(scope.profileIds, profiles);
+    if (!queryIds.length) return false;
+    const portfolioScope = { ...scope, profileIds: queryIds };
     const snapshot = await fetchMobileOverview({
       profileIds: queryIds,
       filterUserId: scope.viewAs,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
     await persistMobileHomeSnapshot(
-      { ...scope, profileIds: queryIds },
+      portfolioScope,
       stampMobileHomeSource(snapshot, "nest"),
     );
 
     const today = toDateString(new Date());
     try {
+      const portfolioSelection = activatedProfileIds(profiles);
       const royaltyIds = selectKdpRoyaltyScopeForSelection(
         profiles,
-        filterToEnabledProfileSelection(scope.profileIds, profiles),
+        portfolioSelection.length
+          ? portfolioSelection
+          : filterToEnabledProfileSelection(scope.profileIds, profiles),
       ).profileIds;
       if (royaltyIds.length) {
         await fetchKdpRoyaltiesRange(royaltyIds, today, today);

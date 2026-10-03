@@ -199,8 +199,9 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     // and a guessed currency — frankensum Spend/ACoS).
     if (!profiles.length) return 0;
 
-    // Spend/orders/ACoS = Overview selection ∩ activated (same money set as Home).
-    // Empty selection → all activated. Never mix disabled profiles into digests.
+    // Spend/orders/ACoS = every activated profile, matching Home's financial
+    // portfolio. The header picker only filters Ads Engine and must never make a
+    // notification look like an account-wide total while showing a subset.
     let queryIds = digestMoneyAdsProfileIds(scope.profileIds, profiles);
     if (!queryIds.length) {
       queryIds = adsProfileIdsForSelection(scope.profileIds, profiles);

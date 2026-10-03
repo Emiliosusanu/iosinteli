@@ -16,10 +16,13 @@ test("load errors never say failed to load", () => {
   assert.doesNotMatch(couldntLoad("books"), /failed to load/i);
 });
 
-test("background scope prefers selected profiles over last Home", () => {
+test("background refresh expands the picker scope to the full financial portfolio", () => {
   assert.match(background, /parseSelectedProfileIds/);
   assert.match(background, /mergeBackgroundScope/);
   assert.match(background, /adsProfileIdsForSelection/);
+  assert.match(background, /activatedAdsProfileIds/);
+  assert.match(background, /activatedProfileIds/);
+  assert.match(background, /const portfolioScope = \{ \.\.\.scope, profileIds: queryIds \}/);
 });
 
 test("dual-source background refresh is wired to notifications and resume", () => {
@@ -46,6 +49,9 @@ test("dual-source background refresh is wired to notifications and resume", () =
   assert.match(create, /CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS/);
   assert.match(create, /isHomeQueryTimeout\(error\)/);
   assert.match(appContext, /warmCampaignCreationBooksCache/);
+  assert.match(layout, /import \{ appQueryClient \} from "@\/src\/lib\/queryClient"/);
+  assert.match(layout, /const queryClient = appQueryClient/);
+  assert.doesNotMatch(layout, /new QueryClient\(/);
 });
 
 test("supabase bearer always retries once after refresh on 401", () => {
