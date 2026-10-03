@@ -5,7 +5,6 @@
  */
 import { storage } from "@/src/utils/storage";
 import { supabase } from "./supabase";
-import { toDateString } from "./format";
 import { FINANCIAL_QUERY_ROOTS } from "./financialReadVersion";
 import {
   loadLastMobileHomeScope,
@@ -15,6 +14,7 @@ import {
 } from "./mobileHomeSnapshot";
 import { adsProfileIdsForSelection, filterToEnabledProfileSelection, mergeBackgroundScope, parseSelectedProfileIds } from "./notificationScope";
 import { activatedAdsProfileIds, activatedProfileIds } from "./notificationAuthority";
+import { buildVerifiedFinancialWidgetPayload, nativeFinancialScopeKey } from "./widgetFinance";
 
 export const BACKGROUND_REFRESH_COOLDOWN_MS = 15 * 60_000;
 export const ADS_SYNC_TRIGGER_COOLDOWN_MS = 30 * 60_000;
@@ -82,7 +82,7 @@ async function maybeTriggerAdsSync(snapshotGeneratedAt: string | null | undefine
   }
 }
 
-/** Refresh Home snapshot + today's KDP royalties from cloud (Chrome may be offline). */
+/** Refresh Home + verified rolling-7-day widget finance from cloud (Chrome may be offline). */
 export async function refreshDualSourceFinancialCache(
   source: "background" | "foreground" | "push" = "background",
 ): Promise<boolean> {
@@ -116,7 +116,8 @@ export async function refreshDualSourceFinancialCache(
       stampMobileHomeSource(snapshot, "nest"),
     );
 
-    const today = toDateString(new Date());
+    let widgetRoyaltiesReadCompleted = false;
+    let widgetPayload: ReturnType<typeof buildVerifiedFinancialWidgetPayload> = null;
     try {
       const portfolioSelection = activatedProfileIds(profiles);
       const royaltyIds = selectKdpRoyaltyScopeForSelection(
@@ -126,10 +127,42 @@ export async function refreshDualSourceFinancialCache(
           : filterToEnabledProfileSelection(scope.profileIds, profiles),
       ).profileIds;
       if (royaltyIds.length) {
-        await fetchKdpRoyaltiesRange(royaltyIds, today, today);
+        const royalties = await fetchKdpRoyaltiesRange(
+          royaltyIds,
+          snapshot.sevenDay.start,
+          snapshot.sevenDay.end,
+        );
+        widgetRoyaltiesReadCompleted = true;
+        widgetPayload = buildVerifiedFinancialWidgetPayload({
+          snapshot,
+          royalties,
+          currencySymbol: "$",
+        });
+      } else {
+        widgetRoyaltiesReadCompleted = true;
       }
     } catch (error) {
       devWarn("KDP background read skipped", error);
+    }
+
+    // WidgetKit never receives partial money. A verified empty/unlinked KDP
+    // scope clears the prior scope; a transient read error leaves the last
+    // verified value until WidgetKit's six-hour freshness gate expires.
+    try {
+      const { updateNativeFinancialSnapshot } = await import("inteliads-native-sync");
+      if (widgetPayload) {
+        await updateNativeFinancialSnapshot(widgetPayload);
+      } else if (widgetRoyaltiesReadCompleted) {
+        await updateNativeFinancialSnapshot({
+          verified: false,
+          asOfMs: Date.now(),
+          periodLabel: "Last 7 days",
+          scopeKey: nativeFinancialScopeKey(snapshot),
+          reload: true,
+        });
+      }
+    } catch (error) {
+      devWarn("Widget finance publish skipped", error);
     }
 
     if (source === "background") {

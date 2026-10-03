@@ -49,6 +49,8 @@ test("Home orders operational cards and never renders a pending monthly forecast
 test("Marketplace card is real-data only and controls the Ads widget scope", () => {
   assert.match(cards, /OverviewMarketplaceAdsCard/);
   assert.match(cards, /if \(!rows\.length\) return null/);
+  assert.match(home, /if \(!adsReady\) return \[\]/);
+  assert.match(home, /return adsMarketCountries\.map/);
   assert.match(home, /adsWidgetProfileIds/);
   assert.match(home, /selectedCountry=\{selectedAdsMarket\}/);
   assert.match(home, /onSelect=\{setSelectedAdsMarket\}/);
@@ -62,6 +64,13 @@ test("Review queue exposes only source-verified signals without one failed sourc
   assert.match(home, /const syncVerified = syncLogsQ\.isSuccess && !syncLogsQ\.isFetching/);
   assert.match(home, /const active = items\.length > 0/);
   assert.match(home, /verified signal/);
-  assert.match(home, /actionItems\.length > 0 \|\| reviewChecks !== "incomplete"/);
+  assert.match(home, /\{reviewReady \? \(/);
   assert.doesNotMatch(home, /const active = checks === "complete" && items\.length > 0/);
+});
+
+test("verified empty operational queries render zero while errors never impersonate zero", () => {
+  assert.match(home, /const budgetSourcesVerified = budgetTodaySynced && allBudgetsQ\.isSuccess/);
+  assert.match(home, /budgetSourcesVerified \|\| totalDailyBudget > 0 \|\| budgetSpend > 0/);
+  assert.match(home, /statusError=\{todayStatsQ\.isError && !todayStatsQ\.data\}/);
+  assert.match(cards, /statusError \? "Unavailable" : formatInt\(stat\.value\)/);
 });

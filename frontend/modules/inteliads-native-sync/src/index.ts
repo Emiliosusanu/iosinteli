@@ -26,6 +26,18 @@ export type SyncSnapshotPayload = {
   reload?: boolean;
 };
 
+export type FinancialWidgetSnapshotPayload = {
+  verified: boolean;
+  asOfMs?: number | null;
+  periodLabel?: string;
+  scopeKey?: string;
+  currencySymbol?: string;
+  royalties?: number;
+  adSpend?: number;
+  net?: number;
+  reload?: boolean;
+};
+
 export type NativeWakeKind = "recent" | "processing";
 export type ApnsEnvironment = "sandbox" | "production";
 
@@ -38,6 +50,7 @@ type NativeModule = {
   getStatusAsync(): Promise<NativeSyncStatus>;
   consumePendingWakeKindAsync(): Promise<string | null>;
   updateSyncSnapshotAsync(payload: SyncSnapshotPayload): Promise<boolean>;
+  updateFinancialSnapshotAsync(payload: FinancialWidgetSnapshotPayload): Promise<boolean>;
   getSyncSnapshotAsync(): Promise<Record<string, unknown>>;
   getStoreProductsAsync(): Promise<StoreProduct[]>;
   purchaseStoreProductAsync(productId: string, appAccountToken: string): Promise<StoreTransaction>;
@@ -166,6 +179,18 @@ export async function updateNativeSyncSnapshot(payload: SyncSnapshotPayload): Pr
   if (!NativeSync) return false;
   try {
     return await NativeSync.updateSyncSnapshotAsync(payload);
+  } catch {
+    return false;
+  }
+}
+
+/** Publish only source-verified finance. `verified: false` clears a mismatched scope. */
+export async function updateNativeFinancialSnapshot(
+  payload: FinancialWidgetSnapshotPayload,
+): Promise<boolean> {
+  if (!NativeSync) return false;
+  try {
+    return await NativeSync.updateFinancialSnapshotAsync(payload);
   } catch {
     return false;
   }
