@@ -113,3 +113,15 @@ test("WidgetKit hides old finance and background refresh publishes only complete
   assert.match(background, /updateNativeFinancialSnapshot/);
 });
 
+test("the iOS app target builds and embeds the finance widget extension", () => {
+  const project = readFileSync(
+    new URL("../ios/InteliAds.xcodeproj/project.pbxproj", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(project, /EAD5BCAE3701AEBC95A99B3B \/\* InteliAdsSyncWidget \*\/ = \{\n\s+isa = PBXNativeTarget;/);
+  assert.match(project, /InteliAdsSyncWidget\.appex in Embed App Extensions/);
+  assert.match(project, /dstSubfolderSpec = 13;/);
+  assert.match(project, /target = EAD5BCAE3701AEBC95A99B3B \/\* InteliAdsSyncWidget \*\//);
+  assert.match(project, /InteliAdsWidgetSnapshot\.swift in Sources/);
+});

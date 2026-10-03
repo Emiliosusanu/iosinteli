@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10F6B5E7C8D9012A3B4C5D6 /* InteliAdsSyncWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 902A9FCAE2342379CB292128 /* InteliAdsSyncWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B21A7C6D8E9F0123A4B5C6D7 /* InteliAdsSyncWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A6457F044F462E71F790E0 /* InteliAdsSyncWidgetBundle.swift */; };
+		C32B8D7E9F0A1234B5C6D7E8 /* InteliAdsSyncStatusWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FF9C53AB4CA53244E2223E7 /* InteliAdsSyncStatusWidget.swift */; };
+		D43C9E8F0A1B2345C6D7E8F9 /* InteliAdsWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BFF514B44EB86F0A19341FE /* InteliAdsWidgetSnapshot.swift */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
 		67D5EF200A3A4B2D8C9CB27B /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2F8B0300AB814CF4B1CFE3C5 /* PrivacyInfo.xcprivacy */; };
@@ -18,6 +22,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		E54D0F9A1B2C3456D7E8F901 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EAD5BCAE3701AEBC95A99B3B;
+			remoteInfo = InteliAdsSyncWidget;
+		};
 		022AE03FFA16AC511EAEDE4A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 73A8F265C35BB45C127BDEF3 /* Pods.xcodeproj */;
@@ -846,6 +857,20 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		F65E1A0B2C3D4567E8F901A2 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A10F6B5E7C8D9012A3B4C5D6 /* InteliAdsSyncWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		0BFF514B44EB86F0A19341FE /* InteliAdsWidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncActivityShared/InteliAdsWidgetSnapshot.swift; sourceTree = "<group>"; };
 		13B07F961A680F5B00A75B9A /* InteliAds.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = InteliAds.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -877,6 +902,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				FD841C9F957463A6AAF36699 /* libPods-InteliAds.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A76F2B1C3D4E5678F901A2B3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1129,16 +1161,35 @@
 				800E24972A6A228C8D4807E9 /* [CP] Copy Pods Resources */,
 				9CC7181EF7615229BAF3AE5A /* [CP] Embed Pods Frameworks */,
 				18F0B607B56E99921DAB7ABC /* [InteliAds] Generate third-party framework dSYMs */,
+				F65E1A0B2C3D4567E8F901A2 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				3BA887B8C1D25106873F4F07 /* PBXTargetDependency */,
+				DA925E4F60718901A2B3C4D5 /* PBXTargetDependency */,
 			);
 			name = InteliAds;
 			productName = InteliAds;
 			productReference = 13B07F961A680F5B00A75B9A /* InteliAds.app */;
 			productType = "com.apple.product-type.application";
+		};
+		EAD5BCAE3701AEBC95A99B3B /* InteliAdsSyncWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0DC5817293A401B2C3D4E5F6 /* Build configuration list for PBXNativeTarget "InteliAdsSyncWidget" */;
+			buildPhases = (
+				C9814D3E5F6078901A2B3C4D /* Sources */,
+				A76F2B1C3D4E5678F901A2B3 /* Frameworks */,
+				B8703C2D4E5F678901A2B3C4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = InteliAdsSyncWidget;
+			productName = InteliAdsSyncWidget;
+			productReference = 902A9FCAE2342379CB292128 /* InteliAdsSyncWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -1179,6 +1230,7 @@
 			projectRoot = "";
 			targets = (
 				13B07F861A680F5B00A75B9A /* InteliAds */,
+				EAD5BCAE3701AEBC95A99B3B /* InteliAdsSyncWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -2017,6 +2069,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B8703C2D4E5F678901A2B3C4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
@@ -2179,6 +2238,16 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C9814D3E5F6078901A2B3C4D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B21A7C6D8E9F0123A4B5C6D7 /* InteliAdsSyncWidgetBundle.swift in Sources */,
+				C32B8D7E9F0A1234B5C6D7E8 /* InteliAdsSyncStatusWidget.swift in Sources */,
+				D43C9E8F0A1B2345C6D7E8F9 /* InteliAdsWidgetSnapshot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -2186,6 +2255,11 @@
 			isa = PBXTargetDependency;
 			name = "Pods-InteliAds";
 			targetProxy = 5648F06B487DAEFA26F973D4 /* PBXContainerItemProxy */;
+		};
+		DA925E4F60718901A2B3C4D5 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EAD5BCAE3701AEBC95A99B3B /* InteliAdsSyncWidget */;
+			targetProxy = E54D0F9A1B2C3456D7E8F901 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -2199,7 +2273,7 @@
 				CODE_SIGN_ENTITLEMENTS = InteliAds/InteliAds.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 359;
+				CURRENT_PROJECT_VERSION = 360;
 				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -2238,7 +2312,7 @@
 				CODE_SIGN_ENTITLEMENTS = InteliAds/InteliAdsRelease.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 359;
+				CURRENT_PROJECT_VERSION = 360;
 				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
 				INFOPLIST_FILE = InteliAds/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
@@ -2380,6 +2454,57 @@
 			};
 			name = Release;
 		};
+		EBA36F507182901A2B3C4D5E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = InteliAdsSyncWidget/InteliAdsSyncWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 360;
+				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = InteliAdsSyncWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.inteliads.app.sync-widget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		FCB47061829301A2B3C4D5E6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = InteliAdsSyncWidget/InteliAdsSyncWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 360;
+				DEVELOPMENT_TEAM = AQ5FWX4K8Y;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = InteliAdsSyncWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.inteliads.app.sync-widget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -2397,6 +2522,15 @@
 			buildConfigurations = (
 				83CBBA201A601CBA00E9B192 /* Debug */,
 				83CBBA211A601CBA00E9B192 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0DC5817293A401B2C3D4E5F6 /* Build configuration list for PBXNativeTarget "InteliAdsSyncWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EBA36F507182901A2B3C4D5E /* Debug */,
+				FCB47061829301A2B3C4D5E6 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
