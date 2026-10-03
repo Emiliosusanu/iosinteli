@@ -218,7 +218,7 @@ never from `main`, and never from the active Cursor checkout.
 - [x] A disabled marketplace is offered only when Amazon Ads returns live `in_stock` evidence for that exact owned `profile_id`. Country, currency, shared marketplace ids, stale book links, and catalog-only or historical-product-ad evidence cannot create a choice.
 - [x] The seller sees one marketplace chooser for the selected book. Disabled rows are labelled `Enable & use` and require a second explicit confirmation before the profile is enabled or selected.
 - [x] Campaign preview and creation remain gated by the server's enabled-profile check. The app updates its local profile scope only after the Nest enable mutation succeeds, then starts Ads sync and reconciles the profile cache.
-- [x] iOS TypeScript, lint with zero errors, the focused cross-account/stock suite, and the full 986-test suite pass.
+- [x] iOS TypeScript, lint with zero errors, the focused cross-account/stock suite, and the full 987-test suite pass.
 - [ ] Server `includeDisabled` marketplace discovery is merged and deployed with its focused Nest tests green.
 - [ ] The next clean archive is installed on the physical iPhone 14 Pro and the chooser is verified with a real disabled marketplace before TestFlight upload.
 
