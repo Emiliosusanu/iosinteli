@@ -158,9 +158,9 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Native WebKit cookie-store access preserves HttpOnly Amazon KDP cookies for background replay. A generic HTTP 403 no longer falsely destroys the saved session; a real 401 or Amazon sign-in redirect does.
 - [x] The helper retries one transient capture failure once and keeps account-specific coverage/deferred state from leaking across a deliberate account switch.
 - [x] TypeScript, diff validation, focused KDP coverage, and the full 980-test suite pass.
-- [x] Clean Release archive `/tmp/InteliAds-351.xcarchive` is `io.inteliads.app` version `1.0.1 (351)` with executable SHA-256 `7e0fe0d6b0177e6e9eeade8d4cd28b320feab1a4e4f131b6fd9eaf80613c2dc0`.
+- [x] Clean Release archive `/tmp/InteliAds-351.xcarchive` is `io.inteliads.app` version `1.0.1 (351)` with executable SHA-256 `7e0fe0d6b0177e6e9eeade8d4cd28b320feab1a4e4f131b6fd9eaf80613c2dc0`. Its App Store export is signed by `Apple Distribution: Emilian Susanu (AQ5FWX4K8Y)`, has production APNs and `get-task-allow=false`, and has IPA SHA-256 `ea30485004ea264c467b3623fe74ec2ef61c43657716a2eb068a631e0326be09`.
 - [x] Build 351 is installed in place on the physical iPhone 14 Pro with the signed-in session preserved. Overview shows Gross `$5.2K`, Net `$2,366.13`, Ad Spend `$2.9K`, ACoS `36.5%`, and Margin `45%`; KDP Manager and two isolated account catalogs render without a JavaScript exception, crash, RedBox, or book-read error.
-- [ ] Commit, push, review, and TestFlight upload remain release gates.
+- [x] Implementation commit `d3c7bdf9` merged through PR #58 at release-candidate commit `a31867e3`. App Store Connect accepted build 351 for internal TestFlight and began processing it on October 3, 2026.
 
 ## Release invariants
 
