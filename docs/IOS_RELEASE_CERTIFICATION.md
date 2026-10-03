@@ -219,8 +219,9 @@ never from `main`, and never from the active Cursor checkout.
 - [x] The seller sees one marketplace chooser for the selected book. Disabled rows are labelled `Enable & use` and require a second explicit confirmation before the profile is enabled or selected.
 - [x] Campaign preview and creation remain gated by the server's enabled-profile check. The app updates its local profile scope only after the Nest enable mutation succeeds, then starts Ads sync and reconciles the profile cache.
 - [x] iOS TypeScript, lint with zero errors, the focused cross-account/stock suite, and the full 987-test suite pass.
-- [ ] Server `includeDisabled` marketplace discovery is merged and deployed with its focused Nest tests green.
-- [ ] The next clean archive is installed on the physical iPhone 14 Pro and the chooser is verified with a real disabled marketplace before TestFlight upload.
+- [x] Server PRs #608 and #609 are merged and deployed from production commit `307dd6701e1041e676f8a0c51a1725b500fa83c9`. Discovery can resolve credentials for a connected disabled profile only for the read-only exact-ASIN check; preview, create, and every mutation retain the enabled-profile gate. The focused 42-test regression suite, full client/server workflow, image builds, and production deploy are green.
+- [x] Clean Release archive `/tmp/InteliAds-358.xcarchive` is `io.inteliads.app` version `1.0.1 (358)` from release-candidate commit `1002cdeca24ddfda264714d09ce73ed354707f70`; executable SHA-256 is `118895ef254bbde27f5e685383144d438d1dedd85fb31ff4762b75d2b319b294`. It was installed in place on the physical iPhone 14 Pro with the signed-in session preserved.
+- [x] Physical-device verification used owned paperback `B0G1MW7MQD`. Production checked 55 connected profiles in about 4 seconds and returned exact-profile `in_stock` evidence for disabled marketplaces. Build 358 opened the marketplace chooser automatically, showed the active US profile as `Choose`, and labelled disabled confirmed rows such as AU, CA, DE, FR, and IT as `Enable & use`. The final enable action was deliberately not confirmed, so the read-only certification changed no Ads profile.
 
 ## Release invariants
 
