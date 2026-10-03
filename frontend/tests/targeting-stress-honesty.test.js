@@ -235,6 +235,7 @@ test("mobile targeting pages enrich titles/covers without dropping ranked rows",
   assert.match(queries, /Display-only title\/cover fill/);
   assert.match(queries, /amazon_catalog/);
   assert.match(queries, /page display enrichment failed/);
+  assert.match(queries, /!isHomeQueryTimeout\(error\)/);
   assert.match(queries, /isUsableBookTitle/);
   assert.match(queries, /applyProductTargetDisplayMeta/);
   assert.match(targeting, /fallbackAsinCoverUrl\(coverAsin\)/);
@@ -250,6 +251,8 @@ test("mobile targeting pages enrich titles/covers without dropping ranked rows",
   assert.match(queries, /skipRetail:\s*true/);
   assert.match(queries, /fillMissingProductTargetTitlesFromRetail/);
   assert.match(targeting, /fillMissingProductTargetTitlesFromRetail/);
+  assert.match(targeting, /skipDisplayEnrich:\s*true/);
+  assert.match(targeting, /never hold the ranked page behind optional catalog lookups/);
   // Catalog tails stay globally ranked but display work follows the viewport;
   // never enrich thousands of off-screen ASIN rows in one timeout-prone batch.
   assert.match(targeting, /onViewableItemsChanged={onViewableTargetRowsChanged}/);
