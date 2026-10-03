@@ -206,6 +206,41 @@ public class InteliAdsNativeSyncModule: Module {
       return true
     }
 
+    AsyncFunction("updateFinancialSnapshotAsync") { (payload: [String: Any]) in
+      var snapshot = InteliAdsWidgetSnapshotStore.load()
+      let verified = (payload["verified"] as? Bool) ?? false
+      snapshot.financialsVerified = verified
+      snapshot.financialsAsOf = nil
+      snapshot.financialPeriodLabel = (payload["periodLabel"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+      snapshot.financialScopeKey = (payload["scopeKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+      if verified {
+        let asOfMs = payload["asOfMs"] as? Double
+        snapshot.financialsAsOf = asOfMs != nil && asOfMs! > 0
+          ? Date(timeIntervalSince1970: asOfMs! / 1000.0)
+          : Date()
+        if let symbol = payload["currencySymbol"] as? String, !symbol.isEmpty {
+          snapshot.currencySymbol = symbol
+        }
+        if let royalties = payload["royalties"] as? Double {
+          snapshot.royalties = royalties
+        }
+        if let adSpend = payload["adSpend"] as? Double {
+          snapshot.adSpend = adSpend
+        }
+        if let net = payload["net"] as? Double {
+          snapshot.net = net
+        }
+      }
+
+      snapshot.updatedAt = Date()
+      InteliAdsWidgetSnapshotStore.save(snapshot)
+#if canImport(WidgetKit)
+      InteliAdsWidgetSnapshotStore.reloadTimelines(force: (payload["reload"] as? Bool) ?? true)
+#endif
+      return true
+    }
+
     AsyncFunction("getSyncSnapshotAsync") { () -> [String: Any] in
       let snap = InteliAdsWidgetSnapshotStore.load()
       return [
@@ -220,6 +255,10 @@ public class InteliAdsNativeSyncModule: Module {
         "royalties": snap.royalties,
         "adSpend": snap.adSpend,
         "net": snap.net,
+        "financialsVerified": snap.financialsVerified as Any,
+        "financialsAsOfMs": snap.financialsAsOf.map { Int($0.timeIntervalSince1970 * 1000) } as Any,
+        "financialPeriodLabel": snap.financialPeriodLabel as Any,
+        "financialScopeKey": snap.financialScopeKey as Any,
         "appGroup": InteliAdsWidgetConstants.appGroupIdentifier,
       ]
     }

@@ -1181,8 +1181,9 @@ export default function OverviewScreen() {
     [adsWidgetMetricRows, adsWidgetProfileIds, primaryCurrency, profileCurrencyById, fxRates],
   );
   const marketplaceAdsRows = useMemo(
-    () =>
-      adsMarketCountries.flatMap((country) => {
+    () => {
+      if (!adsReady) return [];
+      return adsMarketCountries.map((country) => {
         const ids = overviewAdsProfileIdsForMarket(moneyProfileIds, profiles, country);
         const rows = aggregateDailyMetricsForDisplay(metricRows, {
           moneyProfileIds: ids,
@@ -1190,7 +1191,6 @@ export default function OverviewScreen() {
           profileCurrencyById,
           fxRates,
         });
-        if (!rows.length) return [];
         const totals = rows.reduce(
           (acc, row) => ({
             spend: acc.spend + row.spend,
@@ -1200,16 +1200,16 @@ export default function OverviewScreen() {
           }),
           { spend: 0, sales: 0, orders: 0, clicks: 0 },
         );
-        if (!(totals.spend || totals.sales || totals.orders || totals.clicks)) return [];
-        return [{
+        return {
           country,
           spend: totals.spend,
           orders: totals.orders,
           clicks: totals.clicks,
           acos: totals.sales > 0 ? (totals.spend / totals.sales) * 100 : null,
-        }];
-      }),
-    [adsMarketCountries, moneyProfileIds, profiles, metricRows, primaryCurrency, profileCurrencyById, fxRates],
+        };
+      });
+    },
+    [adsReady, adsMarketCountries, moneyProfileIds, profiles, metricRows, primaryCurrency, profileCurrencyById, fxRates],
   );
   const prevDaily = useMemo(
     () =>
@@ -1451,8 +1451,11 @@ export default function OverviewScreen() {
     fxRates,
   ]);
   const budgetSpend = todayBudgetRow?.spend ?? 0;
-  const budgetTodaySynced = !!todayBudgetRow;
+  // A successful empty today query is a verified zero. Query errors never
+  // become $0 and keep the card from claiming a complete budget read.
+  const budgetTodaySynced = viewingAsAdmin ? adsReady : todayMetricsQ.isSuccess;
   const totalDailyBudget = allBudgetsQ.data ?? 0;
+  const budgetSourcesVerified = budgetTodaySynced && allBudgetsQ.isSuccess;
   const budgetHistoryDaily = useMemo(
     () =>
       aggregateDailyMetricsForDisplay(budgetHistoryQ.data ?? [], {
@@ -2600,7 +2603,7 @@ export default function OverviewScreen() {
             />
           ) : null}
 
-          {totalDailyBudget > 0 || budgetSpend > 0 || budgetTodaySynced ? (
+          {budgetSourcesVerified || totalDailyBudget > 0 || budgetSpend > 0 ? (
             <OverviewBudgetTodayCard
               spent={budgetSpend}
               budget={totalDailyBudget}
@@ -2621,6 +2624,7 @@ export default function OverviewScreen() {
               rulesRun={pulseStats.rulesRun}
               edits={pulseStats.entitiesEdited}
               batches={pulseStats.batchCount}
+              statusError={todayStatsQ.isError && !todayStatsQ.data}
               onOpenRules={() => router.push("/more/automation")}
               staggerIndex={4}
             />
@@ -2634,7 +2638,7 @@ export default function OverviewScreen() {
             staggerIndex={5}
           />
 
-          {reviewReady && (actionItems.length > 0 || reviewChecks !== "incomplete") ? (
+          {reviewReady ? (
             <View style={{ marginTop: dashboard.sectionGap }}>
               <ActionReviewCard
                 items={actionItems}

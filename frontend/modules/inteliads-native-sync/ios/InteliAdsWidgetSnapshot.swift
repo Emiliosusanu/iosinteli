@@ -16,6 +16,10 @@ public struct InteliAdsWidgetSnapshot: Codable, Hashable {
   public var royalties: Double
   public var adSpend: Double
   public var net: Double
+  public var financialsVerified: Bool? = nil
+  public var financialsAsOf: Date? = nil
+  public var financialPeriodLabel: String? = nil
+  public var financialScopeKey: String? = nil
 
   public static let empty = InteliAdsWidgetSnapshot(
     accountName: "InteliAds",

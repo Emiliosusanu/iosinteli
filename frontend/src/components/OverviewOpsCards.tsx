@@ -506,12 +506,14 @@ export function OverviewAutomationCard({
   rulesRun,
   edits,
   batches,
+  statusError = false,
   onOpenRules,
   staggerIndex = 2,
 }: {
   rulesRun: number;
   edits: number;
   batches: number;
+  statusError?: boolean;
   onOpenRules: () => void;
   staggerIndex?: number;
 }) {
@@ -573,7 +575,7 @@ export function OverviewAutomationCard({
                       {stat.label}
                     </Text>
                     <VerifiedValue
-                      value={formatInt(stat.value)}
+                      value={statusError ? "Unavailable" : formatInt(stat.value)}
                       style={[
                         t.typography.title2,
                         {
