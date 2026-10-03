@@ -1249,7 +1249,7 @@ export function OverviewHeaderV3({
                   <SyncDot color={t.colors.tone_primary} active />
                 )}
               </PressableScale>
-            ) : (
+            ) : syncNeedsLabel ? (
               <PressableScale
                 onPress={onSyncPress}
                 accessibilityRole="button"
@@ -1257,7 +1257,7 @@ export function OverviewHeaderV3({
                 hitSlop={6}
                 style={[
                   styles.syncChip,
-                  syncNeedsLabel ? styles.syncChipWide : styles.syncChipDot,
+                  styles.syncChipWide,
                   {
                     borderColor: syncColor + "33",
                     backgroundColor: syncColor + "18",
@@ -1267,13 +1267,11 @@ export function OverviewHeaderV3({
                 ]}
               >
                 <SyncDot color={syncColor} active={false} />
-                {syncNeedsLabel ? (
-                  <Text style={[t.typography.caption2, styles.syncText, { color: syncColor }]} numberOfLines={1}>
-                    {syncCompact}
-                  </Text>
-                ) : null}
+                <Text style={[t.typography.caption2, styles.syncText, { color: syncColor }]} numberOfLines={1}>
+                  {syncCompact}
+                </Text>
               </PressableScale>
-            )}
+            ) : null}
           </View>
 
         </Animated.View>

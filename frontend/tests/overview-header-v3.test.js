@@ -80,6 +80,9 @@ test("OverviewHeaderV3 moves from primary loading glow to brief green ready stat
   assert.doesNotMatch(header, /warningColor|greenMix|home-header-glow-amber/);
   assert.match(header, /hexWithAlpha\(color, 0\.48\)/);
   assert.doesNotMatch(header, /hexWithAlpha\(color, 1\)/);
+  // A healthy idle state is visually quiet after the transient ready check.
+  assert.match(header, /\) : syncNeedsLabel \? \(/);
+  assert.match(header, /\) : null\}/);
 });
 
 test("Home wires OverviewHeaderV3 instead of legacy header stack", () => {
