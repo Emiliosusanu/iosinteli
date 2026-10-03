@@ -228,15 +228,22 @@ never from `main`, and never from the active Cursor checkout.
 - [x] App Store Connect processed build 358 and added it to the external **Intelyads** group (3 testers), with automatic tester notification and focused notes for campaign creation, disabled-market eligibility, exact keyword/product selection counts, AI metadata, financial freshness, KDP isolation, immediate mutations, and notification totals. Its status is **Testing** as of October 3, 2026.
 
 
-## Build 359 — verified Home widgets and WidgetKit finance
+## Build 359 — rejected archive: WidgetKit extension missing
 
 - [x] Starts from external-testing release commit `479639e5` in the isolated `codex/ios-home-widget-integrity` worktree; the active Cursor checkout remains untouched.
 - [x] Home distinguishes verified zero from missing/error data. A successful empty Today read renders `$0`; query failures cannot impersonate zero or overwrite the last verified financial snapshot.
 - [x] Marketplace Ads retains every enabled marketplace after a verified read, including countries whose spend, orders, and clicks are all zero. Budget Today, Automation, and Review Queue keep their card state without hiding verified-empty results or presenting failed reads as successful zeros.
-- [x] The native InteliAds WidgetKit extension now shows verified rolling-seven-day Gross, Ad Spend, and Net. It accepts real zeroes, clears incompatible/unlinked scopes, clears on sign-out, and expires financial values after six hours instead of showing stale money.
-- [x] The unsigned Release build, TypeScript, diff validation, focused widget tests, and the full 991-test suite pass.
-- [ ] Clean Release archive `/tmp/InteliAds-359.xcarchive` is created from the merged release candidate without overwriting build 358, installed in place on the physical iPhone 14 Pro, and visually checked with its signed-in session preserved.
-- [ ] App Store export has production APNs and `get-task-allow=false`; App Store Connect processes build 359 and adds it to the external **Intelyads** group.
+- [x] The native widget source shows verified rolling-seven-day Gross, Ad Spend, and Net. It accepts real zeroes, clears incompatible/unlinked scopes, clears on sign-out, and expires financial values after six hours instead of showing stale money.
+- [x] The unsigned Release build, TypeScript, diff validation, focused widget tests, and the full 991-test suite passed.
+- [x] The signed `/tmp/InteliAds-359.xcarchive` exposed a release-blocking project defect: it contained no `PlugIns/InteliAdsSyncWidget.appex`. Build 359 was rejected before upload and must not be distributed.
+
+## Build 360 — embedded WidgetKit finance
+
+- [x] Starts from merged build 359 source in the same isolated worktree; the active Cursor checkout remains untouched and the rejected 359 archive remains preserved.
+- [x] Restores the missing `InteliAdsSyncWidget` native target, source phases, app dependency, and `Embed App Extensions` copy phase.
+- [x] Adds a regression test that fails if the target or embedded `.appex` wiring disappears.
+- [ ] Clean Release archive `/tmp/InteliAds-360.xcarchive` contains the signed `PlugIns/InteliAdsSyncWidget.appex`, installs on the physical iPhone 14 Pro, and preserves the signed-in session.
+- [ ] App Store export has production APNs and `get-task-allow=false`; App Store Connect processes build 360 and adds it to the external **Intelyads** group.
 
 ## Release invariants
 
