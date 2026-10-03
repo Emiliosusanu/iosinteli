@@ -242,8 +242,8 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Starts from merged build 359 source in the same isolated worktree; the active Cursor checkout remains untouched and the rejected 359 archive remains preserved.
 - [x] Restores the missing `InteliAdsSyncWidget` native target, source phases, app dependency, and `Embed App Extensions` copy phase.
 - [x] Adds a regression test that fails if the target or embedded `.appex` wiring disappears.
-- [ ] Clean Release archive `/tmp/InteliAds-360.xcarchive` contains the signed `PlugIns/InteliAdsSyncWidget.appex`, installs on the physical iPhone 14 Pro, and preserves the signed-in session.
-- [ ] App Store export has production APNs and `get-task-allow=false`; App Store Connect processes build 360 and adds it to the external **Intelyads** group.
+- [x] Clean Release archive `/tmp/InteliAds-360.xcarchive` contains the signed `PlugIns/InteliAdsSyncWidget.appex`; both app and widget pass strict signature validation and carry `group.io.inteliads.app`. The archive installed on the physical iPhone 14 Pro as `1.0.1 (360)` without removing the signed-in session. The October 1–3 Home view rendered verified Gross `$384`, Net `$173.36`, Ad Spend `$210`, ACoS `33.1%`, and Margin `45%` without a banner or placeholder dash. Development executable SHA-256 values are `ba7b5728a7785b197e98c3c571fd2475aea1d1c277f456f44876424f623e7b8c` for the app and `89f395a95984bbcd5856b9c99def62e6f19e3da8d3fd4e4f37a58dfb67108e50` for the widget.
+- [x] App Store export `/tmp/InteliAds-360-export/InteliAds.ipa` has production APNs, `get-task-allow=false`, and the shared App Group in both signed bundles. IPA SHA-256 is `77513907367b456aa67465f11d3c68eae97fd315cc06c443f2d3e746e8840e15`; distribution executable SHA-256 values are `6eac927320c38cf8da52d7e5e6d78c56c0c4a3569bffa6b1db7f4ac561fdffb3` for the app and `9207237b8e65b1b51725f987f5ec7388ae82d2acb2727c5253621d2778165b27` for the widget. App Store Connect accepted and processed build 360; it is `Ready to Submit` and preselected for the external **Intelyads** group pending the final Beta App Review submission.
 
 ## Release invariants
 
