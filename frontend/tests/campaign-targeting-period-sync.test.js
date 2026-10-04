@@ -20,12 +20,15 @@ test("campaign and ad-group targeting use the same exact-period RPC as Targets",
   assert.match(adGroup, /fetchExactCampaignTargetingCatalog/);
 });
 
-test("detail screens cap rendering only after the complete ranked snapshot", () => {
+test("campaign previews top 200 while ad-group detail can reveal the full ranked snapshot", () => {
   assert.match(campaign, /CAMPAIGN_TARGET_DISPLAY_LIMIT = 200/);
   assert.match(campaign, /visibleKeywords\.slice\(0, CAMPAIGN_TARGET_DISPLAY_LIMIT\)/);
-  assert.match(adGroup, /AD_GROUP_TARGET_DISPLAY_LIMIT = 200/);
+  assert.match(campaign, /Top \$\{displayedKeywords\.length\} of \$\{visibleKeywords\.length\}/);
+  assert.match(adGroup, /AD_GROUP_TARGET_PAGE_SIZE = 200/);
   assert.match(adGroup, /catalog\.keywords\.filter/);
-  assert.match(adGroup, /\.slice\(0, AD_GROUP_TARGET_DISPLAY_LIMIT\)/);
+  assert.match(adGroup, /keywords\.slice\(0, keywordLimit\)/);
+  assert.match(adGroup, /keywordCount=\{keywords\.length\}/);
+  assert.match(adGroup, /Show more keywords/);
 });
 
 test("ad-group rows stay scoped to their own Amazon ad group", () => {
@@ -33,6 +36,8 @@ test("ad-group rows stay scoped to their own Amazon ad group", () => {
   assert.match(adGroup, /group\?\.campaign_id/);
   assert.match(adGroup, /dateRange\.start/);
   assert.match(adGroup, /dateRange\.end/);
+  assert.match(adGroup, /targetStateFilter === "all" \|\| String\(kw\.status \?\? ""\)\.toLowerCase\(\) === "enabled"/);
+  assert.match(adGroup, /testID="ad-group-target-state"/);
 });
 
 test("campaign and ad-group product titles fill after paint without changing rank", () => {

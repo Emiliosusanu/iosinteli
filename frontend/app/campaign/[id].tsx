@@ -1144,7 +1144,7 @@ export default function CampaignDetail() {
         </SectionCard>
 
         {!isAuto && hasKeywords ? (
-          <SectionCard title={`Keywords (${visibleKeywords.length})`}>
+          <SectionCard title={`Keywords · Top ${displayedKeywords.length} of ${visibleKeywords.length}`}>
             {displayedKeywords.map((kw, idx) => (
               <View
                 key={kw.id}
@@ -1223,7 +1223,7 @@ export default function CampaignDetail() {
         ) : null}
 
         {!isAuto && hasProductTargets ? (
-          <SectionCard title={`Product targets (${visibleProductTargets.length})`}>
+          <SectionCard title={`Product targets · Top ${displayedProductTargets.length} of ${visibleProductTargets.length}`}>
             {displayedProductTargets.map((pt: any, idx) => (
               <ProductTargetRow
                 key={pt.id}

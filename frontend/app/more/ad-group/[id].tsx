@@ -12,11 +12,11 @@ import { acosTone, layout, radii, spacing, toneColor, useTheme } from "@/src/lib
 import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, patchEntityInQueryData, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { updateAdGroupManual, updateAdGroupState, updateKeywordManual, updateProductTargetManual } from "@/src/lib/mutations";
 import { fetchAdGroupAutomationHistory, fetchAdGroupById, fetchExactCampaignTargetingCatalog, fetchSearchTerms } from "@/src/lib/queries";
-import { shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
+import { shouldShowActiveOrPausedWithData } from "@/src/lib/campaigns";
 import { describeProductTarget, fallbackAsinCoverUrl, formatMatchTypeLabel, isExactMatchType, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
 import { resolveAdGroupAddMode } from "@/src/lib/adGroupTargets";
 import { formatCurrency, formatInt, formatPercent, safeDivide } from "@/src/lib/format";
-import { EmptyState, FilterChrome, SectionCard, ToneDot, MetricStrip, RetryState, ScreenSpinner, ListCard, DenseMetricLine } from "@/src/components/Primitives";
+import { EmptyState, FilterChrome, SectionCard, MetricStrip, RetryState, ScreenSpinner, ListCard, DenseMetricLine } from "@/src/components/Primitives";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { fastAddSearchTermExact, searchTermLooksTargeted } from "@/src/lib/searchTermHarvest";
 import { sortSearchTermsAcosThenSpend } from "@/src/lib/searchTermSort";
@@ -24,9 +24,10 @@ import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import { useVisibleProductTargetTitles } from "@/src/lib/useVisibleProductTargetTitles";
 
 type TabKey = "targets" | "searchTerms" | "history";
+type TargetStateFilter = "all" | "enabled";
 
-/** Rank the complete server scope first, then keep the native ScrollView bounded. */
-const AD_GROUP_TARGET_DISPLAY_LIMIT = 200;
+/** Keep each render bounded while allowing every row in the exact-period catalog to be reached. */
+const AD_GROUP_TARGET_PAGE_SIZE = 200;
 
 function paramId(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value[0] ?? "";
@@ -51,7 +52,10 @@ export default function AdGroupDetailScreen() {
   const isAuto = paramId(params.isAuto);
   const stateParam = paramId(params.state);
   const [tab, setTab] = useState<TabKey>("targets");
+  const [targetStateFilter, setTargetStateFilter] = useState<TargetStateFilter>("all");
   const [search, setSearch] = useState("");
+  const [keywordLimit, setKeywordLimit] = useState(AD_GROUP_TARGET_PAGE_SIZE);
+  const [targetLimit, setTargetLimit] = useState(AD_GROUP_TARGET_PAGE_SIZE);
   const [refreshing, setRefreshing] = useState(false);
   const [bidOpen, setBidOpen] = useState(false);
   const [keywordBid, setKeywordBid] = useState<{ id: string; title: string; value: number } | null>(null);
@@ -126,27 +130,27 @@ export default function AdGroupDetailScreen() {
     () =>
       (keywordsQ.data ?? [])
         .filter((kw) => shouldShowActiveOrPausedWithData(kw as any, kw.status))
-        .filter((kw) => !searchNeedle || `${kw.keyword_text ?? ""} ${kw.match_type ?? ""}`.toLowerCase().includes(searchNeedle))
-        .slice(0, AD_GROUP_TARGET_DISPLAY_LIMIT),
-    [keywordsQ.data, searchNeedle],
+        .filter((kw) => targetStateFilter === "all" || String(kw.status ?? "").toLowerCase() === "enabled")
+        .filter((kw) => !searchNeedle || `${kw.keyword_text ?? ""} ${kw.match_type ?? ""}`.toLowerCase().includes(searchNeedle)),
+    [keywordsQ.data, searchNeedle, targetStateFilter],
   );
 
   const baseTargets = useMemo(
     () =>
       (targetsQ.data ?? [])
         .filter((pt) => shouldShowActiveOrPausedWithData(pt as any, pt.state))
+        .filter((pt) => targetStateFilter === "all" || String(pt.state ?? "").toLowerCase() === "enabled")
         .filter((pt: any) => {
           if (!searchNeedle) return true;
           const described = describeProductTarget(pt.expression, pt.expression_type);
           return `${pt.title ?? ""} ${described.label} ${described.asin ?? ""}`.toLowerCase().includes(searchNeedle);
         })
-        .sort(compareByAcosSpendImpressionsSync)
-        .slice(0, AD_GROUP_TARGET_DISPLAY_LIMIT),
-    [targetsQ.data, searchNeedle],
+        .sort(compareByAcosSpendImpressionsSync),
+    [targetsQ.data, searchNeedle, targetStateFilter],
   );
   const targets = useVisibleProductTargetTitles(
-    baseTargets,
-    `${id}:${dateRange.start}:${dateRange.end}:${searchNeedle}:${targetsQ.dataUpdatedAt}`,
+    baseTargets.slice(0, targetLimit),
+    `${id}:${dateRange.start}:${dateRange.end}:${searchNeedle}:${targetsQ.dataUpdatedAt}:${targetLimit}`,
   );
 
   const searchTerms = useMemo(
@@ -424,7 +428,11 @@ export default function AdGroupDetailScreen() {
               testID="ad-group-search"
               placeholder="Find keywords, products, search terms"
               value={search}
-              onChangeText={setSearch}
+              onChangeText={(value) => {
+                setSearch(value);
+                setKeywordLimit(AD_GROUP_TARGET_PAGE_SIZE);
+                setTargetLimit(AD_GROUP_TARGET_PAGE_SIZE);
+              }}
             />
             <IOSSegmentedControl
               testID="ad-group-tabs"
@@ -436,6 +444,18 @@ export default function AdGroupDetailScreen() {
                 { key: "history", label: "History" },
               ]}
             />
+            {tab === "targets" ? (
+              <IOSSegmentedControl
+                testID="ad-group-target-state"
+                value={targetStateFilter}
+                onChange={(value) => {
+                  setTargetStateFilter(value);
+                  setKeywordLimit(AD_GROUP_TARGET_PAGE_SIZE);
+                  setTargetLimit(AD_GROUP_TARGET_PAGE_SIZE);
+                }}
+                options={[{ key: "all", label: "All states" }, { key: "enabled", label: "Enabled" }]}
+              />
+            ) : null}
           </FilterChrome>
         </View>
 
@@ -480,8 +500,12 @@ export default function AdGroupDetailScreen() {
           <TargetsPane
             auto={auto}
             searching={searchNeedle.length > 0}
-            keywords={keywords}
+            keywords={keywords.slice(0, keywordLimit)}
+            keywordCount={keywords.length}
+            onMoreKeywords={() => setKeywordLimit((limit) => limit + AD_GROUP_TARGET_PAGE_SIZE)}
             targets={targets}
+            targetCount={baseTargets.length}
+            onMoreTargets={() => setTargetLimit((limit) => limit + AD_GROUP_TARGET_PAGE_SIZE)}
             keywordsQ={keywordsQ}
             targetsQ={targetsQ}
             primaryCurrency={primaryCurrency}
@@ -657,7 +681,11 @@ function TargetsPane({
   auto,
   searching,
   keywords,
+  keywordCount,
+  onMoreKeywords,
   targets,
+  targetCount,
+  onMoreTargets,
   keywordsQ,
   targetsQ,
   primaryCurrency,
@@ -671,7 +699,11 @@ function TargetsPane({
   auto: boolean;
   searching: boolean;
   keywords: any[];
+  keywordCount: number;
+  onMoreKeywords: () => void;
   targets: any[];
+  targetCount: number;
+  onMoreTargets: () => void;
   keywordsQ: { isLoading: boolean; isError: boolean; isRefetching: boolean; data?: any[]; refetch: () => void };
   targetsQ: { isLoading: boolean; isError: boolean; isRefetching: boolean; data?: any[]; refetch: () => void };
   primaryCurrency: string;
@@ -682,14 +714,14 @@ function TargetsPane({
   onEditKeywordBid: (kw: any) => void;
   onEditTargetBid: (pt: any) => void;
 }) {
-  const showKeywords = keywordsQ.isLoading || keywordsQ.isError || keywords.length > 0 || searching;
-  const showTargets = targetsQ.isLoading || targetsQ.isError || targets.length > 0 || searching;
+  const showKeywords = keywordsQ.isLoading || keywordsQ.isError || keywordCount > 0 || searching;
+  const showTargets = targetsQ.isLoading || targetsQ.isError || targetCount > 0 || searching;
   const bothEmpty = !keywordsQ.isLoading && !targetsQ.isLoading && !keywordsQ.isError && !targetsQ.isError && keywords.length === 0 && targets.length === 0;
 
   return (
     <>
       {showKeywords ? (
-        <SectionCard title={`Keywords (${keywords.length})`}>
+        <SectionCard title={`Keywords (${keywordCount})`}>
           {keywordsQ.isError && (keywordsQ.data ?? []).length === 0 ? (
             <RetryState
               title="Couldn't load keywords"
@@ -706,7 +738,8 @@ function TargetsPane({
               subtitle={searching ? "Try a different name or match type." : "No keywords with data in this range."}
             />
           ) : (
-            keywords.map((kw, idx) => (
+            <>
+            {keywords.map((kw, idx) => (
               <KeywordRow
                 key={kw.id}
                 kw={kw}
@@ -717,13 +750,19 @@ function TargetsPane({
                 onPress={() => onOpenKeyword(kw.id)}
                 onEditBid={() => onEditKeywordBid(kw)}
               />
-            ))
+            ))}
+            {keywords.length < keywordCount ? (
+              <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Show more keywords, ${keywordCount - keywords.length} remaining`} onPress={onMoreKeywords} style={{ alignItems: "center", paddingVertical: spacing.md }}>
+                <Text style={[t.typography.callout, { color: t.colors.tone_primary, fontWeight: "600" }]}>{`Show more · ${keywords.length} of ${keywordCount}`}</Text>
+              </TouchableOpacity>
+            ) : null}
+            </>
           )}
         </SectionCard>
       ) : null}
 
       {showTargets ? (
-        <SectionCard title={auto ? `Auto Targeting (${targets.length})` : `Product Targets (${targets.length})`}>
+        <SectionCard title={auto ? `Auto Targeting (${targetCount})` : `Product Targets (${targetCount})`}>
           {targetsQ.isError && (targetsQ.data ?? []).length === 0 ? (
             <RetryState
               title={auto ? "Couldn't load auto targets" : "Couldn't load product targets"}
@@ -740,7 +779,8 @@ function TargetsPane({
               subtitle={searching ? "Try a different name or ASIN." : "Nothing with data in this range."}
             />
           ) : (
-            targets.map((pt: any, idx) => (
+            <>
+            {targets.map((pt: any, idx) => (
               <TargetRow
                 key={pt.id}
                 pt={pt}
@@ -752,7 +792,13 @@ function TargetsPane({
                 onPress={() => onOpenTarget(pt.id)}
                 onEditBid={() => onEditTargetBid(pt)}
               />
-            ))
+            ))}
+            {targets.length < targetCount ? (
+              <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Show more targets, ${targetCount - targets.length} remaining`} onPress={onMoreTargets} style={{ alignItems: "center", paddingVertical: spacing.md }}>
+                <Text style={[t.typography.callout, { color: t.colors.tone_primary, fontWeight: "600" }]}>{`Show more · ${targets.length} of ${targetCount}`}</Text>
+              </TouchableOpacity>
+            ) : null}
+            </>
           )}
         </SectionCard>
       ) : null}
