@@ -19,7 +19,7 @@ import { BooksReadError, fetchBookRetailMetadata, fetchKdpRoyaltiesRange, fetchT
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
-import { bookRetailAsins, bookRetailEditions, bookRetailStockLabel, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { bookRetailAsins, bookRetailStockLabel, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import {
   formatBreakEvenAcos,
   hasAuthoritativeBreakEven,
@@ -52,6 +52,7 @@ import { countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketpl
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 import { bookDisplayTitle } from "@/src/lib/bookPresentation";
+import { amazonAdsProfileIdsForSelection } from "@/src/lib/accountScope";
 import {
   booksListAwaitingRows,
   booksMoneyProfileIds,
@@ -158,6 +159,10 @@ export default function ProductsScreen() {
     () => sortedProfileIds(booksMoneyProfileIds(profiles, selectedProfileIds)),
     [profiles, selectedProfileIds],
   );
+  const retailProfileIds = useMemo(
+    () => sortedProfileIds(amazonAdsProfileIdsForSelection(profiles, moneyProfileIds)),
+    [profiles, moneyProfileIds],
+  );
   const royaltyScope = useMemo(
     () => booksRoyaltyScopeForSelection(profiles, moneyProfileIds),
     [profiles, moneyProfileIds],
@@ -241,9 +246,9 @@ export default function ProductsScreen() {
   const books = useMemo(() => booksData ?? [], [booksData]);
   const retailAsins = useMemo(() => bookRetailAsins(books), [books]);
   const retailQ = useQuery({
-    queryKey: ["book-retail-metadata", user?.id ?? "anonymous", adminFilterUserId ?? "self", royaltyProfiles, kdpQueryScope, retailAsins],
-    queryFn: () => fetchBookRetailMetadata({ books, kdpProfileIds: royaltyProfiles, kdpScope: kdpQueryScope }),
-    enabled: Boolean(user?.id) && !adminFilterUserId && retailAsins.length > 0,
+    queryKey: ["book-retail-metadata", user?.id ?? "anonymous", adminFilterUserId ?? "self", retailProfileIds, retailAsins],
+    queryFn: () => fetchBookRetailMetadata({ books, adsProfileIds: retailProfileIds }),
+    enabled: Boolean(user?.id) && !adminFilterUserId && retailProfileIds.length > 0 && retailAsins.length > 0,
     staleTime: 5 * 60_000,
     retry: false,
   });
@@ -438,6 +443,11 @@ export default function ProductsScreen() {
               0 books matching
             </Text>
           ) : null}
+          {retailQ.isError ? (
+            <TouchableOpacity onPress={() => void retailQ.refetch()} accessibilityRole="button" accessibilityLabel="Listing details unavailable. Retry">
+              <Text style={[t.typography.footnote, { color: t.colors.tone_warning }]}>Listing details unavailable · Retry</Text>
+            </TouchableOpacity>
+          ) : null}
         </FilterChrome>
       </ReanimatedAnimated.View>
 
@@ -486,7 +496,7 @@ export default function ProductsScreen() {
           renderItem={({ item, index }) => (
             <ProductCard
               item={item}
-              retailEdition={retailQ.isSuccess ? bookRetailEditions(item, retailQ.data)[0] ?? null : null}
+              retailEdition={retailQ.isSuccess ? primaryBookRetailEdition(item, retailQ.data) : null}
               currency={primaryCurrency}
               color={bookColorMap.get(bookColorKeyFor(item)) ?? fallbackBookColor(bookColorKeyFor(item), index)}
               marketplaceIndex={marketplaceIndex}

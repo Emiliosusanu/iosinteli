@@ -52,6 +52,7 @@ import { sortedProfileIds } from "@/src/lib/periodQuery";
 import { biddingStrategyLabel, statusLabel } from "@/src/lib/campaigns";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { bookRowMatchesOpenedAsin } from "@/src/lib/kdpBookIdentity";
+import { amazonAdsProfileIdsForSelection } from "@/src/lib/accountScope";
 import {
   formatBreakEvenAcos,
   hasAuthoritativeBreakEven,
@@ -155,6 +156,10 @@ export default function ProductCampaignsScreen() {
     () => sortedProfileIds(booksMoneyProfileIds(profiles, selectedProfileIds)),
     [profiles, selectedProfileIds],
   );
+  const retailProfileIds = useMemo(
+    () => sortedProfileIds(amazonAdsProfileIdsForSelection(profiles, moneyProfileIds)),
+    [profiles, moneyProfileIds],
+  );
   const royaltyScope = useMemo(
     () => booksRoyaltyScopeForSelection(profiles, moneyProfileIds),
     [profiles, moneyProfileIds],
@@ -227,9 +232,9 @@ export default function ProductCampaignsScreen() {
   const retailBooks = useMemo(() => book ? [book] : [{ book_key: asin, asin }], [book, asin]);
   const retailAsins = useMemo(() => bookRetailAsins(retailBooks), [retailBooks]);
   const retailQ = useQuery({
-    queryKey: ["book-retail-metadata-detail", user?.id ?? "anonymous", adminFilterUserId ?? "self", royaltyProfiles, kdpQueryScope, retailAsins],
-    queryFn: () => fetchBookRetailMetadata({ books: retailBooks, kdpProfileIds: royaltyProfiles, kdpScope: kdpQueryScope }),
-    enabled: Boolean(user?.id) && !adminFilterUserId && retailAsins.length > 0,
+    queryKey: ["book-retail-metadata-detail", user?.id ?? "anonymous", adminFilterUserId ?? "self", retailProfileIds, retailAsins],
+    queryFn: () => fetchBookRetailMetadata({ books: retailBooks, adsProfileIds: retailProfileIds }),
+    enabled: Boolean(user?.id) && !adminFilterUserId && retailProfileIds.length > 0 && retailAsins.length > 0,
     staleTime: 5 * 60_000,
     retry: false,
   });

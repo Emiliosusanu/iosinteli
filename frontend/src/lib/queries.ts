@@ -3,7 +3,7 @@
 
 import { supabase } from "./supabase";
 import { parseNestError, rulesApiFetch, hasNestToken, nestApiJson } from "./rulesApi";
-import { fetchNestAmazonProfiles } from "./mutations";
+import { fetchAmazonProfileBooks, fetchNestAmazonProfiles } from "./mutations";
 import {
   fetchAggregatedCampaigns,
   fetchNestCampaignById,
@@ -91,9 +91,8 @@ import {
 } from "./booksListActivity";
 import {
   bookRetailAsins,
-  indexBookRetailSnapshots,
+  indexProfileBookRetailSnapshots,
   type BookRetailSnapshot,
-  type BookRetailSourceRow,
   type RetailBookIdentity,
 } from "./bookRetailMetadata";
 
@@ -5477,38 +5476,30 @@ export interface TopBookRow {
   created_at?: string | null;
 }
 
-/** Web parity: these Amazon listing snapshots live in owned `kdp_titles`, not Ads reports. */
+/** Same authenticated profile-books API used by the web /amazon book preview. */
 export async function fetchBookRetailMetadata(opts: {
   books: readonly RetailBookIdentity[];
-  kdpProfileIds: string[];
-  kdpScope: KdpRoyaltyQueryScope;
+  adsProfileIds: string[];
+  filterUserId?: string | null;
 }): Promise<Record<string, BookRetailSnapshot>> {
   const asins = bookRetailAsins(opts.books);
-  if (!asins.length) return {};
-  const accountIds = await fetchKdpAccountIdsForRoyaltyQuery(opts.kdpProfileIds, opts.kdpScope);
-  if (!accountIds.length) return {};
-
-  const rows: BookRetailSourceRow[] = [];
-  try {
-    for (const accounts of chunkArray(accountIds, 100)) {
-      for (const asinChunk of chunkArray(asins, BOOKS_IN_CHUNK)) {
-        rows.push(...(await fetchAllPages<BookRetailSourceRow>((from, to) =>
-          supabase
-            .from("kdp_titles")
-            .select("account_id, asin, amazon_rating, amazon_review_count, amazon_stock_status, amazon_meta_updated_at")
-            .in("account_id", accounts)
-            .in("asin", asinChunk)
-            .order("asin", { ascending: true })
-            .range(from, to),
-        )));
-      }
-    }
-  } catch (error) {
-    throw new BooksReadError("retail_metadata", booksErrorCode(error));
+  const profileIds = [...new Set(opts.adsProfileIds.map((id) => String(id).trim()).filter(Boolean))];
+  if (!asins.length || !profileIds.length) return {};
+  const rows = [];
+  // Keep profile requests bounded so the Books screen is not blocked by a burst
+  // of large profile-book responses. React Query renders the books independently.
+  for (const group of chunkArray(profileIds, 3)) {
+    const results = await Promise.all(group.map((id) =>
+      fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId }),
+    ));
+    for (const result of results) rows.push(...result);
   }
   const quarantineEntries = await loadShelfHealQuarantineEntries();
-  const { filterRowsExcludingQuarantine } = await import("./kdp/shelfHeal.ts");
-  return indexBookRetailSnapshots(filterRowsExcludingQuarantine(rows, quarantineEntries));
+  const { isQuarantined } = await import("./kdp/shelfHeal.ts");
+  const safeRows = rows.filter((row) =>
+    !row.accountId || !isQuarantined(row.accountId, row.asin, quarantineEntries),
+  );
+  return indexProfileBookRetailSnapshots(safeRows, asins);
 }
 
 /** Book keys (group_key / asin / sku) with KDP or Ads signal in the activity window. */

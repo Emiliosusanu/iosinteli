@@ -28,14 +28,15 @@ export function BookRetailInfo({
       : t.colors.text_secondary;
   const checkedDate = snapshot.checkedAt && Number.isFinite(Date.parse(snapshot.checkedAt))
     ? snapshot.checkedAt.slice(0, 10)
-    : "check time unknown";
+    : null;
+  const dateSuffix = checkedDate ? `, checked ${checkedDate}` : "";
 
   return (
     <View
       testID={`book-retail-${snapshot.asin}`}
       style={{ gap: 4, paddingVertical: compact ? 5 : 9 }}
       accessibilityRole="text"
-      accessibilityLabel={`${edition} ${snapshot.asin}. ${reviewLabel ? `Amazon rating and reviews snapshot ${reviewLabel}, ${checkedDate}.` : "Reviews unavailable."} ${stockLabel ? `Last reported stock ${stockLabel}, ${checkedDate}.` : "Stock status unavailable."}`}
+      accessibilityLabel={`${edition} ${snapshot.asin}. ${reviewLabel ? `Amazon rating and reviews snapshot ${reviewLabel}${dateSuffix}.` : "Reviews unavailable."} ${stockLabel ? `Last reported stock ${stockLabel}${dateSuffix}.` : "Stock status unavailable."}`}
     >
       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, fontWeight: "700" }]}>
         {edition} · {snapshot.asin}
@@ -45,7 +46,7 @@ export function BookRetailInfo({
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
             <SFSymbol name="star.fill" size={12} color="#F5A623" />
             <Text style={[t.typography.caption1, { color: t.colors.text_primary }]}>
-              {reviewLabel} · {checkedDate}
+              {reviewLabel}{checkedDate ? ` · ${checkedDate}` : ""}
             </Text>
           </View>
         ) : (
@@ -53,7 +54,7 @@ export function BookRetailInfo({
         )}
         {stockLabel ? (
           <Text style={[t.typography.caption1, { color: stockColor }]}>
-            Stock snapshot: {stockLabel} · {checkedDate}
+            Stock snapshot: {stockLabel}{checkedDate ? ` · ${checkedDate}` : ""}
           </Text>
         ) : (
           <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>Stock unknown</Text>
