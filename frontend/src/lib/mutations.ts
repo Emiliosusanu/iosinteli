@@ -1,5 +1,5 @@
-// Nest API writes — same paths the web dashboard uses.
-// Reads stay on Supabase RLS. nestApiFetch sends Nest JWT or the Supabase bearer.
+// Nest API requests shared with the web dashboard. Most financial reads remain
+// on Supabase RLS; profile-book preview uses the authenticated Nest read API.
 
 import { nestApiFetch, nestApiJson, nestLogout, parseNestError, NestApiError } from "./rulesApi";
 import { supabase } from "./supabase";
@@ -1302,6 +1302,11 @@ export type AmazonProfileBookPreview = {
   asin: string;
   title: string | null;
   coverUrl: string | null;
+  amazonRating?: number | null;
+  amazonReviewCount?: number | null;
+  amazonStockStatus?: string | null;
+  amazonMetaUpdatedAt?: string | null;
+  accountId?: string | null;
 };
 
 /** Nest GET /amazon/profiles/:id/books — real sponsored/KDP covers only. */
@@ -1315,7 +1320,17 @@ export async function fetchAmazonProfileBooks(
     ? `?filterUserId=${encodeURIComponent(opts.filterUserId)}`
     : "";
   const data = await nestApiJson<{
-    books?: Array<{ asin?: string; title?: string | null; coverUrl?: string | null; amazonImageUrl?: string | null }>;
+    books?: {
+      asin?: string;
+      title?: string | null;
+      coverUrl?: string | null;
+      amazonImageUrl?: string | null;
+      amazonRating?: number | null;
+      amazonReviewCount?: number | null;
+      amazonStockStatus?: string | null;
+      amazonMetaUpdatedAt?: string | null;
+      accountId?: string | null;
+    }[];
   }>(`/amazon/profiles/${encodeURIComponent(adsId)}/books${q}`, { method: "GET" }, "Couldn't load profile books.");
   const books: AmazonProfileBookPreview[] = [];
   for (const book of data.books ?? []) {
@@ -1323,7 +1338,16 @@ export async function fetchAmazonProfileBooks(
     const coverUrl =
       String(book.coverUrl || book.amazonImageUrl || "").trim() || null;
     if (!asin) continue;
-    books.push({ asin, title: book.title ?? null, coverUrl });
+    books.push({
+      asin,
+      title: book.title ?? null,
+      coverUrl,
+      amazonRating: book.amazonRating ?? null,
+      amazonReviewCount: book.amazonReviewCount ?? null,
+      amazonStockStatus: book.amazonStockStatus ?? null,
+      amazonMetaUpdatedAt: book.amazonMetaUpdatedAt ?? null,
+      accountId: book.accountId ?? null,
+    });
   }
   return books;
 }

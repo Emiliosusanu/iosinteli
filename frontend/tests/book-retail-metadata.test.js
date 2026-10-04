@@ -6,6 +6,8 @@ import {
   bookRetailStockTone,
   bookRetailStockLabel,
   indexBookRetailSnapshots,
+  indexProfileBookRetailSnapshots,
+  primaryBookRetailEdition,
 } from "../src/lib/bookRetailMetadata.ts";
 
 const book = {
@@ -52,4 +54,26 @@ test("stock tone recognizes explicit negative status without treating it as avai
   assert.equal(bookRetailStockTone("Currently unavailable"), "danger");
   assert.equal(bookRetailStockTone("Not in stock"), "danger");
   assert.equal(bookRetailStockLabel("IN_STOCK"), "In stock");
+});
+
+test("web profile-book API metadata is exact-ASIN, scoped, and does not invent a check date", () => {
+  const snapshots = indexProfileBookRetailSnapshots([
+    { asin: "B0GSMGJHKV", amazonRating: 4.6, amazonReviewCount: 66, amazonStockStatus: "IN_STOCK" },
+    { asin: "B0FXRGN5HX", amazonRating: 4.5, amazonReviewCount: 35, amazonStockStatus: "IN_STOCK" },
+    { asin: "B0F80GHL3P", amazonRating: null, amazonReviewCount: null, amazonStockStatus: "OUT_OF_STOCK" },
+  ], ["B0GSMGJHKV", "B0F80GHL3P"]);
+  assert.deepEqual(Object.keys(snapshots).sort(), ["B0F80GHL3P", "B0GSMGJHKV"]);
+  assert.equal(snapshots.B0GSMGJHKV.rating, 4.6);
+  assert.equal(snapshots.B0GSMGJHKV.reviewCount, 66);
+  assert.equal(snapshots.B0GSMGJHKV.checkedAt, null);
+  assert.equal(snapshots.B0F80GHL3P.stockStatus, "OUT_OF_STOCK");
+});
+
+test("Books preview uses an edition with real listing data when another edition is missing", () => {
+  const snapshots = indexProfileBookRetailSnapshots([
+    { asin: "B0ABCDEFGH", amazonRating: 4.3, amazonReviewCount: 12, amazonStockStatus: "IN_STOCK" },
+  ], ["B0ABCDEFGH", "1803014466"]);
+  const preview = primaryBookRetailEdition(book, snapshots);
+  assert.equal(preview?.snapshot.asin, "B0ABCDEFGH");
+  assert.equal(preview?.format, "Kindle");
 });

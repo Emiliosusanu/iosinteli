@@ -18,6 +18,13 @@ export type BookRetailSourceRow = {
   amazon_meta_updated_at?: string | null;
 };
 
+export type ProfileBookRetailRow = {
+  asin: string;
+  amazonRating?: number | null;
+  amazonReviewCount?: number | null;
+  amazonStockStatus?: string | null;
+};
+
 export type RetailBookIdentity = {
   asin: string;
   sku?: string | null;
@@ -56,6 +63,24 @@ export function indexBookRetailSnapshots(rows: readonly BookRetailSourceRow[]): 
   return byAsin;
 }
 
+/** Use the same per-profile API payload as /amazon; never infer metadata from a sibling ASIN. */
+export function indexProfileBookRetailSnapshots(
+  rows: readonly ProfileBookRetailRow[],
+  allowedAsins: readonly string[],
+): Record<string, BookRetailSnapshot> {
+  const allowed = new Set(allowedAsins.map(asinKey));
+  const exactRows = rows.filter((row) => allowed.has(asinKey(row.asin)));
+  // The web endpoint's amazonMetaUpdatedAt may be a catalog fetch date rather
+  // than the review/stock observation date. Do not present it as a check time.
+  return indexBookRetailSnapshots(exactRows.map((row) => ({
+    asin: row.asin,
+    amazon_rating: row.amazonRating,
+    amazon_review_count: row.amazonReviewCount,
+    amazon_stock_status: row.amazonStockStatus,
+    amazon_meta_updated_at: null,
+  })));
+}
+
 export function bookRetailAsins(books: readonly RetailBookIdentity[]): string[] {
   return [...new Set(books.flatMap(identityAsinsForBookRow))].filter((asin) =>
     /^(?:B0[A-Z0-9]{8}|\d{9}[\dX])$/.test(asin),
@@ -77,6 +102,16 @@ export function bookRetailEditions(
       const priority = (format: string) => format === "Paperback" ? 0 : format === "Kindle" ? 1 : format === "Hardcover" ? 2 : 3;
       return priority(a.format) - priority(b.format) || a.snapshot.asin.localeCompare(b.snapshot.asin);
     });
+}
+
+export function primaryBookRetailEdition(
+  book: RetailBookIdentity,
+  byAsin: Readonly<Record<string, BookRetailSnapshot>>,
+): { format: string; snapshot: BookRetailSnapshot } | null {
+  const editions = bookRetailEditions(book, byAsin);
+  return editions.find(({ snapshot }) =>
+    snapshot.rating != null || snapshot.reviewCount != null || snapshot.stockStatus != null,
+  ) ?? editions[0] ?? null;
 }
 
 export function bookRetailStockTone(value: string | null): "good" | "danger" | "neutral" {
