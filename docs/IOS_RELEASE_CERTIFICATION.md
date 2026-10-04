@@ -330,6 +330,8 @@ never from `main`, and never from the active Cursor checkout.
 
 - [x] Starts from unified release-candidate commit `e772e705`, including merged PR #101. Only the app and widget build-number references advance from 366 to 367 in this branch.
 - [x] Final 1,002-test suite, TypeScript, focused ESLint, and diff check pass on the merged release candidate plus build bump.
-- [ ] A clean signed archive must pass before upload.
+- [x] PR #102 merged the five build-number updates into the release candidate at `b261f97f`. A clean signed archive at `/tmp/InteliAds-367.xcarchive` is `io.inteliads.app` version `1.0.1 (367)` in both the app and WidgetKit extension; strict code-signature verification passes. The archived app executable SHA-256 is `9c651cd7f9b8eb289e2de034261b51a905c76c5c032b93fd9b7118a3312a839a`.
+- [x] The App Store export `/tmp/InteliAds-367-signed/InteliAds.ipa` passed strict signature verification in both bundles, with production APNs, `get-task-allow=false`, and the shared App Group. IPA SHA-256 is `26582816dbcde2b960da70b436e50bbdc0333db99516d170352a7361ddc06378`. Xcode upload reported success, and App Store Connect now shows build 367 as **Ready to Submit** with only the internal Intelyads group attached.
+- [x] The archive app installed and launched on the connected iPhone 14 Pro without deleting app data. This verifies launch only; the user had an active foreground activity, so the Books screens were not visually certified.
 - [ ] On-device Books and book detail must show review/stock snapshots only where a real source value exists; otherwise they must say unavailable/unknown. Current production data has no populated rows, so this device check cannot certify live review or stock retrieval.
-- [ ] External TestFlight group assignment and build identity must be verified independently of the upload result.
+- [ ] Add build 367 to the three-tester external Intelyads TestFlight group and independently verify its external status. Upload and internal-group assignment do not satisfy this gate.
