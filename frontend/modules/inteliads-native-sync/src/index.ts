@@ -44,6 +44,7 @@ export type ApnsEnvironment = "sandbox" | "production";
 type NativeModule = {
   getApnsEnvironmentAsync(): Promise<string>;
   getCookieHeaderAsync(url: string): Promise<string>;
+  clearAmazonKdpCookiesAsync(): Promise<number>;
   registerAndScheduleAsync(force: boolean): Promise<boolean>;
   scheduleIfNeededAsync(force: boolean): Promise<boolean>;
   setEnabledAsync(enabled: boolean): Promise<boolean>;
@@ -145,6 +146,17 @@ export async function getNativeCookieHeader(url: string): Promise<string | null>
     return typeof value === "string" && value.trim() ? value.trim() : null;
   } catch {
     return null;
+  }
+}
+
+/** Clear only Amazon/KDP WKWebView cookies before changing import account. */
+export async function clearNativeAmazonKdpCookies(): Promise<boolean> {
+  if (!NativeSync) return Platform.OS !== "ios";
+  try {
+    await NativeSync.clearAmazonKdpCookiesAsync();
+    return true;
+  } catch {
+    return false;
   }
 }
 

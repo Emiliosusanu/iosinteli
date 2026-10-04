@@ -37,6 +37,34 @@ public class InteliAdsNativeSyncModule: Module {
       .joined(separator: "; ")
   }
 
+  @MainActor
+  private func clearAmazonKdpCookies() async -> Int {
+    let store = WKWebsiteDataStore.default().httpCookieStore
+    let cookies: [HTTPCookie] = await withCheckedContinuation { continuation in
+      store.getAllCookies { values in
+        continuation.resume(returning: values)
+      }
+    }
+    let amazonCookies = cookies.filter { cookie in
+      let domain = cookie.domain
+        .lowercased()
+        .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+      return domain == "amazon.com" ||
+        domain.hasPrefix("amazon.") ||
+        domain.contains(".amazon.") ||
+        domain == "kdpreports.amazon.com" ||
+        domain.hasPrefix("kdp.amazon.")
+    }
+    for cookie in amazonCookies {
+      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        store.delete(cookie) {
+          continuation.resume()
+        }
+      }
+    }
+    return amazonCookies.count
+  }
+
   private func normalizedApnsEnvironment(_ value: Any?) -> String? {
     guard let raw = value as? String else { return nil }
     switch raw.lowercased() {
@@ -103,6 +131,12 @@ public class InteliAdsNativeSyncModule: Module {
     // HttpOnly Amazon session cookies. Page JavaScript cannot read them.
     AsyncFunction("getCookieHeaderAsync") { (url: String) async -> String in
       await self.cookieHeader(for: url)
+    }
+
+    // Account switching must not reuse another KDP account's HttpOnly session.
+    // This clears only Amazon cookies; the InteliAds login remains untouched.
+    AsyncFunction("clearAmazonKdpCookiesAsync") { () async -> Int in
+      await self.clearAmazonKdpCookies()
     }
 
     AsyncFunction("getStoreProductsAsync") { () async throws -> [[String: Any]] in

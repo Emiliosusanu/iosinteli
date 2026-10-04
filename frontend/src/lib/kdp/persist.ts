@@ -58,19 +58,34 @@ export async function saveHelperAccountId(id: string): Promise<void> {
 
 /**
  * Switch the explicit iPhone-helper destination without carrying another
- * account's coverage/deferred journal into it. Templates and Amazon cookies
- * remain available because they describe the live WebView session.
+ * account's session, request templates, coverage, or deferred journal into it.
+ * The InteliAds login and all imported cloud data remain untouched.
  */
 export async function selectHelperAccountId(id: string): Promise<void> {
   const next = String(id || "").trim();
   if (!next) throw new Error("Choose a KDP account.");
   const previous = await loadHelperAccountId();
   if (previous === next) return;
-  await saveHelperAccountId(next);
+  const [{ clearKdpWebSession }, { clearNativeAmazonKdpCookies }] = await Promise.all([
+    import("./session.ts"),
+    import("inteliads-native-sync"),
+  ]);
+  const [, nativeCookiesCleared] = await Promise.all([
+    clearKdpWebSession(),
+    clearNativeAmazonKdpCookies(),
+  ]);
+  if (!nativeCookiesCleared) {
+    throw new Error("Unable to clear the current Amazon KDP session safely.");
+  }
   await Promise.all([
     storage.removeItem(STATE_KEY),
+    storage.removeItem(TEMPLATES_KEY),
     storage.removeItem(DEFERRED_KEY),
+    storage.removeItem(REPLAY_CURRENCY_KEY),
   ]);
+  // Commit the destination last so a failed cleanup cannot pair a new KDP
+  // account with the previous account's Amazon session.
+  await saveHelperAccountId(next);
 }
 
 export async function loadHelperSyncState(): Promise<KdpSyncState> {
