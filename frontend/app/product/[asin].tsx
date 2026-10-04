@@ -8,6 +8,8 @@ import {
   View,
 } from "react-native";
 import { BookCover } from "@/src/components/BookCover";
+import { BookRetailInfo } from "@/src/components/BookRetailInfo";
+import { bookRetailAsins, bookRetailEditions, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,8 +26,10 @@ import {
   MetricStrip,
 } from "@/src/components/Primitives";
 import { useApp } from "@/src/contexts/AppContext";
+import { useAuth } from "@/src/contexts/AuthContext";
 import {
   fetchBookCampaignsRange,
+  fetchBookRetailMetadata,
   fetchOwnedBookIdentity,
   fetchTopBooksRange,
   type BookCampaignRow,
@@ -136,6 +140,7 @@ function campaignA11yLabel(item: BookCampaignRow, verdict: { label: string }, cu
 }
 
 export default function ProductCampaignsScreen() {
+  const { user } = useAuth();
   const t = useTheme();
   const router = useRouter();
   const { profiles, selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
@@ -219,6 +224,19 @@ export default function ProductCampaignsScreen() {
   });
 
   const book = useMemo(() => matchBook(booksQ.data ?? [], asin), [booksQ.data, asin]);
+  const retailBooks = useMemo(() => book ? [book] : [{ book_key: asin, asin }], [book, asin]);
+  const retailAsins = useMemo(() => bookRetailAsins(retailBooks), [retailBooks]);
+  const retailQ = useQuery({
+    queryKey: ["book-retail-metadata-detail", user?.id ?? "anonymous", adminFilterUserId ?? "self", royaltyProfiles, kdpQueryScope, retailAsins],
+    queryFn: () => fetchBookRetailMetadata({ books: retailBooks, kdpProfileIds: royaltyProfiles, kdpScope: kdpQueryScope }),
+    enabled: Boolean(user?.id) && !adminFilterUserId && retailAsins.length > 0,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const retailEditions = useMemo(
+    () => retailQ.isSuccess ? bookRetailEditions(retailBooks[0], retailQ.data) : [],
+    [retailBooks, retailQ.data, retailQ.isSuccess],
+  );
   useEffect(() => {
     markPerf("book_detail.mount");
   }, []);
@@ -277,7 +295,12 @@ export default function ProductCampaignsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([campaignsQ.refetch(), booksQ.refetch(), identityQ.refetch()]);
+    await Promise.all([
+      campaignsQ.refetch(),
+      booksQ.refetch(),
+      identityQ.refetch(),
+      ...(!adminFilterUserId && user?.id ? [retailQ.refetch()] : []),
+    ]);
     setRefreshing(false);
   };
 
@@ -337,6 +360,8 @@ export default function ProductCampaignsScreen() {
             currency={primaryCurrency}
             marketplaceIndex={marketplaceIndex}
             formatOptions={formatOptions}
+            retailEditions={retailEditions}
+            retailLoadState={retailQ.isError ? "error" : retailQ.isPending ? "loading" : "ready"}
             onCreateCampaign={openCreateCampaign}
           />
         }
@@ -387,6 +412,8 @@ function BookHeader({
   currency,
   marketplaceIndex,
   formatOptions,
+  retailEditions,
+  retailLoadState,
   onCreateCampaign,
 }: {
   asin: string;
@@ -407,6 +434,8 @@ function BookHeader({
   currency: string;
   marketplaceIndex: SponsoredMarketplaceIndex;
   formatOptions: ReturnType<typeof formatsFromWorkKey>;
+  retailEditions: { format: string; snapshot: BookRetailSnapshot }[];
+  retailLoadState: "loading" | "ready" | "error";
   onCreateCampaign: () => void;
 }) {
   const t = useTheme();
@@ -594,6 +623,22 @@ function BookHeader({
 
         {formatOptions.length > 0 ? (
           <BookFormatBadges formats={formatOptions} />
+        ) : null}
+
+        {retailEditions.length > 0 || retailLoadState === "error" ? (
+          <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: t.colors.separator, paddingTop: 8 }}>
+            <Text style={[t.typography.caption1, { color: t.colors.text_secondary, fontWeight: "700" }]}>
+              Amazon listing snapshots
+            </Text>
+            {retailLoadState === "error" ? (
+              <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 5 }]}>
+                Listing details could not load. Pull down to retry.
+              </Text>
+            ) : null}
+            {retailEditions.map(({ format, snapshot }) => (
+              <BookRetailInfo key={snapshot.asin} edition={format} snapshot={snapshot} />
+            ))}
+          </View>
         ) : null}
 
         {displayBook ? (
