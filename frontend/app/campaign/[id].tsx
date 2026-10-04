@@ -64,6 +64,7 @@ import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityS
 import { enqueueEntityBidWrite } from "@/src/lib/bulkOutbox";
 import { describeProductTarget, fallbackAsinCoverUrl, formatMatchTypeLabel, isExactMatchType, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
+import { compareByTargetingRpcAcos } from "@/src/lib/targetingPage";
 import { sortSearchTermsAcosThenSpend } from "@/src/lib/searchTermSort";
 import { fastAddSearchTermExact, searchTermLooksTargeted } from "@/src/lib/searchTermHarvest";
 import { countriesForCampaignIdentity, countriesForSponsoredCampaign, identityFlagsA11y } from "@/src/lib/bookMarketplaces";
@@ -366,7 +367,7 @@ export default function CampaignDetail() {
       [...(productTargetsQ.data ?? []).filter((pt) => activeChildrenOnly
         ? matchesEntityStateFilter((pt as any).state, "enabled")
         : shouldShowActiveOrPausedWithData(pt as any, (pt as any).state))].sort(
-        compareByAcosSpendImpressionsSync,
+        compareByTargetingRpcAcos,
       ),
     [activeChildrenOnly, productTargetsQ.data],
   );

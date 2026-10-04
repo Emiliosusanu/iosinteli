@@ -20,7 +20,7 @@ import { EmptyState, FilterChrome, SectionCard, MetricStrip, RetryState, ScreenS
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { fastAddSearchTermExact, searchTermLooksTargeted } from "@/src/lib/searchTermHarvest";
 import { sortSearchTermsAcosThenSpend } from "@/src/lib/searchTermSort";
-import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
+import { compareByTargetingRpcAcos } from "@/src/lib/targetingPage";
 import { useVisibleProductTargetTitles } from "@/src/lib/useVisibleProductTargetTitles";
 
 type TabKey = "targets" | "searchTerms" | "history";
@@ -145,7 +145,7 @@ export default function AdGroupDetailScreen() {
           const described = describeProductTarget(pt.expression, pt.expression_type);
           return `${pt.title ?? ""} ${described.label} ${described.asin ?? ""}`.toLowerCase().includes(searchNeedle);
         })
-        .sort(compareByAcosSpendImpressionsSync),
+        .sort(compareByTargetingRpcAcos),
     [targetsQ.data, searchNeedle, targetStateFilter],
   );
   const targets = useVisibleProductTargetTitles(
