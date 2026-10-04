@@ -284,4 +284,14 @@ never from `main`, and never from the active Cursor checkout.
 - [x] For the visible rows, keyword text, match type, bid, clicks, spend, orders, and ACoS match the supplied Amazon Ads screenshot. Its table sorts by clicks; iOS sorts by ACoS and spend. Those differences in order are expected until the sort controls match.
 - [ ] Impression totals do not fully match the October 4 Amazon screenshot: for example, `greek gifts` is 1,305 in Amazon and 1,320 in the app snapshot, while `greece travel guide` is 567 versus 580. The stored daily rows place the discrepancy in the still-changing October 4 bucket. This is a source freshness/reconciliation question, not evidence of a different keyword ID. Recheck the same profile, ad group, date window, state filter, and observation time against a fresh Amazon read before certifying metric parity.
 - [x] The Campaign detail now labels its ranked 200-row preview honestly. Ad Group detail retains the full exact-period catalog, exposes an All states/Enabled filter, and lets the user reveal all 1,051 keywords in bounded 200-row steps; product targets use the same progressive treatment. Search runs against the complete catalog before rendering is bounded.
-- [ ] This UI correction is source-tested but has not yet been built and visually verified on the physical iPhone or uploaded as a new TestFlight build. Build 364 does not include it.
+- [x] The UI correction is included in the clean build 365 archive and was installed in place on the physical iPhone 14 Pro without an install or launch error. Build 364 does not include it.
+- [ ] A visual walk-through of the Greece ad group and refreshed Amazon impression comparison is still required before declaring targeting fully certified.
+
+## Build 365 — full ad-group catalog for external QA
+
+- [x] Starts from the unified release-candidate commit `0601a248` after PRs #94 and #95 merged. Only the five build references changed after that commit; the active Cursor checkout remained untouched.
+- [x] TypeScript, the focused launch and targeting suite (14/14), the full iOS unit suite (997/997), and `git diff --check` pass.
+- [x] Clean signed archive `/tmp/InteliAds-365.xcarchive` is `io.inteliads.app` version `1.0.1 (365)`, embeds `InteliAdsSyncWidget.appex`, and passes strict signature validation. Archive app executable SHA-256: `f16146c1292c43ea28b96bc02b0bf2562416a146324b36e0dcb88698d985f278`.
+- [x] The separately exported App Store IPA `/tmp/InteliAds-365-signed/InteliAds.ipa` has build 365, production APNs, `get-task-allow=false`, and the shared App Group. IPA SHA-256: `211120c0e70029d175f48b8a9c55a7fe2aa1bf604d8f4d321f7ecd7e436e7c4e`.
+- [x] The archive installed and launched on the connected physical iPhone 14 Pro; device inventory confirms `io.inteliads.app 1.0.1 (365)`.
+- [ ] The impression discrepancy remains a release-parity issue. External TestFlight distribution of 365 is for tester verification of the UI and must not be described as a fully certified metric fix.
