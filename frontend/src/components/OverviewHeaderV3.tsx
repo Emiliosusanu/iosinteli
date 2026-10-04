@@ -1088,7 +1088,8 @@ export function OverviewHeaderV3({
   const syncBusy = syncCompact === "Refreshing" || syncCompact === "Syncing";
   /** Busy refresh uses lateral stadium glow — not the wide orange "Refreshing" pill. */
   const showRefreshGlow = syncBusy || periodRefreshing;
-  const syncFailedOrStale = syncCompact === "Failed" || syncCompact === "Stale";
+  const syncFailedOrStale =
+    syncCompact === "Failed" || syncCompact.toLocaleLowerCase().includes("stale");
   const [syncReadyVisible, setSyncReadyVisible] = useState(false);
   const wasRefreshBusy = useRef(false);
   const readyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

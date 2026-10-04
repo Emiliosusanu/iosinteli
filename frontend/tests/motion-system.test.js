@@ -47,6 +47,29 @@ test("sync chrome stays editorial", () => {
   assert.match(formatUpdatedAgo("2026-08-25T17:30:00.000Z", Date.parse("2026-08-25T17:32:00.000Z")), /Updated 2m ago/);
 });
 
+test("sync chrome names a KDP importer stall without blaming Ads freshness", () => {
+  assert.deepEqual(
+    syncChrome({
+      failedRefresh: false,
+      refreshing: false,
+      stale: false,
+      warning: false,
+      kdpStalled: true,
+    }),
+    { state: "stale", compact: "KDP stale", label: "KDP data stalled" },
+  );
+  assert.equal(
+    syncChrome({
+      failedRefresh: false,
+      refreshing: false,
+      stale: true,
+      warning: false,
+      kdpStalled: true,
+    }).compact,
+    "Stale",
+  );
+});
+
 test("BidBot copy is operational, not an AI mascot", () => {
   assert.equal(bidBotOperationalCopy({ autoMode: "off" }).title, "BidBot Off");
   assert.equal(bidBotOperationalCopy({ autoMode: "high_confidence", pendingCount: 3 }).title, "BidBot Recommendations ready");
