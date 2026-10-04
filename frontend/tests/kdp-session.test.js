@@ -67,6 +67,9 @@ test("iOS persists real WKWebView HttpOnly cookies and clears rejected sessions"
   assert.match(nativeSwift, /WKWebsiteDataStore\.default\(\)\.httpCookieStore\.getAllCookies/);
   assert.match(nativeSwift, /getCookieHeaderAsync/);
   assert.match(nativeJs, /getNativeCookieHeader/);
+  assert.match(nativeJs, /clearNativeAmazonKdpCookies/);
+  assert.match(nativeSwift, /clearAmazonKdpCookiesAsync/);
+  assert.match(nativeSwift, /httpCookieStore/);
   assert.match(sessionSrc, /refreshKdpWebSessionFromNativeCookies/);
   assert.match(runtime, /refreshKdpWebSessionFromNativeCookies/);
   assert.match(runtime, /invalidateSavedKdpSession/);

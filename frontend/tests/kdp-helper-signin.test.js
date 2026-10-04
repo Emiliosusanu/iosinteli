@@ -69,4 +69,14 @@ test("helper destination is explicit and Ads filters cannot silently switch KDP 
   assert.match(persist, /export async function selectHelperAccountId/);
   assert.match(persist, /removeItem\(STATE_KEY\)/);
   assert.match(persist, /removeItem\(DEFERRED_KEY\)/);
+  assert.match(persist, /removeItem\(TEMPLATES_KEY\)/);
+  assert.match(persist, /clearKdpWebSession/);
+  assert.match(persist, /clearNativeAmazonKdpCookies/);
+  assert.match(persist, /if \(!nativeCookiesCleared\)/);
+  assert.ok(
+    persist.indexOf("clearNativeAmazonKdpCookies()") < persist.indexOf("saveHelperAccountId(next)"),
+    "the new helper account must only be saved after Amazon cookies are cleared",
+  );
+  assert.match(helper, /Switch KDP account\?/);
+  assert.match(helper, /Your InteliAds login and imported data stay available/);
 });

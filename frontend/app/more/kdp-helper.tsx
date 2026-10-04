@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { StyleSheet, View, ScrollView } from "react-native";
+import { Alert, StyleSheet, View, ScrollView } from "react-native";
 import { WebView } from "react-native-webview";
 import { PrimaryButton, SecondaryButton } from "@/src/components/Primitives";
 import { KdpReportsWebView, KDP_HELPER_HOME } from "@/src/components/KdpReportsWebView";
@@ -48,12 +48,41 @@ export default function KdpHelperScreen() {
     return subscribeKdpHelperStatus(setStatus);
   }, []);
 
-  const chooseHelperAccount = async (accountId: string) => {
-    await selectHelperAccountId(accountId);
-    setHelperAccountId(accountId);
-    startedAfterLogin.current = false;
-    automaticRetryCount.current = 0;
-    setAutomaticRetryNonce((value) => value + 1);
+  const applyHelperAccount = async (accountId: string) => {
+    try {
+      await selectHelperAccountId(accountId);
+      setHelperAccountId(accountId);
+      startedAfterLogin.current = false;
+      automaticRetryCount.current = 0;
+      setAutomaticRetryNonce((value) => value + 1);
+    } catch (error) {
+      Alert.alert(
+        "Couldn't switch KDP account",
+        error instanceof Error
+          ? error.message
+          : "The current Amazon session could not be cleared safely. Try again.",
+      );
+    }
+  };
+
+  const chooseHelperAccount = (accountId: string) => {
+    if (helperAccountId === accountId) return;
+    if (!status.loggedIn && !status.savedSession) {
+      void applyHelperAccount(accountId);
+      return;
+    }
+    Alert.alert(
+      "Switch KDP account?",
+      "To keep books and royalties separated, InteliAds will sign out only the current Amazon KDP session. Your InteliAds login and imported data stay available.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Switch and sign in",
+          style: "destructive",
+          onPress: () => void applyHelperAccount(accountId),
+        },
+      ],
+    );
   };
 
   useLayoutEffect(() => {
@@ -147,7 +176,7 @@ export default function KdpHelperScreen() {
               value={helperAccountId === account.id ? "Selected" : undefined}
               symbol={helperAccountId === account.id ? "checkmark.circle.fill" : "books.vertical"}
               symbolColor={helperAccountId === account.id ? t.colors.tone_good : t.colors.tone_inactive}
-              onPress={() => void chooseHelperAccount(account.id)}
+              onPress={() => chooseHelperAccount(account.id)}
               last={index === rows.length - 1}
             />
           ))}
