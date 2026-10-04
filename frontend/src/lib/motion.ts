@@ -68,6 +68,12 @@ export function syncChrome(input: {
   if (input.syncing) {
     return { state: "refreshing", compact: "Syncing", label: "Amazon sync in progress" };
   }
+  // KDP ingest health is independent from Amazon Ads sync. Naming the source
+  // avoids implying that current financial cards are cached or that Ads failed
+  // when a linked KDP importer stopped writing.
+  if (input.kdpStalled && !input.stale && !input.warning) {
+    return { state: "stale", compact: "KDP stale", label: "KDP data stalled" };
+  }
   if (input.stale || input.warning || input.kdpStalled) {
     return { state: "stale", compact: "Stale", label: "Stale" };
   }
