@@ -443,6 +443,11 @@ export default function ProductsScreen() {
               0 books matching
             </Text>
           ) : null}
+          {retailQ.isError ? (
+            <TouchableOpacity onPress={() => void retailQ.refetch()} accessibilityRole="button" accessibilityLabel="Listing details unavailable. Retry">
+              <Text style={[t.typography.footnote, { color: t.colors.tone_warning }]}>Listing details unavailable · Retry</Text>
+            </TouchableOpacity>
+          ) : null}
         </FilterChrome>
       </ReanimatedAnimated.View>
 
