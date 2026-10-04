@@ -265,3 +265,13 @@ never from `main`, and never from the active Cursor checkout.
 - Paused entities can be seen and resumed; archived entities stay excluded.
 - Never overwrite a known-good archive and never splice JavaScript into an older archive.
 - Before cleanup: verify commit, push, merge, clean status, and preservation of all other worktrees.
+
+## Build 364 — KDP freshness honesty and TestFlight production entitlements
+
+- [x] Starts from the isolated `codex/ios-364-kdp-freshness` worktree at commit `8376ac51`; the Downloads source checkout and unrelated worktrees were not edited.
+- [x] When only the KDP importer is outside the freshness window, Overview reports `KDP data stalled` / `KDP stale` instead of the ambiguous generic `Stale` badge. Ads freshness remains independently represented.
+- [x] Regression coverage verifies the KDP-only stale state and the existing Ads failure state; TypeScript and the focused launch/motion suite pass (15/15).
+- [x] Clean archive `/tmp/InteliAds-364.xcarchive` is `io.inteliads.app` version `1.0.1 (364)`. Its archive executable SHA-256 is `9bfd2d947f5ef7be3ff9b19cd5eea417d28b5dc5f72f320c7496ef1fd05b8640`; the JavaScript bundle SHA-256 is `7ecea98c4e3889eebc6c1e8be7c773cee83a2c661cd71d2ac2497f849f7bb2c4`.
+- [x] The App Store Connect export was separately verified as production-signed: `aps-environment=production`, `get-task-allow=false`, App Group present, build `364`, and IPA SHA-256 `0d85062a4deddff9cc67c6fcb388186871988a96ef521d8ed4f1775729cf90a2`.
+- [x] App Store Connect accepted the public upload and returned `Uploaded InteliAds` / `EXPORT SUCCEEDED`; Apple processing and external-group assignment remain a portal-side state to verify after processing completes.
+- [ ] Production APNs delivery is not certified from the development-installed app: the development token correctly returned `403 BadEnvironmentKeyInToken`. The final notification test must use the production 364 build installed by TestFlight, then verify the registered token environment is `production` before terminating the app and sending a visible alert.
