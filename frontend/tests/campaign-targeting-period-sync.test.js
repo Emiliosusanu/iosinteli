@@ -43,6 +43,7 @@ test("ad-group rows stay scoped to their own Amazon ad group", () => {
 test("campaign and ad-group product titles fill after paint without changing rank", () => {
   assert.match(campaign, /useVisibleProductTargetTitles\(/);
   assert.match(adGroup, /useVisibleProductTargetTitles\(/);
+  assert.match(adGroup, /searchNeedle}:\$\{targetStateFilter}:\$\{targetsQ\.dataUpdatedAt}:\$\{targetLimit}/);
   assert.match(visibleTitleHook, /fillMissingProductTargetTitlesFromRetail/);
   assert.match(visibleTitleHook, /rows\.map\(\(row\)/);
   assert.doesNotMatch(visibleTitleHook, /\.sort\(/);

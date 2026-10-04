@@ -150,7 +150,7 @@ export default function AdGroupDetailScreen() {
   );
   const targets = useVisibleProductTargetTitles(
     baseTargets.slice(0, targetLimit),
-    `${id}:${dateRange.start}:${dateRange.end}:${searchNeedle}:${targetsQ.dataUpdatedAt}:${targetLimit}`,
+    `${id}:${dateRange.start}:${dateRange.end}:${searchNeedle}:${targetStateFilter}:${targetsQ.dataUpdatedAt}:${targetLimit}`,
   );
 
   const searchTerms = useMemo(
