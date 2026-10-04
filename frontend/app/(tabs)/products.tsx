@@ -15,9 +15,11 @@ import { markPerf } from "@/src/lib/perf";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { BooksReadError, fetchKdpRoyaltiesRange, fetchTopBooksRange, type TopBookRow } from "@/src/lib/queries";
+import { BooksReadError, fetchBookRetailMetadata, fetchKdpRoyaltiesRange, fetchTopBooksRange, type TopBookRow } from "@/src/lib/queries";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { BookCover } from "@/src/components/BookCover";
+import { BookRetailInfo } from "@/src/components/BookRetailInfo";
+import { bookRetailAsins, bookRetailEditions, bookRetailStockLabel, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import {
   formatBreakEvenAcos,
   hasAuthoritativeBreakEven,
@@ -136,7 +138,7 @@ export default function ProductsScreen() {
   const reduceMotion = useReduceMotion();
   const router = useRouter();
   const { profiles, selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource } = useApp();
-  const { guestMode } = useAuth();
+  const { guestMode, user } = useAuth();
   const {
     onScroll: onBooksScroll,
     chromeAnimatedStyle,
@@ -236,7 +238,15 @@ export default function ProductsScreen() {
     meta: financialQueryMeta(),
   });
 
-  const books = booksData ?? [];
+  const books = useMemo(() => booksData ?? [], [booksData]);
+  const retailAsins = useMemo(() => bookRetailAsins(books), [books]);
+  const retailQ = useQuery({
+    queryKey: ["book-retail-metadata", user?.id ?? "anonymous", adminFilterUserId ?? "self", royaltyProfiles, kdpQueryScope, retailAsins],
+    queryFn: () => fetchBookRetailMetadata({ books, kdpProfileIds: royaltyProfiles, kdpScope: kdpQueryScope }),
+    enabled: Boolean(user?.id) && !adminFilterUserId && retailAsins.length > 0,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
   const overviewBooksWarm = queryClient.getQueryData(overviewBooksKey) as TopBookRow[] | undefined;
   const showBlockingSpinner =
     booksListAwaitingRows({ isPending, isError, isFetching, data: booksData }) && !overviewBooksWarm;
@@ -342,7 +352,7 @@ export default function ProductsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await refetch();
+    await Promise.all([refetch(), ...(!adminFilterUserId && user?.id ? [retailQ.refetch()] : [])]);
     setRefreshing(false);
   };
 
@@ -476,6 +486,7 @@ export default function ProductsScreen() {
           renderItem={({ item, index }) => (
             <ProductCard
               item={item}
+              retailEdition={retailQ.isSuccess ? bookRetailEditions(item, retailQ.data)[0] ?? null : null}
               currency={primaryCurrency}
               color={bookColorMap.get(bookColorKeyFor(item)) ?? fallbackBookColor(bookColorKeyFor(item), index)}
               marketplaceIndex={marketplaceIndex}
@@ -495,12 +506,14 @@ function ItemSeparator() {
 
 const ProductCard = React.memo(function ProductCard({
   item,
+  retailEdition,
   currency,
   color,
   marketplaceIndex,
   onOpen,
 }: {
   item: TopBookRow;
+  retailEdition: { format: string; snapshot: BookRetailSnapshot } | null;
   currency: string;
   color: string;
   marketplaceIndex: SponsoredMarketplaceIndex;
@@ -537,12 +550,17 @@ const ProductCard = React.memo(function ProductCard({
         <TouchableOpacity
           activeOpacity={1}
           accessibilityRole="button"
-          accessibilityLabel={bookA11yLabel(
-            item,
-            status,
-            currency,
-            marketplaceFlagsA11y(countriesForSponsoredBook(marketplaceIndex, item)),
-          )}
+          accessibilityLabel={[
+            bookA11yLabel(
+              item,
+              status,
+              currency,
+              marketplaceFlagsA11y(countriesForSponsoredBook(marketplaceIndex, item)),
+            ),
+            retailEdition
+              ? `${retailEdition.format} ${retailEdition.snapshot.asin}. Rating ${retailEdition.snapshot.rating?.toFixed(1) ?? "unavailable"}; reviews ${retailEdition.snapshot.reviewCount ?? "unavailable"}. Stock ${retailEdition.snapshot.stockStatus ? bookRetailStockLabel(retailEdition.snapshot.stockStatus) : "unknown"}${retailEdition.snapshot.checkedAt ? `, last checked ${retailEdition.snapshot.checkedAt.slice(0, 10)}` : ""}.`
+              : null,
+          ].filter(Boolean).join(" ")}
           accessibilityHint="Opens book details"
           onPressIn={() => {
             if (reduceMotion) return;
@@ -645,6 +663,10 @@ const ProductCard = React.memo(function ProductCard({
               </Text>
             </View>
           </View>
+
+          {retailEdition ? (
+            <BookRetailInfo edition={retailEdition.format} snapshot={retailEdition.snapshot} compact />
+          ) : null}
 
           {adsReady && item.acos > 0 ? (
             <View style={styles.breakEven} accessible={false} importantForAccessibility="no">

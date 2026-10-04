@@ -314,3 +314,13 @@ never from `main`, and never from the active Cursor checkout.
 - [x] App Store Connect shows `1.0.1 (366)` in the external **Intelyads** group (3 testers) with status **Testing** and 26 group builds. The group state changed while the TestFlight note was being prepared; the saved `What to Test` text and notification delivery were not verified.
 - [ ] Confirm the changed sort on a physical iPhone after installing build 366; device build 365 cannot prove this correction.
 - [ ] Reconcile impression changes with a fresh same-time Amazon Ads comparison. Matching ASIN IDs, spend, clicks, orders, and bids do not by themselves prove impression parity.
+
+## Next build — Amazon listing reviews and stock on iOS
+
+- [x] Books and book detail read the same `kdp_titles.amazon_rating`, `amazon_review_count`, `amazon_stock_status`, and `amazon_meta_updated_at` fields used by the web app. The read is limited to owned/linked KDP accounts and exact edition ASINs, and applies the existing book quarantine.
+- [x] Missing reviews are shown as unavailable and missing stock as unknown; zero reviews is a real zero only when the source explicitly supplies zero. Any available rating or stock is labeled as a dated snapshot, never as live availability.
+- [x] The metadata query does not delay financial books or replace their metrics on failure. Pull-to-refresh retries both reads. Admin view-as cannot accidentally read the signed-in user's private KDP listing data.
+- [x] TypeScript and the full 1,002-test iOS unit suite pass in the isolated worktree.
+- [x] An unsigned native Release build for iOS succeeds and embeds the existing WidgetKit extension; this is a compile check, not a signed TestFlight archive.
+- [ ] The current connected database has no populated rating, review-count, or stock rows in `kdp_titles`; the web app's corresponding fields are also empty. The Ads `/product/metadata` cache has title/image/price but no review fields. Verify a real, authorized metadata source and populate exact-ASIN snapshots before claiming that values appear on device.
+- [ ] Review, merge, build, and physical-device/TestFlight verification remain for this change. Build 366 does not contain it.

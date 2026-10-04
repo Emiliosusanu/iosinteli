@@ -89,6 +89,13 @@ import {
   mergeTopBookCatalogRows,
   preferEditionTitle,
 } from "./booksListActivity";
+import {
+  bookRetailAsins,
+  indexBookRetailSnapshots,
+  type BookRetailSnapshot,
+  type BookRetailSourceRow,
+  type RetailBookIdentity,
+} from "./bookRetailMetadata";
 
 export {
   collapseTargetingBookOptionsByParent,
@@ -5468,6 +5475,40 @@ export interface TopBookRow {
   published_at?: string | null;
   first_seen_at?: string | null;
   created_at?: string | null;
+}
+
+/** Web parity: these Amazon listing snapshots live in owned `kdp_titles`, not Ads reports. */
+export async function fetchBookRetailMetadata(opts: {
+  books: readonly RetailBookIdentity[];
+  kdpProfileIds: string[];
+  kdpScope: KdpRoyaltyQueryScope;
+}): Promise<Record<string, BookRetailSnapshot>> {
+  const asins = bookRetailAsins(opts.books);
+  if (!asins.length) return {};
+  const accountIds = await fetchKdpAccountIdsForRoyaltyQuery(opts.kdpProfileIds, opts.kdpScope);
+  if (!accountIds.length) return {};
+
+  const rows: BookRetailSourceRow[] = [];
+  try {
+    for (const accounts of chunkArray(accountIds, 100)) {
+      for (const asinChunk of chunkArray(asins, BOOKS_IN_CHUNK)) {
+        rows.push(...(await fetchAllPages<BookRetailSourceRow>((from, to) =>
+          supabase
+            .from("kdp_titles")
+            .select("account_id, asin, amazon_rating, amazon_review_count, amazon_stock_status, amazon_meta_updated_at")
+            .in("account_id", accounts)
+            .in("asin", asinChunk)
+            .order("asin", { ascending: true })
+            .range(from, to),
+        )));
+      }
+    }
+  } catch (error) {
+    throw new BooksReadError("retail_metadata", booksErrorCode(error));
+  }
+  const quarantineEntries = await loadShelfHealQuarantineEntries();
+  const { filterRowsExcludingQuarantine } = await import("./kdp/shelfHeal.ts");
+  return indexBookRetailSnapshots(filterRowsExcludingQuarantine(rows, quarantineEntries));
 }
 
 /** Book keys (group_key / asin / sku) with KDP or Ads signal in the activity window. */
