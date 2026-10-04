@@ -390,6 +390,122 @@ export async function fetchMobileTargetingCatalogTail(input: {
   // not change totals, global order, filters, or any Amazon entity.
   return pageNumbers.flatMap((page) => byPage.get(page) ?? []);
 }
+
+export type ExactCampaignTargetingCatalog = {
+  keywords: Keyword[];
+  productTargets: ProductTarget[];
+  /** Oldest metric coverage marker across the requested segments. */
+  metricsCoveredThrough: string | null;
+  /** Newest database observation time across the requested segments. */
+  asOf: string | null;
+};
+
+// Campaign and ad-group detail render at most 200 rows per entity section.
+// Enriching the first 200 rows from each already globally ranked product
+// segment covers every row that can enter that visible window without turning
+// a large campaign catalog into an unbounded metadata query.
+const EXACT_CAMPAIGN_VISIBLE_PRODUCT_META_LIMIT = 200;
+
+/**
+ * Exact-period targeting rows for Campaign and Ad-group detail screens.
+ *
+ * These screens historically read the entity tables ordered by lifetime spend,
+ * then overlaid period metrics with a best-effort timeout. That could make the
+ * same keyword show a different value/order than Targets, or silently retain a
+ * lifetime value after the period lookup timed out. Use the same authoritative
+ * RPC contract as Targets and walk its immutable snapshot before applying any
+ * client display cap.
+ */
+export async function fetchExactCampaignTargetingCatalog(input: {
+  campaignId: string;
+  profiles: string[];
+  start: string;
+  end: string;
+  ownerId?: string | null;
+  state?: "all" | "active";
+  includeKeywords?: boolean;
+  includeProductTargets?: boolean;
+  signal?: AbortSignal;
+}): Promise<ExactCampaignTargetingCatalog> {
+  const campaignId = String(input.campaignId || "").trim();
+  if (!campaignId || input.profiles.length === 0) {
+    return { keywords: [], productTargets: [], metricsCoveredThrough: null, asOf: null };
+  }
+
+  const segments: MobileTargetingSegment[] = [];
+  if (input.includeKeywords !== false) segments.push("keywords");
+  if (input.includeProductTargets !== false) segments.push("asins", "auto", "category");
+
+  const pages = await mapPoolLimited(segments, 2, async (segment) => {
+    const common = {
+      segment,
+      sort: "acos" as const,
+      pageSize: 500,
+      start: input.start,
+      end: input.end,
+      profiles: uniqueStrings(input.profiles.map(String)).sort(),
+      ownerId: input.ownerId,
+      campaignIds: [campaignId],
+      state: input.state ?? "all",
+      signal: input.signal,
+    };
+    const head = await fetchMobileTargetingPage({
+      ...common,
+      page: 1,
+      skipDisplayEnrich: true,
+    });
+    const tail = await fetchMobileTargetingCatalogTail({ ...common, head });
+    return { segment, head, rows: [...head.rows, ...tail] };
+  });
+
+  const keywords = new Map<string, Keyword>();
+  const productTargets = new Map<string, ProductTarget>();
+  const coverageMarkers: string[] = [];
+  const observationMarkers: string[] = [];
+  for (const page of pages) {
+    if (page.head.metricsCoveredThrough) coverageMarkers.push(page.head.metricsCoveredThrough);
+    if (page.head.asOf) observationMarkers.push(page.head.asOf);
+    for (const row of page.rows) {
+      const id = String((row as { id?: unknown }).id ?? "");
+      if (!id) continue;
+      if (page.segment === "keywords") keywords.set(id, row as Keyword);
+      else productTargets.set(id, row as ProductTarget);
+    }
+  }
+
+  // mobile_targeting_page_v1 intentionally returns ranking/metrics first. Keep
+  // that authoritative order and fill titles/covers only for the bounded rows
+  // that can be shown. Metadata failure never changes or removes a target.
+  const asinPage = pages.find((page) => page.segment === "asins");
+  if (asinPage?.rows.length) {
+    const visible = asinPage.rows.slice(0, EXACT_CAMPAIGN_VISIBLE_PRODUCT_META_LIMIT) as ProductTarget[];
+    try {
+      const enriched = await withQueryTimeout(
+        enrichProductTargetDisplay(visible, input.profiles, {
+          skipKdp: false,
+          skipRetail: true,
+        }),
+        TARGETING_PAGE_DISPLAY_ENRICH_MS,
+        input.signal,
+      );
+      for (const row of enriched) {
+        const id = String(row.id ?? "");
+        if (id) productTargets.set(id, row);
+      }
+    } catch (error) {
+      if (!isHomeQueryTimeout(error) && (error as Error)?.name !== "AbortError") {
+        console.warn("[inteliads:campaign-targeting] product metadata enrichment failed", error);
+      }
+    }
+  }
+
+  return {
+    keywords: [...keywords.values()],
+    productTargets: [...productTargets.values()],
+    metricsCoveredThrough: coverageMarkers.sort()[0] ?? null,
+    asOf: observationMarkers.sort().at(-1) ?? null,
+  };
+}
 /** Targets tab: first-window size so multi-profile keyword reads stay responsive. Not an Amazon write limit — Load more grows past this until the filtered catalog is exhausted. */
 export const TARGETING_LIST_LIMIT = 500;
 /** Page size for progressive catalog windows (Load more grows the window). */

@@ -11,7 +11,7 @@ import { useAuth } from "@/src/contexts/AuthContext";
 import { acosTone, layout, radii, spacing, toneColor, useTheme } from "@/src/lib/theme";
 import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, patchEntityInQueryData, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { updateAdGroupManual, updateAdGroupState, updateKeywordManual, updateProductTargetManual } from "@/src/lib/mutations";
-import { fetchAdGroupAutomationHistory, fetchAdGroupById, fetchKeywords, fetchProductTargets, fetchSearchTerms } from "@/src/lib/queries";
+import { fetchAdGroupAutomationHistory, fetchAdGroupById, fetchExactCampaignTargetingCatalog, fetchSearchTerms } from "@/src/lib/queries";
 import { shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
 import { describeProductTarget, fallbackAsinCoverUrl, formatMatchTypeLabel, isExactMatchType, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
 import { resolveAdGroupAddMode } from "@/src/lib/adGroupTargets";
@@ -20,8 +20,13 @@ import { EmptyState, FilterChrome, SectionCard, ToneDot, MetricStrip, RetryState
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { fastAddSearchTermExact, searchTermLooksTargeted } from "@/src/lib/searchTermHarvest";
 import { sortSearchTermsAcosThenSpend } from "@/src/lib/searchTermSort";
+import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
+import { useVisibleProductTargetTitles } from "@/src/lib/useVisibleProductTargetTitles";
 
 type TabKey = "targets" | "searchTerms" | "history";
+
+/** Rank the complete server scope first, then keep the native ScrollView bounded. */
+const AD_GROUP_TARGET_DISPLAY_LIMIT = 200;
 
 function paramId(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value[0] ?? "";
@@ -64,15 +69,35 @@ export default function AdGroupDetailScreen() {
   const auto = group?.is_auto ?? isAuto === "true";
 
   const keywordsQ = useQuery({
-    queryKey: ["adgroup-keywords", adminFilterUserId ?? "self", id, dateRange.start, dateRange.end],
-    queryFn: () => fetchKeywords(selectedProfileIds, { adGroupId: id, start: dateRange.start, end: dateRange.end, filterUserId: adminFilterUserId }),
-    enabled: !!id && selectedProfileIds.length > 0,
+    queryKey: ["adgroup-keywords-exact-period", adminFilterUserId ?? "self", user?.id ?? "anon", id, group?.campaign_id, dateRange.start, dateRange.end],
+    queryFn: () => fetchExactCampaignTargetingCatalog({
+      campaignId: String(group!.campaign_id),
+      profiles: [group!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean),
+      start: dateRange.start,
+      end: dateRange.end,
+      ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+      state: "all",
+      includeKeywords: true,
+      includeProductTargets: false,
+    }),
+    select: (catalog) => catalog.keywords.filter((row) => String(row.ad_group_id ?? "") === id),
+    enabled: !!id && !!group?.campaign_id && selectedProfileIds.length > 0,
   });
 
   const targetsQ = useQuery({
-    queryKey: ["adgroup-targets", adminFilterUserId ?? "self", id, dateRange.start, dateRange.end],
-    queryFn: () => fetchProductTargets(selectedProfileIds, { adGroupId: id, start: dateRange.start, end: dateRange.end, filterUserId: adminFilterUserId }),
-    enabled: !!id && selectedProfileIds.length > 0,
+    queryKey: ["adgroup-targets-exact-period", adminFilterUserId ?? "self", user?.id ?? "anon", id, group?.campaign_id, dateRange.start, dateRange.end],
+    queryFn: () => fetchExactCampaignTargetingCatalog({
+      campaignId: String(group!.campaign_id),
+      profiles: [group!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean),
+      start: dateRange.start,
+      end: dateRange.end,
+      ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+      state: "all",
+      includeKeywords: false,
+      includeProductTargets: true,
+    }),
+    select: (catalog) => catalog.productTargets.filter((row) => String(row.ad_group_id ?? "") === id),
+    enabled: !!id && !!group?.campaign_id && selectedProfileIds.length > 0,
   });
 
   const searchTermsQ = useQuery({
@@ -101,11 +126,12 @@ export default function AdGroupDetailScreen() {
     () =>
       (keywordsQ.data ?? [])
         .filter((kw) => shouldShowActiveOrPausedWithData(kw as any, kw.status))
-        .filter((kw) => !searchNeedle || `${kw.keyword_text ?? ""} ${kw.match_type ?? ""}`.toLowerCase().includes(searchNeedle)),
+        .filter((kw) => !searchNeedle || `${kw.keyword_text ?? ""} ${kw.match_type ?? ""}`.toLowerCase().includes(searchNeedle))
+        .slice(0, AD_GROUP_TARGET_DISPLAY_LIMIT),
     [keywordsQ.data, searchNeedle],
   );
 
-  const targets = useMemo(
+  const baseTargets = useMemo(
     () =>
       (targetsQ.data ?? [])
         .filter((pt) => shouldShowActiveOrPausedWithData(pt as any, pt.state))
@@ -113,8 +139,14 @@ export default function AdGroupDetailScreen() {
           if (!searchNeedle) return true;
           const described = describeProductTarget(pt.expression, pt.expression_type);
           return `${pt.title ?? ""} ${described.label} ${described.asin ?? ""}`.toLowerCase().includes(searchNeedle);
-        }),
+        })
+        .sort(compareByAcosSpendImpressionsSync)
+        .slice(0, AD_GROUP_TARGET_DISPLAY_LIMIT),
     [targetsQ.data, searchNeedle],
+  );
+  const targets = useVisibleProductTargetTitles(
+    baseTargets,
+    `${id}:${dateRange.start}:${dateRange.end}:${searchNeedle}:${targetsQ.dataUpdatedAt}`,
   );
 
   const searchTerms = useMemo(

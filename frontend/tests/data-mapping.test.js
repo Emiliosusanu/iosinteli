@@ -334,7 +334,7 @@ test("overview charts use real derived series without advisory filler copy", () 
   assert.equal(overviewSource.includes("btSpend"), true);
   assert.equal(overviewSource.includes("Low CTR: check creatives"), false);
   assert.equal(campaignDetailSource.includes("ProductTargetRow"), true);
-  assert.equal(campaignDetailSource.includes('SectionCard title="Auto Targeting"'), true);
+  assert.equal(campaignDetailSource.includes("Auto Targeting"), true);
   assert.equal(campaignDetailSource.includes("AutoTargetSummaryRow"), false);
   assert.equal(campaignDetailSource.includes("cooldownRow={pt}"), true);
   assert.equal(queriesSource.includes("assembleLogicalBookRows"), true);

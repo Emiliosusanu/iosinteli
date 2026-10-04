@@ -16,9 +16,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchCampaignById,
   fetchAdGroups,
-  fetchKeywords,
+  fetchExactCampaignTargetingCatalog,
   fetchProductAds,
-  fetchProductTargets,
   fetchSearchTerms,
   fetchCampaignPlacements,
   aggregateDailyMetrics,
@@ -71,6 +70,7 @@ import { countriesForCampaignIdentity, countriesForSponsoredCampaign, identityFl
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { CampaignMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 import { fetchNestBookProfitabilityDetail } from "@/src/lib/dashboardApi";
+import { useVisibleProductTargetTitles } from "@/src/lib/useVisibleProductTargetTitles";
 
 const PLACEMENT_EDITORS: {
   key: keyof PlacementAdjustments;
@@ -81,6 +81,9 @@ const PLACEMENT_EDITORS: {
   { key: "product_pages", label: "Product pages", testID: "campaign-placement-product" },
   { key: "rest_of_search", label: "Rest of search", testID: "campaign-placement-rest" },
 ];
+
+/** Keep detail ScrollViews responsive after the server has ranked the full scope. */
+const CAMPAIGN_TARGET_DISPLAY_LIMIT = 200;
 
 function placementEditorFor(placement: string) {
   const key = placement === "other" ? "rest_of_search" : placement;
@@ -235,29 +238,34 @@ export default function CampaignDetail() {
   // For manual campaigns, fetch BOTH keywords and product targets — show whichever
   // has data (handles keyword, product-targeting, and mixed campaigns correctly).
   const keywordsQ = useQuery({
-    queryKey: ["campaign-keywords", adminFilterUserId ?? "self", id, c?.amazon_profile_id, activeAdGroupKey, dateRange.start, dateRange.end],
-    queryFn: () => fetchKeywords([c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean), {
+    queryKey: ["campaign-keywords-exact-period", adminFilterUserId ?? "self", user?.id ?? "anon", id, c?.amazon_profile_id, activeAdGroupKey, dateRange.start, dateRange.end],
+    queryFn: () => fetchExactCampaignTargetingCatalog({
       campaignId: id!,
-      ...childAdGroupFilter,
-      status: activeChildrenOnly ? "enabled" : undefined,
-      limit: 500,
+      profiles: [c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean),
       start: dateRange.start,
       end: dateRange.end,
-      filterUserId: adminFilterUserId,
+      ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+      state: activeChildrenOnly ? "active" : "all",
+      includeKeywords: true,
+      includeProductTargets: false,
     }),
+    select: (catalog) => catalog.keywords,
     enabled: canLoadActiveChildren && !isAuto,
   });
 
   const productTargetsQ = useQuery({
-    queryKey: ["campaign-product-targets", adminFilterUserId ?? "self", id, c?.amazon_profile_id, activeAdGroupKey, dateRange.start, dateRange.end],
-    queryFn: () => fetchProductTargets([c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean), {
+    queryKey: ["campaign-product-targets-exact-period", adminFilterUserId ?? "self", user?.id ?? "anon", id, c?.amazon_profile_id, activeAdGroupKey, dateRange.start, dateRange.end],
+    queryFn: () => fetchExactCampaignTargetingCatalog({
       campaignId: id!,
-      ...childAdGroupFilter,
-      state: activeChildrenOnly ? "enabled" : undefined,
+      profiles: [c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean),
       start: dateRange.start,
       end: dateRange.end,
-      filterUserId: adminFilterUserId,
+      ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+      state: activeChildrenOnly ? "active" : "all",
+      includeKeywords: false,
+      includeProductTargets: true,
     }),
+    select: (catalog) => catalog.productTargets,
     enabled: canLoadActiveChildren,
   });
 
@@ -364,12 +372,22 @@ export default function CampaignDetail() {
   );
   const visibleKeywords = useMemo(
     () =>
-      [...(keywordsQ.data ?? []).filter((kw) => activeChildrenOnly
+      (keywordsQ.data ?? []).filter((kw) => activeChildrenOnly
         ? matchesEntityStateFilter(kw.status, "enabled")
-        : shouldShowActiveOrPausedWithData(kw as any, kw.status))].sort(
-        compareByAcosSpendImpressionsSync,
-      ),
+        : shouldShowActiveOrPausedWithData(kw as any, kw.status)),
     [activeChildrenOnly, keywordsQ.data],
+  );
+  const displayedKeywords = useMemo(
+    () => visibleKeywords.slice(0, CAMPAIGN_TARGET_DISPLAY_LIMIT),
+    [visibleKeywords],
+  );
+  const baseDisplayedProductTargets = useMemo(
+    () => visibleProductTargets.slice(0, CAMPAIGN_TARGET_DISPLAY_LIMIT),
+    [visibleProductTargets],
+  );
+  const displayedProductTargets = useVisibleProductTargetTitles(
+    baseDisplayedProductTargets,
+    `${id}:${dateRange.start}:${dateRange.end}:${productTargetsQ.dataUpdatedAt}`,
   );
   const campaignChildPreviewByAdGroup = useMemo(() => {
     const previews = new Map<string, { keywordCount: number; targetCount: number; labels: string[] }>();
@@ -1126,11 +1144,11 @@ export default function CampaignDetail() {
         </SectionCard>
 
         {!isAuto && hasKeywords ? (
-          <SectionCard title="Keywords">
-            {visibleKeywords.map((kw, idx) => (
+          <SectionCard title={`Keywords (${visibleKeywords.length})`}>
+            {displayedKeywords.map((kw, idx) => (
               <View
                 key={kw.id}
-                style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: idx === visibleKeywords.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
+                style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: idx === displayedKeywords.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
               >
                 <View onStartShouldSetResponder={() => true} onTouchEnd={(event) => event.stopPropagation()} style={{ marginRight: 8 }}>
                   <EntityStateSwitch
@@ -1205,12 +1223,12 @@ export default function CampaignDetail() {
         ) : null}
 
         {!isAuto && hasProductTargets ? (
-          <SectionCard title="Product targets">
-            {visibleProductTargets.map((pt: any, idx) => (
+          <SectionCard title={`Product targets (${visibleProductTargets.length})`}>
+            {displayedProductTargets.map((pt: any, idx) => (
               <ProductTargetRow
                 key={pt.id}
                 pt={pt}
-                isLast={idx === visibleProductTargets.length - 1}
+                isLast={idx === displayedProductTargets.length - 1}
                 primaryCurrency={primaryCurrency}
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
@@ -1260,13 +1278,13 @@ export default function CampaignDetail() {
         ) : null}
 
         {isAuto && hasProductTargets ? (
-          <SectionCard title="Auto Targeting">
-            {visibleProductTargets.map((pt: any, idx) => (
+          <SectionCard title={`Auto Targeting (${visibleProductTargets.length})`}>
+            {displayedProductTargets.map((pt: any, idx) => (
               <ProductTargetRow
                 key={pt.id}
                 pt={pt}
                 variant="auto"
-                isLast={idx === visibleProductTargets.length - 1}
+                isLast={idx === displayedProductTargets.length - 1}
                 primaryCurrency={primaryCurrency}
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
