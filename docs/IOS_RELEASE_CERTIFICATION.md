@@ -323,4 +323,13 @@ never from `main`, and never from the active Cursor checkout.
 - [x] TypeScript and the full 1,002-test iOS unit suite pass in the isolated worktree.
 - [x] An unsigned native Release build for iOS succeeds and embeds the existing WidgetKit extension; this is a compile check, not a signed TestFlight archive.
 - [ ] The current connected database has no populated rating, review-count, or stock rows in `kdp_titles`; the web app's corresponding fields are also empty. The Ads `/product/metadata` cache has title/image/price but no review fields. Verify a real, authorized metadata source and populate exact-ASIN snapshots before claiming that values appear on device.
-- [ ] Review, merge, build, and physical-device/TestFlight verification remain for this change. Build 366 does not contain it.
+- [x] PR #101 reviewed and merged into the unified release candidate at `e772e705`. Build 366 does not contain it.
+- [ ] Signed archive, physical-device verification, and external TestFlight distribution remain for the next build.
+
+## Build 367 — Amazon listing snapshot presentation
+
+- [x] Starts from unified release-candidate commit `e772e705`, including merged PR #101. Only the app and widget build-number references advance from 366 to 367 in this branch.
+- [x] Final 1,002-test suite, TypeScript, focused ESLint, and diff check pass on the merged release candidate plus build bump.
+- [ ] A clean signed archive must pass before upload.
+- [ ] On-device Books and book detail must show review/stock snapshots only where a real source value exists; otherwise they must say unavailable/unknown. Current production data has no populated rows, so this device check cannot certify live review or stock retrieval.
+- [ ] External TestFlight group assignment and build identity must be verified independently of the upload result.
