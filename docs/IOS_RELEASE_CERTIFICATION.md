@@ -351,3 +351,13 @@ never from `main`, and never from the active Cursor checkout.
 - [x] App Store IPA `/tmp/InteliAds-368-signed/InteliAds.ipa` has SHA-256 `8a934a935a56883fba53d4d8e578d90e03e19f3e5d9aba8915a88b142f94d2af`, production APNs, `get-task-allow=false`, and the shared App Group. Xcode reported `Upload succeeded`, `Uploaded InteliAds`, and `EXPORT SUCCEEDED` on October 4, 2026; Apple package processing follows the upload.
 - [x] Build 368 installed over the existing app on the connected iPhone 14 Pro without erasing the session. Home and Books opened, and the Aruba book detail displayed the exact live API values above. Device captures: `/tmp/InteliAds-368-launch.png`, `/tmp/InteliAds-368-books.png`, and `/tmp/InteliAds-368-aruba.png`.
 - [ ] Confirm Apple processing and associate build 368 with the external **Intelyads** group (3 testers). The Safari App Store Connect session was expired immediately after upload; no external distribution is claimed until the portal confirms it.
+
+
+## Build 368 follow-up — identity, metadata, and marketplace scope
+
+- [x] Regression tests cover exact ASIN identity, Nova Scotia old/new review separation, same-ASIN US/CA review snapshots, Iceland cover refresh, parent aggregation, stock eligibility, Ads/Target book filters, and SKU ASIN fallback.
+- [x] UK country code is normalized from `UK` to Unicode's `GB`; the installed iPhone 14 Pro build renders 🇬🇧 in the shared market header.
+- [x] A new local Release build was compiled from the follow-up source and installed in place on the connected iPhone 14 Pro.
+- [x] Device stress after that install passed: `js_errors=0`, `hard_errors=0`, `perf_lines=826`; evidence is `/tmp/inteliads-14pro-stress-20261005-200129`.
+- [x] Full unit suite after the follow-up source: 1,012/1,012; TypeScript and `git diff --check` pass.
+- [ ] Live Nova Scotia/Iceland API rows were not re-captured in this pass, so external TestFlight build certification is not claimed until the new numbered build is uploaded and its authenticated metadata is checked.

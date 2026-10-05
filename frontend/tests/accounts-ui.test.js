@@ -253,6 +253,11 @@ test("CAD joins a USD view and the reporting chip stays USD", () => {
   }
   assert.equal(displayCurrencyOfSelection(profiles, ["us", "ca"]), "USD");
   assert.deepEqual(currenciesInSelection(profiles, ["us", "ca"]), ["USD", "CAD"]);
+
+  const nonUsdMixed = [
+    { ...profiles[1], id: "gb", profile_id: "gb-ads", country_code: "GB", currency_code: "GBP" },
+  ];
+  assert.equal(displayCurrencyOfSelection([...profiles.slice(1), ...nonUsdMixed], ["ca", "gb"]), "USD");
   assert.deepEqual(
     moneyProfileIdsForSelection(profiles, ["us", "ca"]).sort(),
     ["ca", "ca-ads", "us", "us-ads"].sort(),
@@ -432,6 +437,9 @@ test("row speech includes name, enabled, and view without raw ids", () => {
   assert.match(DISABLE_CONFIRM_MESSAGE, /Does not disconnect Amazon/);
   assert.equal(countryFlagEmoji("US"), "🇺🇸");
   assert.equal(countryFlagEmoji("CA"), "🇨🇦");
+  assert.equal(countryFlagEmoji("UK"), "🇬🇧");
+  assert.equal(countryFlagEmoji("gb"), "🇬🇧");
+  assert.equal(countryFlagEmoji("unknown"), "🌐");
   assert.deepEqual(
     multiCountryFlagIcons(
       [
@@ -457,6 +465,7 @@ test("row speech includes name, enabled, and view without raw ids", () => {
     ["US", "CA", "DE"],
   );
   assert.deepEqual(sortMarketCountryCodes(["de", "US", "ca", "US"]), ["US", "CA", "DE"]);
+  assert.deepEqual(sortMarketCountryCodes(["UK", "gb", "US"]), ["US", "GB"]);
 });
 
 test("formatMarketPillLabel builds Overview market pill copy", () => {

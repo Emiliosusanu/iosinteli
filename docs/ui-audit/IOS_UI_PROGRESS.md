@@ -88,3 +88,19 @@ OPEN
 - [ ] Keep Chrome-extension KDP royalty correction work separate from this iOS
   branch; the levoppc incident remains an integrity guardrail, not a reason to
   rewrite historical totals from per-book data.
+
+
+## Build 368 follow-up — exact edition and marketplace metadata (2026-10-05)
+
+- [x] Nova Scotia old/new editions keep separate ASIN, review, stock, title, and cover values; the in-stock newer edition wins the card preview without transferring the old edition's reviews.
+- [x] Same-ASIN marketplace snapshots remain separate (for example US 49 reviews and CA 13); an unpublished paperback can therefore disappear or lose reviews without contaminating a replacement ASIN.
+- [x] Iceland's newer in-stock cover is preferred and cache-keyed by ASIN, marketplace, metadata version, and URL.
+- [x] Ads, Target, and Books identity helpers keep exact sponsored ASINs, SKU fallback ASINs, enabled-market filtering, and parent-format aggregation covered by regression tests.
+- [x] UK/GB country-code normalization is shared by profile rows and market pills, so `UK` renders 🇬🇧 and deduplicates with `GB`.
+- [x] Mixed non-USD scopes now use USD for comparable totals; single-market scopes remain native.
+- [x] Full unit suite: 1,012/1,012; TypeScript; release build; device stress on iPhone 14 Pro: `js_errors=0`, `hard_errors=0`, `DEVICE STRESS PASSED`.
+
+OPEN
+
+- [ ] Upload a new numbered TestFlight build containing the follow-up source changes. The locally installed 368 binary was rebuilt for device verification; it is not evidence that the external TestFlight 368 package changed.
+- [ ] Run a live device check for the authenticated Nova Scotia and Iceland rows after the new TestFlight build processes.

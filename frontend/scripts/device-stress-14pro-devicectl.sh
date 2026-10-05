@@ -3,37 +3,37 @@
 # Uses xcrun devicectl + idevicesyslog. Covers tab launches, deep routes, JS error scan.
 set -euo pipefail
 
-UDID="${1:-00008120-001210563E6BC01E}"
+CORE_DEVICE_ID="${1:-466A2C5C-0421-5A62-ACB4-231863B48FF1}"
+USB_UDID="${INTELIADS_USB_UDID:-00008120-001210563E6BC01E}"
 BUNDLE="io.inteliads.app"
 OUT="${STRESS_DEVICE_OUT:-/tmp/inteliads-14pro-stress-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT/logs"
 echo "$OUT" > /tmp/inteliads-14pro-stress-latest.path
-echo "OUT=$OUT UDID=$UDID"
+echo "OUT=$OUT CORE_DEVICE_ID=$CORE_DEVICE_ID USB_UDID=$USB_UDID"
 
 launch() {
   local env_json="${1:-}"
   if [[ -n "$env_json" ]]; then
     xcrun devicectl device process launch \
-      --device "$UDID" \
+      --device "$CORE_DEVICE_ID" \
       --terminate-existing \
       --environment-variables "$env_json" \
       "$BUNDLE" >/dev/null
   else
     xcrun devicectl device process launch \
-      --device "$UDID" \
+      --device "$CORE_DEVICE_ID" \
       --terminate-existing \
       "$BUNDLE" >/dev/null
   fi
 }
 
 # Version
-xcrun devicectl device info apps --device "$UDID" 2>/dev/null \
+xcrun devicectl device info apps --device "$CORE_DEVICE_ID" 2>/dev/null \
   | rg -i "inteliads|io\.inteliads\.app" | tee "$OUT/logs/version.txt" || true
 
-# Syslog (JS + app signals only)
-idevicesyslog -u "$UDID" 2>"$OUT/logs/syslog.err" \
-  | rg -i --line-buffered 'InteliAds\[|ReactNativeJS|\[inteliads|TypeError|Unhandled|Invariant|bulkOutbox|BooksReadError|HOME_QUERY|Amazon rejected|Writing to Amazon|period metrics|Couldn.?t load' \
-  > "$OUT/logs/signals.log" &
+# Capture the USB logger as its own process. Keeping it outside a background
+# pipeline lets the harness stop and reap it reliably on macOS.
+idevicesyslog -u "$USB_UDID" >"$OUT/logs/syslog.raw.log" 2>"$OUT/logs/syslog.err" &
 SP=$!
 trap 'kill $SP 2>/dev/null || true' EXIT
 
@@ -81,6 +81,9 @@ settle 10
 
 kill "$SP" 2>/dev/null || true
 wait "$SP" 2>/dev/null || true
+
+rg -i 'InteliAds\[|ReactNativeJS|\[inteliads|TypeError|Unhandled|Invariant|bulkOutbox|BooksReadError|HOME_QUERY|Amazon rejected|Writing to Amazon|period metrics|Couldn.?t load' \
+  "$OUT/logs/syslog.raw.log" > "$OUT/logs/signals.log" || true
 
 python3 - "$OUT" <<'PY'
 import re, sys
