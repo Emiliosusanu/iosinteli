@@ -77,3 +77,48 @@ test("Books preview uses an edition with real listing data when another edition 
   assert.equal(preview?.snapshot.asin, "B0ABCDEFGH");
   assert.equal(preview?.format, "Kindle");
 });
+
+test("current in-stock Nova Scotia edition wins over old review snapshot without transferring reviews", () => {
+  const nova = {
+    book_key: "KDP:VP2:NOVA",
+    asin: "B0H59KMDF9",
+    format_asins: ["B0H59KMDF9", "B0HFKCDPVG"],
+  };
+  const snapshots = indexProfileBookRetailSnapshots([
+    { asin: "B0H59KMDF9", title: "Nova Scotia Travel Guide 2026", coverUrl: "https://example.com/old.jpg", amazonReviewCount: 9, amazonStockStatus: "UNKNOWN" },
+    { asin: "B0HFKCDPVG", title: "Nova Scotia Travel Guide 2027", coverUrl: "https://example.com/new.jpg", amazonReviewCount: 49, amazonStockStatus: "IN_STOCK" },
+  ], nova.format_asins);
+  assert.equal(primaryBookRetailEdition(nova, snapshots)?.snapshot.asin, "B0HFKCDPVG");
+  assert.equal(primaryBookRetailEdition(nova, snapshots)?.snapshot.coverUrl, "https://example.com/new.jpg");
+  assert.equal(snapshots.B0H59KMDF9.reviewCount, 9);
+  assert.equal(snapshots.B0HFKCDPVG.reviewCount, 49);
+});
+
+test("newer in-stock Iceland edition supplies its own cover even when older paperback is also in stock", () => {
+  const iceland = {
+    book_key: "KDP:VP1:ICELAND",
+    asin: "B0DXBVNG1R",
+    format_asins: ["B0DXBVNG1R", "B0HB5MB9L9"],
+  };
+  const snapshots = indexProfileBookRetailSnapshots([
+    { asin: "B0DXBVNG1R", title: "Iceland Travel Guide 2025", coverUrl: "https://example.com/2025.jpg", amazonReviewCount: 60, amazonStockStatus: "IN_STOCK" },
+    { asin: "B0HB5MB9L9", title: "Iceland Travel Guide 2027", coverUrl: "https://example.com/2027.jpg", amazonReviewCount: 102, amazonStockStatus: "IN_STOCK" },
+  ], iceland.format_asins);
+  assert.equal(primaryBookRetailEdition(iceland, snapshots)?.snapshot.asin, "B0HB5MB9L9");
+  assert.equal(primaryBookRetailEdition(iceland, snapshots)?.snapshot.coverUrl, "https://example.com/2027.jpg");
+});
+
+test("same ASIN keeps marketplace review snapshots separate", () => {
+  const book = {
+    book_key: "KDP:VP2:NOVA",
+    asin: "B0HFKCDPVG",
+    format_asins: ["B0HFKCDPVG"],
+  };
+  const snapshots = indexProfileBookRetailSnapshots([
+    { asin: "B0HFKCDPVG", title: "Nova Scotia Travel Guide 2027", coverUrl: "https://example.com/us.jpg", amazonReviewCount: 49, amazonStockStatus: "IN_STOCK", marketplaceCode: "US", amazonMetaUpdatedAt: "2026-10-05T10:00:00Z" },
+    { asin: "B0HFKCDPVG", title: "Nova Scotia Travel Guide 2027", coverUrl: "https://example.com/ca.jpg", amazonReviewCount: 13, amazonStockStatus: "IN_STOCK", marketplaceCode: "CA", amazonMetaUpdatedAt: "2026-10-05T11:00:00Z" },
+  ], book.format_asins);
+  const editions = bookRetailEditions(book, snapshots);
+  assert.deepEqual(editions.map(({ snapshot }) => [snapshot.marketplaceCode, snapshot.reviewCount]), [["CA", 13], ["US", 49]]);
+  assert.match(snapshots.B0HFKCDPVG.coverCacheKey ?? "", /CA/);
+});

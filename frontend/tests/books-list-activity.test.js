@@ -227,6 +227,19 @@ test("collapseTopBooksByFormatGroup keeps authoritative BE from any sibling", ()
   assert.equal(collapsed.spend, 100);
 });
 
+test("grouped book shows the newer edition cover without losing old-edition metrics", () => {
+  const base = {
+    royalties: null, spend: 0, sales: 0, orders: 0, impressions: 0, clicks: 0,
+  };
+  const [group] = collapseTopBooksByFormatGroup([
+    { ...base, book_key: "KDP:VP2:NOVA", asin: "B0H59KMDF9", format_asins: ["B0HFKCDPVG"], title: "Nova Scotia 2026", image_url: "https://example.com/old.jpg", spend: 3 },
+    { ...base, book_key: "B0HFKCDPVG", asin: "B0HFKCDPVG", title: "Nova Scotia 2027", image_url: "https://example.com/new.jpg", in_stock: true, spend: 5 },
+  ]);
+  assert.equal(group.title, "Nova Scotia 2027");
+  assert.equal(group.image_url, "https://example.com/new.jpg");
+  assert.equal(group.spend, 8);
+});
+
 test("collapse keeps group when any sibling has KDP or Ads evidence", () => {
   const quietSibling = {
     book_key: "180797376X",

@@ -45,3 +45,36 @@ REMAINING (ranked; next is first unchecked)
 [ ] TESTFLIGHT DEVICE SMOKE after processing (`IOS_TESTFLIGHT_SMOKE_CHECKLIST.md`)
 
 See `IOS_TESTFLIGHT_BUILD_REPORT.md`.
+
+## Catalog identity and marketplace follow-up (2026-10-05)
+
+This section tracks the current iOS Books/Ads/Target consistency work. It is
+kept separate from the older release-candidate record above so its status is
+not mistaken for a TestFlight submission.
+
+COMPLETED
+
+- [x] Resolve exact ASIN metadata (title, cover, stock, rating, review count)
+  without copying values between editions.
+- [x] Keep same-ASIN review and cover snapshots separate per marketplace;
+  prefer the selected marketplace and expose the other snapshots.
+- [x] Prefer the newer in-stock edition cover/title for the Books and detail
+  headers while retaining the exact sponsored ASIN for campaigns.
+- [x] Include all enabled USD marketplaces in a book detail so US/CA/UK
+  campaigns for the same ASIN are not hidden by the selected profile.
+- [x] Include enabled product ads whose ASIN is missing but whose SKU carries
+  the sponsored ASIN, so Target book filters do not silently drop rows.
+- [x] Add regression coverage for Nova Scotia old/new ASINs, Iceland cover
+  refresh, same-ASIN marketplace review counts, and targeting identity.
+- [x] TypeScript, full unit suite (1011 tests), Metro iOS export, and a debug
+  device build/install on the connected iPhone 14 Pro passed.
+
+OPEN
+
+- [ ] Run the TestFlight smoke checklist on the uploaded build after Apple
+  finishes processing; verify Books -> detail -> campaigns on the device.
+- [ ] Confirm live API rows for every enabled marketplace in the device smoke
+  and record any missing stock/review/cover source row before release.
+- [ ] Keep Chrome-extension KDP royalty correction work separate from this iOS
+  branch; the levoppc incident remains an integrity guardrail, not a reason to
+  rewrite historical totals from per-book data.

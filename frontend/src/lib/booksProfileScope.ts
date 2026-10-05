@@ -43,6 +43,16 @@ export function booksMoneyProfileIds(
   );
 }
 
+/** Book detail in USD includes every enabled marketplace for an exact sponsored ASIN. */
+export function bookDetailProfileSelection(
+  profiles: readonly AmazonProfile[],
+  selectedProfileIds: readonly string[],
+  displayCurrency: string,
+): string[] {
+  if (String(displayCurrency).toUpperCase() !== "USD") return [...selectedProfileIds];
+  return profiles.filter(profileEnabled).map((profile) => profile.id).filter(Boolean);
+}
+
 /**
  * True when the session still has Ads profile rows (enabled or disabled).
  * Empty enabled∩selection must not be treated as a KDP-only session.

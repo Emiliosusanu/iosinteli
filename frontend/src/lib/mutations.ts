@@ -1307,6 +1307,7 @@ export type AmazonProfileBookPreview = {
   amazonStockStatus?: string | null;
   amazonMetaUpdatedAt?: string | null;
   accountId?: string | null;
+  marketplaceCode?: string | null;
 };
 
 /** Nest GET /amazon/profiles/:id/books — real sponsored/KDP covers only. */
