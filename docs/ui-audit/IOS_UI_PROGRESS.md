@@ -104,3 +104,10 @@ OPEN
 
 - [ ] Upload a new numbered TestFlight build containing the follow-up source changes. The locally installed 368 binary was rebuilt for device verification; it is not evidence that the external TestFlight 368 package changed.
 - [ ] Run a live device check for the authenticated Nova Scotia and Iceland rows after the new TestFlight build processes.
+
+## Build 369 — external upload (2026-10-05)
+
+- [x] Build 369 is the numbered release candidate for the exact-ASIN, UK/GB, cover-cache, parent-aggregation, and mixed-FX fixes.
+- [x] `/tmp/InteliAds-369-v2.xcarchive` archived successfully; Xcode's distribution log shows Apple Distribution signing and Store provisioning profiles.
+- [x] Public TestFlight export/upload used `testFlightInternalTestingOnly=false`; Transporter returned `Upload succeeded` and `Uploaded InteliAds`.
+- [ ] Apple processing and external-group assignment still need confirmation in App Store Connect after the expired browser session is restored.

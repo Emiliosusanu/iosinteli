@@ -361,3 +361,11 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Device stress after that install passed: `js_errors=0`, `hard_errors=0`, `perf_lines=826`; evidence is `/tmp/inteliads-14pro-stress-20261005-200129`.
 - [x] Full unit suite after the follow-up source: 1,012/1,012; TypeScript and `git diff --check` pass.
 - [ ] Live Nova Scotia/Iceland API rows were not re-captured in this pass, so external TestFlight build certification is not claimed until the new numbered build is uploaded and its authenticated metadata is checked.
+
+## Build 369 — external upload (2026-10-05)
+
+- [x] Build number 369 is present in the app and WidgetKit project settings at the committed bump `7ca1b6a1`.
+- [x] Clean archive `/tmp/InteliAds-369-v2.xcarchive` completed with version `1.0.1 (369)` and strict code-signature verification passed on the archived app.
+- [x] Xcode exported with `ios/ExportOptionsTestFlightPublic.plist` (`testFlightInternalTestingOnly=false`). The distribution log records Apple Distribution signing and iOS Team Store profiles for the app and widget.
+- [x] App Store Connect Transporter reported `Upload succeeded`, `Uploaded InteliAds`, and `** EXPORT SUCCEEDED **` at 2026-10-05 23:47:57 local time. Apple processing and external-group association still require portal confirmation.
+- [ ] Confirm Apple processing and attach build 369 to the external **Intelyads** group. The current App Store Connect browser session is expired (`authResult=FAILED`), so this is deliberately not claimed here.
