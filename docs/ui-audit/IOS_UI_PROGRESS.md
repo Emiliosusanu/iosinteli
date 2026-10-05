@@ -68,11 +68,21 @@ COMPLETED
   refresh, same-ASIN marketplace review counts, and targeting identity.
 - [x] TypeScript, full unit suite (1011 tests), Metro iOS export, and a debug
   device build/install on the connected iPhone 14 Pro passed.
+- [x] Audit multi-market Ads money: Overview/Books/book-detail USD totals
+  convert each marketplace's spend and sales with date-aligned market FX
+  before aggregation and fail closed when a required rate is missing.
+- [x] Keep Campaigns/Targets entity rows in their marketplace's native
+  currency, including bids and budgets; fix Campaign and Ad Group details so
+  CA/UK values cannot be mislabeled with the global USD chip.
+- [x] Re-run TypeScript, focused lint, the money regression, and the complete
+  1,011-test unit suite after the entity-currency fix.
 
 OPEN
 
 - [ ] Run the TestFlight smoke checklist on the uploaded build after Apple
   finishes processing; verify Books -> detail -> campaigns on the device.
+- [ ] Build and device-smoke a new numbered iOS artifact containing the
+  entity-currency fix before any TestFlight upload.
 - [ ] Confirm live API rows for every enabled marketplace in the device smoke
   and record any missing stock/review/cover source row before release.
 - [ ] Keep Chrome-extension KDP royalty correction work separate from this iOS
