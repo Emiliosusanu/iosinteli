@@ -7,7 +7,7 @@
 - Certified starting point: commit `e14241ad`, external TestFlight build 369
 - Bundle identifier: `io.inteliads.app`
 - Connected certification device: iPhone 17 Pro Max, UDID `00008150-00124D4C02EA401C`
-- Current candidate: build 370 (in-place installed over 369; the app was never uninstalled)
+- Current candidate: build 371 (in-place installed over 370; the app was never uninstalled)
 
 All new iOS edits, builds, archives and device installs must start in this worktree. Run
 `frontend/scripts/assert-ios-release-line.sh` before a build. The command fails in every
@@ -52,10 +52,12 @@ container and Keychain. Certification installs must never uninstall the existing
 - Unit suite: 1,015/1,015 pass
 - Focused KDP session, pricing auth and Rule Activity tests: pass
 - Release device compilation: pass with canonical local Pods and node modules
-- Built artifact identity: `io.inteliads.app`, version `1.0.1`, build `370`
+- Built artifact identity: `io.inteliads.app`, version `1.0.1`, build `371`
 - Provisioning identity: team `AQ5FWX4K8Y`, application id `AQ5FWX4K8Y.io.inteliads.app`, existing Keychain group retained
-- In-place installation on iPhone 17 Pro Max: pass; device reports installed build 370
+- In-place installation on iPhone 17 Pro Max: pass; device reports installed build 371
 
-The final launch/helper UI observation requires the physical phone to be unlocked. The first
-launch attempt was correctly denied by iOS because the device was locked; no reinstall or
-session-clearing action was taken.
+The final launch/helper UI observation passed with the phone unlocked. Home showed the
+authenticated portfolio after the update. KDP Helper showed Emilian Susanu selected,
+KDP session **Signed in**, and report templates available. Its separate Paperback pricing row
+correctly showed **Amazon login required** while the pricing step-up remained blocked; the
+Reports session stayed signed in. Evidence is in `docs/qa/evidence/ios-build-371/`.
