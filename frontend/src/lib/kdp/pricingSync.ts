@@ -41,6 +41,7 @@ import {
   isKdpSetupPageTransportFailure,
   looksLikeAmazonAsin,
   looksLikeKdpSetupBookId,
+  extractBookshelfPrintRowsFromHtml,
   parseAllMarketplacePricingFromSetupPage,
   parseKdpGetSetupPage,
   pickPrimaryMarketplacePricing,
@@ -67,7 +68,13 @@ export type PricingSyncResult = {
   message?: string;
 };
 
-const PRICING_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * A paperback price is only fresh for one iOS metronome interval.  The
+ * lightweight Bookshelf pass runs on every wake, while the setup-page
+ * second gate is re-read at least once per 15-minute wake.  This catches a
+ * price changed outside the app without waiting for a dirty-save event.
+ */
+const PRICING_FRESH_MS = 15 * 60 * 1000;
 const DEFAULT_MAX_BOOKS = 20;
 /** First-time / onboarding: price more per wake so user can leave the helper. */
 const ONBOARDING_MAX_BOOKS = 40;
@@ -277,17 +284,57 @@ async function loadFreshPricingAsins(accountId: string): Promise<Set<string>> {
 }
 
 async function fetchBookshelfHtml(locale: string): Promise<string> {
-  const url = bookshelfUrlForLocale(locale);
-  const result = await kdpPageFetch({
-    url,
-    method: "GET",
-    headers: {
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    },
-    body: null,
-    authScope: "pricing",
-  });
-  return String(result.text || "");
+  const base = bookshelfUrlForLocale(locale);
+  const htmlPages: string[] = [];
+  const seenRows = new Set<string>();
+  let previous = "";
+
+  // KDP's Bookshelf view selector uses `ALL`; native replay cannot click the
+  // selector, so request the equivalent view first.  If Amazon ignores that
+  // hint, walk numbered pages until a page contributes no new setup IDs.
+  const urls = [
+    `${base}?view=ALL`,
+    base,
+    ...Array.from({ length: 20 }, (_, index) => `${base}?page=${index + 2}`),
+  ];
+  for (const url of urls) {
+    let html = "";
+    try {
+      const result = await kdpPageFetch({
+        url,
+        method: "GET",
+        headers: {
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        body: null,
+        authScope: "pricing",
+      });
+      html = String(result.text || "");
+    } catch {
+      if (!htmlPages.length) throw new Error("KDP Bookshelf fetch failed");
+      break;
+    }
+    if (!html) break;
+    const pageMatch = /[?&]page=(\d+)/i.exec(url);
+    const pageNumber = pageMatch ? Number(pageMatch[1]) : 0;
+    // The `view=ALL` hint and the unqualified Bookshelf URL can legitimately
+    // return the same document.  Keep walking after that duplicate; only a
+    // repeated numbered page proves that Amazon ignored pagination.
+    if (html === previous && pageNumber >= 2) break;
+    previous = html;
+    const rows = extractBookshelfPrintRowsFromHtml(html);
+    const newRows = rows.filter((row) => {
+      const key = `${String(row.kdpBookId || "").toUpperCase()}:${String(row.printAsin || "").toUpperCase()}`;
+      if (seenRows.has(key)) return false;
+      seenRows.add(key);
+      return true;
+    });
+    htmlPages.push(html);
+    // A server that ignores `page=` repeats the same setup rows.  Stop there
+    // rather than issuing a long request storm on every 15-minute wake.
+    if (pageNumber >= 2 && newRows.length === 0) break;
+  }
+  return htmlPages.join("\n<!-- inteliads-bookshelf-page -->\n");
 }
 
 type SetupFetchResult = {
@@ -583,7 +630,7 @@ export async function syncKdpPaperbackPricing(opts: {
     }
     const msg =
       skippedFresh > 0
-        ? `KDP pricing: skipped ${skippedFresh}/${candidates.length} (fresh <7d)`
+        ? `KDP pricing: skipped ${skippedFresh}/${candidates.length} (fresh <15m)`
         : "KDP pricing: nothing to fetch";
     void appendKdpActivity(msg, "info");
     return {

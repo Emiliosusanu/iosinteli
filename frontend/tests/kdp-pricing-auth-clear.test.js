@@ -89,3 +89,22 @@ test("KDP helper presents pricing gate separately from report session", () => {
   assert.match(screen, /Reports remain signed in/);
   assert.match(screen, /break-even ACoS/);
 });
+
+test("iOS pricing gate rechecks every metronome wake and sweeps the live shelf", () => {
+  assert.match(sync, /const PRICING_FRESH_MS = 15 \* 60 \* 1000/);
+  assert.match(sync, /\?view=ALL/);
+  assert.match(sync, /\?page=\$\{index \+ 2\}/);
+  const bridge = readFileSync(new URL("../src/lib/kdp/bridge.ts", import.meta.url), "utf8");
+  assert.match(bridge, /selectAllBookshelfRows/);
+  assert.match(bridge, /value = 'ALL'/);
+});
+
+test("pricing auth has a one-shot onboarding prompt with a direct retry", () => {
+  const screen = readFileSync(
+    new URL("../app/more/kdp-helper.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(screen, /Amazon access needed/);
+  assert.match(screen, /Open KDP pricing/);
+  assert.match(screen, /pricingPromptedFor/);
+});

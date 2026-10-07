@@ -505,8 +505,9 @@ export async function runKdpIosHelperTick(
 
     // Paperback list price, printing cost, royalty and BE ACoS share the same
     // account id and exact ASIN catalog as the report import above. Fresh rows
-    // are skipped for seven days; pricing-page saves mark only that setup id
-    // dirty, so a normal Import never rewrites every unchanged book.
+    // are skipped for one 15-minute metronome interval; pricing-page saves
+    // mark only that setup id dirty, so a normal Import never rewrites every
+    // unchanged book.
     let pricingMessage = "";
     let pricingPending = 0;
     let pricingAuthBlocked = false;
