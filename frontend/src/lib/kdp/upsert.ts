@@ -1,4 +1,5 @@
 import { supabase } from "../supabase.ts";
+import { nestApiJson } from "../rulesApi.ts";
 
 type AnyRow = Record<string, unknown>;
 
@@ -21,15 +22,44 @@ export async function writeKdpDay(opts: {
   rowDaily: AnyRow;
   rowEntry: AnyRow;
   rowsBookDaily: AnyRow[];
+  factRows: AnyRow[];
 }): Promise<void> {
-  const stamp = (row: AnyRow) => ({ ...row, account_id: opts.accountId });
-  await upsert("kdp_daily_data", [stamp(opts.rowDaily)], "account_id,date");
-  await upsert("kdp_entries", [stamp(opts.rowEntry)], "account_id,date");
-  await upsert(
-    "kdp_book_daily_data",
-    opts.rowsBookDaily.map(stamp),
-    "account_id,date,asin",
+  const date = String(opts.rowDaily.date || opts.rowEntry.date || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Atomic KDP day write requires YYYY-MM-DD");
+  const randomHex = () => Math.floor(Math.random() * 16).toString(16);
+  const revisionId = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (token) => {
+    const value = token === "x" ? Number.parseInt(randomHex(), 16) : (Number.parseInt(randomHex(), 16) & 0x3) | 0x8;
+    return value.toString(16);
+  });
+  const identity = { account_id: opts.accountId, date, revision_id: revisionId };
+  const result = await nestApiJson<{
+    ok?: boolean;
+    factRows?: number;
+    submittedBookDailyRows?: number;
+  }>(
+    "/kdp-sync/replace-day",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        accountId: opts.accountId,
+        date,
+        revisionId,
+        includeAds: false,
+        dailyData: { ...opts.rowDaily, ...identity },
+        entry: { ...opts.rowEntry, ...identity },
+        bookDailyRows: opts.rowsBookDaily.map((row) => ({ ...row, ...identity })),
+        factRows: opts.factRows.map((row) => ({ ...row, ...identity })),
+      }),
+    },
+    `Atomic KDP write failed for ${date}; existing data was preserved.`,
   );
+  if (
+    result?.ok !== true ||
+    Number(result.factRows) !== opts.factRows.length ||
+    Number(result.submittedBookDailyRows) !== opts.rowsBookDaily.length
+  ) {
+    throw new Error(`Atomic KDP write acknowledgement mismatch for ${date}; existing data was preserved`);
+  }
 }
 
 export async function writeKdpCatalog(opts: {

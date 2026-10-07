@@ -21,7 +21,6 @@ import { cloudHistorySealsOnboarding, cloudMissingDays } from "./history.ts";
 import {
   loadHelperAccountId,
   loadHelperDeferredDays,
-  loadHelperReplayCurrency,
   loadHelperSyncState,
   loadHelperTemplates,
   saveHelperAccountId,
@@ -31,7 +30,6 @@ import {
   saveHelperTemplates,
 } from "./persist.ts";
 import { appendKdpActivity } from "./activity.ts";
-import { resolvePreferredReplayCurrency } from "./currency.ts";
 import { parseKdpJsonOrThrow, rebuildTemplateForDay } from "./replay.ts";
 import { fetchAmazonProfiles } from "../queries.ts";
 import {
@@ -58,6 +56,11 @@ import { isIosHelperEnabled, type KdpRoyaltySource } from "./source.ts";
 import { loadKdpWebSession } from "./session.ts";
 import { KDP_CAPTURE_PAGES } from "./templates.ts";
 import { writeKdpCatalog, writeKdpDay } from "./upsert.ts";
+import {
+  resolveKdpMarketplaceTarget,
+  type KdpMarketplaceTarget,
+} from "./marketplace.ts";
+import { evaluateRoyaltyOverwriteSafety } from "./royaltyOverwriteSafety.ts";
 import { runShelfHeal } from "./runShelfHeal.ts";
 import { syncKdpPaperbackPricing } from "./pricingSync.ts";
 import { hydratePricingAuthBannerFromBootstrap } from "./pricingBootstrap.ts";
@@ -169,11 +172,12 @@ async function ensureTemplates(): Promise<void> {
 async function fetchJsonForType(
   type: "royalties" | "orders" | "kenp" | "titles" | "titles_latest" | "royalties_titles",
   ymd: string,
-  preferredCurrency: "EUR" | "USD" | null = null,
+  preferredCurrency: string | null = null,
+  marketplace: KdpMarketplaceTarget | null = null,
 ) {
   const template = getKdpHelperStatus().templates[type];
   if (!template) return null;
-  const req = rebuildTemplateForDay(template, type, ymd, { preferredCurrency });
+  const req = rebuildTemplateForDay(template, type, ymd, { preferredCurrency, marketplace });
   const attempt = async () => {
     const result = await kdpPageFetch(req);
     if (Number(result.status) === 405) {
@@ -198,30 +202,50 @@ async function fetchJsonForType(
     try {
       return await attempt();
     } catch (retryError) {
-      if (isRateLimited(retryError) && type !== "royalties") return null;
       throw retryError;
     }
   }
+}
+
+function marketplaceTargetsFromProfiles(
+  profiles: Array<{ country_code?: string | null; marketplace_id?: string | null }>,
+): KdpMarketplaceTarget[] {
+  const byKey = new Map<string, KdpMarketplaceTarget>();
+  for (const profile of profiles) {
+    const target =
+      resolveKdpMarketplaceTarget(profile.country_code) ||
+      resolveKdpMarketplaceTarget(profile.marketplace_id);
+    if (target) byKey.set(target.key, target);
+  }
+  return [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+async function fetchDayPayloads(
+  ymd: string,
+  currency: "EUR" | "USD" | string,
+  marketplace: KdpMarketplaceTarget | null,
+): Promise<{ royaltiesJson: unknown; ordersJson: unknown; kenpJson: unknown }> {
+  const [royaltiesJson, ordersJson, kenpJson] = await Promise.all([
+    fetchJsonForType("royalties", ymd, currency, marketplace),
+    fetchJsonForType("orders", ymd, currency, marketplace),
+    fetchJsonForType("kenp", ymd, currency, marketplace),
+  ]);
+  if (!royaltiesJson || !ordersJson || !kenpJson) {
+    const scope = marketplace?.key || "ALL";
+    throw new Error(`Incomplete KDP ${scope} response for ${ymd}; existing data was preserved`);
+  }
+  return { royaltiesJson, ordersJson, kenpJson };
 }
 
 async function syncOneDay(
   accountId: string,
   ymd: string,
   titlesJson: unknown,
-  preferredCurrency: "EUR" | "USD" | null,
+  marketplaceTargets: KdpMarketplaceTarget[],
 ): Promise<void> {
-  const royaltiesJson = await fetchJsonForType("royalties", ymd, preferredCurrency);
-  const ordersJson = await fetchJsonForType("orders", ymd, preferredCurrency).catch((error) => {
-    if (isRateLimited(error)) return null;
-    throw error;
-  });
-  const kenpJson = await fetchJsonForType("kenp", ymd, preferredCurrency).catch((error) => {
-    if (isRateLimited(error)) return null;
-    throw error;
-  });
-  if (!royaltiesJson && !ordersJson && !kenpJson) {
-    throw new Error(`No KDP payloads for ${ymd}`);
-  }
+  // The authoritative All rollup is always USD. Native storefront requests
+  // below populate kdp_daily_facts without changing the account/day total.
+  const { royaltiesJson, ordersJson, kenpJson } = await fetchDayPayloads(ymd, "USD", null);
   const built = buildKdpFromJsons({
     ymd,
     titlesJson,
@@ -231,11 +255,84 @@ async function syncOneDay(
     adsJson: null,
     adsEntityId: null,
   });
+  built.rowEntry.income_currency = "USD";
+
+  const { data: previous, error: previousError } = await supabase
+    .from("kdp_daily_data")
+    .select("royalties,orders,kenp")
+    .eq("account_id", accountId)
+    .eq("date", ymd)
+    .maybeSingle();
+  if (previousError) {
+    throw new Error(`Could not load accepted KDP baseline for ${ymd}; refusing overwrite`);
+  }
+  const overwriteSafety = evaluateRoyaltyOverwriteSafety({ previous, incoming: built.rowDaily });
+  if (!overwriteSafety.safe) {
+    void appendKdpActivity(
+      `Protected ${ymd}: missing royalties with unchanged activity (${overwriteSafety.reason})`,
+      "error",
+    );
+    throw new Error(`Protected ${ymd}: existing positive royalties preserved`);
+  }
+
+  const isEstimated = ymd >= new Date().toISOString().slice(0, 10);
+  const factRows: Array<Record<string, unknown>> = [];
+  const appendFacts = (
+    rows: Array<Record<string, unknown>>,
+    marketplace: string,
+    currency: string,
+  ) => {
+    for (const fact of rows) {
+      const asin = String(fact.asin || "").trim().toUpperCase();
+      const format = String(fact.format || "").trim().toLowerCase();
+      if (!asin || !format) continue;
+      factRows.push({
+        asin,
+        format,
+        marketplace,
+        currency,
+        units: Math.max(0, Math.trunc(Number(fact.units || 0))),
+        royalties: Number(fact.royalties || 0),
+        kenp: Math.max(0, Math.trunc(Number(fact.kenp || 0))),
+        is_estimated: isEstimated,
+      });
+    }
+  };
+
+  if (marketplaceTargets.length) {
+    // Match Chrome's bounded concurrency. A partial storefront set is never
+    // published; the whole day remains queued for the next iOS wake.
+    for (let index = 0; index < marketplaceTargets.length; index += 3) {
+      const batch = marketplaceTargets.slice(index, index + 3);
+      const native = await Promise.all(
+        batch.map(async (target) => {
+          const payloads = await fetchDayPayloads(ymd, target.currency, target);
+          const result = buildKdpFromJsons({
+            ymd,
+            titlesJson,
+            ...payloads,
+            adsJson: null,
+            adsEntityId: null,
+          });
+          return { target, facts: result.facts as Array<Record<string, unknown>> };
+        }),
+      );
+      for (const row of native) appendFacts(row.facts, row.target.key, row.target.currency);
+    }
+  } else {
+    appendFacts(
+      built.facts as Array<Record<string, unknown>>,
+      "ALL",
+      "USD",
+    );
+  }
+
   await writeKdpDay({
     accountId,
     rowDaily: built.rowDaily,
     rowEntry: built.rowEntry,
     rowsBookDaily: built.rowsBookDaily,
+    factRows,
   });
 }
 
@@ -331,21 +428,21 @@ export async function runKdpIosHelperTick(
     // the valid royalties session as signed out.
     void hydratePricingAuthBannerFromBootstrap(accountId);
 
-    // Royaltix: rewrite preferredCurrency on replay. Ads profile currency wins
-    // over templates / saved; onboarding default is always USD when unknown.
+    // The account-wide All rollup is canonical USD. Each enabled storefront
+    // is replayed separately below in its native currency for filtered views.
     const profileCurrencyScope = (await fetchAmazonProfiles(userId).catch(() => [])).filter((p) =>
       (opts.profileIds ?? []).length
         ? (opts.profileIds ?? []).includes(p.id) || (opts.profileIds ?? []).includes(p.profile_id)
         : p.is_enabled !== false,
     );
-    const preferredCurrency = resolvePreferredReplayCurrency({
-      profiles: profileCurrencyScope,
-      templates: getKdpHelperStatus().templates as any,
-      saved: await loadHelperReplayCurrency(),
-    });
+    const preferredCurrency = "USD" as const;
+    const marketplaceTargets = marketplaceTargetsFromProfiles(profileCurrencyScope);
     await saveHelperReplayCurrency(preferredCurrency);
     setKdpHelperRunning(true, `KDP replay currency ${preferredCurrency}`);
-    void appendKdpActivity(`Replay currency ${preferredCurrency}`, "currency");
+    void appendKdpActivity(
+      `Replay currency USD · ${marketplaceTargets.length || 1} marketplace scope(s)`,
+      "currency",
+    );
 
     const titlesYmd = new Date().toISOString().slice(0, 10);
     const titlesJson =
@@ -429,7 +526,7 @@ export async function runKdpIosHelperTick(
         remaining -= 1;
         setKdpHelperRunning(true, `sync ${ymd}`);
         try {
-          await syncOneDay(accountId, ymd, titlesJson, preferredCurrency);
+          await syncOneDay(accountId, ymd, titlesJson, marketplaceTargets);
           deferred = acknowledgeDeferredDays(deferred, [ymd]);
           totalDays += 1;
           if (ymd === today || ymd === yesterday) steadyOk = true;
@@ -457,7 +554,7 @@ export async function runKdpIosHelperTick(
     for (const ymd of queued) {
       setKdpHelperRunning(true, `deferred: ${ymd}`);
       try {
-        await syncOneDay(accountId, ymd, titlesJson, preferredCurrency);
+        await syncOneDay(accountId, ymd, titlesJson, marketplaceTargets);
         deferred = acknowledgeDeferredDays(deferred, [ymd]);
         totalDays += 1;
         if (ymd === today || ymd === yesterday) steadyOk = true;

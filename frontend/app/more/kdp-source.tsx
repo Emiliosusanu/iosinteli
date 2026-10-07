@@ -12,6 +12,7 @@ import {
 } from "@/src/components/settings/SettingsPrimitives";
 import {
   KDP_ROYALTY_SOURCES,
+  isIosHelperEnabled,
   kdpRoyaltySourceOptionSubtitle,
   kdpRoyaltySourceOptionTitle,
   type KdpRoyaltySource,
@@ -31,7 +32,7 @@ export default function KdpSourceScreen() {
   const onSelect = (source: KdpRoyaltySource) => {
     if (guestMode) return;
     if (source !== kdpRoyaltySource) setKdpRoyaltySource(source);
-    if (source === "extension_ios") router.push("/more/kdp-helper" as Href);
+    if (isIosHelperEnabled(source)) router.push("/more/kdp-helper" as Href);
   };
 
   return (
@@ -81,7 +82,7 @@ export default function KdpSourceScreen() {
             );
           })}
         </SettingsSection>
-        {kdpRoyaltySource === "extension_ios" ? (
+        {isIosHelperEnabled(kdpRoyaltySource) ? (
           <SettingsSection>
             <SettingsNavigationRow
               testID="kdp-source-open-helper"

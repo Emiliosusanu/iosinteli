@@ -24,11 +24,14 @@ test("Sync overview query avoids select(*) over wide log rows", () => {
   assert.doesNotMatch(overviewSlice.slice(0, 800), /\.select\("\*"\)/);
 });
 
-test("importer resolves currency with Ads profiles first and appends activity", () => {
-  assert.match(importer, /resolvePreferredReplayCurrency/);
+test("importer keeps All in USD, derives native marketplace targets, and appends activity", () => {
+  assert.match(importer, /const preferredCurrency = "USD"/);
+  assert.match(importer, /marketplaceTargetsFromProfiles/);
+  assert.match(importer, /fetchDayPayloads\(ymd, target\.currency, target\)/);
+  assert.match(importer, /evaluateRoyaltyOverwriteSafety/);
   assert.match(importer, /appendKdpActivity/);
   assert.match(importer, /Night backfill completed/);
-  assert.match(importer, /Replay currency \$\{preferredCurrency\}/);
+  assert.match(importer, /Replay currency USD/);
 });
 
 test("overview rows surface 15 min sync, nightly seal, and currency", () => {
