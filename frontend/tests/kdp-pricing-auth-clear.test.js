@@ -24,6 +24,11 @@ test("pricing sync treats HTML/non-JSON setup-page as auth, not 17 silent fails"
   assert.match(sync, /stopping after repeated setup-page misses/);
   assert.match(sync, /Native Keychain replay cannot resolve bookshelf-relative paths/);
   assert.match(sync, /resolvePricingMarketplaceKey/);
+  assert.equal(
+    (sync.match(/authScope: "pricing"/g) || []).length,
+    2,
+    "both bookshelf and setup-page pricing fetches must preserve reports auth",
+  );
 });
 
 test("pricing sync moves WebView onto kdp.amazon.com before setup-page probes", () => {

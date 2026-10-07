@@ -285,6 +285,7 @@ async function fetchBookshelfHtml(locale: string): Promise<string> {
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     },
     body: null,
+    authScope: "pricing",
   });
   return String(result.text || "");
 }
@@ -343,6 +344,7 @@ async function fetchSetupPage(kdpBookId: string, locale: string): Promise<SetupF
         "X-Requested-With": "XMLHttpRequest",
       },
       body: null,
+      authScope: "pricing",
     });
     const text = String(result.text || "");
     const json = tryParseJson(text);

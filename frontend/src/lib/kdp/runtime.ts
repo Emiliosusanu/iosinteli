@@ -25,6 +25,7 @@ type FetchWaiter = {
   resolve: (value: PageFetchResult) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  invalidateSessionOnAuthFailure: boolean;
 };
 
 export type KdpHelperStatus = {
@@ -212,13 +213,14 @@ export function handleKdpWebViewMessage(raw: string) {
       ...status,
       currentUrl: data.url,
       loggedIn,
-      savedSession: signingIn ? false : status.savedSession,
+      // A print-pricing step-up can land on Amazon sign-in while the reports
+      // session remains valid. Keep Keychain until a reports replay proves the
+      // session was rejected; account switching still clears it explicitly.
+      savedSession: status.savedSession,
       sessionChecked: true,
     };
     emit();
-    if (signingIn) {
-      void clearKdpWebSession();
-    } else if (loggedIn) {
+    if (!signingIn && loggedIn) {
       const navigatedUrl = data.url;
       void refreshKdpWebSessionFromNativeCookies(navigatedUrl).then((session) => {
         if (status.currentUrl !== navigatedUrl || !status.loggedIn) return;
@@ -286,7 +288,7 @@ export function handleKdpWebViewMessage(raw: string) {
       finalUrl: p.finalUrl,
       redirected: p.redirected,
     });
-    if (looksLoggedOut({
+    if (waiter.invalidateSessionOnAuthFailure && looksLoggedOut({
       ok: Boolean(p.ok),
       status: Number(p.status || 0),
       text: String(p.text || ""),
@@ -373,7 +375,10 @@ export async function kdpPageFetch(req: {
   method: string;
   headers: Record<string, string>;
   body: string | null;
+  /** Pricing uses a separate Amazon step-up gate; it must not erase reports auth. */
+  authScope?: "reports" | "pricing";
 }): Promise<PageFetchResult> {
+  const invalidateSessionOnAuthFailure = req.authScope !== "pricing";
   const session =
     (await refreshKdpWebSessionFromNativeCookies(req.url).catch(() => null)) ||
     (await loadKdpWebSession());
@@ -384,7 +389,7 @@ export async function kdpPageFetch(req: {
     try {
       const native = await kdpNativeFetch({ ...req, headers });
       if (!looksLoggedOut(native)) return native;
-      invalidateSavedKdpSession();
+      if (invalidateSessionOnAuthFailure) invalidateSavedKdpSession();
       // Fall through to WebView when attached so the user can re-auth.
       if (!injectFn) return native;
     } catch (err) {
@@ -417,7 +422,7 @@ export async function kdpPageFetch(req: {
       waiters.delete(reqId);
       reject(new Error("KDP page fetch timed out"));
     }, FETCH_TIMEOUT_MS);
-    waiters.set(reqId, { resolve, reject, timer });
+    waiters.set(reqId, { resolve, reject, timer, invalidateSessionOnAuthFailure });
     const payload = JSON.stringify({
       reqId,
       url: req.url,
