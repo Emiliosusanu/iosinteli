@@ -59,6 +59,8 @@ import { loadKdpWebSession } from "./session.ts";
 import { KDP_CAPTURE_PAGES } from "./templates.ts";
 import { writeKdpCatalog, writeKdpDay } from "./upsert.ts";
 import { runShelfHeal } from "./runShelfHeal.ts";
+import { syncKdpPaperbackPricing } from "./pricingSync.ts";
+import { hydratePricingAuthBannerFromBootstrap } from "./pricingBootstrap.ts";
 import { buildKdpFromJsons, buildTitlesRows, extractBooksObj } from "./vendor/kdpVendor.generated.js";
 
 const CAPTURE_WAIT_MS = 28_000;
@@ -324,6 +326,10 @@ export async function runKdpIosHelperTick(
     await ensureTemplates();
 
     const accountId = await resolveAccountId(userId, opts.profileIds ?? []);
+    // Restore a prior print-pricing step-up independently from Reports auth.
+    // This keeps the price gate visible after process death without labelling
+    // the valid royalties session as signed out.
+    void hydratePricingAuthBannerFromBootstrap(accountId);
 
     // Royaltix: rewrite preferredCurrency on replay. Ads profile currency wins
     // over templates / saved; onboarding default is always USD when unknown.
@@ -346,8 +352,12 @@ export async function runKdpIosHelperTick(
       (await fetchJsonForType("titles", titlesYmd, preferredCurrency).catch(() => null)) ||
       (await fetchJsonForType("titles_latest", titlesYmd, preferredCurrency).catch(() => null)) ||
       (await fetchJsonForType("royalties_titles", titlesYmd, preferredCurrency).catch(() => null));
+    let pricingBooksObj: Record<string, unknown> | null = null;
+    let pricingFormatRows: Record<string, unknown>[] = [];
     if (titlesJson) {
-      const shelf = buildTitlesRows({ accountId, booksObj: extractBooksObj(titlesJson) });
+      pricingBooksObj = extractBooksObj(titlesJson) as Record<string, unknown>;
+      const shelf = buildTitlesRows({ accountId, booksObj: pricingBooksObj });
+      pricingFormatRows = shelf.formatRows as Record<string, unknown>[];
       await writeKdpCatalog({
         accountId,
         bookRows: shelf.bookRows,
@@ -487,18 +497,58 @@ export async function runKdpIosHelperTick(
           ? " · nightly leftover"
           : " · last-90 leftover"
         : "";
-    const doneMessage = totalDays
+    const reportsMessage = totalDays
       ? `Imported ${totalDays} day${totalDays === 1 ? "" : "s"}${backlog}${leftoverNote}`
       : leftover
         ? `Retry queued${backlog}`
         : "Up to date";
+
+    // Paperback list price, printing cost, royalty and BE ACoS share the same
+    // account id and exact ASIN catalog as the report import above. Fresh rows
+    // are skipped for seven days; pricing-page saves mark only that setup id
+    // dirty, so a normal Import never rewrites every unchanged book.
+    let pricingMessage = "";
+    let pricingPending = 0;
+    let pricingAuthBlocked = false;
+    try {
+      setKdpHelperRunning(true, "Checking paperback pricing…");
+      const pricing = await syncKdpPaperbackPricing({
+        accountId,
+        titlesJson,
+        booksObj: pricingBooksObj,
+        formatRows: pricingFormatRows,
+        onboarding: !state.onboardingDone || wakeMode === "processing",
+        // Only an open helper is allowed to show Amazon's one-time pricing
+        // step-up. Background wakes remain read-only and never navigate.
+        allowAuthNavigate: isKdpHelperScreenFocused(),
+      });
+      pricingPending = Number(pricing.pending || 0);
+      pricingAuthBlocked = Boolean(pricing.authRequired);
+      if (pricing.authRequired) {
+        pricingMessage = " · pricing login required";
+      } else if (pricing.synced > 0) {
+        pricingMessage = pricingPending
+          ? ` · priced ${pricing.synced} · ${pricingPending} left`
+          : ` · priced ${pricing.synced}`;
+      } else if (pricingPending > 0) {
+        pricingMessage = ` · pricing ${pricingPending} left`;
+      }
+    } catch (pricingError) {
+      const message = pricingError instanceof Error ? pricingError.message : String(pricingError);
+      pricingMessage = " · pricing retry queued";
+      void appendKdpActivity(`KDP pricing retry queued · ${message}`, "info");
+    }
+
+    const pricingLeftover = pricingPending > 0 && !pricingAuthBlocked;
+    const anyLeftover = leftover || pricingLeftover;
+    const doneMessage = `${reportsMessage}${pricingMessage}`;
     setKdpHelperRunning(false, lastSoftError ? `${doneMessage} · ${lastSoftError}` : doneMessage);
-    void appendKdpActivity(doneMessage, leftover ? "info" : "steady");
+    void appendKdpActivity(doneMessage, anyLeftover ? "info" : "steady");
     void publishKdpSyncSnapshot({
-      status: leftover ? "Retrying" : "Updated",
+      status: pricingAuthBlocked ? "Action required" : anyLeftover ? "Retrying" : "Updated",
       detail: doneMessage,
       isActive: false,
-      progress: leftover ? 0.85 : 1,
+      progress: pricingAuthBlocked ? 0.9 : anyLeftover ? 0.85 : 1,
       completedAtMs: Date.now(),
     });
     void import("inteliads-native-sync")
@@ -508,7 +558,16 @@ export async function runKdpIosHelperTick(
       setKdpHelperError(lastSoftError);
       void appendKdpActivity(lastSoftError, "error");
     }
-    return { ok: true, reason: leftover ? "synced_leftover" : "synced", days: totalDays, wakeMode };
+    return {
+      ok: true,
+      reason: pricingAuthBlocked
+        ? "pricing_auth_required"
+        : anyLeftover
+          ? "synced_leftover"
+          : "synced",
+      days: totalDays,
+      wakeMode,
+    };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     setKdpHelperError(message);

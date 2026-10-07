@@ -66,3 +66,26 @@ test("helper hydrates sticky pricing auth and allows print-setup while focused",
   assert.match(helper, /kdpRoyaltySource|helper/i);
   assert.match(runtime, /attachKdpWebView|navigateKdpWebView/);
 });
+
+test("iOS helper tick integrates pricing without forcing unchanged books", () => {
+  const importer = readFileSync(
+    new URL("../src/lib/kdp/importer.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(importer, /import \{ syncKdpPaperbackPricing \} from "\.\/pricingSync\.ts"/);
+  assert.match(importer, /hydratePricingAuthBannerFromBootstrap\(accountId\)/);
+  assert.match(importer, /await syncKdpPaperbackPricing\(\{/);
+  assert.match(importer, /accountId,\s*\n\s*titlesJson,\s*\n\s*booksObj: pricingBooksObj/);
+  assert.match(importer, /allowAuthNavigate: isKdpHelperScreenFocused\(\)/);
+  assert.doesNotMatch(importer, /syncKdpPaperbackPricing\(\{[\s\S]{0,400}forceRefresh:/);
+});
+
+test("KDP helper presents pricing gate separately from report session", () => {
+  const screen = readFileSync(
+    new URL("../app/more/kdp-helper.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(screen, /status\.pricingAuthRequired/);
+  assert.match(screen, /Reports remain signed in/);
+  assert.match(screen, /break-even ACoS/);
+});

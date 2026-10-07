@@ -200,7 +200,21 @@ export default function KdpHelperScreen() {
             last={!status.lastMessage && !status.lastError}
           />
           {status.lastMessage ? (
-            <SettingsRow label="Last update" subtitle={status.lastMessage} last={!status.lastError} />
+            <SettingsRow
+              label="Last update"
+              subtitle={status.lastMessage}
+              last={!status.pricingAuthRequired && !status.lastError}
+            />
+          ) : null}
+          {status.pricingAuthRequired ? (
+            <SettingsRow
+              label="Paperback pricing"
+              value="Amazon login required"
+              subtitle="Reports remain signed in. Complete Amazon's pricing check once to update price, printing cost, royalty and break-even ACoS."
+              symbol="lock.open"
+              symbolColor={t.colors.tone_warning}
+              last={!status.lastError}
+            />
           ) : null}
           {status.lastError ? (
             <SettingsRow
