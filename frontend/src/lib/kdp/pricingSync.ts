@@ -415,9 +415,11 @@ async function fetchSetupPage(kdpBookId: string, locale: string): Promise<SetupF
       pricing,
       marketplaceKey: pricing?.marketplace || marketplaceKey,
     };
-    if (setupPageLooksUnauthenticated(candidate)) {
-      return { ...candidate, ok: false };
-    }
+    // Match the Chrome worker: an individual route may legitimately return
+    // the KDP SPA HTML shell (HTTP 200), a legacy 403, or a stale 404 while a
+    // later /v2/ or locale fallback returns the pricing JSON.  Do not turn the
+    // first miss into an auth gate.  Only classify the result after every
+    // compatible setup-page route has been attempted.
     if (candidate.ok) return candidate;
     if (!best || candidate.status > best.status) best = candidate;
   }
@@ -738,6 +740,7 @@ export async function syncKdpPaperbackPricing(opts: {
         parseKdpGetSetupPage(json, fetched.marketplaceKey || "US")
       : fetched.pricing;
     if (!fetched.ok || !hasKdpSetupPagePricing(pricing)) {
+      const permanentMiss = isKdpSetupPagePermanentMiss(fetched);
       if (!loggedFirstFail) {
         loggedFirstFail = true;
         void appendKdpActivity(
@@ -751,7 +754,11 @@ export async function syncKdpPaperbackPricing(opts: {
         );
       }
       hardFail += 1;
-      consecutiveHard += 1;
+      // A removed/unpublished edition is isolated to its old KDP setup ID.
+      // It must never consume the consecutive-failure budget and prevent the
+      // remaining live ASINs from being priced in this same sweep.
+      if (permanentMiss) consecutiveHard = 0;
+      else consecutiveHard += 1;
       if (consecutiveHard >= 3) {
         void appendKdpActivity("KDP pricing: stopping after repeated setup-page misses", "info");
         break;

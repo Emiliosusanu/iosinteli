@@ -370,6 +370,14 @@ function looksLoggedOut(result: PageFetchResult): boolean {
   return text.includes("/ap/signin") || text.includes("signin.amazon");
 }
 
+function looksLikeHtmlDocument(result: PageFetchResult): boolean {
+  const contentType = String(result.contentType || "").toLowerCase();
+  if (contentType.includes("text/html") || contentType.includes("application/xhtml")) {
+    return true;
+  }
+  return /^\s*(?:<!doctype\s+html|<html\b)/i.test(String(result.text || ""));
+}
+
 export async function kdpPageFetch(req: {
   url: string;
   method: string;
@@ -388,9 +396,15 @@ export async function kdpPageFetch(req: {
   if (session?.cookies?.trim()) {
     try {
       const native = await kdpNativeFetch({ ...req, headers });
-      if (!looksLoggedOut(native)) return native;
-      if (invalidateSessionOnAuthFailure) invalidateSavedKdpSession();
+      const loggedOut = looksLoggedOut(native);
+      const pricingHtmlShell =
+        req.authScope === "pricing" && Boolean(injectFn) && looksLikeHtmlDocument(native);
+      if (!loggedOut && !pricingHtmlShell) return native;
+      if (loggedOut && invalidateSessionOnAuthFailure) invalidateSavedKdpSession();
       // Fall through to WebView when attached so the user can re-auth.
+      // Pricing can also return KDP's HTTP-200 SPA shell through native replay
+      // even though the visible WKWebView has the completed print-setup step-up.
+      // In that case use the authenticated page context, as Chrome does.
       if (!injectFn) return native;
     } catch (err) {
       if (!injectFn) {

@@ -31,6 +31,21 @@ test("pricing sync treats HTML/non-JSON setup-page as auth, not 17 silent fails"
   );
 });
 
+test("pricing sync tries every setup-page route before declaring the auth gate", () => {
+  const fetchStart = sync.indexOf("async function fetchSetupPage");
+  const fetchEnd = sync.indexOf("function resolveTitleExpandedDistribution", fetchStart);
+  const fetchBlock = sync.slice(fetchStart, fetchEnd);
+  const candidateStart = fetchBlock.indexOf("const candidate:");
+  const successReturn = fetchBlock.indexOf("if (candidate.ok) return candidate", candidateStart);
+  assert.ok(candidateStart >= 0 && successReturn > candidateStart);
+  assert.doesNotMatch(
+    fetchBlock.slice(candidateStart, successReturn),
+    /setupPageLooksUnauthenticated\(candidate\)/,
+    "a 200 HTML shell from one legacy route must not prevent a later /v2/ JSON success",
+  );
+  assert.match(fetchBlock.slice(successReturn), /return \(\s*best \|\|/);
+});
+
 test("pricing sync moves WebView onto kdp.amazon.com before setup-page probes", () => {
   assert.match(sync, /Cross-origin get-setup-page from kdpreports/);
   assert.match(sync, /navigateKdpWebView\(bookshelfUrlForLocale/);
@@ -53,6 +68,14 @@ test("pricing sync requests auth for stale prices when a refresh probe is blocke
   assert.doesNotMatch(probeBlock, /catalog already priced/);
 });
 
+test("permanent 404 setup IDs do not stop later live books", () => {
+  const loopIdx = sync.indexOf("for (let i = 0; i < todo.length; i += 1)");
+  const loopBlock = sync.slice(loopIdx, loopIdx + 4200);
+  assert.match(loopBlock, /const permanentMiss = isKdpSetupPagePermanentMiss\(fetched\)/);
+  assert.match(loopBlock, /if \(permanentMiss\) consecutiveHard = 0/);
+  assert.match(loopBlock, /if \(consecutiveHard >= 3\)/);
+});
+
 test("helper hydrates sticky pricing auth and allows print-setup while focused", () => {
   const boot = readFileSync(
     new URL("../src/lib/kdp/pricingBootstrap.ts", import.meta.url),
@@ -65,6 +88,15 @@ test("helper hydrates sticky pricing auth and allows print-setup while focused",
   assert.match(sync, /isKdpHelperScreenFocused\(\)/);
   assert.match(helper, /kdpRoyaltySource|helper/i);
   assert.match(runtime, /attachKdpWebView|navigateKdpWebView/);
+});
+
+test("visible helper falls back from native HTML shell to authenticated WebView", () => {
+  const runtime = readFileSync(new URL("../src/lib/kdp/runtime.ts", import.meta.url), "utf8");
+  assert.match(runtime, /function looksLikeHtmlDocument/);
+  assert.match(runtime, /req\.authScope === "pricing"/);
+  assert.match(runtime, /pricingHtmlShell/);
+  assert.match(runtime, /if \(!loggedOut && !pricingHtmlShell\) return native/);
+  assert.match(runtime, /use the authenticated page context, as Chrome does/);
 });
 
 test("iOS helper tick integrates pricing without forcing unchanged books", () => {

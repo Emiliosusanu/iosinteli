@@ -134,6 +134,27 @@ test("collectPricingCandidatesForIos merges bookshelf HTML + format rows", () =>
   assert.ok(looksLikeKdpSetupBookId("2RZKVQBNHD8"));
 });
 
+test("live Bookshelf setup ID replaces stale stored ID for the same ASIN", () => {
+  const { candidates } = collectPricingCandidatesForIos({
+    booksObj: {
+      stale: {
+        titleName: "Recreated paperback",
+        asins: { print: "B0GS27WQBZ" },
+        printSetupIds: { paperback: "OLDSETUP123" },
+      },
+    },
+    formatRows: [{ asin: "B0GS27WQBZ", format: "paperback" }],
+    titlesJson: null,
+    bookshelfHtml: `
+      <div>Paperback ASIN: B0GS27WQBZ</div>
+      <a href="/en_US/print-setup/paperback/NEWSETUP456/pricing">Rights & Pricing</a>
+    `,
+    storedSetupByAsin: new Map([["B0GS27WQBZ", "OLDSETUP123"]]),
+  });
+  const paired = candidates.filter((row) => row.asin === "B0GS27WQBZ");
+  assert.deepEqual(paired.map((row) => row.kdpBookId), ["NEWSETUP456"]);
+});
+
 test("extractPrintSetupIdsFromJsonDeep finds nested setup ids", () => {
   const links = extractPrintSetupIdsFromJsonDeep({
     nested: { id: "P3BWZSWT3DH", printAsin: "B0F6D8BSP4" },

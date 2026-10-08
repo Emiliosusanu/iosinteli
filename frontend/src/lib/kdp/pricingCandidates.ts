@@ -68,10 +68,14 @@ export function collectPricingCandidatesForIos(opts: {
         );
       });
     const setupFromBook = (fromBooks as AnyRow)?.printSetupIds as AnyRow | undefined;
+    // The live Bookshelf href is authoritative. KDP can replace its internal
+    // setup ID after an edition is unpublished/recreated while reports and our
+    // database still contain the old ID. Using the historical value first
+    // produces a permanent 404 and can starve every live title behind it.
     const setupId =
+      extractSetupIdNearAsin(opts.bookshelfHtml, asin) ||
       setupFromBook?.paperback ||
-      opts.storedSetupByAsin.get(asin) ||
-      extractSetupIdNearAsin(opts.bookshelfHtml, asin);
+      opts.storedSetupByAsin.get(asin);
     if (setupId) add(asin, String(setupId), null);
   }
 
@@ -86,7 +90,11 @@ export function collectPricingCandidatesForIos(opts: {
       row.printSetupIds && typeof row.printSetupIds === "object"
         ? (row.printSetupIds as AnyRow)
         : {};
-    const kdpBookId = setupIds.paperback || opts.storedSetupByAsin.get(asin) || null;
+    const kdpBookId =
+      extractSetupIdNearAsin(opts.bookshelfHtml, asin) ||
+      setupIds.paperback ||
+      opts.storedSetupByAsin.get(asin) ||
+      null;
     if (asin && kdpBookId) {
       add(asin, String(kdpBookId), row.titleName == null ? null : String(row.titleName));
     }
