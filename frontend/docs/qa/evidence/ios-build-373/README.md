@@ -25,3 +25,16 @@ Main JS bundle SHA-256:
 The device was locked when the automated launch was first attempted. Installation succeeded;
 live cloud-ingestion evidence must be recorded after an unlocked launch produces a helper
 activity event.
+
+## Build 375 remote diagnostics correction
+
+Build 374 exposed the API response and identified the contract error: `accountId` is
+batch-scoped and must not be repeated inside each entry. Build 375 strips that local
+queue-only binding from uploaded entries while preserving it in the offline queue.
+
+- Build 375 artifact: `/tmp/InteliAds-375-remote-diagnostics-20261008/Build/Products/Release-iphoneos/InteliAds.app`
+- Build 375 installed in-place on iPhone 17 Pro Max: pass
+- Live upload: HTTP 201
+- Queue before retry: 20 entries; queue after retry: 0
+- Account binding remained the selected KDP account during the drain
+- Upload status is persisted without credentials for future support diagnosis
