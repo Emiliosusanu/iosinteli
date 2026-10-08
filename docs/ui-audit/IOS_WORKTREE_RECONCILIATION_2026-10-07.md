@@ -9,8 +9,8 @@
 - Connected certification devices: iPhone 17 Pro Max, UDID
   `00008150-00124D4C02EA401C`, and iPhone 14 Pro, UDID
   `00008120-001210563E6BC01E`
-- Current candidate: build 372 (installed in place on iPhone 14 Pro; the app was
-  never uninstalled)
+- Current candidate: build 373 (installed in place on iPhone 17 Pro Max; the app was
+  never uninstalled). Build 372 remains the preceding device-certified checkpoint.
 
 All new iOS edits, builds, archives and device installs must start in this worktree. Run
 `frontend/scripts/assert-ios-release-line.sh` before a build. The command fails in every
@@ -20,7 +20,7 @@ number is inconsistent.
 `origin/main` is not the current release line. On 7 October it diverged by 218
 release commits and merging it into this worktree would remove recent iOS features. The
 review base is `origin/feat/ios-release-candidate`; PR #108 contains the 12 release commits
-after that base. Do not rebase build 372 onto `origin/main` or build from another checkout.
+after that base. Do not rebase build 373 onto `origin/main` or build from another checkout.
 
 ## Preservation and reconciliation
 
@@ -77,3 +77,25 @@ KDP session survived the in-place install, but no destination is selected and Am
 the sign-in page. A live import was deliberately not started until the exact destination is
 selected. Evidence is in `frontend/docs/qa/evidence/ios-build-372/`; the prior build 371
 evidence remains in `docs/qa/evidence/ios-build-371/`.
+
+## Build 373 remote diagnostics checkpoint
+
+Build 373 preserves all build 372 KDP sync and pricing behavior and adds remote iOS-helper
+diagnostics to the authenticated `/api/extension-logs/batch` channel already used by the
+Chrome extension. Events are bound to the selected KDP account when captured; queued rows
+cannot be relabeled by a later account switch. A 200-entry persistent offline queue drains
+in 25-entry batches on new helper activity, cold app start, and foreground resume.
+
+Diagnostic messages redact bearer credentials, access/refresh tokens, cookies, passwords,
+and JWT-shaped values before persistence. The payload contains app/build, iOS version,
+activity kind, and a pseudonymous install id. It never includes KDP cookies or InteliAds
+tokens.
+
+- TypeScript: pass
+- Unit suite: 1,031/1,031 pass
+- Focused remote-diagnostics tests: 3/3 pass
+- Release guard: build 373 across app, widget, and Xcode project
+- Release build and codesign verification: pass
+- Built artifact: `/tmp/InteliAds-373-remote-diagnostics-20261008/Build/Products/Release-iphoneos/InteliAds.app`
+- Main bundle SHA-256: `ea0af36c0792fc570262ef81ffcb52c5315e17186d2495d1533f2e58932e79af`
+- In-place install on iPhone 17 Pro Max: pass; device reports `1.0.1 (373)`

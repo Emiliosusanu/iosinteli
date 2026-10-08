@@ -65,6 +65,8 @@ export async function appendKdpActivity(
       };
       const next = [entry, ...prev].slice(0, MAX_ENTRIES);
       await storage.setItem(ACTIVITY_KEY, JSON.stringify(next));
+      const { enqueueKdpRemoteDiagnostic } = await import("./remoteDiagnostics.ts");
+      await enqueueKdpRemoteDiagnostic(entry);
     });
   try {
     await activityWriteChain;
