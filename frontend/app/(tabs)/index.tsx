@@ -9,7 +9,14 @@ import {
   InteractionManager,
   TouchableOpacity,
 } from "react-native";
-import Animated from "react-native-reanimated";
+import Animated, {
+  Easing,
+  cancelAnimation,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from "react-native-reanimated";
 import { AppScreen } from "@/src/components/ScreenAmbient";
 import { adsFxCoveredForDisplay } from "@/src/lib/dailyMetrics";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -2303,11 +2310,11 @@ export default function OverviewScreen() {
               />
               {!loading && royaltiesKnown && prevKdpReady && !chartDay ? <StatBadge delta={deltas.royalties} /> : null}
             </View>
-            {financeCaption ? (
-              <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: t.spacing.sm }]}>
-                {financeCaption}
-              </Text>
-            ) : null}
+            <GrossStatusSlot
+              caption={financeCaption}
+              updating={periodRefreshing}
+              t={t}
+            />
             {(royaltiesFailed || adsFailed) && (
               <TouchableOpacity
                 onPress={() => void onRefresh()}
@@ -2990,6 +2997,98 @@ function AnimatedValueText({
   return <VerifiedValue value={value} style={style} {...props} />;
 }
 
+/**
+ * A permanently reserved status lane keeps the Gross card and every widget
+ * below it anchored while a background refresh starts or finishes. The glow
+ * animates only opacity/scale, so it never participates in layout.
+ */
+function GrossStatusSlot({
+  caption,
+  updating,
+  t,
+}: {
+  caption: string | null;
+  updating: boolean;
+  t: any;
+}) {
+  const reduceMotion = useReduceMotion();
+  const breath = useSharedValue(0);
+
+  useEffect(() => {
+    cancelAnimation(breath);
+    if (!caption || !updating || reduceMotion) {
+      breath.set(caption && updating ? 0.55 : 0);
+      return;
+    }
+    breath.set(0);
+    breath.set(
+      withRepeat(
+        withTiming(1, {
+          duration: 1500,
+          easing: Easing.inOut(Easing.ease),
+        }),
+        -1,
+        true,
+      ),
+    );
+    return () => cancelAnimation(breath);
+  }, [breath, caption, reduceMotion, updating]);
+
+  const glowStyle = useAnimatedStyle(() => ({
+    opacity: 0.14 + breath.get() * 0.18,
+    transform: [{ scale: 1 + breath.get() * 0.035 }],
+  }));
+
+  return (
+    <View style={styles.grossStatusSlot} pointerEvents="none">
+      {caption ? (
+        <View
+          testID="home-gross-status"
+          style={[
+            styles.grossStatusPill,
+            {
+              backgroundColor: updating
+                ? t.colors.tone_primary + "12"
+                : t.colors.background_tertiary,
+              borderColor: updating
+                ? t.colors.tone_primary + "38"
+                : t.colors.separator,
+            },
+          ]}
+        >
+          {updating ? (
+            <Animated.View
+              testID="home-gross-status-glow"
+              style={[
+                StyleSheet.absoluteFill,
+                styles.grossStatusGlow,
+                { backgroundColor: t.colors.tone_primary },
+                glowStyle,
+              ]}
+            />
+          ) : null}
+          {updating ? (
+            <View style={[styles.grossStatusDot, { backgroundColor: t.colors.tone_primary }]} />
+          ) : null}
+          <Text
+            style={[
+              t.typography.caption2,
+              {
+                color: updating ? t.colors.tone_primary : t.colors.text_tertiary,
+                fontWeight: "700",
+              },
+            ]}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
+            {caption}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 
 
 function ActionReviewCard({
@@ -3203,6 +3302,35 @@ function targetingBadge(c: { targeting_type?: string | null; type?: string | nul
 // ─── styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  grossStatusSlot: {
+    height: 34,
+    marginTop: 6,
+    alignItems: "flex-start",
+    justifyContent: "center",
+    overflow: "visible",
+  },
+  grossStatusPill: {
+    position: "relative",
+    maxWidth: "100%",
+    minHeight: 26,
+    borderRadius: 999,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    overflow: "visible",
+  },
+  grossStatusGlow: {
+    borderRadius: 999,
+  },
+  grossStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
   stickyHeader: {
     paddingHorizontal: PAGE_PAD,
     paddingTop: 0,

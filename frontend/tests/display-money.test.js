@@ -158,6 +158,10 @@ test("list rows stay native while Ads Engine funnels receive the full FX context
   assert.match(campaigns, /rowCurrencyOfProfile\(profiles, item\.amazon_profile_id, primaryCurrency\)/);
   assert.match(campaigns, /formatCurrency\(item\.spend, rowCurrency/);
   assert.match(targeting, /rowCurrencyOfProfile\(profiles, item\.amazon_profile_id, primaryCurrency\)/);
+  assert.match(targeting, /currency: rowCurrency/);
+  assert.match(targeting, /currency=\{moneyEditor\?\.currency \?\? primaryCurrency\}/);
+  assert.match(targeting, /selectedBidCurrencies\.length > 1/);
+  assert.match(targeting, /Choose one country in the Markets filter/);
   assert.match(targeting, /currency=\{rowCurrency\}/);
   assert.match(campaignDetail, /rowCurrencyOfProfile\(profiles, c\?\.amazon_profile_id, primaryCurrency\)/);
   assert.match(campaignDetail, /formatCurrency\(Number\(displayBudget\), campaignCurrency\)/);

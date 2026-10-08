@@ -292,10 +292,12 @@ test("mobile targeting pages enrich titles/covers without dropping ranked rows",
 
 test("bulk bid stress: visible Bid ±, outbox drain, cooldown names, Placement gated", () => {
   assert.match(targeting, /targeting-bulk-bar/);
-  assert.match(targeting, /Bid \+\$/);
-  assert.match(targeting, /Bid −\$/);
+  assert.match(targeting, /Bid \+ amount/);
+  assert.match(targeting, /Bid − amount/);
   assert.match(targeting, /Bid \+%/);
   assert.match(targeting, /Bid −%/);
+  assert.match(targeting, /selectedBidCurrencies\.length > 1/);
+  assert.match(targeting, /Choose one country in the Markets filter/);
   assert.doesNotMatch(targeting, />by amount</);
   assert.doesNotMatch(targeting, />by percent</);
   assert.match(targeting, /Increase \/ decrease bid applies to keywords and targets/);
