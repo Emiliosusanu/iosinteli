@@ -13,6 +13,7 @@ import {
 
 const QUEUE_KEY = "inteliads.kdpHelper.remoteDiagnosticsQueue";
 const INSTALL_ID_KEY = "inteliads.kdpHelper.diagnosticsInstallId";
+const UPLOAD_STATUS_KEY = "inteliads.kdpHelper.remoteDiagnosticsStatus";
 const MAX_QUEUED_ENTRIES = 200;
 const BATCH_SIZE = 25;
 
@@ -36,6 +37,23 @@ type RemoteDiagnosticEntry = {
 
 let queueWriteChain: Promise<void> = Promise.resolve();
 let flushPromise: Promise<void> | null = null;
+
+type RemoteDiagnosticsStatus = {
+  at: string;
+  ok: boolean;
+  status?: number;
+  reason?: string;
+  queued: number;
+};
+
+function uploadEntry(entry: RemoteDiagnosticEntry) {
+  const { accountId: _accountId, ...withoutAccountId } = entry;
+  return withoutAccountId;
+}
+
+async function saveUploadStatus(status: RemoteDiagnosticsStatus): Promise<void> {
+  await storage.setItem(UPLOAD_STATUS_KEY, JSON.stringify(status));
+}
 
 function appVersion(): string {
   return String(Constants.expoConfig?.version || Constants.nativeAppVersion || "unknown");
@@ -130,13 +148,25 @@ export function flushKdpRemoteDiagnostics(): Promise<void> {
         .slice(0, BATCH_SIZE);
       const response = await nestApiFetch("/extension-logs/batch", {
         method: "POST",
+        headers: { "X-InteliAds-Client": "ios-kdp-helper" },
         body: JSON.stringify({
           accountId,
           extensionVersion: clientVersion(),
-          entries: batch,
+          // accountId is a batch field in the API contract. Keep the queued
+          // account binding locally, but never duplicate it inside an entry.
+          entries: batch.map(uploadEntry),
         }),
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        await saveUploadStatus({
+          at: new Date().toISOString(),
+          ok: false,
+          status: response.status,
+          reason: redactKdpDiagnosticText(await response.text(), 240),
+          queued: queue.length,
+        });
+        return;
+      }
       const sent = new Set(batch.map((entry) => entry.clientId));
       queueWriteChain = queueWriteChain
         .catch(() => undefined)
@@ -145,9 +175,27 @@ export function flushKdpRemoteDiagnostics(): Promise<void> {
           await saveQueue(latest.filter((entry) => !sent.has(entry.clientId)));
         });
       await queueWriteChain;
+      const remaining = await loadQueue();
+      await saveUploadStatus({
+        at: new Date().toISOString(),
+        ok: true,
+        status: response.status,
+        queued: remaining.length,
+      });
     }
   })()
-    .catch(() => undefined)
+    .catch(async (error: unknown) => {
+      const queue = await loadQueue();
+      await saveUploadStatus({
+        at: new Date().toISOString(),
+        ok: false,
+        reason: redactKdpDiagnosticText(
+          error instanceof Error ? error.message : String(error),
+          240,
+        ),
+        queued: queue.length,
+      });
+    })
     .finally(() => {
       flushPromise = null;
     });
