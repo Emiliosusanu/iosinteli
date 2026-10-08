@@ -380,4 +380,4 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Build 376 installed in place and launched on the physical iPhone 17 Pro Max (`E04E7387-7AD4-505A-9E19-0019BD757FCC`) without erasing its container. Device inventory reports `io.inteliads.app 1.0.1 (376)`.
 - [x] Public App Store export/upload succeeded with `ios/ExportOptionsTestFlightPublic.plist`; Xcode reported `Upload succeeded`, `Uploaded InteliAds`, and `EXPORT SUCCEEDED`.
 - [x] App Store Connect processed build 376 and shows it as **Ready to Submit**, uploaded October 8, 2026 at 9:52 PM local time.
-- [ ] Final external-group action is prepared for **Intelyads** (3 testers) with focused QA notes and automatic tester notification. `Submit for Review` remains pending explicit action-time confirmation.
+- [x] App Store Connect shows build `1.0.1 (376)` in the external **Intelyads** group with 3 testers and status **Testing**. The group now contains 30 builds; the portal lists the upload at October 8, 2026, 9:52 PM local time.

@@ -120,4 +120,4 @@ OPEN
 - [x] TypeScript, release guard, focused lint with zero errors, and 1,032/1,032 tests pass.
 - [x] Signed build `1.0.1 (376)` archived, installed in place, and launched on the connected iPhone 17 Pro Max with the existing app container preserved.
 - [x] Public TestFlight upload succeeded and Apple processing completed. Build 376 is visible as **Ready to Submit**.
-- [ ] Submit build 376 for Beta App Review and attach it to the external **Intelyads** group after the required action-time confirmation.
+- [x] App Store Connect shows build 376 in the external **Intelyads** group (3 testers), status **Testing**; external TestFlight distribution is active.
