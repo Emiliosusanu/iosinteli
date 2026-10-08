@@ -40,10 +40,33 @@ export function collectPricingCandidatesForIos(opts: {
   const pairRows: Array<{ kdpBookId: string; printAsin: string | null; title: string | null }> =
     [];
 
+  const bookshelfRows = extractBookshelfPrintRowsFromHtml(opts.bookshelfHtml || "");
+  const inactiveSetupIds = new Set<string>();
+  const authoritativeSetupByAsin = new Map<string, string>();
+  const inactiveStatuses = new Set(["draft", "in_review", "unpublished", "action_required"]);
+
+  // The current Bookshelf is authoritative for edition identity. KDP may leave
+  // historical setup IDs in reports and in our saved metadata after a paperback
+  // is unpublished/recreated. Prefer an explicit live row, otherwise accept an
+  // unknown-status current row. Explicit inactive rows must never be retried.
+  for (const row of bookshelfRows) {
+    const id = normalizeSetupId(row.kdpBookId);
+    const asin = String(row.printAsin || "").trim().toUpperCase();
+    const status = String(row.printStatus || "").trim().toLowerCase();
+    if (inactiveStatuses.has(status)) inactiveSetupIds.add(id);
+    if (!looksLikeAmazonAsin(asin) || !looksLikeKdpSetupBookId(id)) continue;
+    if (inactiveStatuses.has(status)) continue;
+    const existing = authoritativeSetupByAsin.get(asin);
+    if (status === "live" || !existing) authoritativeSetupByAsin.set(asin, id);
+  }
+
   const add = (asin: string | null, kdpBookId: string, title: string | null = null) => {
     const id = normalizeSetupId(kdpBookId);
     if (!looksLikeKdpSetupBookId(id)) return;
+    if (inactiveSetupIds.has(id)) return;
     const a = asin ? String(asin).trim().toUpperCase() : "";
+    const authoritativeId = a ? authoritativeSetupByAsin.get(a) : null;
+    if (authoritativeId && authoritativeId !== id) return;
     const key = a ? `${a}:${id}` : `id:${id}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -105,7 +128,7 @@ export function collectPricingCandidatesForIos(opts: {
     add(null, link.kdpBookId);
   }
 
-  for (const row of extractBookshelfPrintRowsFromHtml(opts.bookshelfHtml || "")) {
+  for (const row of bookshelfRows) {
     add(row.printAsin, row.kdpBookId);
   }
 
@@ -143,7 +166,11 @@ export function collectPricingCandidatesForIos(opts: {
     if (setupId) add(asin, setupId);
   }
 
-  let candidates = dedupePricingCandidates(out, { pairMaps });
+  let candidates = dedupePricingCandidates(out, {
+    pairMaps,
+    storedSetupByAsin: opts.storedSetupByAsin,
+    bookshelfHtml: opts.bookshelfHtml,
+  });
   candidates = sortPricingCandidatesForFetch(candidates);
   return { candidates, pairMaps };
 }

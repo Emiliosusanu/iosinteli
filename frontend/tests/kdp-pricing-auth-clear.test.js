@@ -71,9 +71,14 @@ test("pricing sync requests auth for stale prices when a refresh probe is blocke
 test("permanent 404 setup IDs do not stop later live books", () => {
   const loopIdx = sync.indexOf("for (let i = 0; i < todo.length; i += 1)");
   const loopBlock = sync.slice(loopIdx, loopIdx + 4200);
-  assert.match(loopBlock, /const permanentMiss = isKdpSetupPagePermanentMiss\(fetched\)/);
+  assert.match(loopBlock, /const permanentMiss = isExhaustedSetupPageMiss\(fetched\)/);
   assert.match(loopBlock, /if \(permanentMiss\) consecutiveHard = 0/);
   assert.match(loopBlock, /if \(consecutiveHard >= 3\)/);
+  const missIdx = sync.indexOf("function isExhaustedSetupPageMiss");
+  const missBlock = sync.slice(missIdx, missIdx + 1000);
+  assert.match(missBlock, /isKdpSetupPagePermanentMiss\(fetched\)/);
+  assert.match(missBlock, /\/v2\\\/get-setup-page/);
+  assert.match(missBlock, /Number\(attempt\.status \|\| 0\) === 404/);
 });
 
 test("helper hydrates sticky pricing auth and allows print-setup while focused", () => {

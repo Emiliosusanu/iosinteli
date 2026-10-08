@@ -4,6 +4,7 @@
  */
 
 export function pickRoyaltyRate(listPrice, royaltyRates) {
+  if (listPrice == null || listPrice === '') return null;
   const price = Number(listPrice);
   const rates = Array.isArray(royaltyRates) ? royaltyRates : [];
   if (!Number.isFinite(price) || rates.length === 0) return null;
@@ -21,20 +22,31 @@ export function pickRoyaltyRate(listPrice, royaltyRates) {
 
 /** US paperback: net ≈ list × rate − printing (no VAT). */
 export function computeKdpNetRoyalty(listPrice, printingCost, royaltyRates) {
+  if (listPrice == null || listPrice === '' || printingCost == null || printingCost === '') return null;
   const list = Number(listPrice);
   const printing = Number(printingCost);
   const rate = pickRoyaltyRate(list, royaltyRates);
-  if (!Number.isFinite(list) || !Number.isFinite(printing) || rate == null) return null;
+  if (!Number.isFinite(list) || list <= 0 || !Number.isFinite(printing) || printing < 0 || rate == null) return null;
   return list * rate - printing;
 }
 
 export function computeTargetBreakEvenAcos(netRoyalty, listPrice) {
+  if (netRoyalty == null || netRoyalty === '' || listPrice == null || listPrice === '') return null;
   const net = Number(netRoyalty);
   const list = Number(listPrice);
   if (!Number.isFinite(net) || !Number.isFinite(list) || list <= 0) return null;
   return (net / list) * 100;
 }
 
+function numericPricingInput(value) {
+  return value == null || String(value).trim() === '' ? null : Number(value);
+}
+
+/**
+ * Live KDP browser contract (forensic 1.2.108):
+ * GET /print-setup/print-book/{setupId}/{format}/{locale}/v2/get-setup-page
+ * Authorization absent; anti-csrftoken-a2z present; cookies browser-managed.
+ */
 export function buildKdpGetSetupPageUrl(
   kdpBookId,
   format = 'paperback',
@@ -42,7 +54,76 @@ export function buildKdpGetSetupPageUrl(
 ) {
   const id = String(kdpBookId || '').trim();
   if (!id) return null;
-  return `https://kdp.amazon.com/print-setup/print-book/${encodeURIComponent(id)}/${format}/${marketplace}/get-setup-page`;
+  const fmt = String(format || 'paperback').trim() || 'paperback';
+  const mkt = String(marketplace || 'en-US').trim() || 'en-US';
+  return `https://kdp.amazon.com/print-setup/print-book/${encodeURIComponent(id)}/${encodeURIComponent(fmt)}/${encodeURIComponent(mkt)}/v2/get-setup-page`;
+}
+
+/** Header names only — never log or persist CSRF/Authorization values. */
+export const KDP_SETUP_PAGE_CSRF_HEADER = 'anti-csrftoken-a2z';
+export const KDP_SETUP_PAGE_CSRF_COOKIE = 'anti-csrftoken-a2z';
+
+/**
+ * Build authoritative get-setup-page request headers matching the live browser.
+ * Does NOT set Authorization (malformed Auth caused false 403 sign_in).
+ * CSRF value must come from the live page session; callers must not persist it.
+ */
+export function buildKdpSetupPageRequestHeaders({
+  referer = 'https://kdp.amazon.com/en_US/bookshelf',
+  csrfToken = null,
+  contentType = 'application/json',
+} = {}) {
+  const headers = {
+    accept: 'application/json, text/plain, */*',
+    referer: String(referer || 'https://kdp.amazon.com/en_US/bookshelf'),
+  };
+  if (contentType) headers['content-type'] = String(contentType);
+  const csrf = String(csrfToken || '').trim();
+  if (csrf) headers[KDP_SETUP_PAGE_CSRF_HEADER] = csrf;
+  // Explicitly omit Authorization — Amazon API Gateway rejects non-SigV4 values.
+  return headers;
+}
+
+/** True when a header map includes a non-empty Authorization (case-insensitive). */
+export function setupPageHeadersIncludeAuthorization(headers = {}) {
+  if (!headers || typeof headers !== 'object') return false;
+  for (const [k, v] of Object.entries(headers)) {
+    if (String(k).toLowerCase() === 'authorization' && String(v || '').trim()) return true;
+  }
+  return false;
+}
+
+/** Strip Authorization from a header map (mutate-safe copy). */
+export function stripSetupPageAuthorizationHeaders(headers = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    if (String(k).toLowerCase() === 'authorization') continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Sanitize log/debug objects so CSRF / Authorization secrets are never persisted.
+ * Replaces values with PRESENT/ABSENT presence markers.
+ */
+export function sanitizeKdpSetupPageLogHeaders(headers = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(headers || {})) {
+    const kl = String(k).toLowerCase();
+    if (
+      kl === 'authorization'
+      || kl === KDP_SETUP_PAGE_CSRF_HEADER
+      || kl === 'cookie'
+      || kl.includes('csrf')
+      || kl.includes('token')
+    ) {
+      out[k] = String(v || '').trim() ? 'PRESENT' : 'ABSENT';
+      continue;
+    }
+    out[k] = v;
+  }
+  return out;
 }
 
 /** Resolve a bookshelf-relative KDP API path to an absolute URL. */
@@ -72,12 +153,15 @@ const LOCALE_SETUP_MARKETPLACE = {
   ja_JP: 'ja-JP',
 };
 
-/** Alternate get-setup-page URLs KDP has used across bookshelf/API revisions. */
+/**
+ * get-setup-page URL candidates. Live browser prefers the /v2/ print-book path
+ * without a bookshelf locale prefix; keep legacy non-v2 paths as fallbacks only.
+ */
 export function buildKdpGetSetupPageUrlCandidates(kdpBookId, options = {}) {
   const id = String(kdpBookId || '').trim();
   if (!id) return [];
   const opts = (options && typeof options === 'object') ? options : {};
-  const format = String(opts.format || 'paperback');
+  const format = String(opts.format || 'paperback').trim() || 'paperback';
   const locale = String(opts.locale || 'en_US').trim() || 'en_US';
   const marketplace = String(
     opts.marketplace || LOCALE_SETUP_MARKETPLACE[locale] || 'en-US',
@@ -85,7 +169,13 @@ export function buildKdpGetSetupPageUrlCandidates(kdpBookId, options = {}) {
   const encId = encodeURIComponent(id);
   const fmt = encodeURIComponent(format);
   const mkt = encodeURIComponent(marketplace);
+  // Proven live browser shape first (forensic closeout 1.2.108).
   const primary = [
+    `/print-setup/print-book/${encId}/${fmt}/${mkt}/v2/get-setup-page`,
+    `https://kdp.amazon.com/print-setup/print-book/${encId}/${fmt}/${mkt}/v2/get-setup-page`,
+    `/${locale}/print-setup/print-book/${encId}/${fmt}/${mkt}/v2/get-setup-page`,
+    `https://kdp.amazon.com/${locale}/print-setup/print-book/${encId}/${fmt}/${mkt}/v2/get-setup-page`,
+    // Legacy non-v2 fallbacks (may 403/404 on modern KDP).
     `/${locale}/title-setup/${fmt}/${encId}/get-setup-page`,
     `/${locale}/print-setup/${fmt}/${encId}/get-setup-page`,
     `/${locale}/print-setup/print-book/${encId}/${fmt}/${mkt}/get-setup-page`,
@@ -103,6 +193,12 @@ export function buildKdpGetSetupPageUrlCandidates(kdpBookId, options = {}) {
     out.push(...buildKdpGetSetupPageUrlCandidates(kdpBookId, { format, locale: 'en_US' }));
   }
   return [...new Set(out)];
+}
+
+/** True when URL is the proven live /v2/ get-setup-page contract. */
+export function isKdpSetupPageV2Url(url) {
+  return /\/print-setup\/print-book\/[^/]+\/(?:paperback|hardcover)\/[^/]+\/v2\/get-setup-page(?:\?|$)/i
+    .test(String(url || ''));
 }
 
 /**
@@ -164,10 +260,18 @@ export function buildPricingAuthActionTabUrl(kdpBookId, options = {}) {
 
 /**
  * True when a tab URL is the paperback Rights & Pricing editor
- * (`…/print-setup|title-setup/paperback/<id>/pricing`). Visiting this page
- * completes Amazon's print-setup step-up so API probes can resume.
+ * (`…/print-setup|title-setup/paperback/<id>/pricing`).
+ *
+ * Visiting this page may *arm verification* of get-setup-page access.
+ * It does **not** by itself prove pricing auth — do not clear the gate
+ * until an authoritative setup-page probe succeeds.
  */
 export function shouldClearPricingGateForTabUrl(url) {
+  return shouldVerifyPricingAuthForTabUrl(url);
+}
+
+/** Alias: pricing-route tab completion → verify, never treat as auth proof. */
+export function shouldVerifyPricingAuthForTabUrl(url) {
   const ctx = extractKdpPricingEditorContext(url);
   return Boolean(ctx?.setupId && ctx.pricingRoute);
 }
@@ -231,8 +335,16 @@ function pricingBlockHasValues(root, marketplaceKey) {
   if (!mk) return false;
   const listBlock = root?.pricing?.[mk];
   const specBlock = root?.pricingSpec?.current?.[mk];
-  return Number.isFinite(Number(listBlock?.priceVatExclusive))
-    || Number.isFinite(Number(specBlock?.printingCost));
+  return Number.isFinite(numericPricingInput(listBlock?.priceVatExclusive))
+    || Number.isFinite(numericPricingInput(specBlock?.printingCost));
+}
+
+function pricingBlockHasCompleteValues(root, marketplaceKey) {
+  const mk = String(marketplaceKey || '').trim();
+  const price = numericPricingInput(root?.pricing?.[mk]?.priceVatExclusive);
+  const cost = numericPricingInput(root?.pricingSpec?.current?.[mk]?.printingCost);
+  return Number.isFinite(price) && price > 0
+    && Number.isFinite(cost) && cost >= 0;
 }
 
 /** Pick the marketplace key that actually carries list/printing values. */
@@ -255,6 +367,14 @@ export function resolvePricingMarketplaceKey(json, preferredKey = 'US') {
     'en-US',
     'en_US',
   ];
+  const allKeys = [...new Set([
+    ...candidates,
+    ...Object.keys(root?.pricing || {}),
+    ...Object.keys(root?.pricingSpec?.current || {}),
+  ])];
+  for (const key of allKeys) {
+    if (pricingBlockHasCompleteValues(root, key)) return key;
+  }
   for (const key of candidates) {
     if (pricingBlockHasValues(root, key)) return key;
   }
@@ -306,8 +426,50 @@ export function extractKdpSignInReason(json) {
   return null;
 }
 
+/**
+ * Amazon API Gateway rejects a non-SigV4 Authorization header with:
+ * "Invalid key=value pair (missing equal-sign) in Authorization header..."
+ * That is a request-shape / programming error — NOT a user sign-in gate.
+ */
+export function isKdpSetupPageMalformedAuthorizationResponse(json, text, status) {
+  const st = Number(status || 0);
+  if (st !== 403 && st !== 401) return false;
+  const body = json && typeof json === 'object'
+    ? JSON.stringify(json)
+    : String(text || '');
+  return /invalid key\s*=\s*value pair/i.test(body)
+    && /authorization header/i.test(body);
+}
+
+/** True when the failure is a request-shape/programming error, not user auth. */
+export function isKdpSetupPageRequestShapeError({ fetchResult, json, hint } = {}) {
+  if (isKdpSetupPageMalformedAuthorizationResponse(
+    json ?? fetchResult?.json,
+    String(fetchResult?.text || ''),
+    Number(fetchResult?.status || 0),
+  )) {
+    return true;
+  }
+  const h = String(hint || '');
+  if (/request_error|malformed authorization|request[_ ]?shape/i.test(h)) return true;
+  // Prefer attempt snippets when the "best" attempt was an SPA shell.
+  const attempts = Array.isArray(fetchResult?.attempts) ? fetchResult.attempts : [];
+  for (const a of attempts) {
+    if (isKdpSetupPageMalformedAuthorizationResponse(
+      a?.json,
+      String(a?.snippet || a?.text || ''),
+      Number(a?.status || 0),
+    )) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** True when get-setup-page response is an Amazon sign-in gate (403, reason sign_in, login HTML). */
 export function isKdpSetupPageSignInResponse(json, text, status) {
+  // Malformed Authorization is NOT sign_in — do not ask the user to log in.
+  if (isKdpSetupPageMalformedAuthorizationResponse(json, text, status)) return false;
   const st = Number(status || 0);
   if (extractKdpSignInReason(json)) return true;
   const body = json && typeof json === 'object'
@@ -322,25 +484,25 @@ export function isKdpSetupPageSignInResponse(json, text, status) {
 }
 
 export function isKdpSetupPageAuthFailure({ fetchResult, json } = {}) {
+  if (isKdpSetupPageRequestShapeError({ fetchResult, json })) return false;
+  if (fetchResult?.pricingAuthRequired === true) return true;
   const status = Number(fetchResult?.status || 0);
   const text = String(fetchResult?.text || '');
   return isKdpSetupPageSignInResponse(json, text, status);
 }
 
+
 /**
- * WebKit/network transport miss for get-setup-page — typically status 0 with
- * text "Load failed" when the helper WebView is still on kdpreports and tries
- * a cross-origin fetch to kdp.amazon.com. Not a permanent book miss; callers
- * should surface print-setup / Amazon login CTA instead of silent hard-fails.
+ * WebKit/network transport miss for get-setup-page. Kept as an iOS-only
+ * compatibility export while the shared Chrome parser remains the source of
+ * truth for URL, pricing and Bookshelf parsing.
  */
 export function isKdpSetupPageTransportFailure(fetchResult) {
   const status = Number(fetchResult?.status || 0);
   if (status !== 0) return false;
   const text = String(fetchResult?.text || '').replace(/\s+/g, ' ').trim();
   if (!text) return true;
-  return /load failed|failed to fetch|network\s*error|networkerror|aborted|internet connection|the network connection was lost/i.test(
-    text,
-  );
+  return /load failed|failed to fetch|network\s*error|networkerror|aborted|internet connection|the network connection was lost/i.test(text);
 }
 
 /**
@@ -383,6 +545,12 @@ export function diagnoseKdpSetupPageFailure({
   if (!ok) parts.push(`HTTP ${status || 'failed'}`);
   if (fetchResult?.redirected) parts.push('redirected');
   if (finalUrl && url && finalUrl !== url) parts.push(`finalUrl=${finalUrl}`);
+
+  // Request-shape / programming errors must not be reported as sign_in.
+  if (isKdpSetupPageRequestShapeError({ fetchResult, json })) {
+    parts.push('request_error: malformed Authorization');
+    return parts.join('; ');
+  }
 
   if (!json) {
     parts.push('non-JSON response');
@@ -446,8 +614,8 @@ export function parseKdpGetSetupPage(json, marketplaceKey = 'US') {
   const mk = resolvePricingMarketplaceKey(root, marketplaceKey);
   const listBlock = root?.pricing?.[mk];
   const specBlock = root?.pricingSpec?.current?.[mk];
-  const listPrice = Number(listBlock?.priceVatExclusive);
-  const printingCost = Number(specBlock?.printingCost);
+  const listPrice = numericPricingInput(listBlock?.priceVatExclusive);
+  const printingCost = numericPricingInput(specBlock?.printingCost);
   const royaltyRates = specBlock?.programs?.RETAIL?.royaltyRates ?? [];
   const currency = String(listBlock?.currencyCode || specBlock?.currencyCode || 'USD');
   const netRoyalty = computeKdpNetRoyalty(listPrice, printingCost, royaltyRates);
@@ -458,8 +626,8 @@ export function parseKdpGetSetupPage(json, marketplaceKey = 'US') {
   return {
     marketplace: mk,
     currency,
-    listPrice: Number.isFinite(listPrice) ? listPrice : null,
-    printingCost: Number.isFinite(printingCost) ? printingCost : null,
+    listPrice: Number.isFinite(listPrice) && listPrice > 0 ? listPrice : null,
+    printingCost: Number.isFinite(printingCost) && printingCost >= 0 ? printingCost : null,
     royaltyRate: royaltyRate != null ? royaltyRate : null,
     netRoyalty: netRoyalty != null ? Number(netRoyalty.toFixed(4)) : null,
     targetBreakEvenAcos: computeTargetBreakEvenAcos(netRoyalty, listPrice),
@@ -569,8 +737,8 @@ function readPricingBlocksForKey(root, rawKey) {
 
 function parsePricingFromBlocks(root, rawKey) {
   const { resolvedKey, listBlock, specBlock } = readPricingBlocksForKey(root, rawKey);
-  const listPrice = Number(listBlock?.priceVatExclusive);
-  const printingCost = Number(specBlock?.printingCost);
+  const listPrice = numericPricingInput(listBlock?.priceVatExclusive);
+  const printingCost = numericPricingInput(specBlock?.printingCost);
   const royaltyRates = specBlock?.programs?.RETAIL?.royaltyRates ?? [];
   const currency = String(listBlock?.currencyCode || specBlock?.currencyCode || 'USD');
   const netRoyalty = computeKdpNetRoyalty(listPrice, printingCost, royaltyRates);
@@ -581,8 +749,8 @@ function parsePricingFromBlocks(root, rawKey) {
   return {
     marketplace: resolvedKey,
     currency,
-    listPrice: Number.isFinite(listPrice) ? listPrice : null,
-    printingCost: Number.isFinite(printingCost) ? printingCost : null,
+    listPrice: Number.isFinite(listPrice) && listPrice > 0 ? listPrice : null,
+    printingCost: Number.isFinite(printingCost) && printingCost >= 0 ? printingCost : null,
     royaltyRate: royaltyRate != null ? royaltyRate : null,
     netRoyalty: netRoyalty != null ? Number(netRoyalty.toFixed(4)) : null,
     targetBreakEvenAcos: computeTargetBreakEvenAcos(netRoyalty, listPrice),
@@ -1171,45 +1339,201 @@ export function looksLikeKdpSetupBookId(value) {
   return true;
 }
 
+const BOOKSHELF_AMOUNT_RE = /[0-9]{1,3}(?:[.,][0-9]{3})+[.,][0-9]{2}|[0-9]{1,6}[.,][0-9]{2}/g;
+const BOOKSHELF_WHOLE_CURRENCY_RE = /(?:US\$|CA\$|C\$|AU\$|A\$|[$€£¥])\s*([0-9]{1,6})(?![0-9.,])|([0-9]{1,6})\s*(?:USD|EUR|GBP|JPY|CAD|AUD|INR|MXN|BRL|PLN|SEK)\b/i;
+/** Visible status words only — not hyphenated HTML ids like status-live-status. */
+const BOOKSHELF_STATUS_LABEL_RE = /(?:^|[>\s"'=])(LIVE|ONLINE|DRAFT|BOZZA|UNPUBLISHED|PUBLISHED|IN\s*REVIEW|PUBLISHING|ACTION\s*REQUIRED)(?=$|[\s<"'/])/i;
+
+export function parseBookshelfLocaleNumber(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return NaN;
+  const lastComma = s.lastIndexOf(',');
+  const lastDot = s.lastIndexOf('.');
+  if (lastComma >= 0 && lastDot >= 0) {
+    if (lastComma > lastDot) return Number(s.replace(/\./g, '').replace(',', '.'));
+    return Number(s.replace(/,/g, ''));
+  }
+  if (lastComma >= 0) {
+    const frac = s.slice(lastComma + 1);
+    if (frac.length === 3 && lastComma > 0) return Number(s.replace(/,/g, ''));
+    return Number(s.replace(',', '.'));
+  }
+  if (lastDot >= 0) {
+    const frac = s.slice(lastDot + 1);
+    if (frac.length === 3 && /^\d{1,3}(?:\.\d{3})+$/.test(s)) return Number(s.replace(/\./g, ''));
+    return Number(s);
+  }
+  return Number(s);
+}
+
+export function parseBookshelfDisplayedMoney(text) {
+  const s = String(text || '');
+  if (!s.trim()) return { displayedPrice: null, currency: null };
+  let currency = null;
+  // Prefer the ISO code rendered by KDP. A bare "$" is deliberately not
+  // treated as USD: US, Canada and Australia all use a dollar symbol, and a
+  // wrong marketplace would corrupt the cached royalty inputs used for BE ACoS.
+  const iso = s.match(/\b(USD|CAD|AUD|EUR|GBP|JPY|INR|MXN|BRL|PLN|SEK)\b/i);
+  if (iso) currency = String(iso[1]).toUpperCase();
+  else if (/US\s*\$/i.test(s)) currency = 'USD';
+  else if (/(?:CA|C)\s*\$/i.test(s)) currency = 'CAD';
+  else if (/(?:AU|A)\s*\$/i.test(s)) currency = 'AUD';
+  else if (/€/.test(s)) currency = 'EUR';
+  else if (/£/.test(s)) currency = 'GBP';
+  else if (/¥/.test(s)) currency = 'JPY';
+  const tokens = Array.from(s.matchAll(BOOKSHELF_AMOUNT_RE));
+  let rawAmount = null;
+  if (tokens.length === 1) {
+    rawAmount = tokens[0][0];
+  } else if (tokens.length > 1) {
+    const scored = tokens.map((m) => {
+      const around = s.slice(Math.max(0, m.index - 6), m.index + m[0].length + 6);
+      return {
+        raw: m[0],
+        score: /[$€£¥]|(?:US|CA|C|AU|A)\$|USD|EUR|GBP|JPY|CAD|AUD|INR|MXN|BRL|PLN|SEK/i.test(around) ? 2 : 1,
+      };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    rawAmount = scored[0].raw;
+  } else {
+    const whole = s.match(BOOKSHELF_WHOLE_CURRENCY_RE);
+    rawAmount = whole?.[1] || whole?.[2] || null;
+  }
+  if (!rawAmount) return { displayedPrice: null, currency };
+  const num = parseBookshelfLocaleNumber(rawAmount);
+  if (!Number.isFinite(num) || num < 0 || num > 999999) {
+    return { displayedPrice: null, currency: null };
+  }
+  return {
+    displayedPrice: num.toFixed(2),
+    currency,
+  };
+}
+
+export function parseBookshelfPrintStatus(text) {
+  const s = String(text || '');
+  const m = s.match(BOOKSHELF_STATUS_LABEL_RE);
+  if (!m) return null;
+  const raw = String(m[1] || '').trim().toLowerCase().replace(/\s+/g, '_');
+  if (raw.includes('unpublish')) return 'unpublished';
+  if (raw.includes('draft') || raw === 'bozza') return 'draft';
+  if (raw.includes('review') || raw.includes('publishing')) return 'in_review';
+  if (raw.includes('action')) return 'action_required';
+  if (raw === 'online' || raw === 'live' || raw === 'published') return 'live';
+  return null;
+}
+
+export function extractSetupIdFromBookshelfWidgetId(id, kind) {
+  const raw = String(id || '');
+  const needle = String(kind || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = raw.match(new RegExp(`${needle}-([A-Z0-9]+)$`, 'i'));
+  const setupId = m?.[1] ? String(m[1]).toUpperCase() : '';
+  return looksLikeKdpSetupBookId(setupId) ? setupId : null;
+}
+
+export function extractAsinFromBookshelfWidgetText(text) {
+  const m = String(text || '').match(/ASIN:\s*([A-Z0-9]{10})/i);
+  const asin = m?.[1] ? String(m[1]).toUpperCase() : '';
+  return looksLikeAmazonAsin(asin) ? asin : null;
+}
+
+function bookshelfWidgetInnerText(html, idNeedle) {
+  const text = String(html || '');
+  const needle = String(idNeedle || '');
+  if (!needle) return '';
+  const idx = text.indexOf(needle);
+  if (idx < 0) return '';
+  const gt = text.indexOf('>', idx);
+  const start = gt >= 0 && gt - idx < 160 ? gt + 1 : idx + needle.length;
+  let end = Math.min(text.length, start + 240);
+  const nextDouble = text.indexOf('id="', start);
+  const nextSingle = text.indexOf("id='", start);
+  const nextId = [nextDouble, nextSingle].filter((n) => n >= 0).sort((a, b) => a - b)[0];
+  if (nextId != null) end = Math.min(end, nextId);
+  const close = text.indexOf('</', start);
+  if (close >= 0) end = Math.min(end, close);
+  return text.slice(start, end);
+}
+
+function collectSetupIdsFromWidgetKind(html, kind) {
+  const ids = new Set();
+  const re = new RegExp(`${kind}-([A-Z0-9]+)`, 'gi');
+  let m;
+  while ((m = re.exec(String(html || ''))) !== null) {
+    const id = String(m[1] || '').toUpperCase();
+    if (looksLikeKdpSetupBookId(id)) ids.add(id);
+  }
+  return ids;
+}
+
+export function inferBookshelfPrintStatusFromHtml(html, setupId) {
+  const text = String(html || '');
+  const id = String(setupId || '').trim().toUpperCase();
+  if (!id) return null;
+  if (new RegExp(`dual-print-status-live-status[^"'\\s>]*${id}`, 'i').test(text)) return 'live';
+  if (new RegExp(`dual-print-status-draft[^"'\\s>]*${id}`, 'i').test(text)) return 'draft';
+  const label = bookshelfWidgetInnerText(text, `dual-print-status-live-status-popover-${id}-label`)
+    || bookshelfWidgetInnerText(text, `dual-print-status-format-${id}`);
+  return parseBookshelfPrintStatus(label);
+}
+
 /**
- * Parse modern KDP bookshelf HTML for paperback rows.
- * Bookshelf element ids embed the same id used by get-setup-page.
+ * Parse modern KDP bookshelf HTML by stable setupId widgets.
+ * Print ASIN and print price are joined independently of DOM order.
+ * Digital widgets never become print rows. Hardcover CTAs are ignored.
  */
 export function extractBookshelfPrintRowsFromHtml(html) {
   const text = String(html || '');
   const out = [];
   const seen = new Set();
-  const add = (kdpBookId, printAsin) => {
+  const add = (kdpBookId, printAsin, extras = {}) => {
     const id = String(kdpBookId || '').trim().toUpperCase();
     const asin = printAsin ? String(printAsin).trim().toUpperCase() : null;
     if (!looksLikeKdpSetupBookId(id)) return;
+    if (asin && extras.digitalAsin && asin === extras.digitalAsin) return;
     const key = asin ? `${id}:${asin}` : id;
     if (seen.has(key)) return;
     seen.add(key);
-    out.push({ kdpBookId: id, printAsin: asin });
+    const money = extras.displayedPrice
+      ? { displayedPrice: extras.displayedPrice, currency: extras.currency || null }
+      : parseBookshelfDisplayedMoney(extras.text || extras.priceText || '');
+    out.push({
+      kdpBookId: id,
+      printAsin: asin,
+      digitalAsin: extras.digitalAsin || null,
+      displayedPrice: money.displayedPrice || null,
+      currency: money.currency || extras.currency || null,
+      printStatus: extras.printStatus || parseBookshelfPrintStatus(extras.statusText || extras.text || ''),
+    });
   };
 
-  const asinBlockRe = /dual-print-price-asin-([A-Z0-9]+)[\s\S]{0,320}?ASIN:\s*([A-Z0-9]{10})/gi;
-  let m;
-  while ((m = asinBlockRe.exec(text)) !== null) {
-    const asin = String(m[2] || '').trim().toUpperCase();
-    const block = text.slice(m.index, m.index + 1500);
-    const resolvedId = resolvePrintSetupBookIdForAsinBlock(block, asin, m[1]);
-    add(resolvedId || m[1], asin);
+  const setupIds = new Set([
+    ...collectSetupIdsFromWidgetKind(text, 'dual-print-price-asin'),
+    ...collectSetupIdsFromWidgetKind(text, 'dual-print-price-list-price'),
+  ]);
+
+  for (const setupId of setupIds) {
+    const printSnippet = bookshelfWidgetInnerText(text, `dual-print-price-asin-${setupId}`);
+    const priceSnippet = bookshelfWidgetInnerText(text, `dual-print-price-list-price-${setupId}`);
+    const digitalSnippet = bookshelfWidgetInnerText(text, `dual-digital-price-asin-${setupId}`);
+    const printAsin = extractAsinFromBookshelfWidgetText(printSnippet);
+    const digitalAsin = extractAsinFromBookshelfWidgetText(digitalSnippet);
+    if (!printAsin || (digitalAsin && printAsin === digitalAsin)) continue;
+    const fromPrice = parseBookshelfDisplayedMoney(priceSnippet);
+    const fromAsinWidget = parseBookshelfDisplayedMoney(printSnippet);
+    const resolvedId = resolvePrintSetupBookIdForAsinBlock(text, printAsin, setupId);
+    add(resolvedId || setupId, printAsin, {
+      digitalAsin,
+      displayedPrice: fromPrice.displayedPrice || fromAsinWidget.displayedPrice || null,
+      currency: fromPrice.currency || fromAsinWidget.currency || null,
+      printStatus: inferBookshelfPrintStatusFromHtml(text, setupId)
+        || parseBookshelfPrintStatus(printSnippet)
+        || parseBookshelfPrintStatus(priceSnippet),
+    });
   }
 
   for (const link of extractPrintSetupLinksFromHtml(text)) {
     if (link.format === 'paperback') add(link.kdpBookId, null);
-  }
-
-  const asinRe = /\bB0[A-Z0-9]{8}\b/gi;
-  for (const link of extractPrintSetupLinksFromHtml(text)) {
-    if (link.format !== 'paperback') continue;
-    const idx = text.indexOf(link.kdpBookId);
-    if (idx < 0) continue;
-    const window = text.slice(Math.max(0, idx - 1600), idx + 1600);
-    const asins = Array.from(new Set((window.match(asinRe) || []).map((a) => a.toUpperCase())));
-    if (asins.length === 1) add(link.kdpBookId, asins[0]);
   }
 
   return out;
@@ -1350,4 +1674,113 @@ export function extractSetupIdNearAsin(html, asin) {
     idx = text.indexOf(a, idx + 1);
   }
   return null;
+}
+
+/**
+ * Authoritative marketplace pricing / royalty / BE may propagate to a peer ASIN
+ * only when both sides have a real non-null matching kdp_setup_book_id.
+ * Title-stem / edition-year collisions are not economic provenance.
+ */
+export function canPropagateAuthoritativePricingToPeer({
+  sourceSetupId,
+  peerSetupId,
+} = {}) {
+  const source = String(sourceSetupId || '').trim().toUpperCase();
+  const peer = String(peerSetupId || '').trim().toUpperCase();
+  if (!looksLikeKdpSetupBookId(source)) return false;
+  if (!looksLikeKdpSetupBookId(peer)) return false;
+  return source === peer;
+}
+
+/** Keep only peer ASINs with proven shared KDP setup identity. */
+export function selectProvenSetupPeerAsins({
+  sourceSetupId,
+  candidateAsins,
+  setupByAsin,
+} = {}) {
+  const source = String(sourceSetupId || '').trim().toUpperCase();
+  if (!looksLikeKdpSetupBookId(source)) return [];
+  const map = setupByAsin instanceof Map ? setupByAsin : new Map();
+  const out = [];
+  const seen = new Set();
+  for (const raw of candidateAsins || []) {
+    const asin = String(raw || '').trim().toUpperCase();
+    if (!looksLikeAmazonAsin(asin) || seen.has(asin)) continue;
+    const peerSetup = String(map.get(asin) || '').trim().toUpperCase();
+    if (!canPropagateAuthoritativePricingToPeer({
+      sourceSetupId: source,
+      peerSetupId: peerSetup,
+    })) {
+      continue;
+    }
+    seen.add(asin);
+    out.push(asin);
+  }
+  return out;
+}
+
+/**
+ * Expand marketplace pricing rows only to ASINs sharing an explicit setup id.
+ * Marketplace and currency always remain those of the authoritative source row.
+ */
+export function expandMarketplacePricingRowsByPeerAsins({
+  marketplaceRows,
+  expandedTitleRows,
+  setupByAsin: setupByAsinInput,
+} = {}) {
+  const list = Array.isArray(marketplaceRows) ? marketplaceRows.filter(Boolean) : [];
+  if (list.length === 0) return [];
+
+  const setupByAsin = setupByAsinInput instanceof Map ? new Map(setupByAsinInput) : new Map();
+  for (const row of Array.isArray(expandedTitleRows) ? expandedTitleRows : []) {
+    const asin = String(row?.asin || '').trim().toUpperCase();
+    const setupId = String(row?.kdp_setup_book_id || '').trim().toUpperCase();
+    if (!looksLikeAmazonAsin(asin) || !looksLikeKdpSetupBookId(setupId)) continue;
+    setupByAsin.set(asin, setupId);
+  }
+
+  const peersBySetup = new Map();
+  for (const [asin, setupId] of setupByAsin.entries()) {
+    if (!looksLikeAmazonAsin(asin) || !looksLikeKdpSetupBookId(setupId)) continue;
+    if (!peersBySetup.has(setupId)) peersBySetup.set(setupId, new Set());
+    peersBySetup.get(setupId).add(asin);
+  }
+
+  const out = [];
+  const seen = new Set();
+  for (const row of list) {
+    const primaryAsin = String(row?.asin || '').trim().toUpperCase();
+    if (!looksLikeAmazonAsin(primaryAsin)) continue;
+    const sourceSetupId = String(setupByAsin.get(primaryAsin) || '').trim().toUpperCase();
+    const peerAsins = looksLikeKdpSetupBookId(sourceSetupId)
+      ? [...(peersBySetup.get(sourceSetupId) || [primaryAsin])].filter((asin) =>
+          canPropagateAuthoritativePricingToPeer({
+            sourceSetupId,
+            peerSetupId: setupByAsin.get(asin),
+          }),
+        )
+      : [primaryAsin];
+
+    if (looksLikeKdpSetupBookId(sourceSetupId) && !peerAsins.includes(primaryAsin)) {
+      peerAsins.unshift(primaryAsin);
+    }
+
+    for (const asin of peerAsins) {
+      if (
+        asin !== primaryAsin
+        && !canPropagateAuthoritativePricingToPeer({
+          sourceSetupId,
+          peerSetupId: setupByAsin.get(asin),
+        })
+      ) {
+        continue;
+      }
+      const marketplace = String(row?.marketplace || '').trim().toUpperCase();
+      const key = `${String(row?.account_id || '')}:${asin}:${marketplace}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...row, asin, marketplace: marketplace || row?.marketplace });
+    }
+  }
+  return out;
 }

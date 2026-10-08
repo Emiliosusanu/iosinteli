@@ -343,7 +343,7 @@ type SetupFetchResult = {
   text: string;
   json: unknown | null;
   url: string;
-  attempts: Array<{ status: number; text?: string; snippet?: string; json?: unknown }>;
+  attempts: Array<{ status: number; url?: string; text?: string; snippet?: string; json?: unknown }>;
   pricing: ReturnType<typeof parseKdpGetSetupPage>;
   marketplaceKey: string;
 };
@@ -373,6 +373,19 @@ function setupPageLooksUnauthenticated(fetched: {
   return false;
 }
 
+function isExhaustedSetupPageMiss(fetched: SetupFetchResult): boolean {
+  if (isKdpSetupPagePermanentMiss(fetched)) return true;
+  // The modern V2 endpoint is the browser's authoritative request. A plain
+  // 404 from that route means this individual setup ID is stale/deleted, even
+  // when Amazon omits the older `ItemSetId is not found` message. Isolate the
+  // book and keep walking; never let three stale editions starve live titles.
+  return fetched.attempts.some(
+    (attempt) =>
+      Number(attempt.status || 0) === 404 &&
+      /\/v2\/get-setup-page(?:$|[?#])/i.test(String(attempt.url || "")),
+  );
+}
+
 async function fetchSetupPage(kdpBookId: string, locale: string): Promise<SetupFetchResult> {
   // Native Keychain replay cannot resolve bookshelf-relative paths.
   const urls = buildKdpGetSetupPageUrlCandidates(kdpBookId, { locale }).filter((url) =>
@@ -397,6 +410,7 @@ async function fetchSetupPage(kdpBookId: string, locale: string): Promise<SetupF
     const json = tryParseJson(text);
     attempts.push({
       status: Number(result.status || 0),
+      url,
       text: text.slice(0, 400),
       snippet: text.slice(0, 240),
       json: json ?? undefined,
@@ -659,7 +673,7 @@ export async function syncKdpPaperbackPricing(opts: {
 
   const probeId = todo[0]!.kdpBookId;
   const probe = await fetchSetupPage(probeId, locale);
-  const probeIsPermanentMiss = isKdpSetupPagePermanentMiss(probe);
+  const probeIsPermanentMiss = isExhaustedSetupPageMiss(probe);
   if (!probeIsPermanentMiss && setupPageLooksUnauthenticated(probe)) {
     // HTML / non-JSON / 403 — same as Chrome sign-in gate. A stored old price
     // is not proof that the pending refresh succeeded: do not clear auth merely
@@ -708,7 +722,7 @@ export async function syncKdpPaperbackPricing(opts: {
     const fetched = i === 0 ? probe : await fetchSetupPage(c.kdpBookId, locale);
 
     if (
-      !isKdpSetupPagePermanentMiss(fetched) &&
+      !isExhaustedSetupPageMiss(fetched) &&
       setupPageLooksUnauthenticated(fetched)
     ) {
       const pendingMid = await countPendingPricing(accountId, paperbackAsins).catch(
@@ -740,7 +754,7 @@ export async function syncKdpPaperbackPricing(opts: {
         parseKdpGetSetupPage(json, fetched.marketplaceKey || "US")
       : fetched.pricing;
     if (!fetched.ok || !hasKdpSetupPagePricing(pricing)) {
-      const permanentMiss = isKdpSetupPagePermanentMiss(fetched);
+      const permanentMiss = isExhaustedSetupPageMiss(fetched);
       if (!loggedFirstFail) {
         loggedFirstFail = true;
         void appendKdpActivity(
