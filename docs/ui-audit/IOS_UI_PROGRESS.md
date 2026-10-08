@@ -111,3 +111,13 @@ OPEN
 - [x] `/tmp/InteliAds-369-v2.xcarchive` archived successfully; Xcode's distribution log shows Apple Distribution signing and Store provisioning profiles.
 - [x] Public TestFlight export/upload used `testFlightInternalTestingOnly=false`; Transporter returned `Upload succeeded` and `Uploaded InteliAds`.
 - [ ] Apple processing and external-group assignment still need confirmation in App Store Connect after the expired browser session is restored.
+
+## Build 376 — compact header, stable refresh state, and bid-currency safety (2026-10-08)
+
+- [x] Marketplace headers show the first two flags and a rounded `+N` badge instead of expanding across the screen.
+- [x] Gross refresh feedback occupies a fixed-height lane and uses a breathing opacity/scale effect, so cards and the page do not move while data updates.
+- [x] Targeting single-row bid edits use the row marketplace's native currency. Mixed-currency absolute bulk edits require one market to be selected; relative percentage edits can still span markets.
+- [x] TypeScript, release guard, focused lint with zero errors, and 1,032/1,032 tests pass.
+- [x] Signed build `1.0.1 (376)` archived, installed in place, and launched on the connected iPhone 17 Pro Max with the existing app container preserved.
+- [x] Public TestFlight upload succeeded and Apple processing completed. Build 376 is visible as **Ready to Submit**.
+- [ ] Submit build 376 for Beta App Review and attach it to the external **Intelyads** group after the required action-time confirmation.

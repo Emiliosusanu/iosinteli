@@ -369,3 +369,15 @@ never from `main`, and never from the active Cursor checkout.
 - [x] Xcode exported with `ios/ExportOptionsTestFlightPublic.plist` (`testFlightInternalTestingOnly=false`). The distribution log records Apple Distribution signing and iOS Team Store profiles for the app and widget.
 - [x] App Store Connect Transporter reported `Upload succeeded`, `Uploaded InteliAds`, and `** EXPORT SUCCEEDED **` at 2026-10-05 23:47:57 local time. Apple processing and external-group association still require portal confirmation.
 - [ ] Confirm Apple processing and attach build 369 to the external **Intelyads** group. The current App Store Connect browser session is expired (`authResult=FAILED`), so this is deliberately not claimed here.
+
+## Build 376 — stable marketplace header and native bid currency (2026-10-08)
+
+- [x] Release candidate commit `affbbfb3` is pushed on `codex/ios-merge-20261007`. The header renders at most two marketplace flags plus a compact `+N` badge, while accessibility keeps the complete marketplace list.
+- [x] The Gross refresh state uses a fixed-height status lane and animates opacity/scale only. Updating no longer changes card or page layout, and the dashboard background remains fixed behind its cards.
+- [x] Targeting bid editors retain the exact row marketplace currency. A single-row edit writes the row's native currency; mixed-currency absolute bulk edits fail closed and instruct the tester to choose one market; percentage bulk edits remain available because they do not mix money values. The existing Markets filter continues to scope the profile IDs used by Targeting.
+- [x] TypeScript, release guard, `git diff --check`, focused lint with zero errors, and the complete 1,032-test suite pass.
+- [x] Clean archive `/tmp/InteliAds-376-20261008214519.xcarchive` is `io.inteliads.app` version `1.0.1 (376)`. The app and embedded WidgetKit extension pass strict signature verification.
+- [x] Build 376 installed in place and launched on the physical iPhone 17 Pro Max (`E04E7387-7AD4-505A-9E19-0019BD757FCC`) without erasing its container. Device inventory reports `io.inteliads.app 1.0.1 (376)`.
+- [x] Public App Store export/upload succeeded with `ios/ExportOptionsTestFlightPublic.plist`; Xcode reported `Upload succeeded`, `Uploaded InteliAds`, and `EXPORT SUCCEEDED`.
+- [x] App Store Connect processed build 376 and shows it as **Ready to Submit**, uploaded October 8, 2026 at 9:52 PM local time.
+- [ ] Final external-group action is prepared for **Intelyads** (3 testers) with focused QA notes and automatic tester notification. `Submit for Review` remains pending explicit action-time confirmation.
