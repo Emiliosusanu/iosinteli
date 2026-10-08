@@ -39,6 +39,8 @@ test("iOS KDP activity is queued offline and uploaded with exact account scope",
   assert.match(uploader, /accountId: string/);
   assert.match(uploader, /entry\.accountId === accountId/);
   assert.match(uploader, /\/extension-logs\/batch/);
+  assert.match(uploader, /entries: batch\.map\(uploadEntry\)/);
+  assert.match(uploader, /accountId is a batch field/);
   assert.match(uploader, /source: "ios_kdp_helper"/);
   assert.match(uploader, /extensionVersion: clientVersion\(\)/);
 });
