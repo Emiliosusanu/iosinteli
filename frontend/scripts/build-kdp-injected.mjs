@@ -349,7 +349,15 @@ const nowIso = () => new Date().toISOString();
     ].includes(n),
   );
 
+  // Imported pure helpers are outside sw.js's function closure. Keep their
+  // modules alongside the generated parser so regeneration cannot ship
+  // unresolved identity or HTML-validation calls.
+  const helperModules = ['kdp-catalog-identity.js', 'kdp-report-urls.js', 'kdp-account-match.js'];
+  const helperImports = `import { applyCatalogIdentity, buildCanonicalTitlesRows } from './kdp-catalog-identity.js';
+import { looksLikeHtmlDocument } from './kdp-report-urls.js';
+import { decideKdpAccountCatalogMatch } from './kdp-account-match.js';\n`;
   const module = `${header}
+${helperImports}
 ${prelude}
 ${body}
 
@@ -363,6 +371,9 @@ export {
 `;
 
   mkdirSync(OUT_DIR, { recursive: true });
+  for (const name of helperModules) {
+    writeFileSync(join(OUT_DIR, name), readFileSync(join(EXT_DIR, name), 'utf8'), 'utf8');
+  }
   writeFileSync(OUT_FILE, module, "utf8");
 
   console.log(`[build-kdp-injected] wrote ${OUT_FILE}`);

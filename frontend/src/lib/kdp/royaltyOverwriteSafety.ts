@@ -19,6 +19,19 @@ export function evaluateRoyaltyOverwriteSafety(input: {
   const previousKenp = integer(input.previous?.kenp);
   const incomingKenp = integer(input.incoming?.kenp);
 
+  if ((previousRoyalties > 0.009 || previousOrders > 0 || previousKenp > 0)
+    && incomingRoyalties <= 0.009 && incomingOrders === 0 && incomingKenp === 0) {
+    return { safe: false, reason: "positive_snapshot_all_zero" };
+  }
+
+  const royaltiesStable = previousRoyalties > 0.009 && Math.abs(incomingRoyalties - previousRoyalties) <= 0.009;
+  if (royaltiesStable && previousOrders > 0 && incomingOrders === 0) {
+    return { safe: false, reason: "stable_royalties_zero_orders" };
+  }
+  if (royaltiesStable && previousKenp > 0 && incomingKenp === 0) {
+    return { safe: false, reason: "stable_royalties_zero_kenp" };
+  }
+
   if (previousRoyalties <= 0.009 || incomingRoyalties >= previousRoyalties) {
     return { safe: true, reason: "no_positive_regression" };
   }

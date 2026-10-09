@@ -43,6 +43,25 @@ export function kdpInjectedJavaScript(): string {
   try { setTimeout(selectAllBookshelfRows, 350); } catch (e) {}
   try { setTimeout(selectAllBookshelfRows, 1200); } catch (e) {}
 
+  // Capture processed orders, which include print sales. Placed orders are
+  // a different report and cannot replace the royalties-aligned activity.
+  function captureProcessedOrders() {
+    try {
+      if (String(location.pathname || '').indexOf('/reports/orders') < 0) return;
+      var elements = Array.from(document.querySelectorAll('button,[role="tab"],[role="button"],label,span'));
+      var choice = elements.find(function (el) { return /^orders processed$/i.test(String(el.textContent || '').trim()); });
+      if (choice) (choice.closest('button,[role="tab"],[role="button"],label') || choice).click();
+      var svg = document.querySelector('svg');
+      if (svg) {
+        var box = svg.getBoundingClientRect();
+        svg.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }));
+      }
+    } catch (e) {}
+  }
+  try { setTimeout(captureProcessedOrders, 350); } catch (e) {}
+  try { setTimeout(captureProcessedOrders, 1200); } catch (e) {}
+  try { setTimeout(captureProcessedOrders, 2500); } catch (e) {}
+
   function send(payload) {
     try {
       if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {

@@ -61,6 +61,7 @@ import {
   type KdpMarketplaceTarget,
 } from "./marketplace.ts";
 import { evaluateRoyaltyOverwriteSafety } from "./royaltyOverwriteSafety.ts";
+import { createSingleFlight } from "./singleFlight.ts";
 import { runShelfHeal } from "./runShelfHeal.ts";
 import { syncKdpPaperbackPricing } from "./pricingSync.ts";
 import { hydratePricingAuthBannerFromBootstrap } from "./pricingBootstrap.ts";
@@ -158,10 +159,14 @@ async function ensureTemplates(): Promise<void> {
   }
 
   for (const page of KDP_CAPTURE_PAGES) {
-    if (getKdpHelperStatus().templates[page.type]) continue;
+    const available = () => {
+      const template = getKdpHelperStatus().templates[page.type];
+      return !!template && (page.type !== "orders" || !/\/orders\/placed\//i.test(template.url));
+    };
+    if (available()) continue;
     setKdpHelperRunning(true, `Capturing ${page.type}…`);
     navigateKdpWebView(page.url);
-    await waitUntil(() => !!getKdpHelperStatus().templates[page.type], CAPTURE_WAIT_MS);
+    await waitUntil(available, CAPTURE_WAIT_MS);
   }
   await saveHelperTemplates(getKdpHelperStatus().templates);
   if (!kdpTemplatesReady()) {
@@ -175,8 +180,18 @@ async function fetchJsonForType(
   preferredCurrency: string | null = null,
   marketplace: KdpMarketplaceTarget | null = null,
 ) {
-  const template = getKdpHelperStatus().templates[type];
+  const templates = getKdpHelperStatus().templates;
+  // Captured title rows carry ASIN activity; marketplace overview rows do not.
+  const template = type === "orders"
+    ? (templates.orders_titles && !/\/orders\/placed\//i.test(templates.orders_titles.url)
+      ? templates.orders_titles : templates.orders)
+    : type === "kenp"
+      ? templates.kenp_titles || templates.kenp
+      : templates[type];
   if (!template) return null;
+  if (type === "orders" && /\/orders\/placed\//i.test(template.url)) {
+    throw new Error("Processed KDP orders need a fresh capture; existing activity preserved");
+  }
   const req = rebuildTemplateForDay(template, type, ymd, { preferredCurrency, marketplace });
   const attempt = async () => {
     const result = await kdpPageFetch(req);
@@ -269,10 +284,10 @@ async function syncOneDay(
   const overwriteSafety = evaluateRoyaltyOverwriteSafety({ previous, incoming: built.rowDaily });
   if (!overwriteSafety.safe) {
     void appendKdpActivity(
-      `Protected ${ymd}: missing royalties with unchanged activity (${overwriteSafety.reason})`,
+      `Protected ${ymd}: incomplete royalty or activity report (${overwriteSafety.reason})`,
       "error",
     );
-    throw new Error(`Protected ${ymd}: existing positive royalties preserved`);
+    throw new Error(`Protected ${ymd}: existing verified royalties and activity preserved`);
   }
 
   const isEstimated = ymd >= new Date().toISOString().slice(0, 10);
@@ -355,7 +370,11 @@ async function resolveAccountId(userId: string, profileIds: string[]): Promise<s
   return resolved.accountId;
 }
 
-export async function runKdpIosHelperTick(
+// AppState, silent push, native wake and the manual button can arrive together.
+// They must share one report/pricing pass and one planner journal update.
+export const runKdpIosHelperTick = createSingleFlight(runKdpIosHelperTickOnce);
+
+async function runKdpIosHelperTickOnce(
   reason: string,
   opts: { force?: boolean; profileIds?: string[]; wakeMode?: KdpWakeMode } = {},
 ): Promise<{ ok: boolean; skipped?: boolean; reason: string; days?: number; wakeMode?: KdpWakeMode }> {

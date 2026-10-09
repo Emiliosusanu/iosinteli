@@ -29,6 +29,26 @@ test("iOS refuses the Levopppc/VPS1 stable-activity zero regression", () => {
     }),
     { safe: false, reason: "stable_activity_zero_royalties" },
   );
-  assert.match(importer, /existing positive royalties preserved/);
+  assert.match(importer, /existing verified royalties and activity preserved/);
   assert.match(importer, /Incomplete KDP \$\{scope\} response/);
+});
+
+test("iOS preserves verified activity when an incomplete report retains royalties", () => {
+  assert.deepEqual(evaluateRoyaltyOverwriteSafety({
+    previous: { royalties: 49.76, orders: 8, kenp: 200 },
+    incoming: { royalties: 0, orders: 0, kenp: 0 },
+  }), { safe: false, reason: "positive_snapshot_all_zero" });
+  assert.deepEqual(evaluateRoyaltyOverwriteSafety({
+    previous: { royalties: 49.76, orders: 8, kenp: 200 },
+    incoming: { royalties: 49.76, orders: 0, kenp: 200 },
+  }), { safe: false, reason: "stable_royalties_zero_orders" });
+  assert.deepEqual(evaluateRoyaltyOverwriteSafety({
+    previous: { royalties: 49.76, orders: 8, kenp: 200 },
+    incoming: { royalties: 49.76, orders: 8, kenp: 0 },
+  }), { safe: false, reason: "stable_royalties_zero_kenp" });
+  assert.equal(evaluateRoyaltyOverwriteSafety({
+    previous: { royalties: 49.76, orders: 8, kenp: 200 },
+    incoming: { royalties: 45.12, orders: 7, kenp: 180 },
+  }).safe, true);
+  assert.equal(evaluateRoyaltyOverwriteSafety({ incoming: { royalties: 0, orders: 0, kenp: 0 } }).safe, true);
 });
