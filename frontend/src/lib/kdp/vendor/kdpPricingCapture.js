@@ -1174,11 +1174,9 @@ export function extractAsinFromSetupPageJson(json) {
   }
 
   const visit = (node, depth = 0) => {
-    if (!node || depth > 6) return null;
-    if (typeof node === 'string') {
-      const asin = String(node || '').trim().toUpperCase();
-      return looksLikeAmazonAsin(asin) ? asin : null;
-    }
+    // A valid-looking ISBN can also be an unrelated browse-node/customer ID.
+    // Only an explicit ASIN field is evidence of the response book identity.
+    if (!node || typeof node !== 'object' || depth > 6) return null;
     if (Array.isArray(node)) {
       for (const item of node) {
         const hit = visit(item, depth + 1);
@@ -1188,7 +1186,7 @@ export function extractAsinFromSetupPageJson(json) {
     }
     if (typeof node === 'object') {
       for (const [key, value] of Object.entries(node)) {
-        if (/asin/i.test(key)) {
+        if (/^(asin|printAsin|paperbackAsin|hardcoverAsin|ebookAsin)$/i.test(key)) {
           const asin = String(value || '').trim().toUpperCase();
           if (looksLikeAmazonAsin(asin)) return asin;
         }
