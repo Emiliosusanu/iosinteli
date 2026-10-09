@@ -23,6 +23,7 @@ export async function writeKdpDay(opts: {
   rowEntry: AnyRow;
   rowsBookDaily: AnyRow[];
   factRows: AnyRow[];
+  reviewOnly?: boolean;
 }): Promise<void> {
   const date = String(opts.rowDaily.date || opts.rowEntry.date || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Atomic KDP day write requires YYYY-MM-DD");
@@ -36,8 +37,10 @@ export async function writeKdpDay(opts: {
     ok?: boolean;
     factRows?: number;
     submittedBookDailyRows?: number;
+    staged?: boolean; quarantined?: boolean; candidateId?: string;
+    accountId?: string; date?: string; revisionId?: string;
   }>(
-    "/kdp-sync/replace-day",
+    opts.reviewOnly ? "/kdp-sync/stage-correction" : "/kdp-sync/replace-day",
     {
       method: "POST",
       body: JSON.stringify({
@@ -53,6 +56,10 @@ export async function writeKdpDay(opts: {
     },
     `Atomic KDP write failed for ${date}; existing data was preserved.`,
   );
+  if (opts.reviewOnly && result?.staged === true && result?.quarantined === true
+    && result?.ok === false && /^[0-9a-f-]{36}$/i.test(String(result.candidateId || ""))
+    && result.accountId === opts.accountId && result.date === date && result.revisionId === revisionId) return;
+  if (opts.reviewOnly) throw new Error(`KDP correction staging was not acknowledged for ${date}; existing data was preserved`);
   if (
     result?.ok !== true ||
     Number(result.factRows) !== opts.factRows.length ||

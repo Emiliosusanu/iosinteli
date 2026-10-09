@@ -282,13 +282,6 @@ async function syncOneDay(
     throw new Error(`Could not load accepted KDP baseline for ${ymd}; refusing overwrite`);
   }
   const overwriteSafety = evaluateRoyaltyOverwriteSafety({ previous, incoming: built.rowDaily });
-  if (!overwriteSafety.safe) {
-    void appendKdpActivity(
-      `Protected ${ymd}: incomplete royalty or activity report (${overwriteSafety.reason})`,
-      "error",
-    );
-    throw new Error(`Protected ${ymd}: existing verified royalties and activity preserved`);
-  }
 
   const isEstimated = ymd >= new Date().toISOString().slice(0, 10);
   const factRows: Array<Record<string, unknown>> = [];
@@ -340,6 +333,19 @@ async function syncOneDay(
       "ALL",
       "USD",
     );
+  }
+
+  if (!overwriteSafety.safe) {
+    // All requested source reports have succeeded. Keep the complete capture
+    // as a review candidate; this endpoint cannot replace accepted data.
+    try {
+      await writeKdpDay({ accountId, rowDaily: built.rowDaily, rowEntry: built.rowEntry,
+        rowsBookDaily: built.rowsBookDaily, factRows, reviewOnly: true });
+      void appendKdpActivity(`Protected ${ymd}: correction saved for administrator verification`, "error");
+    } catch {
+      void appendKdpActivity(`Protected ${ymd}: correction pending; review upload will retry`, "error");
+    }
+    throw new Error(`Protected ${ymd}: existing verified royalties and activity preserved`);
   }
 
   await writeKdpDay({
