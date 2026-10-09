@@ -26,7 +26,7 @@ test("Sync overview query avoids select(*) over wide log rows", () => {
 
 test("importer keeps All in USD, derives native marketplace targets, and appends activity", () => {
   assert.match(importer, /const preferredCurrency = "USD"/);
-  assert.match(importer, /marketplaceTargetsFromProfiles/);
+  assert.match(importer, /allKdpMarketplaceTargets/);
   assert.match(importer, /fetchDayPayloads\(ymd, target\.currency, target\)/);
   assert.match(importer, /evaluateRoyaltyOverwriteSafety/);
   assert.match(importer, /appendKdpActivity/);

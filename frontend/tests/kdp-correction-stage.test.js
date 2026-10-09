@@ -9,6 +9,8 @@ function harness(patch = {}) {
   const calls = [];
   const modules = {
     '../supabase.ts': { supabase: {} },
+    'expo-constants': { default: {} },
+    './marketplaceCoverage.ts': {},
     '../rulesApi.ts': { nestApiJson: async (url, request) => {
       const body = JSON.parse(request.body); calls.push({ url, body });
       return { ok: false, quarantined: true, staged: true, candidateId: '44444444-4444-4444-8444-444444444444',

@@ -1,5 +1,7 @@
 import { supabase } from "../supabase.ts";
 import { nestApiJson } from "../rulesApi.ts";
+import Constants from "expo-constants";
+import { hasVerifiedNativeCoverage, kdpFactSnapshotsMatch } from "./marketplaceCoverage.ts";
 
 type AnyRow = Record<string, unknown>;
 
@@ -24,6 +26,7 @@ export async function writeKdpDay(opts: {
   rowsBookDaily: AnyRow[];
   factRows: AnyRow[];
   reviewOnly?: boolean;
+  marketplaces?: string[];
 }): Promise<void> {
   const date = String(opts.rowDaily.date || opts.rowEntry.date || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Atomic KDP day write requires YYYY-MM-DD");
@@ -62,11 +65,52 @@ export async function writeKdpDay(opts: {
   if (opts.reviewOnly) throw new Error(`KDP correction staging was not acknowledged for ${date}; existing data was preserved`);
   if (
     result?.ok !== true ||
+    result.accountId !== opts.accountId || result.date !== date || result.revisionId !== revisionId ||
     Number(result.factRows) !== opts.factRows.length ||
     Number(result.submittedBookDailyRows) !== opts.rowsBookDaily.length
   ) {
     throw new Error(`Atomic KDP write acknowledgement mismatch for ${date}; existing data was preserved`);
   }
+  if (opts.marketplaces?.length) {
+    await verifyNativeDayCoverage(opts.accountId, date, revisionId, opts.factRows, opts.marketplaces);
+  }
+}
+
+/** Only a complete source capture and matching cloud readback can seal a day. */
+async function verifyNativeDayCoverage(accountId: string, date: string, revisionId: string,
+  expectedFacts: AnyRow[], marketplaces: string[]): Promise<void> {
+  const fail = () => new Error(`KDP native marketplace coverage unverified for ${date}; retry remains pending`);
+  const { data: day, error: dayError } = await supabase.from("kdp_daily_data")
+    .select("updated_at").eq("account_id", accountId).eq("date", date).maybeSingle();
+  if (dayError || !day?.updated_at) throw fail();
+  const actual: AnyRow[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await supabase.from("kdp_daily_facts")
+      .select("asin,format,marketplace,currency,units,royalties,kenp,revision_id")
+      .eq("account_id", accountId).eq("date", date)
+      .order("asin").order("format").order("marketplace").order("currency")
+      .range(offset, offset + 999);
+    if (error || !Array.isArray(data)) throw fail();
+    actual.push(...data);
+    if (data.length < 1000) break;
+  }
+  if (actual.some((row) => row.revision_id !== revisionId) || !kdpFactSnapshotsMatch(expectedFacts, actual)) throw fail();
+  const marker = { account_id: accountId, date, revision_id: revisionId,
+    marketplaces, fact_count: actual.length, daily_updated_at: day.updated_at,
+    producer_version: `ios-${Constants.expoConfig?.version || Constants.nativeAppVersion || "unknown"}+${Constants.expoConfig?.ios?.buildNumber || Constants.nativeBuildVersion || "unknown"}` };
+  if (!hasVerifiedNativeCoverage(day.updated_at, marker)) throw fail();
+  const { error } = await supabase.from("kdp_marketplace_day_coverage")
+    .upsert(marker, { onConflict: "account_id,date" });
+  if (error) throw fail();
+  const [covered, current] = await Promise.all([
+    supabase.from("kdp_marketplace_day_coverage").select("revision_id,daily_updated_at,marketplaces,fact_count")
+      .eq("account_id", accountId).eq("date", date).maybeSingle(),
+    supabase.from("kdp_daily_data").select("updated_at")
+      .eq("account_id", accountId).eq("date", date).maybeSingle(),
+  ]);
+  if (covered.error || current.error || covered.data?.revision_id !== revisionId
+    || covered.data?.fact_count !== actual.length
+    || !hasVerifiedNativeCoverage(current.data?.updated_at, covered.data)) throw fail();
 }
 
 export async function writeKdpCatalog(opts: {

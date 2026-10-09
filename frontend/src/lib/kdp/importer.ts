@@ -31,7 +31,6 @@ import {
 } from "./persist.ts";
 import { appendKdpActivity } from "./activity.ts";
 import { parseKdpJsonOrThrow, rebuildTemplateForDay } from "./replay.ts";
-import { fetchAmazonProfiles } from "../queries.ts";
 import {
   hasIncompleteNightly,
   ONBOARDING_DAYS,
@@ -57,7 +56,7 @@ import { loadKdpWebSession } from "./session.ts";
 import { KDP_CAPTURE_PAGES } from "./templates.ts";
 import { writeKdpCatalog, writeKdpDay } from "./upsert.ts";
 import {
-  resolveKdpMarketplaceTarget,
+  allKdpMarketplaceTargets,
   type KdpMarketplaceTarget,
 } from "./marketplace.ts";
 import { evaluateRoyaltyOverwriteSafety } from "./royaltyOverwriteSafety.ts";
@@ -222,19 +221,6 @@ async function fetchJsonForType(
   }
 }
 
-function marketplaceTargetsFromProfiles(
-  profiles: Array<{ country_code?: string | null; marketplace_id?: string | null }>,
-): KdpMarketplaceTarget[] {
-  const byKey = new Map<string, KdpMarketplaceTarget>();
-  for (const profile of profiles) {
-    const target =
-      resolveKdpMarketplaceTarget(profile.country_code) ||
-      resolveKdpMarketplaceTarget(profile.marketplace_id);
-    if (target) byKey.set(target.key, target);
-  }
-  return [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key));
-}
-
 async function fetchDayPayloads(
   ymd: string,
   currency: "EUR" | "USD" | string,
@@ -340,7 +326,8 @@ async function syncOneDay(
     // as a review candidate; this endpoint cannot replace accepted data.
     try {
       await writeKdpDay({ accountId, rowDaily: built.rowDaily, rowEntry: built.rowEntry,
-        rowsBookDaily: built.rowsBookDaily, factRows, reviewOnly: true });
+        rowsBookDaily: built.rowsBookDaily, factRows, reviewOnly: true,
+        marketplaces: marketplaceTargets.map((target) => target.key) });
       void appendKdpActivity(`Protected ${ymd}: correction saved for administrator verification`, "error");
     } catch {
       void appendKdpActivity(`Protected ${ymd}: correction pending; review upload will retry`, "error");
@@ -354,6 +341,7 @@ async function syncOneDay(
     rowEntry: built.rowEntry,
     rowsBookDaily: built.rowsBookDaily,
     factRows,
+    marketplaces: marketplaceTargets.map((target) => target.key),
   });
 }
 
@@ -453,15 +441,10 @@ async function runKdpIosHelperTickOnce(
     // the valid royalties session as signed out.
     void hydratePricingAuthBannerFromBootstrap(accountId);
 
-    // The account-wide All rollup is canonical USD. Each enabled storefront
-    // is replayed separately below in its native currency for filtered views.
-    const profileCurrencyScope = (await fetchAmazonProfiles(userId).catch(() => [])).filter((p) =>
-      (opts.profileIds ?? []).length
-        ? (opts.profileIds ?? []).includes(p.id) || (opts.profileIds ?? []).includes(p.profile_id)
-        : p.is_enabled !== false,
-    );
+    // A KDP account can earn royalties where it has no Ads profile. Always
+    // fetch every Reports storefront before replacing its native day facts.
     const preferredCurrency = "USD" as const;
-    const marketplaceTargets = marketplaceTargetsFromProfiles(profileCurrencyScope);
+    const marketplaceTargets = allKdpMarketplaceTargets();
     await saveHelperReplayCurrency(preferredCurrency);
     setKdpHelperRunning(true, `KDP replay currency ${preferredCurrency}`);
     void appendKdpActivity(

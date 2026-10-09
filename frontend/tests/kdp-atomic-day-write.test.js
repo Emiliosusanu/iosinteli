@@ -10,7 +10,7 @@ const importer = readFileSync(new URL("../src/lib/kdp/importer.ts", import.meta.
 test("iOS day writes only through the authenticated atomic endpoint", () => {
   const dayWriter = upsert.slice(
     upsert.indexOf("export async function writeKdpDay"),
-    upsert.indexOf("export async function writeKdpCatalog"),
+    upsert.indexOf("async function verifyNativeDayCoverage"),
   );
   assert.match(dayWriter, /\/kdp-sync\/replace-day/);
   assert.match(dayWriter, /revisionId/);

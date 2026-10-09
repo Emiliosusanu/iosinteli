@@ -6,6 +6,7 @@ import { supabase } from "../supabase.ts";
 import { missingDays, webHistorySealsOnboarding, type WebHistorySeal } from "./coverage.ts";
 import { addDaysYmd, isYmd } from "./dates.ts";
 import { ONBOARDING_DAYS } from "./planner.ts";
+import { hasVerifiedNativeCoverage } from "./marketplaceCoverage.ts";
 
 export { webHistorySealsOnboarding };
 export type { WebHistorySeal };
@@ -20,17 +21,18 @@ async function cloudDaysInRange(
     return { ok: false, days: [] };
   }
   try {
-    const { data, error } = await supabase
-      .from("kdp_daily_data")
-      .select("date")
-      .eq("account_id", id)
-      .gte("date", fromYmd)
-      .lte("date", toYmd);
-    if (error) return { ok: false, days: [] };
+    const [daily, coverage] = await Promise.all([
+      supabase.from("kdp_daily_data").select("date,updated_at")
+        .eq("account_id", id).gte("date", fromYmd).lte("date", toYmd),
+      supabase.from("kdp_marketplace_day_coverage").select("date,daily_updated_at,marketplaces")
+        .eq("account_id", id).gte("date", fromYmd).lte("date", toYmd),
+    ]);
+    if (daily.error || coverage.error) return { ok: false, days: [] };
+    const markers = new Map((coverage.data ?? []).map((row) => [row.date, row]));
     const days = new Set<string>();
-    for (const row of data ?? []) {
+    for (const row of daily.data ?? []) {
       const day = String((row as { date?: string }).date || "").slice(0, 10);
-      if (isYmd(day)) days.add(day);
+      if (isYmd(day) && hasVerifiedNativeCoverage(row.updated_at, markers.get(day))) days.add(day);
     }
     return { ok: true, days: [...days].sort() };
   } catch {

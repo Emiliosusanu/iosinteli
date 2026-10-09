@@ -26,6 +26,11 @@ const KDP_MARKETPLACES: readonly (KdpMarketplaceTarget & { aliases: readonly str
   { key: "BR", filterToken: "Amazon.com.br", currency: "BRL", aliases: ["BR", "AMAZON.COM.BR"] },
 ] as const;
 
+/** Reports belong to the KDP account, independently of connected Ads profiles. */
+export function allKdpMarketplaceTargets(): KdpMarketplaceTarget[] {
+  return KDP_MARKETPLACES.map(({ key, filterToken, currency }) => ({ key, filterToken, currency }));
+}
+
 function normalizeMarketplaceToken(raw: unknown): string {
   return String(raw || "")
     .trim()
