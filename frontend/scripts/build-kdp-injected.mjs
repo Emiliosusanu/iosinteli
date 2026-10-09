@@ -374,6 +374,9 @@ export {
   for (const name of helperModules) {
     writeFileSync(join(OUT_DIR, name), readFileSync(join(EXT_DIR, name), 'utf8'), 'utf8');
   }
+  writeFileSync(join(OUT_DIR, 'kdp-bookshelf-primary-pricing.js'),
+    readFileSync(join(EXT_DIR, 'kdp-bookshelf-primary-pricing.js'), 'utf8')
+      .replace("'./kdp-pricing-capture.js'", "'./kdpPricingCapture.js'"), 'utf8');
   writeFileSync(OUT_FILE, module, "utf8");
 
   console.log(`[build-kdp-injected] wrote ${OUT_FILE}`);

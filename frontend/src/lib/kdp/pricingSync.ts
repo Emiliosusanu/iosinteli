@@ -7,6 +7,7 @@
  */
 import { supabase } from "../supabase.ts";
 import { appendKdpActivity } from "./activity.ts";
+import { applyBookshelfPrimaryPriceChanges } from "./bookshelfPrimaryPricing.ts";
 import { collectPricingCandidatesForIos } from "./pricingCandidates.ts";
 import {
   bookshelfHtmlLooksSeeded,
@@ -16,6 +17,7 @@ import {
 import {
   clearDirtyPricingSetupIds,
   loadDirtyPricingSetupIds,
+  markPricingSetupDirty,
 } from "./pricingDirty.ts";
 import {
   getKdpHelperStatus,
@@ -244,15 +246,19 @@ async function countPendingPricing(
   return missing + dirty.length;
 }
 
-async function loadStoredSetupByAsin(accountId: string): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
+async function loadStoredPricingRows(accountId: string): Promise<AnyRow[]> {
   const { data, error } = await supabase
     .from("kdp_titles")
-    .select("asin,kdp_setup_book_id")
+    .select("account_id,asin,kdp_setup_book_id,kdp_list_price,printing_cost,net_royalty_per_sale,royalty_rate,target_break_even_acos,pricing_marketplace,pricing_currency,pricing_captured_at")
     .eq("account_id", accountId)
     .not("kdp_setup_book_id", "is", null);
   if (error) throw new Error(`kdp_titles setup ids: ${error.message}`);
-  for (const row of data || []) {
+  return (data || []) as AnyRow[];
+}
+
+function setupMapFromStoredPricing(rows: AnyRow[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const row of rows) {
     const asin = String((row as AnyRow).asin || "")
       .trim()
       .toUpperCase();
@@ -562,7 +568,14 @@ export async function syncKdpPaperbackPricing(opts: {
     allowAuthNavigate,
   });
 
-  const storedSetupByAsin = await loadStoredSetupByAsin(accountId).catch(() => new Map());
+  const storedRows = await loadStoredPricingRows(accountId).catch(() => []);
+  await applyBookshelfPrimaryPriceChanges({
+    accountId, bookshelfHtml, storedRows,
+    markDirty: markPricingSetupDirty,
+    writePricing: writeKdpPricing,
+    log: (message) => appendKdpActivity(message, "info"),
+  });
+  const storedSetupByAsin = setupMapFromStoredPricing(storedRows);
   const dirtyEntries = await loadDirtyPricingSetupIds(accountId).catch(() => []);
   const dirtySet = new Set(dirtyEntries.map((e) => e.setupId));
 
