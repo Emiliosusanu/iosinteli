@@ -1147,7 +1147,13 @@ export function stripEditionYearFromTitle(title) {
 
 export function looksLikeAmazonAsin(value) {
   const asin = String(value || '').trim().toUpperCase();
-  return /^B0[A-Z0-9]{8}$/.test(asin);
+  if (/^B0[A-Z0-9]{8}$/.test(asin)) return true;
+  // Printed books can use their ISBN-10 as the Amazon ASIN, including an X
+  // check digit. Validate it rather than accepting arbitrary numeric setup ids.
+  if (!/^[0-9]{9}[0-9X]$/.test(asin) || /^0{9}/.test(asin)) return false;
+  const checksum = [...asin].reduce((sum, digit, index) =>
+    sum + (digit === 'X' ? 10 : Number(digit)) * (10 - index), 0);
+  return checksum % 11 === 0;
 }
 
 /** Read paperback ASIN from get-setup-page JSON when KDP exposes it. */
@@ -1335,7 +1341,7 @@ export function looksLikeKdpSetupBookId(value) {
   const id = String(value || '').trim().toUpperCase();
   if (!id || id.length < 8 || id.length > 16) return false;
   if (!/^[A-Z0-9][A-Z0-9]+$/.test(id)) return false;
-  if (/^B0[A-Z0-9]{8}$/.test(id)) return false;
+  if (looksLikeAmazonAsin(id)) return false;
   return true;
 }
 
