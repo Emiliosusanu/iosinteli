@@ -20,6 +20,19 @@ import {
   shouldClearPricingGateForTabUrl,
 } from "../src/lib/kdp/vendor/kdpPricingCapture.js";
 
+test('persisted ebook format excludes a historical paperback setup alias', () => {
+  const { candidates } = collectPricingCandidatesForIos({
+    booksObj: null, titlesJson: null, bookshelfHtml: '',
+    formatRows: [
+      {asin:'B0H8FWKBLV',format:'ebook'}, {asin:'B0H8FWKBLV',format:'ku'},
+      {asin:'B0H9M11FM7',format:'paperback'},
+    ],
+    storedSetupByAsin: new Map([['B0H8FWKBLV','A00MA6WA3MC'],['B0H9M11FM7','A00MA6WA3MC']]),
+  });
+  assert.ok(candidates.some(row => row.asin === 'B0H9M11FM7'));
+  assert.ok(candidates.every(row => row.asin !== 'B0H8FWKBLV'));
+});
+
 test("pricing URL candidates prefer the proven KDP V2 endpoint", () => {
   const urls = buildKdpGetSetupPageUrlCandidates("2RZKVQBNHD8", { locale: "en_US" });
   assert.match(urls[0], /\/v2\/get-setup-page$/);
@@ -222,4 +235,17 @@ test("pricing editor context + save mutation match Chrome", () => {
     }),
     false,
   );
+});
+
+
+test('current Bookshelf digital ASIN is excluded before any format report exists', () => {
+  const {candidates} = collectPricingCandidatesForIos({
+    booksObj:null, titlesJson:null, formatRows:[],
+    bookshelfHtml:`<div id="dual-digital-price-asin-A00MA6WA3MC">ASIN: B0H8FWKBLV</div>
+      <div id="dual-print-price-asin-A00MA6WA3MC">ASIN: B0H9M11FM7</div>
+      <div id="dual-print-status-live-status-A00MA6WA3MC">Live</div>`,
+    storedSetupByAsin:new Map([['B0H8FWKBLV','A00MA6WA3MC'],['B0H9M11FM7','A00MA6WA3MC']]),
+  });
+  assert.ok(candidates.some(row=>row.asin==='B0H9M11FM7'));
+  assert.ok(candidates.every(row=>row.asin!=='B0H8FWKBLV'));
 });

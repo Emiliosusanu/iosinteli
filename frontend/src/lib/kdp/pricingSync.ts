@@ -554,7 +554,32 @@ export async function syncKdpPaperbackPricing(opts: {
     return { ...empty, message: "missing account" };
   }
 
-  const paperbackAsins = (opts.formatRows || [])
+  // Recent report rows may omit an ebook that has no sales today. Persisted
+  // format identity must still exclude its historical print-setup alias.
+  const persistedFormats: AnyRow[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await supabase.from('kdp_book_formats')
+      .select('asin,format').eq('account_id', accountId).order('id')
+      .range(offset, offset + 999);
+    if (error) throw new Error('KDP pricing format identity unavailable; existing prices preserved');
+    persistedFormats.push(...(data || []));
+    if ((data || []).length < 1000) break;
+  }
+  const formatRows = [...persistedFormats, ...(opts.formatRows || [])];
+  const knownFormats = new Map<string, Set<string>>();
+  for (const row of formatRows) {
+    const asin = String(row.asin || '').trim().toUpperCase();
+    const format = String(row.format || '').trim().toLowerCase();
+    if (!asin || !format) continue;
+    const formats = knownFormats.get(asin) || new Set<string>();
+    formats.add(format); knownFormats.set(asin, formats);
+  }
+  const observedDigitalAsins = new Set<string>();
+  const isKnownNonPrint = (asin: string) => {
+    const formats = knownFormats.get(asin);
+    return observedDigitalAsins.has(asin) || Boolean(formats?.size && !formats.has('paperback'));
+  };
+  const paperbackAsins = formatRows
     .filter((fr) => String(fr?.format || "").toLowerCase() === "paperback")
     .map((fr) => String(fr?.asin || "").trim().toUpperCase())
     .filter(Boolean);
@@ -567,6 +592,10 @@ export async function syncKdpPaperbackPricing(opts: {
   const bookshelfHtml = await ensureKdpBookshelfContext(accountId, locale, {
     allowAuthNavigate,
   });
+  for (const row of extractBookshelfPrintRowsFromHtml(bookshelfHtml || '')) {
+    const digitalAsin = String(row.digitalAsin || '').trim().toUpperCase();
+    if (digitalAsin) observedDigitalAsins.add(digitalAsin);
+  }
 
   const storedRows = await loadStoredPricingRows(accountId).catch(() => []);
   await applyBookshelfPrimaryPriceChanges({
@@ -576,12 +605,15 @@ export async function syncKdpPaperbackPricing(opts: {
     log: (message) => appendKdpActivity(message, "info"),
   });
   const storedSetupByAsin = setupMapFromStoredPricing(storedRows);
+  for (const asin of storedSetupByAsin.keys()) {
+    if (isKnownNonPrint(asin)) storedSetupByAsin.delete(asin);
+  }
   const dirtyEntries = await loadDirtyPricingSetupIds(accountId).catch(() => []);
   const dirtySet = new Set(dirtyEntries.map((e) => e.setupId));
 
   const { candidates: discovered, pairMaps } = collectPricingCandidatesForIos({
     booksObj: opts.booksObj || null,
-    formatRows: opts.formatRows || [],
+    formatRows,
     titlesJson: opts.titlesJson ?? null,
     bookshelfHtml,
     storedSetupByAsin,

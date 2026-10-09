@@ -41,6 +41,19 @@ export function collectPricingCandidatesForIos(opts: {
     [];
 
   const bookshelfRows = extractBookshelfPrintRowsFromHtml(opts.bookshelfHtml || "");
+  const knownFormats = new Map<string, Set<string>>();
+  for (const row of opts.formatRows || []) {
+    const asin = String(row.asin || '').trim().toUpperCase();
+    const format = String(row.format || '').trim().toLowerCase();
+    if (!asin || !format) continue;
+    const formats = knownFormats.get(asin) || new Set<string>();
+    formats.add(format); knownFormats.set(asin, formats);
+  }
+  const observedDigitalAsins = new Set(bookshelfRows.map(row => String(row.digitalAsin || '').trim().toUpperCase()).filter(Boolean));
+  const knownNonPrint = (asin: string) => {
+    const formats = knownFormats.get(asin);
+    return observedDigitalAsins.has(asin) || Boolean(formats?.size && !formats.has('paperback'));
+  };
   const inactiveSetupIds = new Set<string>();
   const authoritativeSetupByAsin = new Map<string, string>();
   const inactiveStatuses = new Set(["draft", "in_review", "unpublished", "action_required"]);
@@ -65,6 +78,7 @@ export function collectPricingCandidatesForIos(opts: {
     if (!looksLikeKdpSetupBookId(id)) return;
     if (inactiveSetupIds.has(id)) return;
     const a = asin ? String(asin).trim().toUpperCase() : "";
+    if (a && knownNonPrint(a)) return;
     const authoritativeId = a ? authoritativeSetupByAsin.get(a) : null;
     if (authoritativeId && authoritativeId !== id) return;
     const key = a ? `${a}:${id}` : `id:${id}`;
@@ -155,7 +169,9 @@ export function collectPricingCandidatesForIos(opts: {
       .toUpperCase();
     if (looksLikeAmazonAsin(asin)) paperbackAsins.add(asin);
   }
-  for (const asin of opts.storedSetupByAsin.keys()) paperbackAsins.add(asin);
+  for (const asin of opts.storedSetupByAsin.keys()) {
+    if (!knownNonPrint(asin)) paperbackAsins.add(asin);
+  }
 
   for (const asin of paperbackAsins) {
     if (out.some((c) => c.asin === asin)) continue;
