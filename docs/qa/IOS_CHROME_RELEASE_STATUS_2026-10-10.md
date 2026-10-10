@@ -2,6 +2,18 @@
 
 Mass distribution is not yet certified. This note supersedes older release-status conclusions, without relabeling prior evidence.
 
+## Latest verified update (06:55 UTC)
+
+- iOS 386 includes the preserved account-switch cleanup changes, committed as `073bb19e`: a new helper destination is committed only after Keychain deletion/readback, native cookie cleanup, and every local journal removal succeed. Selecting the same account preserves its session and progress. All 1,074 tests and TypeScript pass. The signed 386 archive passes deep strict codesign validation; app/widget are both 386. External-eligible upload succeeded at 06:54:35 UTC. JS SHA256 `023f4e85596c547369deda96e743debbc3c871f76aec72de50dde8fb92988e7b`; native executable SHA256 `c34e553330a5fa6e0be7ea078efa04fc1d4caefd911b93a893fa194aaa6fa6c2`. Apple group availability and installation of 386 are not yet verified. The current Apple browser session is now authenticated, and 384/385 visibly show Testing; physical iPhone remains 383.
+- Both VPS hosts now confirm runtime manifest 159 and worker `1.2.159-pricing-probe-auth` after controlled cold restarts with their original argv/profile/environment. Natural two-day startup syncs completed on VPS1 at 06:41 UTC and VPS2 at 06:48 UTC. Correct account identity, signed-in state and all clocks survived.
+- VPS1's direct setup response is HTTP 200 JSON with 14 calculator markets. A separate authorized force pricing-only pass captured six account-owned live candidates in 21.8 seconds, with all five error counters zero, no deferred/dirty queue, and the real gate cleared. Database readback confirms 84 fresh rows with list price, printing cost, net royalty, currency and break-even present; no break-even math mismatch. No user login was needed to recover from the prior transport failure. The diagnostic capture itself did not write financial rows.
+- Accepted account and book rows reconcile royalties/orders/KENP on October 9–10 for VPS1, VPS2 and Emilian. Both VPS account-days have current 17-store native coverage; Emilian's installed 383 still has no 17-store coverage marker. The genuine empty VPS2 day remains zero with no invented book rows.
+- Windows 159 was staged at its original registered path after backup `C:\Users\Administrator\InteliAds-QA-Backup\159-staged-20261010-085007`. Official Chrome reload and final runtime readback remain pending. No Windows credentials/profile/account were replaced.
+- PR #725 merged as `94edabca22f00eed23373ccb0e4c6f4c1c4eabe9`; PR #726 passed CI and merged as `edb9b2cba9b10d43d8c4bad6a3cba71e1cbcc231`. A later main merge superseded the deployment requests; latest production run `38032511105` / main `1a7729ec66ba99dddd140f5a44ae7c5404f3cb4e` is pending. Actual deployed image identity must still be verified before claiming production/source alignment.
+- The retained HTTP-response window contains 24 successful scheduled dispatch responses, all HTTP 200 and zero dispatch errors. These prove APNs acceptance, not TestFlight 386 installation or every requested wake executing.
+
+The sections below record earlier evidence in this session. The latest update above takes precedence for current versions and completed checks.
+
 ## iOS archive and background delivery
 
 Build 385 preserves all 384 changes: USD All plus 17 native KDP Reports storefronts independent of Ads selection, verified database facts and revision-aware coverage, marketplace pricing, deferred backfill and correction safeguards. The native background completion gate now claims completion before publishing status; callbacks after expiration are ignored. A successful TaskManager wake does not overwrite a pending/login-required KDP snapshot with “Updated”.
