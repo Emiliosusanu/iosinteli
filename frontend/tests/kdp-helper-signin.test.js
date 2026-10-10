@@ -72,7 +72,8 @@ test("helper destination is explicit and Ads filters cannot silently switch KDP 
   assert.match(persist, /removeItem\(TEMPLATES_KEY\)/);
   assert.match(persist, /clearKdpWebSession/);
   assert.match(persist, /clearNativeAmazonKdpCookies/);
-  assert.match(persist, /if \(!nativeCookiesCleared\)/);
+  assert.match(persist, /webSessionCleared !== true \|\| nativeCookiesCleared !== true/);
+  assert.match(persist, /progressCleared\.some/);
   assert.ok(
     persist.indexOf("clearNativeAmazonKdpCookies()") < persist.indexOf("saveHelperAccountId(next)"),
     "the new helper account must only be saved after Amazon cookies are cleared",

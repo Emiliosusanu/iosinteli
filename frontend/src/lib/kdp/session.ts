@@ -69,13 +69,17 @@ export async function saveKdpWebSession(session: KdpWebSession): Promise<boolean
   }
 }
 
-export async function clearKdpWebSession(): Promise<void> {
+export async function clearKdpWebSession(): Promise<boolean> {
   try {
     await SecureStore.deleteItemAsync(SESSION_KEY, {
       keychainAccessible: ACCESSIBLE,
     });
+    const remaining = await SecureStore.getItemAsync(SESSION_KEY, {
+      keychainAccessible: ACCESSIBLE,
+    });
+    return remaining == null;
   } catch {
-    /* best-effort */
+    return false;
   }
 }
 
