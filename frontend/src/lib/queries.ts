@@ -3723,6 +3723,8 @@ async function fetchKdpBooksForTargetingFilter(
     paperback_royalties?: unknown;
     kenp_royalties?: unknown;
   }> = [];
+  // Match the account/date/ASIN primary key so each page avoids sorting and
+  // evaluating RLS over the full history. Keep all dates and both schema paths.
   try {
     dailyRows = await fetchOptionalInPages<any>(
       "targeting_filter_kdp_daily",
@@ -3734,6 +3736,8 @@ async function fetchKdpBooksForTargetingFilter(
             "asin, group_key, royalties, orders, ebook_royalties, paperback_royalties, kenp_royalties",
           )
           .in("account_id", chunk)
+          .order("account_id", { ascending: true })
+          .order("date", { ascending: true })
           .order("asin", { ascending: true })
           .range(from, to),
     );
@@ -3748,6 +3752,8 @@ async function fetchKdpBooksForTargetingFilter(
             .from("kdp_book_daily_data")
             .select("asin, group_key, royalties, orders")
             .in("account_id", chunk)
+            .order("account_id", { ascending: true })
+            .order("date", { ascending: true })
             .order("asin", { ascending: true })
             .range(from, to),
       );
