@@ -22,6 +22,9 @@ import { addDaysYmd, daysBetweenYmd, eachYmd, hourInTz, isYmd, ymdInTz } from ".
 import { DEFERRED_DAY_LIMIT_RECENT } from "./deferred.ts";
 
 export const SYNC_EVERY_MS = 15 * 60_000;
+// APNs/native delivery can precede the previous capture's planner timestamp
+// by a few seconds. Do not waste that wake and wait another full 15-minute slot.
+export const STEADY_WAKE_GRACE_MS = 60_000;
 export const ONBOARDING_DAYS = 90;
 export const ONBOARDING_MILESTONE_30_DAYS = 30;
 export const NIGHTLY_BACKFILL_DAYS = 30;
@@ -239,7 +242,7 @@ export function planSync(
   // Every wake may advance onboarding. Processing chains chunks; recent does one.
 
   // ---- STEADY: today + yesterday every ~15 min (or forced) — always allowed ----
-  const steadyDue = opts.force || nowMs - state.lastSteadyAtMs >= SYNC_EVERY_MS;
+  const steadyDue = opts.force || nowMs - state.lastSteadyAtMs >= SYNC_EVERY_MS - STEADY_WAKE_GRACE_MS;
   if (steadyDue) {
     ranges.push({ from: yesterday, to: today, kind: "steady" });
     state.lastSteadyAtMs = nowMs;
@@ -340,4 +343,3 @@ export function planSync(
     leftoverNightly: hasIncompleteNightly(state),
   };
 }
-

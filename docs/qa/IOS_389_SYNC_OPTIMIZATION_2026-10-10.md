@@ -22,12 +22,16 @@ The evening physical-388 readback exposed a completion-state error after pricing
 The 389 candidate keeps pricing exceptions, pending work and report soft failures in Retrying (or Action required for the authentication gate), without advancing the full-completion stamp.
 Successful report captures remain preserved. See IOS_388_DAYTIME_BACKGROUND_READBACK_2026-10-10.md for actual device and cloud evidence.
 
+The physical 388 interval delivery at 17:15:02.981 UTC skipped report capture because the previous planner timestamp was 17:00:15.637 UTC (13 seconds short of a full interval).
+The candidate allows a bounded one-minute grace around the 15-minute cadence, so that delivered wake is used instead of waiting another slot. A repeated delivery still remains throttled; non-forced captures cannot run closer than 14 minutes.
+Behavioral tests replay these actual timestamps and check both wake modes at the grace boundary. This does not change or guarantee iOS delivery timing.
+
 ## Validation
 
-- 1,087/1,087 unit tests passed after the completion-state correction.
+- 1,089/1,089 unit tests passed after the completion-state and wake-phase corrections.
 - TypeScript passed.
 - Canonical release guard passed for build 389.
-- Metro/Hermes iOS export succeeded again at /tmp/inteliads389-ios-export-return after the completion-state correction.
+- Final Metro/Hermes iOS export succeeded at /tmp/inteliads389-ios-export-wake-grace after both corrections.
 - Shared scheduler bytes match the Chrome source.
 - Behavioral tests verify that a partial native day writes nothing and that a verified zero day is supported.
 - Offline timing upload test verifies original account binding and structured support detail.

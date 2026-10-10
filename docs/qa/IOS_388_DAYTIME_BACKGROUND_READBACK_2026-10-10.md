@@ -15,6 +15,8 @@ The physical iPhone 17 Pro Max remains on TestFlight 1.0.1 (388). Read-only evid
 
 The user reported carrying the phone with the helper left in background. There is a foreground event at 13:02 local, followed by interval/background-labelled ticks. Those labels alone do not independently prove the screen remained locked for the full afternoon.
 
+At the start of the next confirmed locked-screen window (20:17 local), a fresh native-preferences read at 20:18 showed a successful TaskManager completion at 20:07:59 and no remaining native error. This occurred after the earlier native snapshot was collected; the initial expired-wake evidence above must not be read as a permanent failure.
+
 ## Release status
 
 Report import, pricing recovery and current cloud reconciliation pass the readback. Continuous 15-minute execution is not certified. A genuine locked Amazon second-gate transition on physical 388 remains unobserved; this readback does not substitute for that test. Unrestricted mass-distribution certification remains open.
