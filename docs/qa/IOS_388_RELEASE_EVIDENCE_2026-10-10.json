@@ -1,0 +1,14 @@
+{
+  "version": "1.0.1",
+  "build": "388",
+  "widgetBuild": "388",
+  "sourceCommit": "97af5aff",
+  "tests": 1081,
+  "jsSha256": "9fef56e4e5d212e0875a2dc42e1dc6be527c1bb0079dc5294b00e6f416038fc9",
+  "nativeSha256": "a41b35ba51ee1b61dce5b29bff44966c470ec1d6790ef83cd0d4be8e2a3e3a5b",
+  "externalInstallVerified": false,
+  "uploadSucceededAt": "2026-10-10T08:04:08Z",
+  "appleStatus": "Approved",
+  "externalGroup": "Intelyads",
+  "testerEmailsSent": false
+}
