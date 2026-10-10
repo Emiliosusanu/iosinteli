@@ -61,6 +61,7 @@ import {
 } from "./marketplace.ts";
 import { evaluateRoyaltyOverwriteSafety } from "./royaltyOverwriteSafety.ts";
 import { createSingleFlight } from "./singleFlight.ts";
+import { mapKdpMarketplacesSettled } from "./vendor/kdp-report-scheduler.js";
 import { runShelfHeal } from "./runShelfHeal.ts";
 import { syncKdpPaperbackPricing } from "./pricingSync.ts";
 import { hydratePricingAuthBannerFromBootstrap } from "./pricingBootstrap.ts";
@@ -226,11 +227,16 @@ async function fetchDayPayloads(
   currency: "EUR" | "USD" | string,
   marketplace: KdpMarketplaceTarget | null,
 ): Promise<{ royaltiesJson: unknown; ordersJson: unknown; kenpJson: unknown }> {
-  const [royaltiesJson, ordersJson, kenpJson] = await Promise.all([
+  const results = await Promise.allSettled([
     fetchJsonForType("royalties", ymd, currency, marketplace),
     fetchJsonForType("orders", ymd, currency, marketplace),
     fetchJsonForType("kenp", ymd, currency, marketplace),
   ]);
+  // Wait for all siblings before a failed day is retried by another wake.
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
+  const [royaltiesJson, ordersJson, kenpJson] = results.map((result) =>
+    result.status === "fulfilled" ? result.value : null);
   if (!royaltiesJson || !ordersJson || !kenpJson) {
     const scope = marketplace?.key || "ALL";
     throw new Error(`Incomplete KDP ${scope} response for ${ymd}; existing data was preserved`);
@@ -294,24 +300,32 @@ async function syncOneDay(
   };
 
   if (marketplaceTargets.length) {
-    // Match Chrome's bounded concurrency. A partial storefront set is never
-    // published; the whole day remains queued for the next iOS wake.
-    for (let index = 0; index < marketplaceTargets.length; index += 3) {
-      const batch = marketplaceTargets.slice(index, index + 3);
-      const native = await Promise.all(
-        batch.map(async (target) => {
-          const payloads = await fetchDayPayloads(ymd, target.currency, target);
-          const result = buildKdpFromJsons({
-            ymd,
-            titlesJson,
-            ...payloads,
-            adsJson: null,
-            adsEntityId: null,
-          });
-          return { target, facts: result.facts as Array<Record<string, unknown>> };
-        }),
-      );
-      for (const row of native) appendFacts(row.facts, row.target.key, row.target.currency);
+    // Keep three stores active without a fixed-batch barrier. On failure stop
+    // new work and drain active requests before deferring the whole day.
+    const started = Date.now();
+    const native = await mapKdpMarketplacesSettled(marketplaceTargets,
+      async (target) => {
+        const payloads = await fetchDayPayloads(ymd, target.currency, target);
+        const result = buildKdpFromJsons({
+          ymd,
+          titlesJson,
+          ...payloads,
+          adsJson: null,
+          adsEntityId: null,
+        });
+        return { target, facts: result.facts as Array<Record<string, unknown>> };
+      }, { concurrency: 3, pauseMs: 0, stopOnFailure: true });
+    await appendKdpActivity(`Marketplace capture ${ymd} · ${marketplaceTargets.length} stores`, "info", {
+      stage: "marketplaces", ymd, concurrency: 3, durationMs: Date.now() - started,
+      stores: native.map((result, index) => ({
+        marketplace: marketplaceTargets[index].key, currency: marketplaceTargets[index].currency,
+        durationMs: result.durationMs, ok: result.status === "fulfilled", skipped: result.skipped === true,
+      })),
+    });
+    const failed = native.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+    for (const result of native) {
+      if (result.status === "fulfilled") appendFacts(result.value.facts, result.value.target.key, result.value.target.currency);
     }
   } else {
     appendFacts(

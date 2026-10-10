@@ -23,6 +23,15 @@ export type KdpActivityEntry = {
   atMs: number;
   kind: KdpActivityKind;
   message: string;
+  timing?: KdpMarketplaceTiming;
+};
+
+export type KdpMarketplaceTiming = {
+  stage: "marketplaces";
+  ymd: string;
+  durationMs: number;
+  concurrency: number;
+  stores: Array<{ marketplace: string; currency: string; durationMs: number; ok: boolean; skipped?: boolean }>;
 };
 
 let activityWriteChain: Promise<void> = Promise.resolve();
@@ -40,6 +49,7 @@ export async function loadKdpActivityLog(): Promise<KdpActivityEntry[]> {
         atMs: Number.isFinite(Number(row.atMs)) ? Number(row.atMs) : 0,
         kind: (typeof row.kind === "string" ? row.kind : "info") as KdpActivityKind,
         message: String(row.message),
+        ...(row.timing && typeof row.timing === "object" ? { timing: row.timing as KdpMarketplaceTiming } : {}),
       }))
       .slice(0, MAX_ENTRIES);
   } catch {
@@ -50,6 +60,7 @@ export async function loadKdpActivityLog(): Promise<KdpActivityEntry[]> {
 export async function appendKdpActivity(
   message: string,
   kind: KdpActivityKind = "info",
+  timing?: KdpMarketplaceTiming,
 ): Promise<void> {
   const text = String(message || "").trim();
   if (!text) return;
@@ -62,6 +73,7 @@ export async function appendKdpActivity(
         atMs: Date.now(),
         kind,
         message: text.slice(0, 240),
+        ...(timing ? { timing } : {}),
       };
       const next = [entry, ...prev].slice(0, MAX_ENTRIES);
       await storage.setItem(ACTIVITY_KEY, JSON.stringify(next));

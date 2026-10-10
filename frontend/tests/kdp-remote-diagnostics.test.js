@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import ts from "typescript";
 
 import {
   classifyKdpDiagnosticEvent,
@@ -43,4 +45,44 @@ test("iOS KDP activity is queued offline and uploaded with exact account scope",
   assert.match(uploader, /accountId is a batch field/);
   assert.match(uploader, /source: "ios_kdp_helper"/);
   assert.match(uploader, /extensionVersion: clientVersion\(\)/);
+});
+
+test("marketplace timings survive an offline queue and retain their original account", async () => {
+  const values = new Map(), requests = [], exports = {};
+  let online = false, account = "account-a";
+  const storage = {
+    getItem: async (key, fallback) => values.get(key) ?? fallback,
+    setItem: async (key, value) => values.set(key, value),
+  };
+  const modules = {
+    "expo-constants": { default: { expoConfig: { version: "1.0.1", ios: { buildNumber: "candidate" } } } },
+    "react-native": { Platform: { Version: "26.0" } },
+    "../rulesApi": { nestApiFetch: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return { ok: online, status: online ? 200 : 503, text: async () => "offline" };
+    } },
+    "@/src/utils/storage": { storage },
+    "./persist.ts": { loadHelperAccountId: async () => account },
+    "./remoteDiagnosticsContract.ts": {
+      classifyKdpDiagnosticEvent, levelForKdpDiagnostic, redactKdpDiagnosticText,
+    },
+  };
+  vm.runInNewContext(ts.transpileModule(uploader, { compilerOptions: {
+    module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
+  } }).outputText, { exports, require: name => modules[name], Date, Math, Set, Promise });
+  const timing = { stage: "marketplaces", ymd: "2026-10-10", durationMs: 4200,
+    concurrency: 3, stores: [{ marketplace: "CA", currency: "CAD", durationMs: 1100, ok: true }] };
+  await exports.enqueueKdpRemoteDiagnostic({ id: "timing-1", atMs: Date.now(), kind: "info",
+    message: "Marketplace capture", timing });
+  await exports.flushKdpRemoteDiagnostics();
+  account = "account-b";
+  online = true;
+  await exports.flushKdpRemoteDiagnostics();
+  const last = requests.at(-1);
+  assert.equal(last.url, "/extension-logs/batch");
+  assert.equal(last.body.accountId, "account-a");
+  assert.equal(last.body.entries[0].event, "ios.kdp.marketplace_timing");
+  assert.deepEqual(last.body.entries[0].detail.timing, timing);
+  assert.equal(last.body.entries[0].accountId, undefined);
+  assert.deepEqual(JSON.parse(values.get("inteliads.kdpHelper.remoteDiagnosticsQueue")), []);
 });

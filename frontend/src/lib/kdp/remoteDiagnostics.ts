@@ -32,6 +32,7 @@ type RemoteDiagnosticEntry = {
     osVersion: string;
     activityKind: KdpActivityEntry["kind"];
     installId: string;
+    timing?: KdpActivityEntry["timing"];
   };
 };
 
@@ -108,7 +109,7 @@ export async function enqueueKdpRemoteDiagnostic(entry: KdpActivityEntry): Promi
     clientId: entry.id.slice(0, 80),
     at: new Date(entry.atMs).toISOString(),
     level: levelForKdpDiagnostic(entry.kind),
-    event: classifyKdpDiagnosticEvent(entry.message, entry.kind),
+    event: entry.timing?.stage === "marketplaces" ? "ios.kdp.marketplace_timing" : classifyKdpDiagnosticEvent(entry.message, entry.kind),
     msg: redactKdpDiagnosticText(entry.message),
     detail: {
       source: "ios_kdp_helper",
@@ -118,6 +119,7 @@ export async function enqueueKdpRemoteDiagnostic(entry: KdpActivityEntry): Promi
       osVersion: String(Platform.Version),
       activityKind: entry.kind,
       installId,
+      ...(entry.timing ? { timing: entry.timing } : {}),
     },
   };
 

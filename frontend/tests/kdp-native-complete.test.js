@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { allKdpMarketplaceTargets } from '../src/lib/kdp/marketplace.ts';
 import { hasVerifiedNativeCoverage, kdpFactSnapshotsMatch } from '../src/lib/kdp/marketplaceCoverage.ts';
+import { mapKdpMarketplacesSettled } from '../src/lib/kdp/vendor/kdp-report-scheduler.js';
 
 const importer = readFileSync(new URL('../src/lib/kdp/importer.ts', import.meta.url), 'utf8');
 const writer = readFileSync(new URL('../src/lib/kdp/upsert.ts', import.meta.url), 'utf8');
@@ -40,6 +41,7 @@ async function runDay(failedMarket = null, writes = []) {
     supabase:{from:()=>({select:()=>({eq:()=>({eq:()=>({maybeSingle:async()=>({data:null,error:null})})})})})},
     evaluateRoyaltyOverwriteSafety:()=>({safe:true}),
     appendKdpActivity:async()=>{},writeKdpDay:async value=>writes.push(value),
+    mapKdpMarketplacesSettled,
   });
   await exports.syncOneDay(accountId,date,{},targets);
   return {reads,writes};
