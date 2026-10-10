@@ -21,7 +21,7 @@ import {
 } from "./pricingDirty.ts";
 import {
   getKdpHelperStatus,
-  isKdpWebViewAttached,
+  isKdpWebViewActive,
   kdpPageFetch,
   navigateKdpWebView,
   setKdpHelperError,
@@ -134,7 +134,7 @@ async function ensureKdpBookshelfContext(
   locale: string,
   opts: { allowAuthNavigate: boolean },
 ): Promise<string> {
-  const canSilentNav = isKdpWebViewAttached();
+  const canSilentNav = isKdpWebViewActive();
 
   // Cross-origin get-setup-page from kdpreports yields WebKit "Load failed".
   // Move onto kdp.amazon.com before any pricing API probe when we can.
@@ -203,6 +203,7 @@ async function ensureKdpBookshelfContext(
   if (
     opts.allowAuthNavigate &&
     isKdpHelperScreenFocused() &&
+    isKdpWebViewActive() &&
     !bookshelfHtmlLooksSeeded(html)
   ) {
     /* caller may still probe get-setup-page and surface CTA */

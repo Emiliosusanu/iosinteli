@@ -21,7 +21,7 @@ function harness({ formatReadFails = false, ebookAlias = false } = {}) {
         ? {data: formatReadFails ? null : formats, error: formatReadFails ? {message:'network unavailable'} : null}
         : {data: titles, error:null}).then(resolve) }; return q;
   } };
-  const runtime = { getKdpHelperStatus: () => ({ currentUrl: 'https://kdp.amazon.com/en_US/bookshelf' }), isKdpWebViewAttached: () => false, navigateKdpWebView: () => {}, setKdpHelperError: () => {}, setKdpHelperPricingAuth: value => auth.push(value), setKdpHelperRunning: () => {},
+  const runtime = { getKdpHelperStatus: () => ({ currentUrl: 'https://kdp.amazon.com/en_US/bookshelf' }), isKdpWebViewActive: () => false, navigateKdpWebView: () => {}, setKdpHelperError: () => {}, setKdpHelperPricingAuth: value => auth.push(value), setKdpHelperRunning: () => {},
     kdpPageFetch: async ({ url }) => {
       if (url.includes('/bookshelf')) return { ok: true, status: 200, text: shelf };
       setupRequests++;

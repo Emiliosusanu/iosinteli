@@ -4,6 +4,7 @@
  * The WebView is the authenticated fetch proxy (same role as the extension
  * page hook). React Native owns schedule, parse, and Supabase writes.
  */
+import { AppState } from "react-native";
 import type { PageFetchResult } from "./replay.ts";
 import {
   hasRequiredTemplates,
@@ -135,6 +136,11 @@ export function setKdpHelperError(error: string | null) {
 
 export function isKdpWebViewAttached(): boolean {
   return injectFn !== null;
+}
+
+/** An attached WebView can be suspended after the phone locks. */
+export function isKdpWebViewActive(): boolean {
+  return injectFn !== null && AppState.currentState === "active";
 }
 
 export function setKdpHelperPricingAuth(input: {
@@ -398,16 +404,16 @@ export async function kdpPageFetch(req: {
       const native = await kdpNativeFetch({ ...req, headers });
       const loggedOut = looksLoggedOut(native);
       const pricingHtmlShell =
-        req.authScope === "pricing" && Boolean(injectFn) && looksLikeHtmlDocument(native);
+        req.authScope === "pricing" && isKdpWebViewActive() && looksLikeHtmlDocument(native);
       if (!loggedOut && !pricingHtmlShell) return native;
       if (loggedOut && invalidateSessionOnAuthFailure) invalidateSavedKdpSession();
       // Fall through to WebView when attached so the user can re-auth.
       // Pricing can also return KDP's HTTP-200 SPA shell through native replay
       // even though the visible WKWebView has the completed print-setup step-up.
       // In that case use the authenticated page context, as Chrome does.
-      if (!injectFn) return native;
+      if (!isKdpWebViewActive()) return native;
     } catch (err) {
-      if (!injectFn) {
+      if (!isKdpWebViewActive()) {
         const message = err instanceof Error ? err.message : String(err);
         return Promise.reject(
           new Error(
@@ -420,7 +426,7 @@ export async function kdpPageFetch(req: {
     }
   }
 
-  if (!injectFn) {
+  if (!isKdpWebViewActive()) {
     return Promise.reject(
       new Error(
         session?.cookies?.trim()
