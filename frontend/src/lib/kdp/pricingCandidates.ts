@@ -40,10 +40,47 @@ export function collectPricingCandidatesForIos(opts: {
   const pairRows: Array<{ kdpBookId: string; printAsin: string | null; title: string | null }> =
     [];
 
+  const bookshelfRows = extractBookshelfPrintRowsFromHtml(opts.bookshelfHtml || "");
+  const knownFormats = new Map<string, Set<string>>();
+  for (const row of opts.formatRows || []) {
+    const asin = String(row.asin || '').trim().toUpperCase();
+    const format = String(row.format || '').trim().toLowerCase();
+    if (!asin || !format) continue;
+    const formats = knownFormats.get(asin) || new Set<string>();
+    formats.add(format); knownFormats.set(asin, formats);
+  }
+  const observedDigitalAsins = new Set(bookshelfRows.map(row => String(row.digitalAsin || '').trim().toUpperCase()).filter(Boolean));
+  const knownNonPrint = (asin: string) => {
+    const formats = knownFormats.get(asin);
+    return observedDigitalAsins.has(asin) || Boolean(formats?.size && !formats.has('paperback'));
+  };
+  const inactiveSetupIds = new Set<string>();
+  const authoritativeSetupByAsin = new Map<string, string>();
+  const inactiveStatuses = new Set(["draft", "in_review", "unpublished", "action_required"]);
+
+  // The current Bookshelf is authoritative for edition identity. KDP may leave
+  // historical setup IDs in reports and in our saved metadata after a paperback
+  // is unpublished/recreated. Prefer an explicit live row, otherwise accept an
+  // unknown-status current row. Explicit inactive rows must never be retried.
+  for (const row of bookshelfRows) {
+    const id = normalizeSetupId(row.kdpBookId);
+    const asin = String(row.printAsin || "").trim().toUpperCase();
+    const status = String(row.printStatus || "").trim().toLowerCase();
+    if (inactiveStatuses.has(status)) inactiveSetupIds.add(id);
+    if (!looksLikeAmazonAsin(asin) || !looksLikeKdpSetupBookId(id)) continue;
+    if (inactiveStatuses.has(status)) continue;
+    const existing = authoritativeSetupByAsin.get(asin);
+    if (status === "live" || !existing) authoritativeSetupByAsin.set(asin, id);
+  }
+
   const add = (asin: string | null, kdpBookId: string, title: string | null = null) => {
     const id = normalizeSetupId(kdpBookId);
     if (!looksLikeKdpSetupBookId(id)) return;
+    if (inactiveSetupIds.has(id)) return;
     const a = asin ? String(asin).trim().toUpperCase() : "";
+    if (a && knownNonPrint(a)) return;
+    const authoritativeId = a ? authoritativeSetupByAsin.get(a) : null;
+    if (authoritativeId && authoritativeId !== id) return;
     const key = a ? `${a}:${id}` : `id:${id}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -68,10 +105,14 @@ export function collectPricingCandidatesForIos(opts: {
         );
       });
     const setupFromBook = (fromBooks as AnyRow)?.printSetupIds as AnyRow | undefined;
+    // The live Bookshelf href is authoritative. KDP can replace its internal
+    // setup ID after an edition is unpublished/recreated while reports and our
+    // database still contain the old ID. Using the historical value first
+    // produces a permanent 404 and can starve every live title behind it.
     const setupId =
+      extractSetupIdNearAsin(opts.bookshelfHtml, asin) ||
       setupFromBook?.paperback ||
-      opts.storedSetupByAsin.get(asin) ||
-      extractSetupIdNearAsin(opts.bookshelfHtml, asin);
+      opts.storedSetupByAsin.get(asin);
     if (setupId) add(asin, String(setupId), null);
   }
 
@@ -86,7 +127,11 @@ export function collectPricingCandidatesForIos(opts: {
       row.printSetupIds && typeof row.printSetupIds === "object"
         ? (row.printSetupIds as AnyRow)
         : {};
-    const kdpBookId = setupIds.paperback || opts.storedSetupByAsin.get(asin) || null;
+    const kdpBookId =
+      extractSetupIdNearAsin(opts.bookshelfHtml, asin) ||
+      setupIds.paperback ||
+      opts.storedSetupByAsin.get(asin) ||
+      null;
     if (asin && kdpBookId) {
       add(asin, String(kdpBookId), row.titleName == null ? null : String(row.titleName));
     }
@@ -97,7 +142,7 @@ export function collectPricingCandidatesForIos(opts: {
     add(null, link.kdpBookId);
   }
 
-  for (const row of extractBookshelfPrintRowsFromHtml(opts.bookshelfHtml || "")) {
+  for (const row of bookshelfRows) {
     add(row.printAsin, row.kdpBookId);
   }
 
@@ -124,7 +169,9 @@ export function collectPricingCandidatesForIos(opts: {
       .toUpperCase();
     if (looksLikeAmazonAsin(asin)) paperbackAsins.add(asin);
   }
-  for (const asin of opts.storedSetupByAsin.keys()) paperbackAsins.add(asin);
+  for (const asin of opts.storedSetupByAsin.keys()) {
+    if (!knownNonPrint(asin)) paperbackAsins.add(asin);
+  }
 
   for (const asin of paperbackAsins) {
     if (out.some((c) => c.asin === asin)) continue;
@@ -135,7 +182,11 @@ export function collectPricingCandidatesForIos(opts: {
     if (setupId) add(asin, setupId);
   }
 
-  let candidates = dedupePricingCandidates(out, { pairMaps });
+  let candidates = dedupePricingCandidates(out, {
+    pairMaps,
+    storedSetupByAsin: opts.storedSetupByAsin,
+    bookshelfHtml: opts.bookshelfHtml,
+  });
   candidates = sortPricingCandidatesForFetch(candidates);
   return { candidates, pairMaps };
 }

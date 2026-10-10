@@ -135,7 +135,7 @@ export const KDP_INGEST_EMPTY = "No KDP account linked to the selected profiles.
 export const KDP_INGEST_UNAVAILABLE = "Couldn't load KDP status.";
 export const KDP_HELPER_FOOTER_ENABLED =
   "Signs in once. Syncs recent royalties about every 15 minutes.";
-export const KDP_HELPER_FOOTER_DISABLED = "Turn on Chrome + iPhone under Royalty source first.";
+export const KDP_HELPER_FOOTER_DISABLED = "Choose iPhone helper under Royalty source first. Chrome is optional.";
 export const KDP_HELPER_SETUP_ROW = "Set up iPhone helper";
 
 /** Footers only for blocked / empty states — never restates On/Off. */

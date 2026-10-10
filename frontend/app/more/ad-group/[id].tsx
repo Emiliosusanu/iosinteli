@@ -16,6 +16,7 @@ import { shouldShowActiveOrPausedWithData } from "@/src/lib/campaigns";
 import { describeProductTarget, fallbackAsinCoverUrl, formatMatchTypeLabel, isExactMatchType, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
 import { resolveAdGroupAddMode } from "@/src/lib/adGroupTargets";
 import { formatCurrency, formatInt, formatPercent, safeDivide } from "@/src/lib/format";
+import { rowCurrencyOfProfile } from "@/src/lib/accountsUi";
 import { EmptyState, FilterChrome, SectionCard, MetricStrip, RetryState, ScreenSpinner, ListCard, DenseMetricLine } from "@/src/components/Primitives";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { fastAddSearchTermExact, searchTermLooksTargeted } from "@/src/lib/searchTermHarvest";
@@ -39,12 +40,12 @@ export default function AdGroupDetailScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const invalidateAds = useInvalidateAds();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, defaultExactBid } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, defaultExactBid, profiles } = useApp();
   const { user, guestMode } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
   const writeGuard = { guestMode, viewAsOtherUser };
   const params = useLocalSearchParams<{
-    id: string; name?: string; isAuto?: string; state?: string;
+    id: string; name?: string; isAuto?: string; state?: string; currency?: string;
     spend?: string; orders?: string; acos?: string; ctr?: string; clicks?: string; impressions?: string;
   }>();
   const id = paramId(params.id);
@@ -68,6 +69,11 @@ export default function AdGroupDetailScreen() {
     enabled: !!id && selectedProfileIds.length > 0,
   });
   const group = adGroupsQ.data ?? null;
+  const groupCurrency = rowCurrencyOfProfile(
+    profiles,
+    group?.amazon_profile_id,
+    paramId(params.currency) || primaryCurrency,
+  );
   const groupState = String(group?.state ?? stateParam ?? "");
   const displayName = group?.name || nameParam || "Ad Group";
   const auto = group?.is_auto ?? isAuto === "true";
@@ -191,7 +197,7 @@ export default function AdGroupDetailScreen() {
     total_acos: metricsFromGroup ? acosN : Number(params.acos ?? 0) || 0,
   });
   const defaultBid = group?.default_bid != null && Number.isFinite(Number(group.default_bid))
-    ? formatCurrency(Number(group.default_bid), primaryCurrency)
+    ? formatCurrency(Number(group.default_bid), groupCurrency)
     : null;
   const addExact = async (term: any) => {
     if (addingExactId) return;
@@ -393,7 +399,7 @@ export default function AdGroupDetailScreen() {
                   value: salesReady ? (salesN > 0 ? formatPercent(acosN) : "—") : dash(Number(params.acos ?? 0) > 0 ? formatPercent(Number(params.acos)) : "—"),
                   color: toneColor(acosTone(acosN || Number(params.acos ?? 0)), t.colors),
                 },
-                { label: "Spend", value: formatCurrency(spendN, primaryCurrency) },
+                { label: "Spend", value: formatCurrency(spendN, groupCurrency) },
                 { label: "Orders", value: formatInt(ordersN) },
               ]}
             />
@@ -416,7 +422,7 @@ export default function AdGroupDetailScreen() {
             <MetricStrip
               items={[
                 { label: "ROAS", value: salesReady && spendN > 0 ? `${roasN.toFixed(2)}x` : "—" },
-                { label: "CPC", value: clicksN > 0 ? formatCurrency(cpcN, primaryCurrency) : "—" },
+                { label: "CPC", value: clicksN > 0 ? formatCurrency(cpcN, groupCurrency) : "—" },
               ]}
             />
           </View>
@@ -508,7 +514,7 @@ export default function AdGroupDetailScreen() {
             onMoreTargets={() => setTargetLimit((limit) => limit + AD_GROUP_TARGET_PAGE_SIZE)}
             keywordsQ={keywordsQ}
             targetsQ={targetsQ}
-            primaryCurrency={primaryCurrency}
+            primaryCurrency={groupCurrency}
             t={t}
             viewAsOtherUser={viewAsOtherUser}
             onOpenKeyword={(keywordId) => router.push(`/keyword/${keywordId}` as any)}
@@ -557,7 +563,7 @@ export default function AdGroupDetailScreen() {
                   key={term.id}
                   item={term}
                   last={idx === searchTerms.length - 1}
-                  currency={primaryCurrency}
+                  currency={groupCurrency}
                   t={t}
                   alreadyExact={searchTermLooksTargeted(term)}
                   addingExact={addingExactId === term.id}
@@ -593,7 +599,7 @@ export default function AdGroupDetailScreen() {
               />
             ) : (
               historyRows.map((row: any, idx) => (
-                <HistoryRow key={row.id} row={row} last={idx === historyRows.length - 1} currency={primaryCurrency} t={t} />
+                <HistoryRow key={row.id} row={row} last={idx === historyRows.length - 1} currency={groupCurrency} t={t} />
               ))
             )}
           </SectionCard>
@@ -603,7 +609,7 @@ export default function AdGroupDetailScreen() {
         visible={bidOpen}
         title="Default bid"
         value={group?.default_bid != null ? Number(group.default_bid) : 0.75}
-        currency={primaryCurrency}
+        currency={groupCurrency}
         kind="money"
         onClose={() => setBidOpen(false)}
         onSave={async (next) => {
@@ -633,7 +639,7 @@ export default function AdGroupDetailScreen() {
         visible={keywordBid != null}
         title={keywordBid?.title ?? "Keyword bid"}
         value={keywordBid?.value ?? 0.75}
-        currency={primaryCurrency}
+        currency={groupCurrency}
         kind="money"
         onClose={() => setKeywordBid(null)}
         onSave={async (next) => {
@@ -655,7 +661,7 @@ export default function AdGroupDetailScreen() {
         visible={targetBid != null}
         title={targetBid?.title ?? "Target bid"}
         value={targetBid?.value ?? 0.75}
-        currency={primaryCurrency}
+        currency={groupCurrency}
         kind="money"
         onClose={() => setTargetBid(null)}
         onSave={async (next) => {

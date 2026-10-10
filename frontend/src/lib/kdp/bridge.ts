@@ -28,6 +28,40 @@ export function kdpInjectedJavaScript(): string {
     try { ${KDP_PAGE_HOOK_JS} } catch (e) {}
   }
 
+  // Keep the live Bookshelf source aligned with the Chrome helper.  KDP
+  // exposes a view selector that can otherwise leave only the first page in
+  // the DOM.  Selecting ALL is idempotent and does not touch title data.
+  function selectAllBookshelfRows() {
+    try {
+      if (String(location.pathname || '').indexOf('/bookshelf') < 0) return;
+      var select = document.querySelector('#refreshedbookshelftable_view_input-option, select[id*="bookshelftable_view"]');
+      if (!select || String(select.value || '').toUpperCase() === 'ALL') return;
+      select.value = 'ALL';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch (e) {}
+  }
+  try { setTimeout(selectAllBookshelfRows, 350); } catch (e) {}
+  try { setTimeout(selectAllBookshelfRows, 1200); } catch (e) {}
+
+  // Capture processed orders, which include print sales. Placed orders are
+  // a different report and cannot replace the royalties-aligned activity.
+  function captureProcessedOrders() {
+    try {
+      if (String(location.pathname || '').indexOf('/reports/orders') < 0) return;
+      var elements = Array.from(document.querySelectorAll('button,[role="tab"],[role="button"],label,span'));
+      var choice = elements.find(function (el) { return /^orders processed$/i.test(String(el.textContent || '').trim()); });
+      if (choice) (choice.closest('button,[role="tab"],[role="button"],label') || choice).click();
+      var svg = document.querySelector('svg');
+      if (svg) {
+        var box = svg.getBoundingClientRect();
+        svg.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }));
+      }
+    } catch (e) {}
+  }
+  try { setTimeout(captureProcessedOrders, 350); } catch (e) {}
+  try { setTimeout(captureProcessedOrders, 1200); } catch (e) {}
+  try { setTimeout(captureProcessedOrders, 2500); } catch (e) {}
+
   function send(payload) {
     try {
       if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {

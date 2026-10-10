@@ -7,6 +7,7 @@
  */
 import { supabase } from "../supabase.ts";
 import { appendKdpActivity } from "./activity.ts";
+import { applyBookshelfPrimaryPriceChanges } from "./bookshelfPrimaryPricing.ts";
 import { collectPricingCandidatesForIos } from "./pricingCandidates.ts";
 import {
   bookshelfHtmlLooksSeeded,
@@ -16,10 +17,11 @@ import {
 import {
   clearDirtyPricingSetupIds,
   loadDirtyPricingSetupIds,
+  markPricingSetupDirty,
 } from "./pricingDirty.ts";
 import {
   getKdpHelperStatus,
-  isKdpWebViewAttached,
+  isKdpWebViewActive,
   kdpPageFetch,
   navigateKdpWebView,
   setKdpHelperError,
@@ -41,6 +43,7 @@ import {
   isKdpSetupPageTransportFailure,
   looksLikeAmazonAsin,
   looksLikeKdpSetupBookId,
+  extractBookshelfPrintRowsFromHtml,
   parseAllMarketplacePricingFromSetupPage,
   parseKdpGetSetupPage,
   pickPrimaryMarketplacePricing,
@@ -67,7 +70,13 @@ export type PricingSyncResult = {
   message?: string;
 };
 
-const PRICING_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * A paperback price is only fresh for one iOS metronome interval.  The
+ * lightweight Bookshelf pass runs on every wake, while the setup-page
+ * second gate is re-read at least once per 15-minute wake.  This catches a
+ * price changed outside the app without waiting for a dirty-save event.
+ */
+const PRICING_FRESH_MS = 15 * 60 * 1000;
 const DEFAULT_MAX_BOOKS = 20;
 /** First-time / onboarding: price more per wake so user can leave the helper. */
 const ONBOARDING_MAX_BOOKS = 40;
@@ -125,7 +134,7 @@ async function ensureKdpBookshelfContext(
   locale: string,
   opts: { allowAuthNavigate: boolean },
 ): Promise<string> {
-  const canSilentNav = isKdpWebViewAttached();
+  const canSilentNav = isKdpWebViewActive();
 
   // Cross-origin get-setup-page from kdpreports yields WebKit "Load failed".
   // Move onto kdp.amazon.com before any pricing API probe when we can.
@@ -194,6 +203,7 @@ async function ensureKdpBookshelfContext(
   if (
     opts.allowAuthNavigate &&
     isKdpHelperScreenFocused() &&
+    isKdpWebViewActive() &&
     !bookshelfHtmlLooksSeeded(html)
   ) {
     /* caller may still probe get-setup-page and surface CTA */
@@ -237,15 +247,19 @@ async function countPendingPricing(
   return missing + dirty.length;
 }
 
-async function loadStoredSetupByAsin(accountId: string): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
+async function loadStoredPricingRows(accountId: string): Promise<AnyRow[]> {
   const { data, error } = await supabase
     .from("kdp_titles")
-    .select("asin,kdp_setup_book_id")
+    .select("account_id,asin,kdp_setup_book_id,kdp_list_price,printing_cost,net_royalty_per_sale,royalty_rate,target_break_even_acos,pricing_marketplace,pricing_currency,pricing_captured_at")
     .eq("account_id", accountId)
     .not("kdp_setup_book_id", "is", null);
   if (error) throw new Error(`kdp_titles setup ids: ${error.message}`);
-  for (const row of data || []) {
+  return (data || []) as AnyRow[];
+}
+
+function setupMapFromStoredPricing(rows: AnyRow[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const row of rows) {
     const asin = String((row as AnyRow).asin || "")
       .trim()
       .toUpperCase();
@@ -277,16 +291,57 @@ async function loadFreshPricingAsins(accountId: string): Promise<Set<string>> {
 }
 
 async function fetchBookshelfHtml(locale: string): Promise<string> {
-  const url = bookshelfUrlForLocale(locale);
-  const result = await kdpPageFetch({
-    url,
-    method: "GET",
-    headers: {
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    },
-    body: null,
-  });
-  return String(result.text || "");
+  const base = bookshelfUrlForLocale(locale);
+  const htmlPages: string[] = [];
+  const seenRows = new Set<string>();
+  let previous = "";
+
+  // KDP's Bookshelf view selector uses `ALL`; native replay cannot click the
+  // selector, so request the equivalent view first.  If Amazon ignores that
+  // hint, walk numbered pages until a page contributes no new setup IDs.
+  const urls = [
+    `${base}?view=ALL`,
+    base,
+    ...Array.from({ length: 20 }, (_, index) => `${base}?page=${index + 2}`),
+  ];
+  for (const url of urls) {
+    let html = "";
+    try {
+      const result = await kdpPageFetch({
+        url,
+        method: "GET",
+        headers: {
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        body: null,
+        authScope: "pricing",
+      });
+      html = String(result.text || "");
+    } catch {
+      if (!htmlPages.length) throw new Error("KDP Bookshelf fetch failed");
+      break;
+    }
+    if (!html) break;
+    const pageMatch = /[?&]page=(\d+)/i.exec(url);
+    const pageNumber = pageMatch ? Number(pageMatch[1]) : 0;
+    // The `view=ALL` hint and the unqualified Bookshelf URL can legitimately
+    // return the same document.  Keep walking after that duplicate; only a
+    // repeated numbered page proves that Amazon ignored pagination.
+    if (html === previous && pageNumber >= 2) break;
+    previous = html;
+    const rows = extractBookshelfPrintRowsFromHtml(html);
+    const newRows = rows.filter((row) => {
+      const key = `${String(row.kdpBookId || "").toUpperCase()}:${String(row.printAsin || "").toUpperCase()}`;
+      if (seenRows.has(key)) return false;
+      seenRows.add(key);
+      return true;
+    });
+    htmlPages.push(html);
+    // A server that ignores `page=` repeats the same setup rows.  Stop there
+    // rather than issuing a long request storm on every 15-minute wake.
+    if (pageNumber >= 2 && newRows.length === 0) break;
+  }
+  return htmlPages.join("\n<!-- inteliads-bookshelf-page -->\n");
 }
 
 type SetupFetchResult = {
@@ -295,7 +350,7 @@ type SetupFetchResult = {
   text: string;
   json: unknown | null;
   url: string;
-  attempts: Array<{ status: number; text?: string; snippet?: string; json?: unknown }>;
+  attempts: Array<{ status: number; url?: string; text?: string; snippet?: string; json?: unknown }>;
   pricing: ReturnType<typeof parseKdpGetSetupPage>;
   marketplaceKey: string;
 };
@@ -325,6 +380,19 @@ function setupPageLooksUnauthenticated(fetched: {
   return false;
 }
 
+function isExhaustedSetupPageMiss(fetched: SetupFetchResult): boolean {
+  if (isKdpSetupPagePermanentMiss(fetched)) return true;
+  // The modern V2 endpoint is the browser's authoritative request. A plain
+  // 404 from that route means this individual setup ID is stale/deleted, even
+  // when Amazon omits the older `ItemSetId is not found` message. Isolate the
+  // book and keep walking; never let three stale editions starve live titles.
+  return fetched.attempts.some(
+    (attempt) =>
+      Number(attempt.status || 0) === 404 &&
+      /\/v2\/get-setup-page(?:$|[?#])/i.test(String(attempt.url || "")),
+  );
+}
+
 async function fetchSetupPage(kdpBookId: string, locale: string): Promise<SetupFetchResult> {
   // Native Keychain replay cannot resolve bookshelf-relative paths.
   const urls = buildKdpGetSetupPageUrlCandidates(kdpBookId, { locale }).filter((url) =>
@@ -343,11 +411,13 @@ async function fetchSetupPage(kdpBookId: string, locale: string): Promise<SetupF
         "X-Requested-With": "XMLHttpRequest",
       },
       body: null,
+      authScope: "pricing",
     });
     const text = String(result.text || "");
     const json = tryParseJson(text);
     attempts.push({
       status: Number(result.status || 0),
+      url,
       text: text.slice(0, 400),
       snippet: text.slice(0, 240),
       json: json ?? undefined,
@@ -366,9 +436,11 @@ async function fetchSetupPage(kdpBookId: string, locale: string): Promise<SetupF
       pricing,
       marketplaceKey: pricing?.marketplace || marketplaceKey,
     };
-    if (setupPageLooksUnauthenticated(candidate)) {
-      return { ...candidate, ok: false };
-    }
+    // Match the Chrome worker: an individual route may legitimately return
+    // the KDP SPA HTML shell (HTTP 200), a legacy 403, or a stale 404 while a
+    // later /v2/ or locale fallback returns the pricing JSON.  Do not turn the
+    // first miss into an auth gate.  Only classify the result after every
+    // compatible setup-page route has been attempted.
     if (candidate.ok) return candidate;
     if (!best || candidate.status > best.status) best = candidate;
   }
@@ -483,7 +555,32 @@ export async function syncKdpPaperbackPricing(opts: {
     return { ...empty, message: "missing account" };
   }
 
-  const paperbackAsins = (opts.formatRows || [])
+  // Recent report rows may omit an ebook that has no sales today. Persisted
+  // format identity must still exclude its historical print-setup alias.
+  const persistedFormats: AnyRow[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await supabase.from('kdp_book_formats')
+      .select('asin,format').eq('account_id', accountId).order('id')
+      .range(offset, offset + 999);
+    if (error) throw new Error('KDP pricing format identity unavailable; existing prices preserved');
+    persistedFormats.push(...(data || []));
+    if ((data || []).length < 1000) break;
+  }
+  const formatRows = [...persistedFormats, ...(opts.formatRows || [])];
+  const knownFormats = new Map<string, Set<string>>();
+  for (const row of formatRows) {
+    const asin = String(row.asin || '').trim().toUpperCase();
+    const format = String(row.format || '').trim().toLowerCase();
+    if (!asin || !format) continue;
+    const formats = knownFormats.get(asin) || new Set<string>();
+    formats.add(format); knownFormats.set(asin, formats);
+  }
+  const observedDigitalAsins = new Set<string>();
+  const isKnownNonPrint = (asin: string) => {
+    const formats = knownFormats.get(asin);
+    return observedDigitalAsins.has(asin) || Boolean(formats?.size && !formats.has('paperback'));
+  };
+  const paperbackAsins = formatRows
     .filter((fr) => String(fr?.format || "").toLowerCase() === "paperback")
     .map((fr) => String(fr?.asin || "").trim().toUpperCase())
     .filter(Boolean);
@@ -496,14 +593,28 @@ export async function syncKdpPaperbackPricing(opts: {
   const bookshelfHtml = await ensureKdpBookshelfContext(accountId, locale, {
     allowAuthNavigate,
   });
+  for (const row of extractBookshelfPrintRowsFromHtml(bookshelfHtml || '')) {
+    const digitalAsin = String(row.digitalAsin || '').trim().toUpperCase();
+    if (digitalAsin) observedDigitalAsins.add(digitalAsin);
+  }
 
-  const storedSetupByAsin = await loadStoredSetupByAsin(accountId).catch(() => new Map());
+  const storedRows = await loadStoredPricingRows(accountId).catch(() => []);
+  await applyBookshelfPrimaryPriceChanges({
+    accountId, bookshelfHtml, storedRows,
+    markDirty: markPricingSetupDirty,
+    writePricing: writeKdpPricing,
+    log: (message) => appendKdpActivity(message, "info"),
+  });
+  const storedSetupByAsin = setupMapFromStoredPricing(storedRows);
+  for (const asin of storedSetupByAsin.keys()) {
+    if (isKnownNonPrint(asin)) storedSetupByAsin.delete(asin);
+  }
   const dirtyEntries = await loadDirtyPricingSetupIds(accountId).catch(() => []);
   const dirtySet = new Set(dirtyEntries.map((e) => e.setupId));
 
   const { candidates: discovered, pairMaps } = collectPricingCandidatesForIos({
     booksObj: opts.booksObj || null,
-    formatRows: opts.formatRows || [],
+    formatRows,
     titlesJson: opts.titlesJson ?? null,
     bookshelfHtml,
     storedSetupByAsin,
@@ -581,7 +692,7 @@ export async function syncKdpPaperbackPricing(opts: {
     }
     const msg =
       skippedFresh > 0
-        ? `KDP pricing: skipped ${skippedFresh}/${candidates.length} (fresh <7d)`
+        ? `KDP pricing: skipped ${skippedFresh}/${candidates.length} (fresh <15m)`
         : "KDP pricing: nothing to fetch";
     void appendKdpActivity(msg, "info");
     return {
@@ -608,7 +719,7 @@ export async function syncKdpPaperbackPricing(opts: {
 
   const probeId = todo[0]!.kdpBookId;
   const probe = await fetchSetupPage(probeId, locale);
-  const probeIsPermanentMiss = isKdpSetupPagePermanentMiss(probe);
+  const probeIsPermanentMiss = isExhaustedSetupPageMiss(probe);
   if (!probeIsPermanentMiss && setupPageLooksUnauthenticated(probe)) {
     // HTML / non-JSON / 403 — same as Chrome sign-in gate. A stored old price
     // is not proof that the pending refresh succeeded: do not clear auth merely
@@ -657,7 +768,7 @@ export async function syncKdpPaperbackPricing(opts: {
     const fetched = i === 0 ? probe : await fetchSetupPage(c.kdpBookId, locale);
 
     if (
-      !isKdpSetupPagePermanentMiss(fetched) &&
+      !isExhaustedSetupPageMiss(fetched) &&
       setupPageLooksUnauthenticated(fetched)
     ) {
       const pendingMid = await countPendingPricing(accountId, paperbackAsins).catch(
@@ -689,6 +800,7 @@ export async function syncKdpPaperbackPricing(opts: {
         parseKdpGetSetupPage(json, fetched.marketplaceKey || "US")
       : fetched.pricing;
     if (!fetched.ok || !hasKdpSetupPagePricing(pricing)) {
+      const permanentMiss = isExhaustedSetupPageMiss(fetched);
       if (!loggedFirstFail) {
         loggedFirstFail = true;
         void appendKdpActivity(
@@ -702,7 +814,11 @@ export async function syncKdpPaperbackPricing(opts: {
         );
       }
       hardFail += 1;
-      consecutiveHard += 1;
+      // A removed/unpublished edition is isolated to its old KDP setup ID.
+      // It must never consume the consecutive-failure budget and prevent the
+      // remaining live ASINs from being priced in this same sweep.
+      if (permanentMiss) consecutiveHard = 0;
+      else consecutiveHard += 1;
       if (consecutiveHard >= 3) {
         void appendKdpActivity("KDP pricing: stopping after repeated setup-page misses", "info");
         break;

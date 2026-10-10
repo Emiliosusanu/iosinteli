@@ -14,6 +14,13 @@ import {
 } from "./vendor/kdpVendor.generated.js";
 import type { KdpCapturedTemplate, KdpTemplateType } from "./templates.ts";
 import { patchKdpBodyCurrency, patchKdpUrlCurrency } from "./currency.ts";
+import {
+  patchKdpBodyAllMarketplaces,
+  patchKdpBodyMarketplace,
+  patchKdpUrlAllMarketplaces,
+  patchKdpUrlMarketplace,
+  type KdpMarketplaceTarget,
+} from "./marketplace.ts";
 
 export interface PageFetchResult {
   ok: boolean;
@@ -35,7 +42,7 @@ export function rebuildTemplateForDay(
   template: KdpCapturedTemplate,
   type: KdpTemplateType,
   ymd: string,
-  opts: { preferredCurrency?: string | null } = {},
+  opts: { preferredCurrency?: string | null; marketplace?: KdpMarketplaceTarget | null } = {},
 ): RebuiltRequest {
   const body0 = template.requestBody;
   const bodyObj = body0 ? tryParseJson(body0) : null;
@@ -50,14 +57,20 @@ export function rebuildTemplateForDay(
         capturedEndIso: capturedRange?.endDate,
       });
   const normalizedUrl = normalizeTemplateUrlForType(type, template.url);
-  const url = patchKdpUrlCurrency(
+  const currencyUrl = patchKdpUrlCurrency(
     updateUrlDates(normalizedUrl, range.from, range.to),
     opts.preferredCurrency,
   );
+  const url = opts.marketplace
+    ? patchKdpUrlMarketplace(currencyUrl, opts.marketplace)
+    : patchKdpUrlAllMarketplaces(currencyUrl);
   const datedBody = bodyObj
     ? updatePostData(JSON.stringify(bodyObj), range.from, range.to)
     : updatePostData(body0, range.from, range.to);
-  const body = patchKdpBodyCurrency(datedBody, opts.preferredCurrency);
+  const currencyBody = patchKdpBodyCurrency(datedBody, opts.preferredCurrency);
+  const body = opts.marketplace
+    ? patchKdpBodyMarketplace(currencyBody, opts.marketplace)
+    : patchKdpBodyAllMarketplaces(currencyBody);
 
   const method = String(template.method || "GET");
   const headers: Record<string, string> = {

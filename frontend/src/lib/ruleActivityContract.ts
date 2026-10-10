@@ -21,7 +21,8 @@ export function ruleActivityQueryKey(
   return ["rule-history-page", userId ?? "guest", adminFilterUserId ?? "self", profileIds] as const;
 }
 
-export function activityChangedCount(run: Pick<RuleExecution, "entities">): number {
+/** `rule_execution_history.entities` stores matches, including skipped items. */
+export function activityMatchedCount(run: Pick<RuleExecution, "entities">): number {
   return Number(run.entities || 0);
 }
 
@@ -42,13 +43,13 @@ export function activityIsInProgress(status: string | null | undefined): boolean
 
 export function activityCountsLabel(input: {
   status?: string | null;
-  changed: number;
+  matched: number;
   failed: number;
 }): string | null {
   if (activityIsInProgress(input.status)) return null;
-  if (input.failed > 0 && input.changed > 0) return `${input.changed} changed · ${input.failed} failed`;
+  if (input.failed > 0 && input.matched > 0) return `${input.matched} matched · ${input.failed} failed`;
   if (input.failed > 0) return `${input.failed} failed`;
-  if (input.changed > 0) return `${input.changed} changed`;
+  if (input.matched > 0) return `${input.matched} matched`;
   return null;
 }
 
@@ -65,13 +66,13 @@ export function activityNavParams(row: {
   ruleName: string;
   executedAt: string;
   rawStatus: string;
-  changed: number;
+  matched: number;
 }) {
   return {
     id: row.executionId,
     ruleName: row.ruleName,
     executedAt: row.executedAt,
     status: row.rawStatus,
-    entities: String(row.changed),
+    entities: String(row.matched),
   };
 }

@@ -3,7 +3,7 @@
 
 import { supabase } from "./supabase";
 import { parseNestError, rulesApiFetch, hasNestToken, nestApiJson } from "./rulesApi";
-import { fetchAmazonProfileBooks, fetchNestAmazonProfiles } from "./mutations";
+import { fetchAmazonProfileBooks, fetchNestAmazonProfiles, type AmazonProfileBookPreview } from "./mutations";
 import {
   fetchAggregatedCampaigns,
   fetchNestCampaignById,
@@ -73,6 +73,7 @@ import {
   dedupeTargetingBookOptions,
   filterTargetingBookOptions,
   hasMeaningfulKdpDailySignal,
+  sponsoredBookAsin,
   selectEligibleTargetingBookOptions,
   type TargetingBookEligibilityContext,
 } from "./targetingBookFilter";
@@ -3722,6 +3723,8 @@ async function fetchKdpBooksForTargetingFilter(
     paperback_royalties?: unknown;
     kenp_royalties?: unknown;
   }> = [];
+  // Match the account/date/ASIN primary key so each page avoids sorting and
+  // evaluating RLS over the full history. Keep all dates and both schema paths.
   try {
     dailyRows = await fetchOptionalInPages<any>(
       "targeting_filter_kdp_daily",
@@ -3733,6 +3736,8 @@ async function fetchKdpBooksForTargetingFilter(
             "asin, group_key, royalties, orders, ebook_royalties, paperback_royalties, kenp_royalties",
           )
           .in("account_id", chunk)
+          .order("account_id", { ascending: true })
+          .order("date", { ascending: true })
           .order("asin", { ascending: true })
           .range(from, to),
     );
@@ -3747,6 +3752,8 @@ async function fetchKdpBooksForTargetingFilter(
             .from("kdp_book_daily_data")
             .select("asin, group_key, royalties, orders")
             .in("account_id", chunk)
+            .order("account_id", { ascending: true })
+            .order("date", { ascending: true })
             .order("asin", { ascending: true })
             .range(from, to),
       );
@@ -3894,12 +3901,11 @@ async function fetchEnabledSponsoredBooksForProfiles(
     data = await fetchAllPages<any>((from, to) =>
       supabase
         .from("product_ads")
-        .select("asin, title, campaign_id, image_url, status, campaigns!inner(state)")
+        .select("asin, sku, title, campaign_id, image_url, status, campaigns!inner(state)")
         .in("amazon_profile_id", profileIds)
         .in("status", ["enabled"])
         .in("campaigns.state", ["enabled"])
-        .not("asin", "is", null)
-        .order("asin", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, to),
     );
   } catch {
@@ -3907,11 +3913,10 @@ async function fetchEnabledSponsoredBooksForProfiles(
     const ads = await fetchAllPages<any>((from, to) =>
       supabase
         .from("product_ads")
-        .select("asin, title, campaign_id, image_url, status")
+        .select("asin, sku, title, campaign_id, image_url, status")
         .in("amazon_profile_id", profileIds)
         .in("status", ["enabled"])
-        .not("asin", "is", null)
-        .order("asin", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, to),
     );
     const campaignIds = [
@@ -3938,10 +3943,8 @@ async function fetchEnabledSponsoredBooksForProfiles(
     { title: string; image_url: string | null; campaignIds: Set<string>; hasKdpData: boolean }
   >();
   for (const row of data ?? []) {
-    const asin = String((row as any).asin || "")
-      .trim()
-      .toUpperCase();
-    if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
+    const asin = sponsoredBookAsin(row);
+    if (!asin) continue;
     const adStatus = String((row as any).status || "").toLowerCase();
     if (!liveAdStates.has(adStatus)) continue;
     const title = String((row as any).title || "").trim() || asin;
@@ -5481,25 +5484,30 @@ export async function fetchBookRetailMetadata(opts: {
   books: readonly RetailBookIdentity[];
   adsProfileIds: string[];
   filterUserId?: string | null;
+  marketplaceCodes?: Readonly<Record<string, string>>;
+  preferredMarketplaceCode?: string | null;
 }): Promise<Record<string, BookRetailSnapshot>> {
   const asins = bookRetailAsins(opts.books);
   const profileIds = [...new Set(opts.adsProfileIds.map((id) => String(id).trim()).filter(Boolean))];
   if (!asins.length || !profileIds.length) return {};
-  const rows = [];
+  const rows: Array<AmazonProfileBookPreview> = [];
   // Keep profile requests bounded so the Books screen is not blocked by a burst
   // of large profile-book responses. React Query renders the books independently.
   for (const group of chunkArray(profileIds, 3)) {
     const results = await Promise.all(group.map((id) =>
       fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId }),
     ));
-    for (const result of results) rows.push(...result);
+    group.forEach((id, index) => {
+      const marketplaceCode = String(opts.marketplaceCodes?.[id] ?? "").trim().toUpperCase() || null;
+      for (const row of results[index]) rows.push({ ...row, marketplaceCode });
+    });
   }
   const quarantineEntries = await loadShelfHealQuarantineEntries();
   const { isQuarantined } = await import("./kdp/shelfHeal.ts");
   const safeRows = rows.filter((row) =>
     !row.accountId || !isQuarantined(row.accountId, row.asin, quarantineEntries),
   );
-  return indexProfileBookRetailSnapshots(safeRows, asins);
+  return indexProfileBookRetailSnapshots(safeRows, asins, opts.preferredMarketplaceCode ?? "");
 }
 
 /** Book keys (group_key / asin / sku) with KDP or Ads signal in the activity window. */

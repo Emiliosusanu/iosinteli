@@ -44,6 +44,12 @@ test("US + CA shows both flags, United States first", () => {
   assert.equal(marketplaceFlagsA11y(["CA", "US"]), "Sponsored in United States and Canada");
 });
 
+test("UK and GB share one canonical United Kingdom flag", () => {
+  assert.deepEqual(multiMarketplaceCountries(["UK", "GB", "US"]), ["US", "GB"]);
+  assert.deepEqual(marketplaceFlagEmojis(["UK", "US"]), ["🇺🇸", "🇬🇧"]);
+  assert.equal(marketplaceFlagsA11y(["UK", "US"]), "Sponsored in United States and United Kingdom");
+});
+
 test("each campaign in an exact multi-market book family receives its own marketplace identity", () => {
   const index = buildSponsoredMarketplaceIndex({
     profiles: [US, CA],

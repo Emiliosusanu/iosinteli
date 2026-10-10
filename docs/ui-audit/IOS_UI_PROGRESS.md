@@ -45,3 +45,79 @@ REMAINING (ranked; next is first unchecked)
 [ ] TESTFLIGHT DEVICE SMOKE after processing (`IOS_TESTFLIGHT_SMOKE_CHECKLIST.md`)
 
 See `IOS_TESTFLIGHT_BUILD_REPORT.md`.
+
+## Catalog identity and marketplace follow-up (2026-10-05)
+
+This section tracks the current iOS Books/Ads/Target consistency work. It is
+kept separate from the older release-candidate record above so its status is
+not mistaken for a TestFlight submission.
+
+COMPLETED
+
+- [x] Resolve exact ASIN metadata (title, cover, stock, rating, review count)
+  without copying values between editions.
+- [x] Keep same-ASIN review and cover snapshots separate per marketplace;
+  prefer the selected marketplace and expose the other snapshots.
+- [x] Prefer the newer in-stock edition cover/title for the Books and detail
+  headers while retaining the exact sponsored ASIN for campaigns.
+- [x] Include all enabled USD marketplaces in a book detail so US/CA/UK
+  campaigns for the same ASIN are not hidden by the selected profile.
+- [x] Include enabled product ads whose ASIN is missing but whose SKU carries
+  the sponsored ASIN, so Target book filters do not silently drop rows.
+- [x] Add regression coverage for Nova Scotia old/new ASINs, Iceland cover
+  refresh, same-ASIN marketplace review counts, and targeting identity.
+- [x] TypeScript, full unit suite (1011 tests), Metro iOS export, and a debug
+  device build/install on the connected iPhone 14 Pro passed.
+- [x] Audit multi-market Ads money: Overview/Books/book-detail USD totals
+  convert each marketplace's spend and sales with date-aligned market FX
+  before aggregation and fail closed when a required rate is missing.
+- [x] Keep Campaigns/Targets entity rows in their marketplace's native
+  currency, including bids and budgets; fix Campaign and Ad Group details so
+  CA/UK values cannot be mislabeled with the global USD chip.
+- [x] Re-run TypeScript, focused lint, the money regression, and the complete
+  1,011-test unit suite after the entity-currency fix.
+
+OPEN
+
+- [ ] Run the TestFlight smoke checklist on the uploaded build after Apple
+  finishes processing; verify Books -> detail -> campaigns on the device.
+- [ ] Build and device-smoke a new numbered iOS artifact containing the
+  entity-currency fix before any TestFlight upload.
+- [ ] Confirm live API rows for every enabled marketplace in the device smoke
+  and record any missing stock/review/cover source row before release.
+- [ ] Keep Chrome-extension KDP royalty correction work separate from this iOS
+  branch; the levoppc incident remains an integrity guardrail, not a reason to
+  rewrite historical totals from per-book data.
+
+
+## Build 368 follow-up — exact edition and marketplace metadata (2026-10-05)
+
+- [x] Nova Scotia old/new editions keep separate ASIN, review, stock, title, and cover values; the in-stock newer edition wins the card preview without transferring the old edition's reviews.
+- [x] Same-ASIN marketplace snapshots remain separate (for example US 49 reviews and CA 13); an unpublished paperback can therefore disappear or lose reviews without contaminating a replacement ASIN.
+- [x] Iceland's newer in-stock cover is preferred and cache-keyed by ASIN, marketplace, metadata version, and URL.
+- [x] Ads, Target, and Books identity helpers keep exact sponsored ASINs, SKU fallback ASINs, enabled-market filtering, and parent-format aggregation covered by regression tests.
+- [x] UK/GB country-code normalization is shared by profile rows and market pills, so `UK` renders 🇬🇧 and deduplicates with `GB`.
+- [x] Mixed non-USD scopes now use USD for comparable totals; single-market scopes remain native.
+- [x] Full unit suite: 1,012/1,012; TypeScript; release build; device stress on iPhone 14 Pro: `js_errors=0`, `hard_errors=0`, `DEVICE STRESS PASSED`.
+
+OPEN
+
+- [ ] Upload a new numbered TestFlight build containing the follow-up source changes. The locally installed 368 binary was rebuilt for device verification; it is not evidence that the external TestFlight 368 package changed.
+- [ ] Run a live device check for the authenticated Nova Scotia and Iceland rows after the new TestFlight build processes.
+
+## Build 369 — external upload (2026-10-05)
+
+- [x] Build 369 is the numbered release candidate for the exact-ASIN, UK/GB, cover-cache, parent-aggregation, and mixed-FX fixes.
+- [x] `/tmp/InteliAds-369-v2.xcarchive` archived successfully; Xcode's distribution log shows Apple Distribution signing and Store provisioning profiles.
+- [x] Public TestFlight export/upload used `testFlightInternalTestingOnly=false`; Transporter returned `Upload succeeded` and `Uploaded InteliAds`.
+- [ ] Apple processing and external-group assignment still need confirmation in App Store Connect after the expired browser session is restored.
+
+## Build 376 — compact header, stable refresh state, and bid-currency safety (2026-10-08)
+
+- [x] Marketplace headers show the first two flags and a rounded `+N` badge instead of expanding across the screen.
+- [x] Gross refresh feedback occupies a fixed-height lane and uses a breathing opacity/scale effect, so cards and the page do not move while data updates.
+- [x] Targeting single-row bid edits use the row marketplace's native currency. Mixed-currency absolute bulk edits require one market to be selected; relative percentage edits can still span markets.
+- [x] TypeScript, release guard, focused lint with zero errors, and 1,032/1,032 tests pass.
+- [x] Signed build `1.0.1 (376)` archived, installed in place, and launched on the connected iPhone 17 Pro Max with the existing app container preserved.
+- [x] Public TestFlight upload succeeded and Apple processing completed. Build 376 is visible as **Ready to Submit**.
+- [x] App Store Connect shows build 376 in the external **Intelyads** group (3 testers), status **Testing**; external TestFlight distribution is active.

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { collectPricingCandidatesForIos } from "../src/lib/kdp/pricingCandidates.ts";
 import {
+  buildKdpGetSetupPageUrlCandidates,
   computeKdpNetRoyalty,
   computeTargetBreakEvenAcos,
   diagnoseKdpSetupPageFailure,
@@ -18,6 +19,25 @@ import {
   parseKdpGetSetupPage,
   shouldClearPricingGateForTabUrl,
 } from "../src/lib/kdp/vendor/kdpPricingCapture.js";
+
+test('persisted ebook format excludes a historical paperback setup alias', () => {
+  const { candidates } = collectPricingCandidatesForIos({
+    booksObj: null, titlesJson: null, bookshelfHtml: '',
+    formatRows: [
+      {asin:'B0H8FWKBLV',format:'ebook'}, {asin:'B0H8FWKBLV',format:'ku'},
+      {asin:'B0H9M11FM7',format:'paperback'},
+    ],
+    storedSetupByAsin: new Map([['B0H8FWKBLV','A00MA6WA3MC'],['B0H9M11FM7','A00MA6WA3MC']]),
+  });
+  assert.ok(candidates.some(row => row.asin === 'B0H9M11FM7'));
+  assert.ok(candidates.every(row => row.asin !== 'B0H8FWKBLV'));
+});
+
+test("pricing URL candidates prefer the proven KDP V2 endpoint", () => {
+  const urls = buildKdpGetSetupPageUrlCandidates("2RZKVQBNHD8", { locale: "en_US" });
+  assert.match(urls[0], /\/v2\/get-setup-page$/);
+  assert.ok(urls.some((url) => /^https:\/\/kdp\.amazon\.com\//.test(url) && /\/v2\/get-setup-page$/.test(url)));
+});
 
 test("BE ACoS = net royalty / list price × 100 (Chrome formula)", () => {
   const net = computeKdpNetRoyalty(16.91, 2.5, [{ threshold: 0, royaltyRate: 0.6 }]);
@@ -134,6 +154,56 @@ test("collectPricingCandidatesForIos merges bookshelf HTML + format rows", () =>
   assert.ok(looksLikeKdpSetupBookId("2RZKVQBNHD8"));
 });
 
+test("live Bookshelf setup ID replaces stale stored ID for the same ASIN", () => {
+  const { candidates } = collectPricingCandidatesForIos({
+    booksObj: {
+      stale: {
+        titleName: "Recreated paperback",
+        asins: { print: "B0GS27WQBZ" },
+        printSetupIds: { paperback: "OLDSETUP123" },
+      },
+    },
+    formatRows: [{ asin: "B0GS27WQBZ", format: "paperback" }],
+    titlesJson: null,
+    bookshelfHtml: `
+      <div>Paperback ASIN: B0GS27WQBZ</div>
+      <a href="/en_US/print-setup/paperback/NEWSETUP456/pricing">Rights & Pricing</a>
+    `,
+    storedSetupByAsin: new Map([["B0GS27WQBZ", "OLDSETUP123"]]),
+  });
+  const paired = candidates.filter((row) => row.asin === "B0GS27WQBZ");
+  assert.deepEqual(paired.map((row) => row.kdpBookId), ["NEWSETUP456"]);
+});
+
+test("draft Bookshelf paperback is excluded while live paperback remains", () => {
+  const bookshelfHtml = `
+    <div id="dual-print-price-asin-LIVESETUP12">Paperback ASIN: B0GS27WQBZ</div>
+    <div id="dual-print-price-list-price-LIVESETUP12">$15.99 USD</div>
+    <div id="dual-print-status-live-status-LIVESETUP12">Live</div>
+    <a href="/en_US/print-setup/paperback/LIVESETUP12/pricing">Live pricing</a>
+    <div id="dual-print-price-asin-DRAFTSETUP1">Paperback ASIN: B0DRFT0001</div>
+    <div id="dual-print-price-list-price-DRAFTSETUP1">$9.99 USD</div>
+    <div id="dual-print-status-draft-DRAFTSETUP1">Draft</div>
+    <a href="/en_US/print-setup/paperback/DRAFTSETUP1/pricing">Draft pricing</a>
+  `;
+  const { candidates } = collectPricingCandidatesForIos({
+    booksObj: null,
+    formatRows: [
+      { asin: "B0GS27WQBZ", format: "paperback" },
+      { asin: "B0DRFT0001", format: "paperback" },
+    ],
+    titlesJson: null,
+    bookshelfHtml,
+    storedSetupByAsin: new Map([
+      ["B0GS27WQBZ", "OLDSETUP123"],
+      ["B0DRFT0001", "DRAFTSETUP1"],
+    ]),
+  });
+  assert.ok(candidates.some((row) => row.kdpBookId === "LIVESETUP12"));
+  assert.ok(!candidates.some((row) => row.kdpBookId === "OLDSETUP123"));
+  assert.ok(!candidates.some((row) => row.kdpBookId === "DRAFTSETUP1"));
+});
+
 test("extractPrintSetupIdsFromJsonDeep finds nested setup ids", () => {
   const links = extractPrintSetupIdsFromJsonDeep({
     nested: { id: "P3BWZSWT3DH", printAsin: "B0F6D8BSP4" },
@@ -165,4 +235,17 @@ test("pricing editor context + save mutation match Chrome", () => {
     }),
     false,
   );
+});
+
+
+test('current Bookshelf digital ASIN is excluded before any format report exists', () => {
+  const {candidates} = collectPricingCandidatesForIos({
+    booksObj:null, titlesJson:null, formatRows:[],
+    bookshelfHtml:`<div id="dual-digital-price-asin-A00MA6WA3MC">ASIN: B0H8FWKBLV</div>
+      <div id="dual-print-price-asin-A00MA6WA3MC">ASIN: B0H9M11FM7</div>
+      <div id="dual-print-status-live-status-A00MA6WA3MC">Live</div>`,
+    storedSetupByAsin:new Map([['B0H8FWKBLV','A00MA6WA3MC'],['B0H9M11FM7','A00MA6WA3MC']]),
+  });
+  assert.ok(candidates.some(row=>row.asin==='B0H9M11FM7'));
+  assert.ok(candidates.every(row=>row.asin!=='B0H8FWKBLV'));
 });

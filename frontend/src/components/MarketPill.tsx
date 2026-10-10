@@ -12,17 +12,23 @@ import { useTheme } from "@/src/lib/theme";
 
 const MARKET_FLAG_SIZE = 21;
 const MARKET_FLAG_GAP = 4;
+const MAX_VISIBLE_MARKET_FLAGS = 2;
 
 /** Separated glossy circular flag discs for a centered, readable market pill. */
 export function MarketFlagStack({
   countries,
   rimColor,
   fillColor,
+  textColor,
 }: {
   countries: string[];
   rimColor: string;
   fillColor: string;
+  textColor: string;
 }) {
+  const visibleCountries = countries.slice(0, MAX_VISIBLE_MARKET_FLAGS);
+  const hiddenCount = Math.max(0, countries.length - visibleCountries.length);
+
   return (
     <View
       testID="multi-country-flags"
@@ -30,7 +36,7 @@ export function MarketFlagStack({
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
     >
-      {countries.map((code, index) => (
+      {visibleCountries.map((code, index) => (
         <View
           key={code}
           style={[
@@ -48,6 +54,23 @@ export function MarketFlagStack({
           </Text>
         </View>
       ))}
+      {hiddenCount > 0 ? (
+        <View
+          testID="multi-country-overflow"
+          style={[
+            styles.marketOverflowBadge,
+            {
+              marginLeft: MARKET_FLAG_GAP,
+              borderColor: rimColor,
+              backgroundColor: fillColor,
+            },
+          ]}
+        >
+          <Text style={[styles.marketOverflowText, { color: textColor }]} allowFontScaling={false} numberOfLines={1}>
+            +{hiddenCount}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -77,8 +100,11 @@ export function MarketPill({
 }: MarketPillProps) {
   const t = useTheme();
   const resolvedCountries = sortMarketCountryCodes(countries);
-  const label = formatMarketPillLabel(resolvedCountries, currency);
-  const a11y = accessibilityLabel ?? `Profiles, ${label}`;
+  const fullLabel = formatMarketPillLabel(resolvedCountries, currency);
+  const label = resolvedCountries.length > MAX_VISIBLE_MARKET_FLAGS
+    ? `${resolvedCountries.length} markets${currency ? ` • ${currency}` : ""}`
+    : fullLabel;
+  const a11y = accessibilityLabel ?? `Profiles, ${fullLabel}`;
   const chrome = useMemo(
     () => ({
       scheme: t.scheme,
@@ -131,6 +157,7 @@ export function MarketPill({
             countries={resolvedCountries}
             rimColor={chrome.flagRim}
             fillColor={chrome.flagFill}
+            textColor={chrome.chevron}
           />
           <Text
             style={[t.typography.footnote, styles.marketPillText, { color: chrome.label }]}
@@ -202,5 +229,22 @@ const styles = StyleSheet.create({
     textAlign: "center",
     includeFontPadding: false,
     transform: [{ scale: 1.05 }],
+  },
+  marketOverflowBadge: {
+    minWidth: 28,
+    height: MARKET_FLAG_SIZE,
+    borderRadius: MARKET_FLAG_SIZE / 2,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  marketOverflowText: {
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: "800",
+    letterSpacing: -0.15,
+    fontVariant: ["tabular-nums"],
   },
 });

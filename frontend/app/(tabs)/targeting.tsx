@@ -460,6 +460,7 @@ export default function TargetingScreen() {
     id: string;
     title: string;
     value: number;
+    currency: string;
     forceCooldown?: boolean;
   } | null>(null);
   const [percentEditor, setPercentEditor] = useState<{
@@ -1147,6 +1148,25 @@ export default function TargetingScreen() {
   const clearSelection = () => {
     setSelectedIds([]);
     setSelectMode(false);
+  };
+
+  const selectedBidCurrencies = useMemo(() => {
+    const selected = new Set(selectedIds);
+    const currencies = data
+      .filter((row) => selected.has(row.id))
+      .map((row) => rowCurrencyOfProfile(profiles, row.amazon_profile_id, primaryCurrency));
+    return [...new Set(currencies)].sort();
+  }, [data, primaryCurrency, profiles, selectedIds]);
+
+  const openBulkMoneyEditor = (mode: "increase_usd" | "decrease_usd") => {
+    if (selectedBidCurrencies.length > 1) {
+      Alert.alert(
+        "Choose one marketplace",
+        `The selected targets use ${selectedBidCurrencies.join(", ")}. Choose one country in the Markets filter for an amount change, or use a percentage across currencies.`,
+      );
+      return;
+    }
+    setBulkDeltaEditor(mode);
   };
 
   const enqueueSelected = async (
@@ -2110,6 +2130,7 @@ export default function TargetingScreen() {
                       id: item.id,
                       title: item.keyword_text ?? "Keyword bid",
                       value: baseBidForRow("keywords", item, defaultBidByAdGroupId) ?? 0.02,
+                      currency: rowCurrency,
                       forceCooldown: opts?.forceCooldown === true,
                     });
                   }}
@@ -2159,6 +2180,7 @@ export default function TargetingScreen() {
                     id: item.id,
                     title: item.title || describeProductTarget(item.expression, item.expression_type).label,
                     value: baseBidForRow(segment, item, defaultBidByAdGroupId) ?? 0.02,
+                    currency: rowCurrency,
                     forceCooldown: opts?.forceCooldown === true,
                   });
                 }}
@@ -2201,20 +2223,20 @@ export default function TargetingScreen() {
                 <TouchableOpacity
                   testID="targeting-bulk-increase"
                   accessibilityRole="button"
-                  accessibilityLabel="Increase bid by dollar amount"
-                  onPress={() => setBulkDeltaEditor("increase_usd")}
+                  accessibilityLabel="Increase bid by a native currency amount"
+                  onPress={() => openBulkMoneyEditor("increase_usd")}
                   style={[styles.bulkBtn, { backgroundColor: t.colors.tone_good + "22" }]}
                 >
-                  <Text style={[t.typography.caption1, { color: t.colors.tone_good, fontWeight: "800" }]}>Bid +$</Text>
+                  <Text style={[t.typography.caption1, { color: t.colors.tone_good, fontWeight: "800" }]}>Bid + amount</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   testID="targeting-bulk-decrease"
                   accessibilityRole="button"
-                  accessibilityLabel="Decrease bid by dollar amount"
-                  onPress={() => setBulkDeltaEditor("decrease_usd")}
+                  accessibilityLabel="Decrease bid by a native currency amount"
+                  onPress={() => openBulkMoneyEditor("decrease_usd")}
                   style={[styles.bulkBtn, { backgroundColor: t.colors.tone_warning + "22" }]}
                 >
-                  <Text style={[t.typography.caption1, { color: t.colors.tone_warning, fontWeight: "800" }]}>Bid −$</Text>
+                  <Text style={[t.typography.caption1, { color: t.colors.tone_warning, fontWeight: "800" }]}>Bid − amount</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   testID="targeting-bulk-increase-pct"
@@ -2262,15 +2284,15 @@ export default function TargetingScreen() {
         visible={bulkDeltaEditor != null}
         title={
           bulkDeltaEditor === "decrease_usd"
-            ? "Decrease bid by $"
+            ? `Decrease bid by ${selectedBidCurrencies[0] ?? primaryCurrency}`
             : bulkDeltaEditor === "increase_usd"
-              ? "Increase bid by $"
+              ? `Increase bid by ${selectedBidCurrencies[0] ?? primaryCurrency}`
               : bulkDeltaEditor === "decrease_pct"
                 ? "Decrease bid by %"
                 : "Increase bid by %"
         }
         value={bulkDeltaEditor?.endsWith("pct") ? 10 : 0.05}
-        currency={primaryCurrency}
+        currency={selectedBidCurrencies[0] ?? primaryCurrency}
         kind={bulkDeltaEditor?.endsWith("pct") ? "percent" : "money"}
         min={0.01}
         max={bulkDeltaEditor?.endsWith("pct") ? 200 : 50}
@@ -2289,7 +2311,7 @@ export default function TargetingScreen() {
         visible={moneyEditor != null}
         title={moneyEditor?.title ?? "Bid"}
         value={moneyEditor?.value ?? 0}
-        currency={primaryCurrency}
+        currency={moneyEditor?.currency ?? primaryCurrency}
         min={0.01}
         testID={moneyEditor ? `targeting-bid-editor-${moneyEditor.id}` : undefined}
         onClose={() => setMoneyEditor(null)}

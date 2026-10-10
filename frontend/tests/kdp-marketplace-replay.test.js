@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   patchKdpBodyAllMarketplaces,
   patchKdpUrlAllMarketplaces,
+  resolveKdpMarketplaceTarget,
 } from "../src/lib/kdp/marketplace.ts";
 import { rebuildTemplateForDay } from "../src/lib/kdp/replay.ts";
 
@@ -28,7 +29,7 @@ test("KDP replay URL removes only marketplace inside filterBy", () => {
   assert.equal(patched.searchParams.get("account"), "seller-1");
 });
 
-test("rebuilt requests are USD; marketplace strip is a separate patch helper", () => {
+test("rebuilt All requests are USD and cannot retain the captured marketplace", () => {
   const rebuilt = rebuildTemplateForDay(
     {
       url: "https://kdpreports.amazon.com/api/reports/royalties?from=2026-01-01&to=2026-01-01",
@@ -47,10 +48,24 @@ test("rebuilt requests are USD; marketplace strip is a separate patch helper", (
   );
   const body = JSON.parse(rebuilt.body);
   assert.equal(body.preferredCurrency, "USD");
-  // rebuildTemplateForDay only patches currency/dates; all-marketplace strip is patchKdpBodyAllMarketplaces.
-  assert.deepEqual(JSON.parse(body.filterBy), { MARKETPLACE: ["DE"], FORMAT: ["ebook"] });
-  assert.deepEqual(
-    JSON.parse(JSON.parse(patchKdpBodyAllMarketplaces(rebuilt.body)).filterBy),
-    { FORMAT: ["ebook"] },
+  assert.deepEqual(JSON.parse(body.filterBy), { FORMAT: ["ebook"] });
+});
+
+test("rebuilt native requests set exact marketplace and native currency", () => {
+  const target = resolveKdpMarketplaceTarget("UK");
+  assert.deepEqual(target, { key: "GB", filterToken: "Amazon.co.uk", currency: "GBP" });
+  const rebuilt = rebuildTemplateForDay(
+    {
+      url: "https://kdpreports.amazon.com/api/reports/royalties",
+      method: "POST",
+      requestHeaders: {},
+      requestBody: JSON.stringify({ filterBy: JSON.stringify({ MARKETPLACE: ["Amazon.de"] }) }),
+    },
+    "royalties",
+    "2026-10-07",
+    { preferredCurrency: "GBP", marketplace: target },
   );
+  const body = JSON.parse(rebuilt.body);
+  assert.equal(body.preferredCurrency, "GBP");
+  assert.deepEqual(JSON.parse(body.filterBy), { MARKETPLACE: ["Amazon.co.uk"] });
 });

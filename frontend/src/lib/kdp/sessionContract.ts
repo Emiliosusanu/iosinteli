@@ -32,6 +32,33 @@ export function headerLookup(
   return null;
 }
 
+/**
+ * Merge two browser Cookie headers without dropping cookies that are scoped to
+ * a sibling Amazon host. Values observed most recently win by cookie name.
+ *
+ * KDP reports and the print-pricing editor live on different subdomains. A
+ * pricing-gate probe must not replace the reports cookie jar with the smaller
+ * set visible to kdp.amazon.com, otherwise an otherwise valid reports session
+ * is lost and the next helper run asks for the password again.
+ */
+export function mergeCookieHeaders(previous: string, observed: string): string {
+  const jar = new Map<string, string>();
+  const ingest = (header: string) => {
+    for (const raw of String(header || "").split(";")) {
+      const part = raw.trim();
+      if (!part) continue;
+      const equals = part.indexOf("=");
+      if (equals <= 0) continue;
+      const name = part.slice(0, equals).trim();
+      if (!name) continue;
+      jar.set(name, part.slice(equals + 1).trim());
+    }
+  };
+  ingest(previous);
+  ingest(observed);
+  return [...jar.entries()].map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
 export function pickSessionExtraHeaders(
   headers: Record<string, string> | undefined,
   prev?: Record<string, string>,

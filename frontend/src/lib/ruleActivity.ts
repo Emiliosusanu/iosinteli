@@ -1,7 +1,7 @@
 // Presentation-only helpers for Rule Activity. Does not evaluate, schedule, or mutate rules.
 import { formatAuditWhen, presentExecutionOutcome, type ExecutionTone } from "./ruleExecutionPresentation";
 import {
-  activityChangedCount,
+  activityMatchedCount,
   activityCountsLabel,
   activityEvaluatedCount,
   activityFailedCount,
@@ -12,7 +12,7 @@ import type { RuleExecutionWithName } from "./types";
 export {
   RULE_ACTIVITY_LIMIT,
   activityCapCopy,
-  activityChangedCount,
+  activityMatchedCount,
   activityCountsLabel,
   activityEvaluatedCount,
   activityFailedCount,
@@ -32,7 +32,7 @@ export type ActivityRowPresentation = {
   outcomeLabel: string;
   secondaryLine: string;
   countsLabel: string | null;
-  changed: number;
+  matched: number;
   failed: number;
   evaluated: number | null;
   executedAt: string;
@@ -44,15 +44,17 @@ export type ActivityRowPresentation = {
 };
 
 export function presentActivityRow(run: RuleExecutionWithName): ActivityRowPresentation {
-  const changed = activityChangedCount(run);
+  const matched = activityMatchedCount(run);
   const failed = activityFailedCount(run);
   const evaluated = activityEvaluatedCount(run);
-  const presented = presentExecutionOutcome({ status: run.status, changed, failed });
+  const presented = presentExecutionOutcome({ status: run.status, changed: 0, failed });
   const ruleName = run.optimization_rules?.name?.trim() || "Untitled rule";
   const when = formatAuditWhen(run.executed_at);
-  const countsLabel = activityCountsLabel({ status: run.status, changed, failed });
+  const countsLabel = activityCountsLabel({ status: run.status, matched, failed });
   const inProgress = activityIsInProgress(run.status);
-  const outcomeSpoken = presented.outcome.replace(/\.$/, "");
+  const outcomeSpoken = (matched > 0 && presented.outcome === "No changes needed."
+    ? "Individual changes not verified."
+    : presented.outcome).replace(/\.$/, "");
   const secondaryLine = countsLabel
     ? `${presented.statusLabel} · ${countsLabel}`
     : presented.statusLabel === outcomeSpoken
@@ -68,10 +70,10 @@ export function presentActivityRow(run: RuleExecutionWithName): ActivityRowPrese
     ruleName,
     rawStatus: run.status ?? "",
     statusLabel: presented.statusLabel,
-    outcomeLabel: presented.outcome,
+    outcomeLabel: `${outcomeSpoken}.`,
     secondaryLine,
     countsLabel,
-    changed,
+    matched,
     failed,
     evaluated,
     executedAt: run.executed_at ?? "",
