@@ -20,6 +20,18 @@
   "pricingAsins": 10,
   "pricingMarkets": 14,
   "pricingCurrencies": 8,
-  "deferredDays": 4,
-  "backgroundCandidateVerified": false
+  "deferredDays": 0,
+  "backgroundCandidateVerified": false,
+  "verifiedAt": "2026-10-10T08:40:30Z",
+  "lockConfirmedAt": "2026-10-10T08:28:03Z",
+  "lockedAcceptedDays": 4,
+  "currentVerifiedCloudDays": 90,
+  "current388VerifiedDays": 34,
+  "cloudWindowRoyaltiesMismatchOver3Cents": 0,
+  "cloudWindowUnitMismatches": 0,
+  "backgroundReportRecoveryVerified": true,
+  "backgroundPricingVerified": false,
+  "productionSha": "66434cd74781e349695a86ecf933e0e1c98d5201",
+  "productionRun": "38036353546",
+  "productionDeploymentVerified": true
 }
