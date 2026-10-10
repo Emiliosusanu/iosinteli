@@ -2,6 +2,18 @@
 
 Mass distribution is not yet certified. This note supersedes older release-status conclusions, without relabeling prior evidence.
 
+## Latest verified update (07:07 UTC)
+
+- Apple processed build 386 and accepted the authorized external beta submission. App Store Connect visibly reports **Approved** and associates both internal and external Intelyads groups. Automatic tester notification was unchecked; Notify Testers was not clicked. This is approval evidence, not physical TestFlight installation or completed background import. Screenshot: [Apple 386 approval](IOS_386_APPLE_APPROVED_2026-10-10.png).
+- Physical iPhone 17 Pro Max still reports installed InteliAds 1.0.1 (383). The request to update in place through TestFlight is pending; no developer installation, uninstall, or container reset was performed.
+- Both VPS hosts again confirm manifest 1.2.159 and worker `1.2.159-pricing-probe-auth`, their original account IDs and signed-in sessions. Gate blocked=false, dirty pending=0, sync not running, latest result successful. Their 60-minute report and pricing alarms remain registered. VPS1's fresh six-book pricing pass remains the 84-row reconciliation evidence.
+- Windows has candidate 159 staged but the latest runtime snapshot still shows worker 158. Its successful existing sync and intact Demo account do not certify runtime 159. Official extension Reload and readback remain pending.
+- Latest production run 38032511105 is pending behind an earlier generation guard and the online, busy prod runner. PR validation run 38031675455 is currently executing client validation. Current containers still run `a2546777aeb5b1dcc7dc6b213df223d6a770845e`; deployed financial protection remains present, but latest main/package alignment is not yet certified.
+- The product wake cron is active every 15 minutes. Dispatches at 06:15, 06:30, 06:45 and 07:00 UTC all returned HTTP 200 without a transport timeout. This certifies dispatch acceptance, not a guaranteed iOS wake or completed import.
+- iOS targeting resolves row currency from the row's Amazon profile and passes selected profile IDs to each catalog request. Mixed-currency amount bulk changes are blocked with a Markets-filter prompt. This source review does not substitute for a live mutation test; no Amazon bids were changed.
+
+Current release conclusion remains **not certified for unrestricted mass distribution**. Required human steps are the Windows official Reload and in-place TestFlight 386 installation; deployment convergence, native all-store foreground/locked background reconciliation, blocked-gate fallback/retry and real-admin genuine-refund acceptance remain explicit release gates.
+
 ## Latest verified update (06:55 UTC)
 
 - iOS 386 includes the preserved account-switch cleanup changes, committed as `073bb19e`: a new helper destination is committed only after Keychain deletion/readback, native cookie cleanup, and every local journal removal succeed. Selecting the same account preserves its session and progress. All 1,074 tests and TypeScript pass. The signed 386 archive passes deep strict codesign validation; app/widget are both 386. External-eligible upload succeeded at 06:54:35 UTC. JS SHA256 `023f4e85596c547369deda96e743debbc3c871f76aec72de50dde8fb92988e7b`; native executable SHA256 `c34e553330a5fa6e0be7ea078efa04fc1d4caefd911b93a893fa194aaa6fa6c2`. Apple group availability and installation of 386 are not yet verified. The current Apple browser session is now authenticated, and 384/385 visibly show Testing; physical iPhone remains 383.
