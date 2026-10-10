@@ -24,7 +24,7 @@
   "backgroundCandidateVerified": true,
   "verifiedAt": "2026-10-10T08:45:45Z",
   "lockConfirmedAt": "2026-10-10T08:28:03Z",
-  "lockedAcceptedDays": 4,
+  "lockedAcceptedDays": 6,
   "currentVerifiedCloudDays": 90,
   "current388VerifiedDays": 34,
   "cloudWindowRoyaltiesMismatchOver3Cents": 0,
