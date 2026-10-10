@@ -6,11 +6,14 @@ import ts from 'typescript';
 import * as capture from '../src/lib/kdp/vendor/kdpPricingCapture.js';
 import * as candidateModule from '../src/lib/kdp/pricingCandidates.ts';
 import * as fastModule from '../src/lib/kdp/bookshelfPrimaryPricing.ts';
+import * as checkpoints from '../src/lib/kdp/pricingCheckpoint.ts';
 const account = 'a'; const asin = '1807973794'; const setup = 'MT02FVSE645';
 const shelf = `${'x'.repeat(500)}<div id="dual-print-price-asin-${setup}">ASIN: ${asin}</div><div id="dual-print-price-list-price-${setup}">16.99 USD</div><div id="dual-print-status-live-status-${setup}">Live</div>`;
 function harness({ formatReadFails = false, ebookAlias = false } = {}) {
   const title = { account_id: account, asin, kdp_setup_book_id: setup, kdp_list_price: 15.99, printing_cost: 3.064, royalty_rate: .6, pricing_marketplace: 'US', pricing_currency: 'USD', pricing_captured_at: new Date().toISOString() };
   const dirty = new Set(); const writes = []; const logs = []; const auth = []; let locked = true; let setupRequests = 0;
+  const local = new Map();
+  const storage = { getItem: async (key, fallback) => local.get(key) ?? fallback, setItem: async (key, value) => { local.set(key, value); return true; } };
   const bootstrap = { bookshelfHtmlLooksSeeded: () => true, loadPricingBootstrap: async () => ({}), patchPricingBootstrap: async () => {} };
   const pricingDirty = { loadDirtyPricingSetupIds: async () => [...dirty].map(setupId => ({ setupId })), markPricingSetupDirty: async (_, id) => { dirty.add(id); return true; }, clearDirtyPricingSetupIds: async (_, ids) => { ids.forEach(id => dirty.delete(id)); } };
   const supabase = { from: (table) => {
@@ -29,7 +32,7 @@ function harness({ formatReadFails = false, ebookAlias = false } = {}) {
       const json = { book: { asin, title: 'Test' }, pricing: { US: { priceVatExclusive: 16.99, currencyCode: 'USD' }, CA: { priceVatExclusive: 23.99, currencyCode: 'CAD' } }, pricingSpec: { current: { US: { printingCost: 3.064, programs: { RETAIL: { royaltyRates: [{ threshold: 0, royaltyRate: .6 }] } } }, CA: { printingCost: 4, programs: { RETAIL: { royaltyRates: [{ threshold: 0, royaltyRate: .6 }] } } } } } };
       return { ok: true, status: 200, text: JSON.stringify(json) };
     } };
-  const modules = { '../supabase.ts': { supabase }, './activity.ts': { appendKdpActivity: async msg => logs.push(msg) }, './bookshelfPrimaryPricing.ts': fastModule, './pricingCandidates.ts': candidateModule, './pricingBootstrap.ts': bootstrap, './pricingDirty.ts': pricingDirty, './runtime.ts': runtime, './helperUi.ts': { isKdpHelperScreenFocused: () => false }, './upsert.ts': { writeKdpPricing: async payload => { writes.push(payload); Object.assign(title, payload.titleRows[0]); } }, './vendor/kdpVendor.generated.js': { looksLikeHtmlErrorPage: () => false }, './vendor/kdpPricingCapture.js': capture };
+  const modules = { '@/src/utils/storage': { storage }, './pricingCheckpoint.ts': checkpoints, '../supabase.ts': { supabase }, './activity.ts': { appendKdpActivity: async msg => logs.push(msg) }, './bookshelfPrimaryPricing.ts': fastModule, './pricingCandidates.ts': candidateModule, './pricingBootstrap.ts': bootstrap, './pricingDirty.ts': pricingDirty, './runtime.ts': runtime, './helperUi.ts': { isKdpHelperScreenFocused: () => false }, './upsert.ts': { writeKdpPricing: async payload => { writes.push(payload); Object.assign(title, payload.titleRows[0]); } }, './vendor/kdpVendor.generated.js': { looksLikeHtmlErrorPage: () => false }, './vendor/kdpPricingCapture.js': capture };
   const source = readFileSync(new URL('../src/lib/kdp/pricingSync.ts', import.meta.url), 'utf8');
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const exports = {};

@@ -8,6 +8,8 @@
  * day in the window is imported; missed days are recovered from the journal and
  * from cloud coverage holes.
  */
+import { AppState } from "react-native";
+import { SHORT_PRICING_MAX_BOOKS, SHORT_WAKE_WORK_MS } from "./pricingCheckpoint.ts";
 import { supabase } from "../supabase.ts";
 import { resolveHelperAccountId } from "./accounts.ts";
 import { orderDaysForWake, reopenOnboardingIfIncomplete } from "./coverage.ts";
@@ -386,6 +388,7 @@ async function runKdpIosHelperTickOnce(
   reason: string,
   opts: { force?: boolean; profileIds?: string[]; wakeMode?: KdpWakeMode } = {},
 ): Promise<{ ok: boolean; skipped?: boolean; reason: string; days?: number; wakeMode?: KdpWakeMode }> {
+  const tickStartedAtMs = Date.now();
   // Background / resume ticks must not navigate the sign-in WebView.
   // Once signed in, Keychain replay can continue 90-day leftover in-place.
   if (isKdpHelperScreenFocused() && reason !== "manual" && !getKdpHelperStatus().loggedIn) {
@@ -427,6 +430,7 @@ async function runKdpIosHelperTickOnce(
   }
 
   let wakeMode = opts.wakeMode ?? resolveWakeMode(reason, { force: opts.force });
+  const deliveredWakeMode = wakeMode;
 
   try {
     setKdpHelperRunning(true, reason === "enable" ? "Starting iPhone helper…" : "Syncing KDP…");
@@ -631,6 +635,7 @@ async function runKdpIosHelperTickOnce(
     let pricingPending = 0;
     let pricingAuthBlocked = false;
     let pricingRetryQueued = false;
+    const shortBackgroundWake = AppState.currentState !== "active" && deliveredWakeMode === "recent";
     try {
       setKdpHelperRunning(true, "Checking paperback pricing…");
       const pricing = await syncKdpPaperbackPricing({
@@ -638,6 +643,8 @@ async function runKdpIosHelperTickOnce(
         titlesJson,
         booksObj: pricingBooksObj,
         formatRows: pricingFormatRows,
+        maxBooks: shortBackgroundWake ? SHORT_PRICING_MAX_BOOKS : undefined,
+        deadlineAtMs: shortBackgroundWake ? tickStartedAtMs + SHORT_WAKE_WORK_MS : undefined,
         onboarding: !state.onboardingDone || wakeMode === "processing",
         // Only an open helper is allowed to show Amazon's one-time pricing
         // step-up. Background wakes remain read-only and never navigate.

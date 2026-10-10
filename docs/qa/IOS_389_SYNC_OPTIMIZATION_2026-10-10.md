@@ -26,12 +26,21 @@ The physical 388 interval delivery at 17:15:02.981 UTC skipped report capture be
 The candidate allows a bounded one-minute grace around the 15-minute cadence, so that delivered wake is used instead of waiting another slot. A repeated delivery still remains throttled; non-forced captures cannot run closer than 14 minutes.
 Behavioral tests replay these actual timestamps and check both wake modes at the grace boundary. This does not change or guarantee iOS delivery timing.
 
+The locked 20:17 physical-388 cycle later completed all ten books at 20:30; its expiration marker alone did not prove permanent cancellation. This successful eventual recovery does not remove the vulnerable all-books-in-memory pricing buffer.
+
+The candidate now journals exact account/ASIN/setup pricing work before probes, commits one book's primary and marketplace rows before continuing, and acknowledges that checkpoint only after both database writes. A failed marketplace write remains pending even if the primary title timestamp became fresh. Confirmed books stay excluded from the same sweep when their timestamps age past 15 minutes; new dirty-price changes can re-enter. Current discovery excludes inactive/superseded/non-print identities from a resumed queue, including dirty setup aliases.
+
+Short background wakes admit up to three books and use a soft 22-second JS-work deadline with a four-second reserve before starting another pricing request. Native and WebView request timeouts respect the remaining pricing budget. An exhausted wake persists discovery intent and returns pending without issuing an Amazon pricing request or painting full completion. This is a work-admission policy, not an extension of Apple's native execution allowance. Startup, discovery, database latency, and actual OS expiration can still interrupt work; the durable checkpoint provides recovery on a later delivered wake. Processing/foreground captures retain larger limits.
+
+Per-book diagnostic messages include the exact ASIN, marketplace count and remaining queue count. Reports and their quarantine/refund rules are unchanged. Both pricing writes are acknowledged separately; this change does not turn the two-table writer into an atomic transaction.
+
 ## Validation
 
-- 1,089/1,089 unit tests passed after the completion-state and wake-phase corrections.
-- TypeScript passed.
+- 1,100/1,100 unit tests passed after the completion-state, wake-phase and pricing-checkpoint corrections.
+- TypeScript passed; lint for the changed production files has no errors (six existing array-style warnings).
+- Behavioral pricing tests cover interruption/restart, ageing timestamps during a sweep, partial two-table acknowledgement, blocked gate after one committed book, stale-setup fairness, account isolation, failed local checkpoint persistence and request cancellation.
 - Canonical release guard passed for build 389.
-- Final Metro/Hermes iOS export succeeded at /tmp/inteliads389-ios-export-wake-grace after both corrections.
+- Final Metro/Hermes iOS export succeeded at /tmp/inteliads389-ios-export-checkpoint after the pricing-checkpoint correction (8.91 MB).
 - Shared scheduler bytes match the Chrome source.
 - Behavioral tests verify that a partial native day writes nothing and that a verified zero day is supported.
 - Offline timing upload test verifies original account binding and structured support detail.

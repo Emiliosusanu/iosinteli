@@ -315,9 +315,10 @@ async function kdpNativeFetch(req: {
   method: string;
   headers: Record<string, string>;
   body: string | null;
+  timeoutMs?: number;
 }): Promise<PageFetchResult> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), req.timeoutMs ?? FETCH_TIMEOUT_MS);
   try {
     const method = String(req.method || "GET").toUpperCase();
     const res = await fetch(req.url, {
@@ -391,6 +392,7 @@ export async function kdpPageFetch(req: {
   body: string | null;
   /** Pricing uses a separate Amazon step-up gate; it must not erase reports auth. */
   authScope?: "reports" | "pricing";
+  timeoutMs?: number;
 }): Promise<PageFetchResult> {
   const invalidateSessionOnAuthFailure = req.authScope !== "pricing";
   const session =
@@ -441,7 +443,7 @@ export async function kdpPageFetch(req: {
     const timer = setTimeout(() => {
       waiters.delete(reqId);
       reject(new Error("KDP page fetch timed out"));
-    }, FETCH_TIMEOUT_MS);
+    }, req.timeoutMs ?? FETCH_TIMEOUT_MS);
     waiters.set(reqId, { resolve, reject, timer, invalidateSessionOnAuthFailure });
     const payload = JSON.stringify({
       reqId,

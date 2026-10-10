@@ -38,3 +38,25 @@ test('background pricing login response preserves reports session',async()=>{
 test('background without saved cookies does not inject into a suspended helper',async()=>{
  const h=harness('background',{cookies:false});await assert.rejects(h.fetch(),/WebView is not attached/);assert.deepEqual(h.calls,[]);
 });
+
+const nativeFetchSource = src.slice(src.indexOf('async function kdpNativeFetch'), src.indexOf('function mergeCookieHeader'));
+for (const timeoutMs of [8000, undefined]) test(`native pricing replay aborts using ${timeoutMs ?? 'default'} ms budget`, async () => {
+  const timers = [], cleared = [];
+  const exports = {};
+  vm.runInNewContext(ts.transpileModule(nativeFetchSource.replace('async function', 'export async function'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, {
+    exports, AbortController, FETCH_TIMEOUT_MS: 45000,
+    setTimeout: (callback, ms) => { timers.push(ms); queueMicrotask(callback); return timers.length; },
+    clearTimeout: id => cleared.push(id),
+    fetch: async (_url, options) => {
+      assert.equal(options.credentials, 'omit');
+      return new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(Error('aborted')), { once: true });
+      });
+    },
+  });
+  await assert.rejects(exports.kdpNativeFetch({ url: 'https://kdp.amazon.com', method: 'GET', headers: {}, body: null, timeoutMs }), /aborted/);
+  assert.deepEqual(timers, [timeoutMs ?? 45000]);
+  assert.deepEqual(cleared, [1]);
+});
