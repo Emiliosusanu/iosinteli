@@ -57,5 +57,22 @@
   "controlledGateFallbackRetryTestsPassed": true,
   "realSqlRefundAcceptanceTestsPassed": true,
   "productionCorrectionFunctionsMatched": 6,
-  "freshPhysicalBlockedGateStillPending": true
+  "freshPhysicalBlockedGateStillPending": true,
+  "latestPhysicalRecheck": {
+    "observedAt": "2026-10-10T09:52:22Z",
+    "physicalDevice": "iPhone 17 Pro Max",
+    "installedBuild": "388",
+    "nativeBookshelfSeededAt": "2026-10-10T09:50:54.176Z",
+    "nativeAuthBlockedAt": null,
+    "nativeDirtySetupCount": 0,
+    "nativeDeferredDays": 0,
+    "backgroundPricingRecaptureCompletedAt": "2026-10-10T09:38:07.753Z",
+    "pushReportSyncCompletedAt": "2026-10-10T09:45:29.065Z",
+    "foregroundTickAt": "2026-10-10T09:50:43.124Z",
+    "checkedCloudDays": 90,
+    "royaltyMismatchOver3Cents": 0,
+    "unitMismatches": 0,
+    "genuineBlockedGateObserved": false,
+    "uiInspection": "Unavailable: iPhone Mirroring did not start; computer-use capture returned ScreenCaptureKit failure. No physical-screen claim."
+  }
 }

@@ -45,3 +45,13 @@ The iOS helper combines BGAppRefresh, BGProcessing, silent push, foreground resu
 Observe a genuine blocked pricing gate on an existing authenticated candidate account. Verify the exact Live book's safe Bookshelf fallback, persisted dirty detail retry, preservation of old detailed values, and recovery at a later natural wake once Amazon opens the gate. Do not log out, delete the profile, change a customer's price, forge a refund, or weaken the gate merely to label this case passed.
 
 The earlier blanket statement that a genuine production refund must be manufactured before any qualification was too strong. Transactional acceptance is now qualified by production-equivalent SQL execution. The fresh physical blocked-gate request remains separate and unfulfilled.
+
+## Connected iPhone recheck — 12:52 Romania (09:52 UTC)
+
+CoreDevice again confirms connected iPhone 17 Pro Max and installed io.inteliads.app 1.0.1 (388). Read-only app storage confirms Bookshelf seeded 09:50:54, authBlockedAt null, empty current dirty pricing queue, and empty current deferred-day queue. Legacy account-scoped storage was not counted as active backfill. No installation, relaunch, price change, cookie reset or account transfer was performed.
+
+Production records show a background tick at 09:37:40, 10-book pricing completion at 09:38:07, push tick at 09:45:02 and accepted two-day capture at 09:45:19. A foreground tick occurred at 09:50:43; activity after that point is not presented as locked-device proof. The July 13–October 10 window still has 90 verified days, no units mismatches and no royalty differences exceeding $0.03.
+
+Read-only SSH rechecks confirm original VPS1 and VPS2 identities, runtime 1.2.159, successful natural syncs at 09:21:36 and 09:21:05 respectively, open gates, empty dirty pricing queues and preserved hourly alarms.
+
+The fresh candidate has no logged blocked/auth/login/pending event, and native authBlockedAt is null. The real blocked gate transition remains unobserved; connection and success with an open gate cannot certify a blocked gate. Functional PASS and the field HOLD remain unchanged. Attempted physical screen inspection could not proceed because iPhone Mirroring did not start and computer-use capture failed; this does not affect the independently obtained device storage/database evidence.
