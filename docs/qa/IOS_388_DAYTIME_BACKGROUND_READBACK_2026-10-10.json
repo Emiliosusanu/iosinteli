@@ -1,0 +1,425 @@
+{
+  "recordedAtUtc": "2026-10-10T17:12:37.442804+00:00",
+  "device": "iPhone 17 Pro Max",
+  "connection": "USB-C",
+  "physicalBuild": "1.0.1 (388)",
+  "accountId": "cd8a3da4-ae3f-4d83-bc18-45e5e06b6626",
+  "timeZone": "Europe/Bucharest",
+  "observationWindowUtc": "2026-10-10T09:45:00Z\u20132026-10-10T17:08:00Z",
+  "phoneNotUpdatedOrLaunchedByAgent": true,
+  "backgroundScope": "User reported leaving helper in background; interval labels are not independently conclusive proof that screen remained locked throughout. Foreground event exists at 10:02 UTC.",
+  "nativeWake": {
+    "inteliads_bg_metronome_enabled": true,
+    "inteliads_bg_last_error": "iOS expired the background slice",
+    "inteliads_bg_last_success_ts": 1791622389.153142,
+    "inteliads_bg_last_run_ts": 1791651595.356032,
+    "inteliads_bg_last_scheduled_ts": 1791651600.91805
+  },
+  "cloudReadback": {
+    "utc": "2026-10-10T17:12:37.442804+00:00",
+    "coverage": {
+      "days": 90,
+      "latest": "2026-10-10T17:00:36.254139+00:00",
+      "minimumStores": 17
+    },
+    "pricing": {
+      "printRows": 140,
+      "printAsins": 10,
+      "marketplaces": 14,
+      "currencies": 8,
+      "incompletePositive": 0,
+      "breakEvenMismatch": 0,
+      "latest": "2026-10-10T17:07:57.357+00:00",
+      "nullPriceRows": 98
+    },
+    "push": {
+      "responses": 24,
+      "httpErrors": 0,
+      "dispatchFailures": 0,
+      "first": "2026-10-10T11:15:00.422578+00:00",
+      "last": "2026-10-10T17:00:00.995866+00:00"
+    },
+    "recentReconciliation": [
+      {
+        "date": "2026-10-09",
+        "royalties": 7.32,
+        "orders": 1,
+        "kenp": 62,
+        "booksroyalties": 7.32
+      },
+      {
+        "date": "2026-10-10",
+        "royalties": 0.03,
+        "orders": 0,
+        "kenp": 6,
+        "booksroyalties": 0.03
+      }
+    ]
+  },
+  "recentCoverage": [
+    {
+      "date": "2026-10-09",
+      "verified_at": "2026-10-10T17:00:36.254139+00:00",
+      "producer_version": "ios-1.0.1+388",
+      "stores": 17,
+      "fact_count": 3
+    },
+    {
+      "date": "2026-10-10",
+      "verified_at": "2026-10-10T17:00:26.513872+00:00",
+      "producer_version": "ios-1.0.1+388",
+      "stores": 17,
+      "fact_count": 3
+    }
+  ],
+  "activity": [
+    {
+      "atUtc": "2026-10-10T09:45:02.521+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (push)"
+    },
+    {
+      "atUtc": "2026-10-10T09:45:02.824+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T09:45:19.642+00:00",
+      "event": "ios.kdp.sync",
+      "message": "15 min sync \u00b7 imported 2 day(s)"
+    },
+    {
+      "atUtc": "2026-10-10T09:45:29.007+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: skipped 10/10 (fresh <15m)"
+    },
+    {
+      "atUtc": "2026-10-10T09:45:29.065+00:00",
+      "event": "ios.kdp.sync",
+      "message": "Imported 2 days"
+    },
+    {
+      "atUtc": "2026-10-10T09:50:43.124+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (foreground)"
+    },
+    {
+      "atUtc": "2026-10-10T09:50:43.227+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T09:50:55.57+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: skipped 10/10 (fresh <15m)"
+    },
+    {
+      "atUtc": "2026-10-10T09:50:55.594+00:00",
+      "event": "ios.kdp.sync",
+      "message": "Up to date"
+    },
+    {
+      "atUtc": "2026-10-10T09:52:23.343+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (background)"
+    },
+    {
+      "atUtc": "2026-10-10T09:52:23.533+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T09:52:36.559+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: skipped 10/10 (fresh <15m)"
+    },
+    {
+      "atUtc": "2026-10-10T09:52:36.582+00:00",
+      "event": "ios.kdp.sync",
+      "message": "Up to date"
+    },
+    {
+      "atUtc": "2026-10-10T09:58:50.806+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (background)"
+    },
+    {
+      "atUtc": "2026-10-10T09:58:51.65+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T10:00:03.501+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: 10/10 candidates"
+    },
+    {
+      "atUtc": "2026-10-10T10:00:16.373+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: updated 10 books"
+    },
+    {
+      "atUtc": "2026-10-10T10:00:16.501+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "Up to date \u00b7 priced 10"
+    },
+    {
+      "atUtc": "2026-10-10T10:02:17.146+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (foreground)"
+    },
+    {
+      "atUtc": "2026-10-10T10:02:17.268+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T10:10:44.388+00:00",
+      "event": "ios.kdp.sync",
+      "message": "15 min sync \u00b7 imported 2 day(s)"
+    },
+    {
+      "atUtc": "2026-10-10T10:10:57.807+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: skipped 10/10 (fresh <15m)"
+    },
+    {
+      "atUtc": "2026-10-10T10:10:57.916+00:00",
+      "event": "ios.kdp.sync",
+      "message": "Imported 2 days"
+    },
+    {
+      "atUtc": "2026-10-10T10:15:02.165+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (push)"
+    },
+    {
+      "atUtc": "2026-10-10T10:15:02.493+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T10:15:17.331+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: 10/10 candidates"
+    },
+    {
+      "atUtc": "2026-10-10T10:15:31.256+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: updated 10 books"
+    },
+    {
+      "atUtc": "2026-10-10T10:15:31.358+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "Up to date \u00b7 priced 10"
+    },
+    {
+      "atUtc": "2026-10-10T10:23:05.01+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (background)"
+    },
+    {
+      "atUtc": "2026-10-10T10:23:05.211+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T10:23:17.578+00:00",
+      "event": "ios.kdp.sync",
+      "message": "15 min sync \u00b7 imported 2 day(s)"
+    },
+    {
+      "atUtc": "2026-10-10T10:23:28.359+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: skipped 10/10 (fresh <15m)"
+    },
+    {
+      "atUtc": "2026-10-10T10:23:28.385+00:00",
+      "event": "ios.kdp.sync",
+      "message": "Imported 2 days"
+    },
+    {
+      "atUtc": "2026-10-10T10:30:03.308+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (push)"
+    },
+    {
+      "atUtc": "2026-10-10T10:30:03.886+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T10:30:19.368+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: 1/10 candidates"
+    },
+    {
+      "atUtc": "2026-10-10T10:30:20.866+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: updated 1 book"
+    },
+    {
+      "atUtc": "2026-10-10T10:30:20.981+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "Up to date \u00b7 priced 1"
+    },
+    {
+      "atUtc": "2026-10-10T10:30:37.362+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (background)"
+    },
+    {
+      "atUtc": "2026-10-10T10:30:38.901+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T10:31:13.26+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: 9/10 candidates"
+    },
+    {
+      "atUtc": "2026-10-10T10:31:33.054+00:00",
+      "event": "ios.kdp.pricing.retry",
+      "message": "KDP pricing retry queued \u00b7 kdp_title_marketplace_pricing: TypeError: Network request failed"
+    },
+    {
+      "atUtc": "2026-10-10T10:31:33.137+00:00",
+      "event": "ios.kdp.pricing.retry",
+      "message": "Up to date \u00b7 pricing retry queued"
+    },
+    {
+      "atUtc": "2026-10-10T11:14:34.554+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (interval)"
+    },
+    {
+      "atUtc": "2026-10-10T11:14:34.906+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T11:14:54.114+00:00",
+      "event": "ios.kdp.sync",
+      "message": "15 min sync \u00b7 imported 2 day(s)"
+    },
+    {
+      "atUtc": "2026-10-10T11:15:04.261+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: 10/10 candidates"
+    },
+    {
+      "atUtc": "2026-10-10T11:15:17.896+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: updated 10 books"
+    },
+    {
+      "atUtc": "2026-10-10T11:15:18.011+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "Imported 2 days \u00b7 priced 10"
+    },
+    {
+      "atUtc": "2026-10-10T14:13:57.18+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (interval)"
+    },
+    {
+      "atUtc": "2026-10-10T14:13:57.454+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T14:14:16.929+00:00",
+      "event": "ios.kdp.sync",
+      "message": "15 min sync \u00b7 imported 2 day(s)"
+    },
+    {
+      "atUtc": "2026-10-10T14:14:51.073+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (background)"
+    },
+    {
+      "atUtc": "2026-10-10T14:14:52.172+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T14:15:18.335+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: 10/10 candidates"
+    },
+    {
+      "atUtc": "2026-10-10T16:59:36.471+00:00",
+      "event": "ios.kdp.pricing.retry",
+      "message": "KDP pricing retry queued \u00b7 kdp_titles: TypeError: Network request failed"
+    },
+    {
+      "atUtc": "2026-10-10T16:59:38.617+00:00",
+      "event": "ios.kdp.pricing.retry",
+      "message": "Up to date \u00b7 pricing retry queued"
+    },
+    {
+      "atUtc": "2026-10-10T16:59:39.786+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (interval)"
+    },
+    {
+      "atUtc": "2026-10-10T16:59:44.74+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T17:00:00.917+00:00",
+      "event": "ios.kdp.error",
+      "message": "kdp_books: TypeError: Network request failed"
+    },
+    {
+      "atUtc": "2026-10-10T17:00:10.987+00:00",
+      "event": "ios.kdp.activity",
+      "message": "KDP helper tick (background)"
+    },
+    {
+      "atUtc": "2026-10-10T17:00:11.419+00:00",
+      "event": "ios.kdp.currency",
+      "message": "Replay currency USD \u00b7 17 marketplace scope(s)"
+    },
+    {
+      "atUtc": "2026-10-10T17:00:36.894+00:00",
+      "event": "ios.kdp.sync",
+      "message": "15 min sync \u00b7 imported 2 day(s)"
+    },
+    {
+      "atUtc": "2026-10-10T17:07:45.617+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: 10/10 candidates"
+    },
+    {
+      "atUtc": "2026-10-10T17:07:58.793+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "KDP pricing: updated 10 books"
+    },
+    {
+      "atUtc": "2026-10-10T17:07:59.082+00:00",
+      "event": "ios.kdp.pricing",
+      "message": "Imported 2 days \u00b7 priced 10"
+    }
+  ],
+  "fullMassDistributionCertified": false,
+  "blockedSecondGateVerifiedOn388": false,
+  "exact15MinuteContinuityPassed": false,
+  "largestObservedGapBetweenRecentDayCapturesMinutes": 179.38,
+  "transportRecovery": "Pricing retry at 10:31 UTC recovered at 11:15 UTC. Network failures near 17:00 UTC followed by successful recent-day captures at 17:00:36 and pricing at 17:07:58.",
+  "candidate389Fix": "Transient pricing errors and report soft failures stay Retrying without a full completion timestamp; 388 binary is unchanged.",
+  "vpsReadOnlyRecheck": {
+    "vps1": {
+      "version": "1.2.160",
+      "signedIn": true,
+      "criticalIssues": []
+    },
+    "vps2": {
+      "version": "1.2.159",
+      "signedIn": true,
+      "criticalIssues": []
+    }
+  }
+}

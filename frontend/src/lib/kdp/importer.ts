@@ -630,6 +630,7 @@ async function runKdpIosHelperTickOnce(
     let pricingMessage = "";
     let pricingPending = 0;
     let pricingAuthBlocked = false;
+    let pricingRetryQueued = false;
     try {
       setKdpHelperRunning(true, "Checking paperback pricing…");
       const pricing = await syncKdpPaperbackPricing({
@@ -655,12 +656,13 @@ async function runKdpIosHelperTickOnce(
       }
     } catch (pricingError) {
       const message = pricingError instanceof Error ? pricingError.message : String(pricingError);
+      pricingRetryQueued = true;
       pricingMessage = " · pricing retry queued";
       void appendKdpActivity(`KDP pricing retry queued · ${message}`, "info");
     }
 
     const pricingLeftover = pricingPending > 0 && !pricingAuthBlocked;
-    const anyLeftover = leftover || pricingLeftover;
+    const anyLeftover = leftover || pricingLeftover || pricingRetryQueued || Boolean(lastSoftError);
     const doneMessage = `${reportsMessage}${pricingMessage}`;
     setKdpHelperRunning(false, lastSoftError ? `${doneMessage} · ${lastSoftError}` : doneMessage);
     void appendKdpActivity(doneMessage, anyLeftover ? "info" : "steady");
@@ -669,7 +671,7 @@ async function runKdpIosHelperTickOnce(
       detail: doneMessage,
       isActive: false,
       progress: pricingAuthBlocked ? 0.9 : anyLeftover ? 0.85 : 1,
-      completedAtMs: Date.now(),
+      completedAtMs: anyLeftover || pricingAuthBlocked ? undefined : Date.now(),
     });
     void import("inteliads-native-sync")
       .then((m) => m.scheduleNativeMetronome(true))

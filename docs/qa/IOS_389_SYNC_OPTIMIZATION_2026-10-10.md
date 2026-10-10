@@ -18,12 +18,16 @@ Structured per-marketplace timing entries retain currency, duration, outcome and
 The offline diagnostic queue retains the original account binding even if the helper account later changes.
 The server-side diagnostic redaction change is in robo_ads PR #732; it is not yet deployed.
 
+The evening physical-388 readback exposed a completion-state error after pricing transport failures.
+The 389 candidate keeps pricing exceptions, pending work and report soft failures in Retrying (or Action required for the authentication gate), without advancing the full-completion stamp.
+Successful report captures remain preserved. See IOS_388_DAYTIME_BACKGROUND_READBACK_2026-10-10.md for actual device and cloud evidence.
+
 ## Validation
 
-- 1,084/1,084 unit tests passed.
+- 1,087/1,087 unit tests passed after the completion-state correction.
 - TypeScript passed.
 - Canonical release guard passed for build 389.
-- Metro/Hermes iOS export succeeded at /tmp/inteliads389-ios-export.
+- Metro/Hermes iOS export succeeded again at /tmp/inteliads389-ios-export-return after the completion-state correction.
 - Shared scheduler bytes match the Chrome source.
 - Behavioral tests verify that a partial native day writes nothing and that a verified zero day is supported.
 - Offline timing upload test verifies original account binding and structured support detail.
