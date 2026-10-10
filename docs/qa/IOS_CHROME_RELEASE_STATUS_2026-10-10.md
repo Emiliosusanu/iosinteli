@@ -2,6 +2,14 @@
 
 Mass distribution is not yet certified. This note supersedes older release-status conclusions, without relabeling prior evidence.
 
+## TestFlight 388 physical update (08:26 UTC / 11:26 Romania)
+
+- User confirms an in-place TestFlight 388 update. CoreDevice readback reports io.inteliads.app 1.0.1 (388); remote diagnostics use ios-1.0.1+388 and the unchanged Emilian destination. No developer installation, session transfer, app deletion or account switch was performed for this test. CoreDevice builtByDeveloper=true is not treated as independent proof of installation channel; TestFlight channel is human-confirmed with matching build/runtime readback.
+- The 388 foreground pass completed 30 report days at 08:22:19 UTC across all 17 native marketplaces, then updated ten priced books at 08:23:19 UTC. Database reconciliation finds no orders/KENP mismatch or royalty discrepancy over three cents on those 30 days. Fresh 388-session pricing is 140 rows / ten ASINs / 14 markets / eight currencies, captured 08:23:08–08:23:19, with no missing economics or break-even mismatch. Four deferred days remain. Diagnostics upload returned 201 with queued=0.
+- Requested the locked-phone candidate test after this complete foreground baseline; confirmation is pending. No 388 locked wake is claimed yet. The older native deadline diagnostic reports expiration at its 08:12 run, before this install; this is retained as a limitation rather than relabeled as a completed 388 wake.
+- Both VPS canaries completed another natural 159 pass: VPS1 08:14:59 UTC (retry_alarm), VPS2 08:20:40 UTC (hourly alarm), correct original authenticated accounts, lastError=null, gate=false and pricing dirty=0. VPS1 reports fresh cached candidates skipped rather than needlessly rewriting the unchanged detailed prices. Valid 17-store coverage on unchanged Windows/VPS2 rows can retain its older producer timestamp; a successful hourly no-change pass does not imply all old rows were recaptured.
+- Production run 38036353546 now passes the complete client and server test prerequisite and is building the backend image. Build/deployment/container/package readback is still pending. This is stronger than local-only test evidence but is not a completed deployment.
+
 ## Latest verified update (08:18 UTC / 11:18 Romania)
 
 - iOS candidate 388 is signed, archived and uploaded successfully at 08:04:08 UTC. Apple visibly reports Approved with internal and external Intelyads groups. Automatic tester notifications were unchecked; Notify Testers was not clicked. Screenshot: [Apple 388 approval](IOS_388_APPLE_APPROVED_2026-10-10.png). Physical TestFlight 388 installation and its locked-device pass remain pending; the current device evidence is still producer 386.

@@ -10,5 +10,16 @@
   "uploadSucceededAt": "2026-10-10T08:04:08Z",
   "appleStatus": "Approved",
   "externalGroup": "Intelyads",
-  "testerEmailsSent": false
+  "testerEmailsSent": false,
+  "externalInstallUserConfirmed": true,
+  "physicalBuild": "388",
+  "runtimeProducer": "ios-1.0.1+388",
+  "foregroundDays": 30,
+  "nativeReportMarkets": 17,
+  "pricingRows": 140,
+  "pricingAsins": 10,
+  "pricingMarkets": 14,
+  "pricingCurrencies": 8,
+  "deferredDays": 4,
+  "backgroundCandidateVerified": false
 }
