@@ -52,5 +52,10 @@
   "backgroundPricingMissingFields": 0,
   "backgroundPricingBreakEvenMismatches": 0,
   "blockedGateTransitionVerifiedOn388": false,
-  "unrestrictedMassReleaseCertified": false
+  "unrestrictedMassReleaseCertified": false,
+  "functionalQualification": "PASS",
+  "controlledGateFallbackRetryTestsPassed": true,
+  "realSqlRefundAcceptanceTestsPassed": true,
+  "productionCorrectionFunctionsMatched": 6,
+  "freshPhysicalBlockedGateStillPending": true
 }

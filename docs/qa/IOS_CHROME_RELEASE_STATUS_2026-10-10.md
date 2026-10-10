@@ -2,6 +2,14 @@
 
 Mass distribution is not yet certified. This note supersedes older release-status conclusions, without relabeling prior evidence.
 
+## Functional qualification audit (approximately 09:40 UTC / 12:40 Romania)
+
+[Release qualification matrix](KDP_RELEASE_QUALIFICATION_2026-10-10.md) records functional PASS and the precise remaining field limit. All 119 Chrome tests, 39 targeted iOS pricing/background tests and eight real-SQL correction/format tests passed. All six effective production correction functions match the isolated migrated SQL. Verified full-refund acceptance legitimately applies zero while retaining the prior snapshot and audit; suspicious/repeated zeros without review stay quarantined. A fabricated production refund is not required or authorized.
+
+VPS1/VPS2 natural syncs at 09:21 UTC succeeded on 159, original sessions intact, gate open, dirty=0. Candidate 388 continues natural background work: detailed ten-book pricing recaptured 09:15:12–09:15:24 UTC (140 complete rows, 14 markets/eight currencies, no BE mismatch), followed by a report pass accepted at 09:23:57 UTC. Current 90-day/17-store revision-aware totals still reconcile. Production images remain 66434cd74781e349695a86ecf933e0e1c98d5201, backend healthy.
+
+Fresh physical candidate-388 blocked-gate transition was not observed; it must not be called passed from the controlled transport test or historical Windows-154 fallback. Therefore unrestricted mass-distribution field certification remains HOLD. Exact 15-minute/never-sleep claims are excluded by the platform contract, not waived by a certificate.
+
 ## TestFlight 388 locked report and pricing pass completed (08:46 UTC / 11:46 Romania)
 
 - With the same user-confirmed screen-lock/USB-C baseline at 08:28:03 UTC, build 388 ran a natural processing tick at 08:42:16. No developer launch, reinstall, foreground Import or container read was used to cause this pass. It recognized revision-verified Web history complete (90 days), skipped repeated 30→90 onboarding, imported today/yesterday, then captured ten priced books. Completion at 08:45:10 reports Imported 2 days · priced 10, without a deferred-day suffix.
