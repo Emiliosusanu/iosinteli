@@ -84,6 +84,7 @@ type ProfileLike = {
   country_code: string | null;
   currency_code: string | null;
   marketplace_id: string | null;
+  is_enabled?: boolean;
 };
 
 function normalizeStatus(value: unknown): string {
@@ -1090,6 +1091,48 @@ export function marketplacesFromBookProfiles(
   });
 }
 
+/**
+ * Disabled Ads profiles that Amazon has live-confirmed for this exact ASIN.
+ *
+ * This is intentionally stricter than the normal picker fallback: a disabled
+ * profile is never suggested from country/currency, shared marketplace id, or
+ * stale book.marketplaceIds. The user may enable it only when the per-ASIN
+ * probe returned in_stock for that exact owned Amazon Ads profile id.
+ */
+export function confirmedDisabledMarketplacesForBook(
+  profiles: ProfileLike[],
+  live: CreationMarketplace[] = [],
+): CreationMarketplace[] {
+  const disabledProfiles = profiles.filter((profile) => profile.is_enabled === false);
+  if (!disabledProfiles.length || !live.length) return [];
+
+  const seen = new Set<string>();
+  const rows: CreationMarketplace[] = [];
+  for (const marketplace of live) {
+    if (!amazonAdsStockConfirmed(marketplace)) continue;
+    const profile = matchLocalProfileForCreationMarketplace(
+      disabledProfiles,
+      marketplace,
+    );
+    if (!profile) continue;
+    const adsId = String(profile.profile_id || profile.id).trim();
+    if (!adsId || seen.has(adsId)) continue;
+    seen.add(adsId);
+    rows.push({
+      id: profile.id,
+      profileId: adsId,
+      countryCode: marketplace.countryCode ?? profile.country_code,
+      currencyCode: marketplace.currencyCode ?? profile.currency_code,
+      marketplaceId: marketplace.marketplaceId ?? profile.marketplace_id,
+      availabilityEvidence: marketplace.availabilityEvidence,
+      stockStatus: marketplace.stockStatus,
+      sku: marketplace.sku,
+      verificationSource: marketplace.verificationSource,
+    });
+  }
+  return rows;
+}
+
 /** @deprecated Prefer marketplacesFromBookProfiles. */
 export function fallbackMarketplacesFromProfiles(
   profiles: ProfileLike[],
@@ -1176,7 +1219,9 @@ export function parseCustomAsins(value: string): string[] {
     .split(/[\n,;\s]+/)
     .map((asin) => asin.trim().toUpperCase())
     .filter((asin) => {
-      if (!/^B0[A-Z0-9]{8}$/.test(asin) || seen.has(asin)) return false;
+      // Amazon has both modern B0 ASINs and legacy ten-character ISBN-derived
+      // ASINs (for example 156695536X). Product targeting accepts either.
+      if (!/^[A-Z0-9]{10}$/.test(asin) || seen.has(asin)) return false;
       seen.add(asin);
       return true;
     })
@@ -1477,8 +1522,20 @@ export function normalizeCampaignCreationPreview(raw: unknown): {
     })),
   );
 
+  // Nest `/ad-groups/suggestions` returns top-level asin/profileId (no nested
+  // book{} / profile{}). Map those so Groq relevance gets a real advertised ASIN.
+  const topLevelAsin = readString(body, ["asin", "advertisedAsin", "advertised_asin"]);
+  const topLevelProfileId = readString(body, [
+    "profileId",
+    "profile_id",
+    "amazonProfileId",
+    "amazon_profile_id",
+  ]);
   const profileId =
-    readString(profileRaw, ["profileId", "profile_id", "id"]) || "";
+    readString(profileRaw, ["profileId", "profile_id", "id"]) ||
+    topLevelProfileId ||
+    "";
+  const bookAsin = readString(bookRaw, ["asin"]) || topLevelAsin || "";
   return {
     source: "amazon_ads",
     fetchedAt: readString(body, ["fetchedAt", "fetched_at"]) || new Date().toISOString(),
@@ -1493,7 +1550,7 @@ export function normalizeCampaignCreationPreview(raw: unknown): {
       marketplaceId: readString(profileRaw, ["marketplaceId", "marketplace_id"]) || null,
     },
     book: {
-      asin: readString(bookRaw, ["asin"]) || "",
+      asin: bookAsin,
       title: readString(bookRaw, ["title"]) || "",
       subtitle:
         readString(bookRaw, ["subtitle", "bookSubtitle", "book_subtitle"]) ||

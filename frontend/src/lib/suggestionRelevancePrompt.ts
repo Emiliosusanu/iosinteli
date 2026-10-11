@@ -26,10 +26,14 @@
 export const GROK_RELEVANCE_MODEL = "grok-3-mini";
 
 /**
- * Groq OpenAI-compatible model when EXPO_PUBLIC_GROQ_API_KEY is set (dev).
+ * Groq OpenAI-compatible model when EXPO_PUBLIC_GROQ_API_KEY is set.
  * Used only for the direct Groq path — Nest/xAI still use GROK_RELEVANCE_MODEL.
+ *
+ * Prefer a model that puts the JSON keep-list in `message.content`.
+ * `openai/gpt-oss-20b` often leaves content empty and only fills `reasoning`,
+ * which made Create show "AI unavailable" on device (build 303).
  */
-export const GROQ_RELEVANCE_MODEL = "openai/gpt-oss-20b";
+export const GROQ_RELEVANCE_MODEL = "qwen/qwen3.8-27b";
 
 /** System instruction — edit tone / strictness here. */
 export const GROK_RELEVANCE_SYSTEM_PROMPT = `You are a senior Amazon Sponsored Products keyword strategist for KDP authors.

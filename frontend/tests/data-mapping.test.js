@@ -15,12 +15,14 @@ import { describeProductTarget, extractTargetAsin, fallbackAsinCoverUrl, formatM
 
 const queriesSource = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");
 const overviewSource = readFileSync(new URL("../app/(tabs)/index.tsx", import.meta.url), "utf8");
+const overviewFinanceTrendSource = readFileSync(new URL("../src/lib/overviewFinanceTrend.ts", import.meta.url), "utf8");
 const campaignsSource = readFileSync(new URL("../app/(tabs)/campaigns.tsx", import.meta.url), "utf8");
 const campaignDetailSource = readFileSync(new URL("../app/campaign/[id].tsx", import.meta.url), "utf8");
 const searchTermsSource = readFileSync(new URL("../app/more/search-terms.tsx", import.meta.url), "utf8");
 const targetingSource = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
 const adGroupDetailSource = readFileSync(new URL("../app/more/ad-group/[id].tsx", import.meta.url), "utf8");
 const dynamicIslandSource = readFileSync(new URL("../src/components/DynamicIsland.tsx", import.meta.url), "utf8");
+const dashboardApiSource = readFileSync(new URL("../src/lib/dashboardApi.ts", import.meta.url), "utf8");
 
 test("critical calculation helpers handle safe division and money formatting", () => {
   assert.equal(safeDivide(10, 2), 5);
@@ -116,7 +118,8 @@ test("kdp royalties prefer explicit profile links over legacy profile fields", (
 
 test("dashboard finance widgets use imported KDP data instead of a manual royalty-rate fallback", () => {
   assert.equal(overviewSource.includes("kdpRoyaltiesOnDate"), true);
-  assert.equal(overviewSource.includes("publisherNetForPeriod"), true);
+  assert.equal(overviewSource.includes("buildOverviewFinanceTrend"), true);
+  assert.equal(overviewFinanceTrendSource.includes("netRoyalties"), true);
   assert.equal(overviewSource.includes("royaltyRate: 0"), true);
   assert.equal(overviewSource.includes("royaltyRate,"), false);
   assert.equal(overviewSource.includes("fallbackRoyalties"), false);
@@ -160,6 +163,10 @@ test("product target helper resolves auto subtypes and ASIN expressions", () => 
     name: "",
   });
   assert.equal(extractTargetAsin([{ type: "asinSameAs", value: "b0abc12345" }]), "B0ABC12345");
+  assert.equal(
+    extractTargetAsin([{ type: "asinSameAs", value: ["b0g2sl2wrh"] }]),
+    "B0G2SL2WRH",
+  );
   assert.equal(
     fallbackAsinCoverUrl("b0abc12345"),
     "https://images-na.ssl-images-amazon.com/images/P/B0ABC12345.01._SL500_.jpg",
@@ -327,7 +334,7 @@ test("overview charts use real derived series without advisory filler copy", () 
   assert.equal(overviewSource.includes("btSpend"), true);
   assert.equal(overviewSource.includes("Low CTR: check creatives"), false);
   assert.equal(campaignDetailSource.includes("ProductTargetRow"), true);
-  assert.equal(campaignDetailSource.includes('SectionCard title="Auto Targeting"'), true);
+  assert.equal(campaignDetailSource.includes("Auto Targeting"), true);
   assert.equal(campaignDetailSource.includes("AutoTargetSummaryRow"), false);
   assert.equal(campaignDetailSource.includes("cooldownRow={pt}"), true);
   assert.equal(queriesSource.includes("assembleLogicalBookRows"), true);
@@ -341,10 +348,20 @@ test("search terms and ad group detail avoid fixed pagination gaps", () => {
   assert.equal(queriesSource.includes("fetchAllPages<ProductTarget>"), true);
   assert.equal(queriesSource.includes("adGroupId?: string"), true);
   assert.equal(searchTermsSource.includes("limit: 200"), false);
-  // Targets uses server-ranked pages (mobile_targeting_page_v1), not a client 500-cap footer.
+  assert.equal(searchTermsSource.includes("useInfiniteQuery"), true);
+  assert.equal(searchTermsSource.includes("fetchNestSearchTermsPage"), true);
+  assert.equal(searchTermsSource.includes("fetchSearchTerms(selectedProfileIds"), false);
+  assert.equal(searchTermsSource.includes("getNextPageParam"), true);
+  assert.equal(searchTermsSource.includes("onEndReached"), true);
+  assert.equal(dashboardApiSource.includes("/search-terms/page"), true);
+  assert.equal(dashboardApiSource.includes('sortOrder: "desc"'), true);
+  assert.equal(dashboardApiSource.includes('amazonProfileIds: params.profileIds.join(",")'), true);
+  // Targets uses server-ranked full catalog (mobile_targeting_page_v1), not a client 500-cap footer.
   assert.equal(targetingSource.includes("fetchMobileTargetingPage"), true);
+  assert.equal(targetingSource.includes("loadNextCatalogPage"), true);
+  assert.equal(targetingSource.includes('testID="targeting-load-more"'), true);
   assert.equal(targetingSource.includes("TARGETING_PAGE_SIZE"), true);
-  assert.equal(targetingSource.includes("TargetingPagination"), true);
+  assert.equal(targetingSource.includes("TargetingPagination"), false);
   assert.equal(targetingSource.includes("enabled: canReadPage"), true);
   assert.equal(targetingSource.includes("scopeProfiles.length > 0"), true);
   assert.equal(targetingSource.includes("placeholderData: noPeriodPlaceholder"), true);
@@ -373,7 +390,7 @@ test("overview presents royalties minus spend without implying a full pnl", () =
 test("overview does not present missing KDP royalties as a verified zero profit", () => {
   assert.equal(overviewSource.includes("const kdpReady = !!royaltyRange?.hasKdpData"), true);
   assert.equal(overviewSource.includes("const financeComplete = kdpReady && adsReady"), true);
-  assert.equal(overviewSource.includes("publisherNetForPeriod"), true);
+  assert.equal(overviewSource.includes("buildOverviewFinanceTrend"), true);
   assert.equal(overviewSource.includes("kdpRoyaltiesAreKnown"), true);
   assert.equal(overviewSource.includes("const netKnown ="), true);
   assert.equal(overviewSource.includes("heroNet != null"), true);
@@ -381,7 +398,7 @@ test("overview does not present missing KDP royalties as a verified zero profit"
   assert.match(overviewSource, /const royaltiesDisplay = !royaltiesKnown/);
   assert.match(overviewSource, /netRoyalties\(\{ kdpRoyalties: heroRoyalties, adsSpend: heroSpend \}\)/);
   assert.equal(overviewSource.includes("netKnown && netSeries.length > 1"), true);
-  assert.equal(overviewSource.includes("if (!kdpReady) return []"), true);
+  assert.equal(overviewFinanceTrendSource.includes("if (!input.kdpReady) return []"), true);
 });
 
 test("book campaign drilldown remains read-only and uses all link paths", () => {
@@ -391,4 +408,7 @@ test("book campaign drilldown remains read-only and uses all link paths", () => 
   assert.equal(queriesSource.includes("verified_book_campaign_metrics"), true);
   assert.equal(queriesSource.includes("fetchLogicalBookAsins"), true);
   assert.equal(queriesSource.includes("logicalBookAsinsFromDailyRows"), true);
+  // Placement mix must not block the campaign list (soft budget + catch).
+  assert.match(queriesSource, /BOOK_CAMPAIGN_PLACEMENT_BUDGET_MS/);
+  assert.match(queriesSource, /placement shares skipped/);
 });

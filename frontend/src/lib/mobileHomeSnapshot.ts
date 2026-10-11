@@ -454,6 +454,12 @@ export async function clearMobileHomeSnapshots(): Promise<void> {
       await AsyncStorage.removeItem(LAST_SCOPE_KEY);
     } catch {}
   }
+  try {
+    const { updateNativeFinancialSnapshot } = await import("inteliads-native-sync");
+    await updateNativeFinancialSnapshot({ verified: false, reload: true });
+  } catch {
+    // Native widget is optional in simulator/pre-link builds.
+  }
 }
 
 export function displayMetric(

@@ -134,6 +134,10 @@ export function extractPrintSetupIdsFromJsonDeep(json: unknown): Array<{
 export function extractBookshelfPrintRowsFromHtml(html: string): Array<{
   kdpBookId: string;
   printAsin: string | null;
+  digitalAsin?: string | null;
+  displayedPrice?: string | null;
+  currency?: string | null;
+  printStatus?: "live" | "draft" | "in_review" | "unpublished" | "action_required" | null;
 }>;
 
 export function extractPrintSetupLinksFromHtml(html: string): Array<{

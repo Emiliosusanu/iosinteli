@@ -8,6 +8,9 @@ import {
   View,
 } from "react-native";
 import { BookCover } from "@/src/components/BookCover";
+import { BookRetailInfo } from "@/src/components/BookRetailInfo";
+import { bookRetailAsins, bookRetailEditions, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,8 +27,10 @@ import {
   MetricStrip,
 } from "@/src/components/Primitives";
 import { useApp } from "@/src/contexts/AppContext";
+import { useAuth } from "@/src/contexts/AuthContext";
 import {
   fetchBookCampaignsRange,
+  fetchBookRetailMetadata,
   fetchOwnedBookIdentity,
   fetchTopBooksRange,
   type BookCampaignRow,
@@ -33,6 +38,7 @@ import {
 } from "@/src/lib/queries";
 import { isKdpOnlySessionScope } from "@/src/lib/kdpRoyaltyScope";
 import {
+  bookDetailProfileSelection,
   booksMoneyProfileIds,
   booksRoyaltyScopeForSelection,
   overviewKdpQueryScope,
@@ -48,6 +54,7 @@ import { sortedProfileIds } from "@/src/lib/periodQuery";
 import { biddingStrategyLabel, statusLabel } from "@/src/lib/campaigns";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { bookRowMatchesOpenedAsin } from "@/src/lib/kdpBookIdentity";
+import { amazonAdsProfileIdsForSelection } from "@/src/lib/accountScope";
 import {
   formatBreakEvenAcos,
   hasAuthoritativeBreakEven,
@@ -74,6 +81,11 @@ import {
 } from "@/src/lib/bookMarketplaces";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { BookMarketplaceFlags, CampaignMarketplaceFlags } from "@/src/components/MarketplaceFlags";
+import {
+  BOOK_CAMPAIGNS_TIMEOUT_MS,
+  isHomeQueryTimeout,
+  withQueryTimeout,
+} from "@/src/lib/queryTimeout";
 
 function paramValue(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] ?? "";
@@ -131,6 +143,7 @@ function campaignA11yLabel(item: BookCampaignRow, verdict: { label: string }, cu
 }
 
 export default function ProductCampaignsScreen() {
+  const { user } = useAuth();
   const t = useTheme();
   const router = useRouter();
   const { profiles, selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
@@ -141,9 +154,17 @@ export default function ProductCampaignsScreen() {
   const paramImageUrl = paramValue(params.imageUrl);
   const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
+  const detailProfileIds = useMemo(
+    () => bookDetailProfileSelection(profiles, selectedProfileIds, primaryCurrency),
+    [profiles, selectedProfileIds, primaryCurrency],
+  );
   const moneyProfileIds = useMemo(
-    () => sortedProfileIds(booksMoneyProfileIds(profiles, selectedProfileIds)),
-    [profiles, selectedProfileIds],
+    () => sortedProfileIds(booksMoneyProfileIds(profiles, detailProfileIds)),
+    [profiles, detailProfileIds],
+  );
+  const retailProfileIds = useMemo(
+    () => sortedProfileIds(amazonAdsProfileIdsForSelection(profiles, moneyProfileIds)),
+    [profiles, moneyProfileIds],
   );
   const royaltyScope = useMemo(
     () => booksRoyaltyScopeForSelection(profiles, moneyProfileIds),
@@ -153,7 +174,7 @@ export default function ProductCampaignsScreen() {
     () => sortedProfileIds(royaltyScope.profileIds),
     [royaltyScope.profileIds],
   );
-  const kdpQueryScope = overviewKdpQueryScope(profiles, selectedProfileIds, royaltyScope);
+  const kdpQueryScope = overviewKdpQueryScope(profiles, detailProfileIds, royaltyScope);
   // Keep limit in the key so Overview/Books caches cannot cross-hydrate a truncated list.
   const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, 300] as const;
 
@@ -178,18 +199,32 @@ export default function ProductCampaignsScreen() {
   });
 
   const campaignsQ = useQuery({
-    queryKey: ["product-campaigns", adminFilterUserId ?? "self", moneyProfileIds, asin, paramTitle, dateRange.start, dateRange.end, primaryCurrency],
-    queryFn: () =>
-      fetchBookCampaignsRange({
-        profileIds: moneyProfileIds,
-        asin,
-        title: paramTitle,
-        start: dateRange.start,
-        end: dateRange.end,
-        displayCurrency: primaryCurrency,
-        filterUserId: adminFilterUserId,
-      }),
+    queryKey: [
+      "product-campaigns",
+      adminFilterUserId ?? "self",
+      moneyProfileIds,
+      asin,
+      dateRange.start,
+      dateRange.end,
+      primaryCurrency,
+    ],
+    queryFn: ({ signal }) =>
+      withQueryTimeout(
+        fetchBookCampaignsRange({
+          profileIds: moneyProfileIds,
+          asin,
+          title: paramTitle,
+          start: dateRange.start,
+          end: dateRange.end,
+          displayCurrency: primaryCurrency,
+          filterUserId: adminFilterUserId,
+        }),
+        BOOK_CAMPAIGNS_TIMEOUT_MS,
+        signal,
+      ),
     enabled: moneyProfileIds.length > 0 && asin.length > 0,
+    // Timeout / currency errors must surface RetryState — not 3× silent re-spins.
+    retry: false,
   });
 
   const identityQ = useQuery({
@@ -200,13 +235,38 @@ export default function ProductCampaignsScreen() {
   });
 
   const book = useMemo(() => matchBook(booksQ.data ?? [], asin), [booksQ.data, asin]);
+  const retailBooks = useMemo(() => book ? [book] : [{ book_key: asin, asin }], [book, asin]);
+  const retailAsins = useMemo(() => bookRetailAsins(retailBooks), [retailBooks]);
+  const retailQ = useQuery({
+    queryKey: ["book-retail-metadata-detail", user?.id ?? "anonymous", adminFilterUserId ?? "self", retailProfileIds, retailAsins],
+    queryFn: () => fetchBookRetailMetadata({
+      books: retailBooks,
+      adsProfileIds: retailProfileIds,
+      marketplaceCodes: Object.fromEntries(profiles.flatMap((profile) => {
+        const code = String(profile.country_code ?? "").trim().toUpperCase();
+        return code ? [[profile.id, code], [profile.profile_id, code]] : [];
+      })),
+      preferredMarketplaceCode: profiles.find((profile) => selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id))?.country_code,
+    }),
+    enabled: Boolean(user?.id) && !adminFilterUserId && retailProfileIds.length > 0 && retailAsins.length > 0,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const retailEditions = useMemo(
+    () => retailQ.isSuccess ? bookRetailEditions(retailBooks[0], retailQ.data) : [],
+    [retailBooks, retailQ.data, retailQ.isSuccess],
+  );
+  const primaryRetailEdition = useMemo(
+    () => retailQ.isSuccess ? primaryBookRetailEdition(retailBooks[0], retailQ.data) : null,
+    [retailBooks, retailQ.data, retailQ.isSuccess],
+  );
   useEffect(() => {
     markPerf("book_detail.mount");
   }, []);
   const campaigns = campaignsQ.data ?? [];
   const identity = identityQ.data ?? null;
-  const title = book?.title || identity?.title || paramTitle || "Book";
-  const imageUrl = book?.image_url ?? identity?.image_url ?? paramImageUrl;
+  const title = preferEditionTitle(book?.title || identity?.title || paramTitle, primaryRetailEdition?.snapshot.title) || "Book";
+  const imageUrl = primaryRetailEdition?.snapshot.coverUrl ?? book?.image_url ?? identity?.image_url ?? paramImageUrl;
   const bookIdentity = book ?? {
     title,
     asin,
@@ -258,7 +318,12 @@ export default function ProductCampaignsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([campaignsQ.refetch(), booksQ.refetch(), identityQ.refetch()]);
+    await Promise.all([
+      campaignsQ.refetch(),
+      booksQ.refetch(),
+      identityQ.refetch(),
+      ...(!adminFilterUserId && user?.id ? [retailQ.refetch()] : []),
+    ]);
     setRefreshing(false);
   };
 
@@ -282,8 +347,11 @@ export default function ProductCampaignsScreen() {
     );
   }
 
-  const campaignsLoading = campaignsQ.isLoading && campaigns.length === 0;
+  const campaignsLoading = campaignsQ.isPending && campaigns.length === 0 && !campaignsQ.isError;
   const campaignsFailed = campaignsQ.isError && campaigns.length === 0;
+  const campaignsFailedSubtitle = isHomeQueryTimeout(campaignsQ.error)
+    ? "Timed out loading linked campaigns. Retry — long date ranges can take a moment."
+    : "Book identity is still available. Retry to load linked campaigns.";
 
   return (
     <SubScreen title="Book" showDateRange>
@@ -309,11 +377,15 @@ export default function ProductCampaignsScreen() {
             campaignsCount={campaigns.length}
             campaignsLoading={campaignsLoading}
             campaignsFailed={campaignsFailed}
+            campaignsFailedSubtitle={campaignsFailedSubtitle}
             campaignsRetrying={campaignsQ.isRefetching}
             onRetryCampaigns={() => void campaignsQ.refetch()}
             currency={primaryCurrency}
             marketplaceIndex={marketplaceIndex}
             formatOptions={formatOptions}
+            retailEditions={retailEditions}
+            coverCacheKey={primaryRetailEdition?.snapshot.coverCacheKey}
+            retailLoadState={retailQ.isError ? "error" : retailQ.isPending ? "loading" : "ready"}
             onCreateCampaign={openCreateCampaign}
           />
         }
@@ -358,11 +430,15 @@ function BookHeader({
   campaignsCount,
   campaignsLoading,
   campaignsFailed,
+  campaignsFailedSubtitle,
   campaignsRetrying,
   onRetryCampaigns,
   currency,
   marketplaceIndex,
   formatOptions,
+  retailEditions,
+  coverCacheKey,
+  retailLoadState,
   onCreateCampaign,
 }: {
   asin: string;
@@ -377,11 +453,15 @@ function BookHeader({
   campaignsCount: number;
   campaignsLoading: boolean;
   campaignsFailed: boolean;
+  campaignsFailedSubtitle: string;
   campaignsRetrying: boolean;
   onRetryCampaigns: () => void;
   currency: string;
   marketplaceIndex: SponsoredMarketplaceIndex;
   formatOptions: ReturnType<typeof formatsFromWorkKey>;
+  retailEditions: { format: string; snapshot: BookRetailSnapshot }[];
+  coverCacheKey?: string;
+  retailLoadState: "loading" | "ready" | "error";
   onCreateCampaign: () => void;
 }) {
   const t = useTheme();
@@ -472,6 +552,7 @@ function BookHeader({
               asin={asin}
               size="lg"
               recyclingKey={asin}
+              cacheKey={coverCacheKey}
             />
 
             <View style={styles.titleBlock}>
@@ -571,6 +652,22 @@ function BookHeader({
           <BookFormatBadges formats={formatOptions} />
         ) : null}
 
+        {retailEditions.length > 0 || retailLoadState === "error" ? (
+          <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: t.colors.separator, paddingTop: 8 }}>
+            <Text style={[t.typography.caption1, { color: t.colors.text_secondary, fontWeight: "700" }]}>
+              Amazon listing snapshots
+            </Text>
+            {retailLoadState === "error" ? (
+              <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 5 }]}>
+                Listing details could not load. Pull down to retry.
+              </Text>
+            ) : null}
+            {retailEditions.map(({ format, snapshot }) => (
+              <BookRetailInfo key={`${snapshot.asin}:${snapshot.marketplaceCode ?? ""}`} edition={format} snapshot={snapshot} />
+            ))}
+          </View>
+        ) : null}
+
         {displayBook ? (
           <View style={styles.efficiencyRow}>
             <Text
@@ -622,7 +719,7 @@ function BookHeader({
       {campaignsFailed ? (
         <RetryState
           title="Couldn't load campaigns"
-          subtitle="Book identity is still available. Retry to load linked campaigns."
+          subtitle={campaignsFailedSubtitle}
           onRetry={onRetryCampaigns}
           retrying={campaignsRetrying}
         />

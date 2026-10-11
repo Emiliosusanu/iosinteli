@@ -538,6 +538,56 @@ function applyHeuristicRelevanceFilter<
 }
 
 /**
+ * Transient Nest/Groq/xAI failures that should soft-retry (see
+ * RELEVANCE_SOFT_RETRY_GAPS_MS) before painting "AI unavailable"
+ * (`failed_unfiltered`). Auth / config / hard 4xx stay fail-fast.
+ */
+export function isTransientRelevanceError(error: unknown): boolean {
+  const status =
+    error && typeof error === "object" && "status" in error
+      ? Number((error as { status?: unknown }).status)
+      : NaN;
+  if (status === 401 || status === 403 || status === 400 || status === 404) {
+    return false;
+  }
+  const msg = error instanceof Error ? error.message : String(error ?? "");
+  if (
+    /sign in|unauthorized|forbidden|not configured|EXPO_PUBLIC_GROQ_API_KEY is not set/i.test(
+      msg,
+    )
+  ) {
+    return false;
+  }
+  if (status === 408 || status === 429 || status >= 500) return true;
+  return /aborted|timed out|timeout|429|TPM|rate.?limit|Request too large|network|ECONNRESET|fetch failed|502|503|504|Couldn't run Grok|Nest relevance|Groq relevance|Grok relevance filter unavailable|AI search-intent filter unavailable/i.test(
+    msg,
+  );
+}
+
+/** In-filter soft-retry gaps (ms) for transient Nest/Groq TPM/timeouts. */
+export const RELEVANCE_SOFT_RETRY_GAPS_MS = [800] as const;
+
+async function withRelevanceSoftRetry<T>(run: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  // `gaps.length` is the number of retries, so total attempts are +1. The old
+  // `< gaps.length` loop exited after the first failure and never retried.
+  for (let attempt = 0; attempt <= RELEVANCE_SOFT_RETRY_GAPS_MS.length; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientRelevanceError(error)) throw error;
+      if (attempt >= RELEVANCE_SOFT_RETRY_GAPS_MS.length) break;
+      const gap = RELEVANCE_SOFT_RETRY_GAPS_MS[attempt] ?? 1_200;
+      await new Promise((resolve) => setTimeout(resolve, gap));
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("AI search-intent filter unavailable.");
+}
+
+/**
  * Filter Amazon keyword/ASIN suggestions for the sponsored book + marketplace.
  * - identity: return unchanged (never invent)
  * - heuristic: filter product ASINs by title similarity; **keywords pass through**
@@ -548,6 +598,10 @@ function applyHeuristicRelevanceFilter<
  *   On Grok failure → Amazon rows with `failed_unfiltered` (UI must not
  *   auto-select / claim AI curated). Empty AI keep → Amazon restore with
  *   `restored_empty` (honest label). Edit prompts in suggestionRelevancePrompt.ts.
+ *   The server already retries provider rate limits. The client performs one
+ *   bounded retry after the initial bounded attempt, then keeps the real Amazon
+ *   rows available for selection;
+ *   it never starts a minutes-long retry chain or invents replacement rows.
  */
 export async function filterSuggestionsForBookRelevance<
   K extends { keyword: string; matchType?: string },
@@ -581,31 +635,64 @@ export async function filterSuggestionsForBookRelevance<
 
   const finishGrokKeep = (
     filtered: FilterableSuggestions<K, P>,
+    source: FilterableSuggestions<K, P> = suggestions,
   ): SuggestionRelevanceResult<K, P> => {
+    // A product with neither a real title nor an Amazon correlation theme has
+    // insufficient metadata for a safe AI rejection. Keep it for the seller to
+    // decide instead of letting a model guess from an ASIN alone.
+    const filteredProductKeys = new Set(
+      filtered.productTargets.map((row) =>
+        `${String(row.asin ?? "").trim().toUpperCase()}::${String(
+          row.matchType ?? "exact",
+        )
+          .trim()
+          .toLowerCase()}`,
+      ),
+    );
+    const protectedUnknownProducts = source.productTargets.filter((row) => {
+      const asin = String(row.asin ?? "").trim().toUpperCase();
+      const key = `${asin}::${String(row.matchType ?? "exact")
+        .trim()
+        .toLowerCase()}`;
+      const hasThemes = (row.themes ?? []).some((theme) => String(theme).trim());
+      return (
+        productTitleNeedsEnrichment(row.title, asin) &&
+        !hasThemes &&
+        !filteredProductKeys.has(key)
+      );
+    });
+    const safeFiltered = protectedUnknownProducts.length
+      ? {
+          ...filtered,
+          productTargets: [
+            ...filtered.productTargets,
+            ...protectedUnknownProducts,
+          ],
+        }
+      : filtered;
     const finalizedKw = finalizeKeywordRelevanceKeep(
-      suggestions.keywords,
-      filtered.keywords,
+      source.keywords,
+      safeFiltered.keywords,
     );
     const finalizedProducts = finalizeProductRelevanceKeep(
-      suggestions.productTargets,
-      filtered.productTargets,
+      source.productTargets,
+      safeFiltered.productTargets,
     );
     const kwOutcome = outcomeAfterKeywordKeep(
-      suggestions.keywords.length,
+      source.keywords.length,
       finalizedKw.keywords.length,
       finalizedKw.restoredEmpty,
     );
     // Products-only: drive outcome from product keep. Mixed: prefer keyword
     // outcome when keywords existed (create KW chrome); products still curated.
     const productOnly =
-      suggestions.keywords.length === 0 &&
-      suggestions.productTargets.length > 0;
+      source.keywords.length === 0 && source.productTargets.length > 0;
     let relevanceOutcome: SuggestionRelevanceOutcome = kwOutcome;
     if (productOnly) {
       if (finalizedProducts.restoredEmpty) relevanceOutcome = "restored_empty";
       else if (
         finalizedProducts.productTargets.length <
-        suggestions.productTargets.length
+        source.productTargets.length
       ) {
         relevanceOutcome = "filtered";
       } else {
@@ -635,25 +722,42 @@ export async function filterSuggestionsForBookRelevance<
   if (mode === "grok" || mode === "openai") {
     if (opts?.grokFilter) {
       try {
-        return finishGrokKeep(await opts.grokFilter(suggestions, context));
+        return finishGrokKeep(
+          await withRelevanceSoftRetry(() =>
+            opts.grokFilter!(suggestions, context),
+          ),
+        );
       } catch (error) {
         return failUnfiltered(error);
       }
     }
     if (opts?.openaiFilter) {
       try {
-        return finishGrokKeep(await opts.openaiFilter(suggestions, context));
+        return finishGrokKeep(
+          await withRelevanceSoftRetry(() =>
+            opts.openaiFilter!(suggestions, context),
+          ),
+        );
       } catch (error) {
         return failUnfiltered(error);
       }
     }
     try {
-      // Skip retail scrape before Groq — Nest titles + themes are enough for
-      // the keep-list; UI fills missing titles via useProductSuggestionAsinMeta.
-      // (Retail enrich was adding tens of seconds for little keep quality.)
-      const { filterSuggestionsWithGrok, groqApiKeys } = await import(
-        "./suggestionRelevanceGrok.ts"
+      // Give every product ASIN a bounded metadata pass before Groq. The hard
+      // budget keeps the picker responsive; unresolved ASIN-only rows are
+      // protected above and cannot be rejected by the model without evidence.
+      const enrichedProductTargets = await enrichProductTargetsForRelevanceFilter(
+        suggestions.productTargets,
+        {
+          countryCode: context.countryCode,
+          maxRetail: suggestions.productTargets.length,
+          budgetMs: 2_500,
+        },
       );
+      const relevanceInput: FilterableSuggestions<K, P> = {
+        keywords: suggestions.keywords,
+        productTargets: enrichedProductTargets,
+      };
       const preferGroqEnv =
         String(process.env.EXPO_PUBLIC_SUGGESTION_PREFER_GROQ ?? "")
           .trim()
@@ -661,15 +765,22 @@ export async function filterSuggestionsForBookRelevance<
         String(process.env.EXPO_PUBLIC_SUGGESTION_PREFER_GROQ ?? "")
           .trim()
           .toLowerCase() === "true";
-      // Prefer client Groq (skip Nest relevance hop). Fall back to Nest→xAI→Groq
-      // only when no Groq keys are baked into the binary.
-      const preferGroq = preferGroqEnv || groqApiKeys().length > 0;
+      // Default Nest → xAI → Groq. Only skip Nest when explicitly benching
+      // client Groq (EXPO_PUBLIC_SUGGESTION_PREFER_GROQ=1). Baked Groq keys
+      // alone must NOT force preferGroq — that made Create AI fail-closed on
+      // free-tier TPM while Nest relevance-filter was healthy.
       return finishGrokKeep(
-        await filterSuggestionsWithGrok(
-          suggestions,
-          context,
-          preferGroq ? { preferGroq: true } : undefined,
-        ),
+        await withRelevanceSoftRetry(async () => {
+          const { filterSuggestionsWithGrok } = await import(
+            "./suggestionRelevanceGrok.ts"
+          );
+          return filterSuggestionsWithGrok(
+            relevanceInput,
+            context,
+            preferGroqEnv ? { preferGroq: true } : undefined,
+          );
+        }),
+        relevanceInput,
       );
     } catch (error) {
       return failUnfiltered(error);
@@ -810,6 +921,33 @@ export function sortProductSuggestionsByTitleSimilarity<T extends ProductSuggest
 export type BidMode = "default" | "custom";
 
 export type KeywordMatchType = "broad" | "phrase" | "exact";
+
+/**
+ * Return only selected indexes that are still eligible for submission.
+ * Suggestions can be re-ranked, removed as duplicates, or hidden after an
+ * asynchronous existing-entity read. Counts and payloads must share this
+ * exact ordered set so the UI never promises more rows than it sends.
+ */
+export function selectedEligibleSuggestionIndexes(
+  selected: ReadonlySet<number>,
+  eligibleIndexes: Iterable<number>,
+): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const index of eligibleIndexes) {
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      seen.has(index) ||
+      !selected.has(index)
+    ) {
+      continue;
+    }
+    seen.add(index);
+    out.push(index);
+  }
+  return out;
+}
 
 /**
  * Normalize Amazon / Nest keyword match codes. Never drop a keyword for an
@@ -1044,12 +1182,18 @@ export function offerKeywordMatchCompanions<
   if (!rows.length) return rows;
   const typesByPhrase = new Map<string, Set<KeywordMatchType>>();
   const templateByPhrase = new Map<string, T>();
+  const uniqueRows: T[] = [];
+  const seenEntities = new Set<string>();
   for (const row of rows) {
     const key = String(row.keyword ?? "")
       .trim()
       .toLowerCase();
     if (!key) continue;
     const match = normalizeKeywordMatchType(row.matchType);
+    const entityKey = `${key}::${match}`;
+    if (seenEntities.has(entityKey)) continue;
+    seenEntities.add(entityKey);
+    uniqueRows.push({ ...row, matchType: match });
     if (!typesByPhrase.has(key)) {
       typesByPhrase.set(key, new Set());
       templateByPhrase.set(key, { ...row, matchType: match });
@@ -1065,7 +1209,7 @@ export function offerKeywordMatchCompanions<
       companions.push({ ...template, matchType: match });
     }
   }
-  return companions.length ? [...rows, ...companions] : rows;
+  return companions.length ? [...uniqueRows, ...companions] : uniqueRows;
 }
 
 /** Unique keyword phrases (case-insensitive), for honest UI counts. */
@@ -1177,7 +1321,7 @@ export function buildProductSuggestionCountStats(input: {
  *   "Amazon · {N} phrases · {M} · Ranking…"
  *   "Amazon · {N} phrases · {M} · Kept {K}"
  *   "Amazon · {N} phrases · {M} · AI kept all"  (Grok finished, no thin)
- *   "Amazon · {N} · AI filter failed · unfiltered"
+ *   "Amazon · {N} · Amazon suggestions"
  *   "Amazon · {N} · Amazon restored (AI empty)"
  */
 export function formatKeywordSuggestionCountLabel(
@@ -1205,7 +1349,7 @@ export function formatKeywordSuggestionCountLabel(
   if (stats.grokPending || outcome === "pending") {
     parts.push("Ranking…");
   } else if (outcome === "failed_unfiltered") {
-    parts.push("AI filter failed · unfiltered");
+    parts.push("Amazon suggestions");
   } else if (outcome === "restored_empty") {
     parts.push("Amazon restored (AI empty)");
   } else if (outcome === "user_accepted_unfiltered") {
@@ -1234,7 +1378,11 @@ export function formatKeywordSuggestionCountLabel(
   return parts.join(" · ");
 }
 
-/** True when Step 2 failed or restored empty — block auto-select until user confirms. */
+/**
+ * Raw Amazon rows remain visible after provider failure, but they are not an AI
+ * result. Keep selection blocked until the user retries or explicitly chooses
+ * the unfiltered Amazon set.
+ */
 export function suggestionRelevanceNeedsUserConfirm(
   stats: KeywordSuggestionCountStats | null | undefined,
 ): boolean {

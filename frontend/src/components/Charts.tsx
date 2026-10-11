@@ -9,7 +9,8 @@ import Svg, { Path, Circle, Rect, Line, Text as SvgText, Defs, LinearGradient, S
 import { useTheme, toneColor } from "../lib/theme";
 import { formatCompact, formatInt, formatPercent, safeDivide, formatCurrency } from "../lib/format";
 import { hasAuthoritativeBreakEven } from "../lib/kdpTitlePresentation";
-import { dayBarStep, dayXLayout } from "../lib/chartLayout";
+import { dayBarStep, dayLabelTextAnchor, dayXLayout } from "../lib/chartLayout";
+import { resolveChartDayFinance } from "../lib/chartDayFinance";
 import { useOverviewPeriodSwipeGesture } from "./OverviewPeriodSwipe";
 import { useOverviewWidgetPageSwipeGesture } from "./OverviewWidgetPageSwipe";
 
@@ -100,15 +101,20 @@ function buildChartDaySelection(
   royaltiesData?: ChartPoint[],
   spendData?: ChartPoint[],
 ): NonNullable<ChartDaySelection> {
-  const point = data[index];
-  return {
+  const resolved = resolveChartDayFinance({
     index,
-    label: point?.label,
-    date: point?.date,
-    net: point?.value ?? 0,
-    royalties: royaltiesData?.[index]?.value ?? null,
-    spend: spendData?.[index]?.value ?? 0,
-    sales: point?.sales ?? 0,
+    netPoint: data[index],
+    royaltiesSeries: royaltiesData,
+    spendSeries: spendData,
+  });
+  return {
+    index: resolved.index,
+    label: resolved.label,
+    date: resolved.date,
+    net: resolved.net,
+    royalties: resolved.royalties,
+    spend: resolved.spend,
+    sales: resolved.sales,
   };
 }
 
@@ -172,6 +178,12 @@ function useChartSelection(
   const widgetPageSwipe = useOverviewWidgetPageSwipeGesture();
   const gesture = React.useMemo(() => {
     const pan = Gesture.Pan().failOffsetY([-10, 10]);
+    const tap = Gesture.Tap()
+      .maxDuration(280)
+      .maxDistance(12)
+      .onEnd((event, success) => {
+        if (success) runOnJS(selectByX)(event.x);
+      });
     if (holdToInspect) {
       pan.activateAfterLongPress(160);
     } else {
@@ -180,11 +192,15 @@ function useChartSelection(
     // Day scrub wins over period chrome + widget page pans.
     if (periodSwipe) pan.blocksExternalGesture(periodSwipe);
     if (widgetPageSwipe) pan.blocksExternalGesture(widgetPageSwipe);
+    if (periodSwipe) tap.blocksExternalGesture(periodSwipe);
+    if (widgetPageSwipe) tap.blocksExternalGesture(widgetPageSwipe);
     pan.onStart((e) => runOnJS(selectByX)(e.x)).onUpdate((e) => runOnJS(selectByX)(e.x));
     if (!persistSelection) {
       pan.onFinalize(() => runOnJS(clearSelection)());
     }
-    return pan;
+    // A deliberate tap pins the inspected day. Horizontal dragging still
+    // scrubs the full series and retains the existing release behavior.
+    return Gesture.Race(tap, pan);
   }, [selectByX, clearSelection, persistSelection, holdToInspect, periodSwipe, widgetPageSwipe]);
 
   return { selectedIndex, gesture, clearSelection };
@@ -485,7 +501,7 @@ export function PerformanceChart({ spendData, salesData, width = 320, currency, 
 
         {/* X-axis labels */}
         {xAxisLabels(spendData).map(({ index, label, key }) => (
-          <SvgText key={key} x={spendPoints[index]?.x ?? inset} y={chartHeight + 20} textAnchor={index === 0 ? "start" : index === spendData.length - 1 ? "end" : "middle"} fontSize={11} fill={t.colors.text_tertiary}>
+          <SvgText key={key} x={spendPoints[index]?.x ?? inset} y={chartHeight + 20} textAnchor={dayLabelTextAnchor(index, spendData.length, spendPoints[index]?.x ?? inset, chartWidth - inset)} fontSize={11} fill={t.colors.text_tertiary}>
             {label}
           </SvgText>
         ))}
@@ -666,10 +682,10 @@ export type ChartDaySelection = {
   index: number;
   label?: string;
   date?: string;
-  net: number;
+  net: number | null;
   royalties: number | null;
-  spend: number;
-  sales: number;
+  spend: number | null;
+  sales: number | null;
 } | null;
 
 interface NetProfitChartProps {
@@ -937,7 +953,7 @@ export function NetProfitChart({
 
           {xLabels.map(({ index, label, key }) => {
             const x = leftGutter + (points[index]?.x ?? inset);
-            const anchor = index === 0 ? "start" : index === data.length - 1 ? "end" : "middle";
+            const anchor = dayLabelTextAnchor(index, data.length, x, leftGutter + plotWidth);
             const active = selectedIndex === index;
             return (
               <SvgText
@@ -1325,7 +1341,7 @@ export function AdsEngineChart({
               key={key}
               x={clickPoints[index]?.x ?? inset}
               y={chartHeight + 20}
-              textAnchor={index === 0 ? "start" : index === impressionsData.length - 1 ? "end" : "middle"}
+              textAnchor={dayLabelTextAnchor(index, impressionsData.length, clickPoints[index]?.x ?? inset, chartWidth - inset)}
               fontSize={11}
               fill={t.colors.text_tertiary}
             >
@@ -1471,7 +1487,7 @@ export function KdpFormatRoyaltiesChart({
               key={key}
               x={points[index]?.x ?? inset}
               y={chartHeight + 20}
-              textAnchor={index === 0 ? "start" : index === days.length - 1 ? "end" : "middle"}
+              textAnchor={dayLabelTextAnchor(index, days.length, points[index]?.x ?? inset, chartWidth - inset)}
               fontSize={11}
               fill={t.colors.text_tertiary}
             >
@@ -1484,10 +1500,11 @@ export function KdpFormatRoyaltiesChart({
   );
 }
 
-// Campaign daily chart — impressions as background bars + spend / orders / ACoS lines.
+// Campaign daily chart — impressions as background bars + clicks / spend / orders / ACoS lines.
 // Each line is normalized to its own max so all are readable at once.
 interface CampaignDailyChartProps {
   impressionsData: ChartPoint[];
+  clicksData: ChartPoint[];
   spendData: ChartPoint[];
   ordersData: ChartPoint[];
   acosData: ChartPoint[];
@@ -1495,7 +1512,7 @@ interface CampaignDailyChartProps {
   currency?: string;
 }
 
-export function CampaignDailyChart({ impressionsData, spendData, ordersData, acosData, width = 320, currency }: CampaignDailyChartProps) {
+export function CampaignDailyChart({ impressionsData, clicksData, spendData, ordersData, acosData, width = 320, currency }: CampaignDailyChartProps) {
   const t = useTheme();
   const chartWidth = innerChartWidth(width, 0);
   const chartHeight = 175;
@@ -1505,6 +1522,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
   const baseY = chartHeight - inset;
 
   const maxImpr   = Math.max(...impressionsData.map((d) => d.value), 1);
+  const maxClicks = Math.max(...clicksData.map((d) => d.value), 1);
   const maxSpend  = Math.max(...spendData.map((d) => d.value), 1);
   const maxOrders = Math.max(...ordersData.map((d) => d.value), 1);
   const maxAcos   = Math.max(...acosData.map((d) => d.value), 1);
@@ -1521,6 +1539,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
   }
 
   const imprPts   = scale(impressionsData, maxImpr);
+  const clickPts  = scale(clicksData, maxClicks);
   const spendPts  = scale(spendData, maxSpend);
   const orderPts  = scale(ordersData, maxOrders);
   const acosPts   = scale(acosData, maxAcos);
@@ -1530,6 +1549,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
   const barW = clamp(barStep * 0.55, 2, 14);
 
   const colSpend = t.colors.tone_warning;
+  const colClicks = t.colors.tone_placement;
   const colOrders = t.colors.tone_primary;
   const colAcos = t.colors.tone_good;
 
@@ -1539,7 +1559,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
       <View style={chartStyles.tooltipRow}>
         <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{impressionsData[i]?.label ?? "—"}</Text>
         <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "700" }]} numberOfLines={1}>
-          {formatCompact(impressionsData[i]?.value ?? 0)} impr · {formatCurrency(spendData[i]?.value ?? 0, currency, { compact: true })} · {formatInt(ordersData[i]?.value ?? 0)} ord · {formatPercent(acosData[i]?.value ?? 0)}
+          {formatCompact(impressionsData[i]?.value ?? 0)} impr · {formatInt(clicksData[i]?.value ?? 0)} clk · {formatCurrency(spendData[i]?.value ?? 0, currency, { compact: true })} · {formatInt(ordersData[i]?.value ?? 0)} ord · {formatPercent(acosData[i]?.value ?? 0)} ACoS
         </Text>
       </View>
       <Svg width={chartWidth} height={chartHeight + 30}>
@@ -1550,7 +1570,8 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
           <Rect key={idx} x={p.x - barW / 2} y={p.y} width={barW} height={Math.max(1, baseY - p.y)} rx={2} fill={t.colors.chart_grid} opacity={idx === i ? 0.9 : 0.4} />
         ))}
 
-        {/* Spend / Orders / ACoS lines */}
+        {/* Clicks / Spend / Orders / ACoS lines */}
+        <Path d={makeSmoothPath(clickPts)} stroke={colClicks} strokeWidth={2.5} fill="none" strokeLinecap="round" />
         <Path d={makeSmoothPath(spendPts)} stroke={colSpend} strokeWidth={2.5} fill="none" strokeLinecap="round" />
         <Path d={makeSmoothPath(orderPts)} stroke={colOrders} strokeWidth={2.5} fill="none" strokeLinecap="round" />
         <Path d={makeSmoothPath(acosPts)} stroke={colAcos} strokeWidth={2.5} fill="none" strokeLinecap="round" />
@@ -1559,6 +1580,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
         {imprPts[i] && (
           <>
             <Line x1={imprPts[i].x} y1={inset} x2={imprPts[i].x} y2={baseY} stroke={t.colors.text_tertiary} strokeWidth={1} opacity={0.3} />
+            <Circle cx={clickPts[i].x} cy={clickPts[i].y} r={4} fill={colClicks} />
             <Circle cx={spendPts[i].x} cy={spendPts[i].y} r={4} fill={colSpend} />
             <Circle cx={orderPts[i].x} cy={orderPts[i].y} r={4} fill={colOrders} />
             <Circle cx={acosPts[i].x} cy={acosPts[i].y} r={4} fill={colAcos} />
@@ -1566,7 +1588,7 @@ export function CampaignDailyChart({ impressionsData, spendData, ordersData, aco
         )}
 
         {xAxisLabels(impressionsData).map(({ index, label, key }) => (
-          <SvgText key={key} x={imprPts[index]?.x ?? inset} y={chartHeight + 20} textAnchor={index === 0 ? "start" : index === impressionsData.length - 1 ? "end" : "middle"} fontSize={11} fill={t.colors.text_tertiary}>
+          <SvgText key={key} x={imprPts[index]?.x ?? inset} y={chartHeight + 20} textAnchor={dayLabelTextAnchor(index, impressionsData.length, imprPts[index]?.x ?? inset, chartWidth - inset)} fontSize={11} fill={t.colors.text_tertiary}>
             {label}
           </SvgText>
         ))}
@@ -1694,7 +1716,7 @@ export function BusinessTrendChart({ royaltiesData, spendData, netData, organicO
         )}
 
         {xAxisLabels(royaltiesData).map(({ index, label, key }) => (
-          <SvgText key={key} x={royaltiesPoints[index]?.x ?? inset} y={chartHeight + 20} textAnchor={index === 0 ? "start" : index === royaltiesData.length - 1 ? "end" : "middle"} fontSize={11} fill={t.colors.text_tertiary}>
+          <SvgText key={key} x={royaltiesPoints[index]?.x ?? inset} y={chartHeight + 20} textAnchor={dayLabelTextAnchor(index, royaltiesData.length, royaltiesPoints[index]?.x ?? inset, chartWidth - inset)} fontSize={11} fill={t.colors.text_tertiary}>
             {label}
           </SvgText>
         ))}

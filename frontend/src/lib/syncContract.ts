@@ -56,6 +56,26 @@ export function isActiveSyncStatus(status: string): boolean {
   return status === "pending" || status === "running" || status === "processing" || status === "in_progress";
 }
 
+/**
+ * Hourly profiles with large keyword/target catalogs routinely need 95–105
+ * minutes. Keep this aligned with the server's
+ * HOURLY_ACTIVE_SYNC_TIMEOUT_MINUTES so an active large sync is never shown as
+ * stale while the worker still owns it.
+ */
+export const ACTIVE_PROFILE_SYNC_STALE_MINUTES = 120;
+
+export function isActiveProfileSyncStale(input: {
+  status?: string | null;
+  startedAt?: string | null;
+  now?: number;
+}): boolean {
+  if (!isActiveSyncStatus(String(input.status ?? "").toLowerCase())) return false;
+  const startedAtMs = Date.parse(String(input.startedAt ?? ""));
+  if (!Number.isFinite(startedAtMs)) return false;
+  const ageMs = Math.max(0, (input.now ?? Date.now()) - startedAtMs);
+  return ageMs > ACTIVE_PROFILE_SYNC_STALE_MINUTES * 60_000;
+}
+
 export function isFailedSyncStatus(status: string): boolean {
   return status === "failed" || status === "partial_failed";
 }

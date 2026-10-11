@@ -46,6 +46,14 @@ function isValidAsin(asin: string): boolean {
   return /^[A-Z0-9]{10}$/.test(asin);
 }
 
+/** Product ads may carry the advertised book's ASIN in SKU when ASIN is null. */
+export function sponsoredBookAsin(row: { asin?: string | null; sku?: string | null }): string | null {
+  const asin = normalizeAsin(row.asin);
+  if (isValidAsin(asin)) return asin;
+  const sku = normalizeAsin(row.sku);
+  return isValidAsin(sku) ? sku : null;
+}
+
 function money(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -217,7 +225,9 @@ export function dedupeTargetingBookOptions<T extends TargetingBookFilterOption>(
       ...next,
       asin,
       title: preferTitle(prev.title, next.title, asin),
-      image_url: pickCover(prev.image_url, next.image_url),
+      image_url: editionYear(next.title) > editionYear(prev.title)
+        ? pickCover(next.image_url, prev.image_url)
+        : pickCover(prev.image_url, next.image_url),
       campaignIds: mergedIds,
       campaignCount: Math.max(
         Number(prev.campaignCount) || 0,
@@ -299,8 +309,11 @@ export function collapseTargetingBookOptionsByParent<T extends TargetingBookFilt
         if (trimmed) campaignIds.add(trimmed);
       }
       if (!groupKey && row.groupKey) groupKey = String(row.groupKey);
+      const previousTitle = title;
       title = preferTitle(title, row.title, row.asin);
-      image_url = pickCover(image_url, row.image_url);
+      image_url = editionYear(row.title) > editionYear(previousTitle)
+        ? pickCover(row.image_url, image_url)
+        : pickCover(image_url, row.image_url);
       hasKdpData = hasKdpData || !!row.hasKdpData;
       inStock = inStock || !!row.inStock;
     }

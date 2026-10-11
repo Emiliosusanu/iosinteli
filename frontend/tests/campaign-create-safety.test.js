@@ -33,6 +33,21 @@ test("campaign creation uses server-verified KDP and Amazon Ads identity", () =>
   assert.doesNotMatch(screen, /name match/i);
 });
 
+test("disabled marketplaces require exact live stock and explicit enable confirmation", () => {
+  assert.match(mutations, /includeDisabled=true/);
+  assert.match(screen + stock, /confirmedDisabledMarketplacesForBook/);
+  assert.match(screen, /disabledConfirmedMarketplaces/);
+  assert.match(screen, /toggleAmazonProfile/);
+  assert.match(screen, /Enable & choose/);
+  assert.match(screen, /Enable & use/);
+  assert.match(
+    screen,
+    /is confirmed sponsorable on \$\{country\} through \$\{account\}/,
+  );
+  assert.match(stock, /profile\.is_enabled === false/);
+  assert.match(stock, /amazonAdsStockConfirmed/);
+});
+
 test("book-first flow confirms Ads stock and live-gates soft product ads", () => {
   assert.match(screen, /title="Book"/);
   assert.match(screen, /title="Marketplace"/);
@@ -85,8 +100,10 @@ test("suggestions are Amazon-owned and missing suggested bids fall back explicit
 
 test("suggestion meta enrich ignores stale async after book or marketplace change", () => {
   assert.match(screen, /suggestionMetaGenRef/);
-  assert.match(screen, /const gen = \+\+suggestionMetaGenRef\.current/);
-  assert.match(screen, /if \(gen !== suggestionMetaGenRef\.current\) return/);
+  assert.match(screen, /const metaGen = \+\+suggestionMetaGenRef\.current/);
+  assert.match(screen, /if \(metaGen !== suggestionMetaGenRef\.current\) return/);
+  assert.match(screen, /previewRequestGenRef/);
+  assert.match(screen, /targetingRef\.current !== requestTargeting/);
   assert.match(screen, /fetchAsinDisplayMeta/);
   assert.match(screen, /fetchAmazonRetailTitles/);
   assert.match(screen, /skipRetail:\s*true/);
@@ -202,8 +219,15 @@ test("all Amazon suggestions remain accessible without rendering an unbounded li
   assert.match(screen, /Select all ·/);
   assert.match(screen, /toggleSelectAllSuggestions/);
   assert.match(screen, /Show \$\{Math\.min\(SUGGESTION_PAGE_SIZE/);
-  assert.match(screen, /new Set\(\(result\.keywords \?\? \[\]\)\.map\(\(_, index\) => index\)\)/);
-  assert.match(screen, /new Set\(\(result\.productTargets \?\? \[\]\)\.map\(\(_, index\) => index\)\)/);
+  assert.doesNotMatch(
+    screen,
+    /new Set\(\(result\.keywords \?\? \[\]\)\.map\(\(_, index\) => index\)\)/,
+  );
+  assert.doesNotMatch(
+    screen,
+    /new Set\(\(result\.productTargets \?\? \[\]\)\.map\(\(_, index\) => index\)\)/,
+  );
+  assert.match(screen, /Suggestions are recommendations, not user intent/);
   assert.doesNotMatch(screen, /100 target limit/);
 });
 
@@ -257,7 +281,7 @@ test("marketplace-scoped active campaigns use profile+ASIN product_ads fetch", (
   );
 });
 
-test("Create keeps suggestions visible: sticky chrome off, paste above Amazon list", () => {
+test("Create keeps suggestions visible: sticky chrome off, Kept above paste", () => {
   assert.match(screen, /showSuggestionStickyChrome = false/);
   assert.match(screen, /testID="campaign-create-your-keywords"/);
   assert.match(screen, /testID="campaign-create-your-asins"/);
@@ -265,11 +289,23 @@ test("Create keeps suggestions visible: sticky chrome off, paste above Amazon li
   assert.match(screen, /overflow:\s*"visible"/);
   assert.match(screen, /minHeight:\s*44/);
   assert.match(screen, /height:\s*44/);
-  // Your keywords must appear before the Amazon chip list in source order.
+  // Kept chrome lives under Refresh (above-fold); paste card follows Amazon list.
+  const refresh = screen.indexOf('testID="campaign-create-refresh-suggestions"');
+  const aiChrome = screen.indexOf("campaign-create-ai-filter", refresh);
   const yourKw = screen.indexOf('testID="campaign-create-your-keywords"');
-  const listStart = screen.indexOf("keywordSuggestionRows.length ?", yourKw);
-  assert.ok(yourKw >= 0 && listStart > yourKw);
+  const listStart = screen.indexOf("keywordSuggestionRows.length ?", refresh);
+  assert.ok(refresh >= 0 && aiChrome > refresh);
+  assert.ok(yourKw >= 0 && listStart > refresh && yourKw > listStart);
   assert.match(screen, /testID="campaign-create-refresh-suggestions"/);
+  // Active campaigns must sit below suggestions so Keywords chrome paints
+  // in the first viewport (not Refresh-only under tall Active cards).
+  const active = screen.indexOf('testID="campaign-create-existing-campaigns"');
+  const budget = screen.indexOf('title="Budget"', refresh);
+  assert.ok(active > budget && budget > refresh);
+  assert.match(screen, /pendingKeywordCountsShell/);
+  assert.match(screen, /previewRequestGenRef/);
+  assert.match(screen, /paint discarded/);
+  assert.match(screen, /softShellRecoverRef/);
 });
 
 test("Create campaign keeps SubScreen chrome always visible", () => {

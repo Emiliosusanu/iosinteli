@@ -56,6 +56,41 @@ export function productPromptNeedsChunking(
   );
 }
 
+/**
+ * Split a list into LLM batches with **full coverage** — every index appears
+ * in exactly one slice. Chunking is TPM/size only; never a silent drop at 50.
+ * UI "Show more" (SUGGESTION_PAGE_SIZE=50) must never call this.
+ */
+export function planRelevanceChunks<T>(
+  items: T[],
+  chunkSize: number,
+): Array<{ slice: T[]; offset: number }> {
+  const size = Math.max(1, Math.floor(chunkSize) || 1);
+  if (items.length === 0) return [];
+  const out: Array<{ slice: T[]; offset: number }> = [];
+  for (let offset = 0; offset < items.length; offset += size) {
+    out.push({ slice: items.slice(offset, offset + size), offset });
+  }
+  return out;
+}
+
+/** True when slices cover [0..total) with no gaps or overlaps. */
+export function relevanceChunksCoverAll(
+  slices: Array<{ slice: { length: number }; offset: number }>,
+  total: number,
+): boolean {
+  if (total <= 0) return slices.length === 0;
+  let covered = 0;
+  let expect = 0;
+  for (const entry of slices) {
+    if (entry.offset !== expect) return false;
+    if (entry.slice.length <= 0) return false;
+    covered += entry.slice.length;
+    expect = entry.offset + entry.slice.length;
+  }
+  return covered === total && expect === total;
+}
+
 function cleanText(value: unknown): string {
   const s = String(value ?? "").trim();
   return s || "—";

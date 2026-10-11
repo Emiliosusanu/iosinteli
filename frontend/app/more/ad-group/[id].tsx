@@ -9,19 +9,26 @@ import { ParentLinks, targetingPerfStatus } from "@/src/components/EntityDetail"
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { acosTone, layout, radii, spacing, toneColor, useTheme } from "@/src/lib/theme";
-import { applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityState } from "@/src/lib/invalidateAds";
+import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, patchEntityInQueryData, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { updateAdGroupManual, updateAdGroupState, updateKeywordManual, updateProductTargetManual } from "@/src/lib/mutations";
-import { fetchAdGroupAutomationHistory, fetchAdGroups, fetchKeywords, fetchProductTargets, fetchSearchTerms } from "@/src/lib/queries";
-import { shouldShowActiveOrPausedWithData, statusLabel } from "@/src/lib/campaigns";
+import { fetchAdGroupAutomationHistory, fetchAdGroupById, fetchExactCampaignTargetingCatalog, fetchSearchTerms } from "@/src/lib/queries";
+import { shouldShowActiveOrPausedWithData } from "@/src/lib/campaigns";
 import { describeProductTarget, fallbackAsinCoverUrl, formatMatchTypeLabel, isExactMatchType, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
 import { resolveAdGroupAddMode } from "@/src/lib/adGroupTargets";
 import { formatCurrency, formatInt, formatPercent, safeDivide } from "@/src/lib/format";
-import { EmptyState, FilterChrome, SectionCard, ToneDot, MetricStrip, RetryState, ScreenSpinner, ListCard, DenseMetricLine } from "@/src/components/Primitives";
+import { rowCurrencyOfProfile } from "@/src/lib/accountsUi";
+import { EmptyState, FilterChrome, SectionCard, MetricStrip, RetryState, ScreenSpinner, ListCard, DenseMetricLine } from "@/src/components/Primitives";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { fastAddSearchTermExact, searchTermLooksTargeted } from "@/src/lib/searchTermHarvest";
 import { sortSearchTermsAcosThenSpend } from "@/src/lib/searchTermSort";
+import { compareByTargetingRpcAcos } from "@/src/lib/targetingPage";
+import { useVisibleProductTargetTitles } from "@/src/lib/useVisibleProductTargetTitles";
 
 type TabKey = "targets" | "searchTerms" | "history";
+type TargetStateFilter = "all" | "enabled";
+
+/** Keep each render bounded while allowing every row in the exact-period catalog to be reached. */
+const AD_GROUP_TARGET_PAGE_SIZE = 200;
 
 function paramId(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value[0] ?? "";
@@ -32,12 +39,13 @@ export default function AdGroupDetailScreen() {
   const t = useTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, defaultExactBid } = useApp();
+  const invalidateAds = useInvalidateAds();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, defaultExactBid, profiles } = useApp();
   const { user, guestMode } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
   const writeGuard = { guestMode, viewAsOtherUser };
   const params = useLocalSearchParams<{
-    id: string; name?: string; isAuto?: string; state?: string;
+    id: string; name?: string; isAuto?: string; state?: string; currency?: string;
     spend?: string; orders?: string; acos?: string; ctr?: string; clicks?: string; impressions?: string;
   }>();
   const id = paramId(params.id);
@@ -45,7 +53,10 @@ export default function AdGroupDetailScreen() {
   const isAuto = paramId(params.isAuto);
   const stateParam = paramId(params.state);
   const [tab, setTab] = useState<TabKey>("targets");
+  const [targetStateFilter, setTargetStateFilter] = useState<TargetStateFilter>("all");
   const [search, setSearch] = useState("");
+  const [keywordLimit, setKeywordLimit] = useState(AD_GROUP_TARGET_PAGE_SIZE);
+  const [targetLimit, setTargetLimit] = useState(AD_GROUP_TARGET_PAGE_SIZE);
   const [refreshing, setRefreshing] = useState(false);
   const [bidOpen, setBidOpen] = useState(false);
   const [keywordBid, setKeywordBid] = useState<{ id: string; title: string; value: number } | null>(null);
@@ -53,25 +64,50 @@ export default function AdGroupDetailScreen() {
   const [addingExactId, setAddingExactId] = useState<string | null>(null);
 
   const adGroupsQ = useQuery({
-    queryKey: ["ad-groups-list", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => fetchAdGroups(selectedProfileIds, undefined, { start: dateRange.start, end: dateRange.end }),
+    queryKey: ["ad-group-detail", id, selectedProfileIds, dateRange.start, dateRange.end],
+    queryFn: () => fetchAdGroupById(id, selectedProfileIds, { start: dateRange.start, end: dateRange.end }),
     enabled: !!id && selectedProfileIds.length > 0,
   });
-  const group = useMemo(() => (adGroupsQ.data ?? []).find((row) => row.id === id), [adGroupsQ.data, id]);
+  const group = adGroupsQ.data ?? null;
+  const groupCurrency = rowCurrencyOfProfile(
+    profiles,
+    group?.amazon_profile_id,
+    paramId(params.currency) || primaryCurrency,
+  );
   const groupState = String(group?.state ?? stateParam ?? "");
   const displayName = group?.name || nameParam || "Ad Group";
   const auto = group?.is_auto ?? isAuto === "true";
 
   const keywordsQ = useQuery({
-    queryKey: ["adgroup-keywords", adminFilterUserId ?? "self", id, dateRange.start, dateRange.end],
-    queryFn: () => fetchKeywords(selectedProfileIds, { adGroupId: id, start: dateRange.start, end: dateRange.end, filterUserId: adminFilterUserId }),
-    enabled: !!id && selectedProfileIds.length > 0,
+    queryKey: ["adgroup-keywords-exact-period", adminFilterUserId ?? "self", user?.id ?? "anon", id, group?.campaign_id, dateRange.start, dateRange.end],
+    queryFn: () => fetchExactCampaignTargetingCatalog({
+      campaignId: String(group!.campaign_id),
+      profiles: [group!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean),
+      start: dateRange.start,
+      end: dateRange.end,
+      ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+      state: "all",
+      includeKeywords: true,
+      includeProductTargets: false,
+    }),
+    select: (catalog) => catalog.keywords.filter((row) => String(row.ad_group_id ?? "") === id),
+    enabled: !!id && !!group?.campaign_id && selectedProfileIds.length > 0,
   });
 
   const targetsQ = useQuery({
-    queryKey: ["adgroup-targets", adminFilterUserId ?? "self", id, dateRange.start, dateRange.end],
-    queryFn: () => fetchProductTargets(selectedProfileIds, { adGroupId: id, start: dateRange.start, end: dateRange.end, filterUserId: adminFilterUserId }),
-    enabled: !!id && selectedProfileIds.length > 0,
+    queryKey: ["adgroup-targets-exact-period", adminFilterUserId ?? "self", user?.id ?? "anon", id, group?.campaign_id, dateRange.start, dateRange.end],
+    queryFn: () => fetchExactCampaignTargetingCatalog({
+      campaignId: String(group!.campaign_id),
+      profiles: [group!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean),
+      start: dateRange.start,
+      end: dateRange.end,
+      ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+      state: "all",
+      includeKeywords: false,
+      includeProductTargets: true,
+    }),
+    select: (catalog) => catalog.productTargets.filter((row) => String(row.ad_group_id ?? "") === id),
+    enabled: !!id && !!group?.campaign_id && selectedProfileIds.length > 0,
   });
 
   const searchTermsQ = useQuery({
@@ -100,20 +136,27 @@ export default function AdGroupDetailScreen() {
     () =>
       (keywordsQ.data ?? [])
         .filter((kw) => shouldShowActiveOrPausedWithData(kw as any, kw.status))
+        .filter((kw) => targetStateFilter === "all" || String(kw.status ?? "").toLowerCase() === "enabled")
         .filter((kw) => !searchNeedle || `${kw.keyword_text ?? ""} ${kw.match_type ?? ""}`.toLowerCase().includes(searchNeedle)),
-    [keywordsQ.data, searchNeedle],
+    [keywordsQ.data, searchNeedle, targetStateFilter],
   );
 
-  const targets = useMemo(
+  const baseTargets = useMemo(
     () =>
       (targetsQ.data ?? [])
         .filter((pt) => shouldShowActiveOrPausedWithData(pt as any, pt.state))
+        .filter((pt) => targetStateFilter === "all" || String(pt.state ?? "").toLowerCase() === "enabled")
         .filter((pt: any) => {
           if (!searchNeedle) return true;
           const described = describeProductTarget(pt.expression, pt.expression_type);
           return `${pt.title ?? ""} ${described.label} ${described.asin ?? ""}`.toLowerCase().includes(searchNeedle);
-        }),
-    [targetsQ.data, searchNeedle],
+        })
+        .sort(compareByTargetingRpcAcos),
+    [targetsQ.data, searchNeedle, targetStateFilter],
+  );
+  const targets = useVisibleProductTargetTitles(
+    baseTargets.slice(0, targetLimit),
+    `${id}:${dateRange.start}:${dateRange.end}:${searchNeedle}:${targetStateFilter}:${targetsQ.dataUpdatedAt}:${targetLimit}`,
   );
 
   const searchTerms = useMemo(
@@ -154,7 +197,7 @@ export default function AdGroupDetailScreen() {
     total_acos: metricsFromGroup ? acosN : Number(params.acos ?? 0) || 0,
   });
   const defaultBid = group?.default_bid != null && Number.isFinite(Number(group.default_bid))
-    ? formatCurrency(Number(group.default_bid), primaryCurrency)
+    ? formatCurrency(Number(group.default_bid), groupCurrency)
     : null;
   const addExact = async (term: any) => {
     if (addingExactId) return;
@@ -356,7 +399,7 @@ export default function AdGroupDetailScreen() {
                   value: salesReady ? (salesN > 0 ? formatPercent(acosN) : "—") : dash(Number(params.acos ?? 0) > 0 ? formatPercent(Number(params.acos)) : "—"),
                   color: toneColor(acosTone(acosN || Number(params.acos ?? 0)), t.colors),
                 },
-                { label: "Spend", value: formatCurrency(spendN, primaryCurrency) },
+                { label: "Spend", value: formatCurrency(spendN, groupCurrency) },
                 { label: "Orders", value: formatInt(ordersN) },
               ]}
             />
@@ -379,7 +422,7 @@ export default function AdGroupDetailScreen() {
             <MetricStrip
               items={[
                 { label: "ROAS", value: salesReady && spendN > 0 ? `${roasN.toFixed(2)}x` : "—" },
-                { label: "CPC", value: clicksN > 0 ? formatCurrency(cpcN, primaryCurrency) : "—" },
+                { label: "CPC", value: clicksN > 0 ? formatCurrency(cpcN, groupCurrency) : "—" },
               ]}
             />
           </View>
@@ -391,7 +434,11 @@ export default function AdGroupDetailScreen() {
               testID="ad-group-search"
               placeholder="Find keywords, products, search terms"
               value={search}
-              onChangeText={setSearch}
+              onChangeText={(value) => {
+                setSearch(value);
+                setKeywordLimit(AD_GROUP_TARGET_PAGE_SIZE);
+                setTargetLimit(AD_GROUP_TARGET_PAGE_SIZE);
+              }}
             />
             <IOSSegmentedControl
               testID="ad-group-tabs"
@@ -403,6 +450,18 @@ export default function AdGroupDetailScreen() {
                 { key: "history", label: "History" },
               ]}
             />
+            {tab === "targets" ? (
+              <IOSSegmentedControl
+                testID="ad-group-target-state"
+                value={targetStateFilter}
+                onChange={(value) => {
+                  setTargetStateFilter(value);
+                  setKeywordLimit(AD_GROUP_TARGET_PAGE_SIZE);
+                  setTargetLimit(AD_GROUP_TARGET_PAGE_SIZE);
+                }}
+                options={[{ key: "all", label: "All states" }, { key: "enabled", label: "Enabled" }]}
+              />
+            ) : null}
           </FilterChrome>
         </View>
 
@@ -447,11 +506,15 @@ export default function AdGroupDetailScreen() {
           <TargetsPane
             auto={auto}
             searching={searchNeedle.length > 0}
-            keywords={keywords}
+            keywords={keywords.slice(0, keywordLimit)}
+            keywordCount={keywords.length}
+            onMoreKeywords={() => setKeywordLimit((limit) => limit + AD_GROUP_TARGET_PAGE_SIZE)}
             targets={targets}
+            targetCount={baseTargets.length}
+            onMoreTargets={() => setTargetLimit((limit) => limit + AD_GROUP_TARGET_PAGE_SIZE)}
             keywordsQ={keywordsQ}
             targetsQ={targetsQ}
-            primaryCurrency={primaryCurrency}
+            primaryCurrency={groupCurrency}
             t={t}
             viewAsOtherUser={viewAsOtherUser}
             onOpenKeyword={(keywordId) => router.push(`/keyword/${keywordId}` as any)}
@@ -500,7 +563,7 @@ export default function AdGroupDetailScreen() {
                   key={term.id}
                   item={term}
                   last={idx === searchTerms.length - 1}
-                  currency={primaryCurrency}
+                  currency={groupCurrency}
                   t={t}
                   alreadyExact={searchTermLooksTargeted(term)}
                   addingExact={addingExactId === term.id}
@@ -536,7 +599,7 @@ export default function AdGroupDetailScreen() {
               />
             ) : (
               historyRows.map((row: any, idx) => (
-                <HistoryRow key={row.id} row={row} last={idx === historyRows.length - 1} currency={primaryCurrency} t={t} />
+                <HistoryRow key={row.id} row={row} last={idx === historyRows.length - 1} currency={groupCurrency} t={t} />
               ))
             )}
           </SectionCard>
@@ -546,42 +609,74 @@ export default function AdGroupDetailScreen() {
         visible={bidOpen}
         title="Default bid"
         value={group?.default_bid != null ? Number(group.default_bid) : 0.75}
-        currency={primaryCurrency}
+        currency={groupCurrency}
         kind="money"
         onClose={() => setBidOpen(false)}
         onSave={async (next) => {
-          await updateAdGroupManual(id, { defaultBid: next }, (targetsQ.data ?? []).filter((pt: any) => describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression).isAuto).map((pt: any) => pt.id));
-          await Promise.all([adGroupsQ.refetch(), targetsQ.refetch(), keywordsQ.refetch()]);
+          const previous = group?.default_bid == null ? null : Number(group.default_bid);
+          queryClient.setQueriesData(
+            { predicate: (query) => String(query.queryKey[0] ?? "").startsWith("ad-group") || String(query.queryKey[0] ?? "").startsWith("campaign") },
+            (old) => patchEntityInQueryData(old, id, (row) => ({ ...row, default_bid: next })),
+          );
+          setBidOpen(false);
+          try {
+            await updateAdGroupManual(id, { defaultBid: next }, (targetsQ.data ?? []).filter((pt: any) => describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression).isAuto).map((pt: any) => pt.id));
+            void invalidateAds(["ad-group-detail", "campaign-ad-groups", "campaign-keywords", "campaign-product-targets"]);
+          } catch (error) {
+            if (previous != null && Number.isFinite(previous)) {
+              queryClient.setQueriesData(
+                { predicate: (query) => String(query.queryKey[0] ?? "").startsWith("ad-group") || String(query.queryKey[0] ?? "").startsWith("campaign") },
+                (old) => patchEntityInQueryData(old, id, (row) => ({ ...row, default_bid: previous })),
+              );
+            } else {
+              void adGroupsQ.refetch();
+            }
+            throw error;
+          }
         }}
       />
       <BidBudgetEditor
         visible={keywordBid != null}
         title={keywordBid?.title ?? "Keyword bid"}
         value={keywordBid?.value ?? 0.75}
-        currency={primaryCurrency}
+        currency={groupCurrency}
         kind="money"
         onClose={() => setKeywordBid(null)}
         onSave={async (next) => {
           if (!keywordBid) return;
           assertNotViewingAsOtherUser(viewAsOtherUser);
-          await updateKeywordManual(keywordBid.id, { bid: next });
+          const edit = keywordBid;
+          const previous = applyOptimisticEntityBid(queryClient, "keyword", edit.id, next);
           setKeywordBid(null);
-          await keywordsQ.refetch();
+          try {
+            await updateKeywordManual(edit.id, { bid: next });
+            void invalidateAds(["ad-group-keywords", "campaign-keywords"]);
+          } catch (error) {
+            revertOptimisticEntityBid(queryClient, "keyword", edit.id, previous);
+            throw error;
+          }
         }}
       />
       <BidBudgetEditor
         visible={targetBid != null}
         title={targetBid?.title ?? "Target bid"}
         value={targetBid?.value ?? 0.75}
-        currency={primaryCurrency}
+        currency={groupCurrency}
         kind="money"
         onClose={() => setTargetBid(null)}
         onSave={async (next) => {
           if (!targetBid) return;
           assertNotViewingAsOtherUser(viewAsOtherUser);
-          await updateProductTargetManual(targetBid.id, { bid: next });
+          const edit = targetBid;
+          const previous = applyOptimisticEntityBid(queryClient, "product_target", edit.id, next);
           setTargetBid(null);
-          await targetsQ.refetch();
+          try {
+            await updateProductTargetManual(edit.id, { bid: next });
+            void invalidateAds(["ad-group-product-targets", "campaign-product-targets"]);
+          } catch (error) {
+            revertOptimisticEntityBid(queryClient, "product_target", edit.id, previous);
+            throw error;
+          }
         }}
       />
     </SubScreen>
@@ -592,7 +687,11 @@ function TargetsPane({
   auto,
   searching,
   keywords,
+  keywordCount,
+  onMoreKeywords,
   targets,
+  targetCount,
+  onMoreTargets,
   keywordsQ,
   targetsQ,
   primaryCurrency,
@@ -606,7 +705,11 @@ function TargetsPane({
   auto: boolean;
   searching: boolean;
   keywords: any[];
+  keywordCount: number;
+  onMoreKeywords: () => void;
   targets: any[];
+  targetCount: number;
+  onMoreTargets: () => void;
   keywordsQ: { isLoading: boolean; isError: boolean; isRefetching: boolean; data?: any[]; refetch: () => void };
   targetsQ: { isLoading: boolean; isError: boolean; isRefetching: boolean; data?: any[]; refetch: () => void };
   primaryCurrency: string;
@@ -617,14 +720,14 @@ function TargetsPane({
   onEditKeywordBid: (kw: any) => void;
   onEditTargetBid: (pt: any) => void;
 }) {
-  const showKeywords = keywordsQ.isLoading || keywordsQ.isError || keywords.length > 0 || searching;
-  const showTargets = targetsQ.isLoading || targetsQ.isError || targets.length > 0 || searching;
+  const showKeywords = keywordsQ.isLoading || keywordsQ.isError || keywordCount > 0 || searching;
+  const showTargets = targetsQ.isLoading || targetsQ.isError || targetCount > 0 || searching;
   const bothEmpty = !keywordsQ.isLoading && !targetsQ.isLoading && !keywordsQ.isError && !targetsQ.isError && keywords.length === 0 && targets.length === 0;
 
   return (
     <>
       {showKeywords ? (
-        <SectionCard title={`Keywords (${keywords.length})`}>
+        <SectionCard title={`Keywords (${keywordCount})`}>
           {keywordsQ.isError && (keywordsQ.data ?? []).length === 0 ? (
             <RetryState
               title="Couldn't load keywords"
@@ -641,7 +744,8 @@ function TargetsPane({
               subtitle={searching ? "Try a different name or match type." : "No keywords with data in this range."}
             />
           ) : (
-            keywords.map((kw, idx) => (
+            <>
+            {keywords.map((kw, idx) => (
               <KeywordRow
                 key={kw.id}
                 kw={kw}
@@ -652,13 +756,19 @@ function TargetsPane({
                 onPress={() => onOpenKeyword(kw.id)}
                 onEditBid={() => onEditKeywordBid(kw)}
               />
-            ))
+            ))}
+            {keywords.length < keywordCount ? (
+              <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Show more keywords, ${keywordCount - keywords.length} remaining`} onPress={onMoreKeywords} style={{ alignItems: "center", paddingVertical: spacing.md }}>
+                <Text style={[t.typography.callout, { color: t.colors.tone_primary, fontWeight: "600" }]}>{`Show more · ${keywords.length} of ${keywordCount}`}</Text>
+              </TouchableOpacity>
+            ) : null}
+            </>
           )}
         </SectionCard>
       ) : null}
 
       {showTargets ? (
-        <SectionCard title={auto ? `Auto Targeting (${targets.length})` : `Product Targets (${targets.length})`}>
+        <SectionCard title={auto ? `Auto Targeting (${targetCount})` : `Product Targets (${targetCount})`}>
           {targetsQ.isError && (targetsQ.data ?? []).length === 0 ? (
             <RetryState
               title={auto ? "Couldn't load auto targets" : "Couldn't load product targets"}
@@ -675,7 +785,8 @@ function TargetsPane({
               subtitle={searching ? "Try a different name or ASIN." : "Nothing with data in this range."}
             />
           ) : (
-            targets.map((pt: any, idx) => (
+            <>
+            {targets.map((pt: any, idx) => (
               <TargetRow
                 key={pt.id}
                 pt={pt}
@@ -687,7 +798,13 @@ function TargetsPane({
                 onPress={() => onOpenTarget(pt.id)}
                 onEditBid={() => onEditTargetBid(pt)}
               />
-            ))
+            ))}
+            {targets.length < targetCount ? (
+              <TouchableOpacity accessibilityRole="button" accessibilityLabel={`Show more targets, ${targetCount - targets.length} remaining`} onPress={onMoreTargets} style={{ alignItems: "center", paddingVertical: spacing.md }}>
+                <Text style={[t.typography.callout, { color: t.colors.tone_primary, fontWeight: "600" }]}>{`Show more · ${targets.length} of ${targetCount}`}</Text>
+              </TouchableOpacity>
+            ) : null}
+            </>
           )}
         </SectionCard>
       ) : null}

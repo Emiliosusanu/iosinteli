@@ -47,7 +47,8 @@ export function hasRequiredTemplates(
 ): boolean {
   return REQUIRED_TEMPLATE_TYPES.every((t) => {
     const row = templates[t];
-    return !!row && typeof row.url === "string" && row.url.length > 0;
+    return !!row && typeof row.url === "string" && row.url.length > 0
+      && (t !== "orders" || !/\/orders\/placed\//i.test(row.url));
   });
 }
 
@@ -62,6 +63,11 @@ export function mergeCapturedTemplate(
 ): Partial<Record<KdpTemplateType, KdpCapturedTemplate>> {
   const type = classifyCapturedUrl(incoming.url);
   if (!type) return current;
+  // Placed-order pages omit processed print activity. Never replace an
+  // accepted processed-order template when the user views that other tab.
+  if ((type === "orders" || type === "orders_titles")
+    && /\/orders\/placed\//i.test(incoming.url)
+    && current[type]?.url && !/\/orders\/placed\//i.test(current[type]!.url)) return current;
   const next = { ...current };
   next[type] = {
     type,

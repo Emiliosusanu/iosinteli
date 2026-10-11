@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import {
   CHART_MAX_DAY_STEP_PX,
   dayBarStep,
+  dayLabelTextAnchor,
   dayXLayout,
 } from "../src/lib/chartLayout.ts";
 
@@ -38,6 +39,15 @@ test("touch mapping follows the compact span, not empty right gutter", () => {
 test("bar step is capped for short windows", () => {
   assert.equal(dayBarStep(3, 300), CHART_MAX_DAY_STEP_PX);
   assert.ok(dayBarStep(30, 300) < CHART_MAX_DAY_STEP_PX);
+});
+
+test("short-range final labels use the empty right gutter instead of overlapping", () => {
+  const compact = dayXLayout(2, 300, 8);
+  assert.equal(dayLabelTextAnchor(0, 2, compact.xAt(0), 300), "start");
+  assert.equal(dayLabelTextAnchor(1, 2, compact.xAt(1), 300), "start");
+
+  const full = dayXLayout(30, 300, 0);
+  assert.equal(dayLabelTextAnchor(29, 30, full.xAt(29), 300), "end");
 });
 
 test("Charts use dayXLayout for series and selection", () => {

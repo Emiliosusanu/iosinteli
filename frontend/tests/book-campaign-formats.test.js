@@ -114,7 +114,7 @@ test("Create campaign format chips switch exclusively without forcing PRINT high
 
 test("Products targeting auto-fetches suggestions with explicit targeting arg", () => {
   assert.match(create, /previewM\.mutate\(type\)/);
-  assert.match(create, /mutationFn: \(nextTargeting\?: CampaignCreationTargeting\)/);
+  assert.match(create, /mutationFn:\s*async \(nextTargeting\?: CampaignCreationTargeting\)/);
   // Soft paste path — no over-explain banner; placeholder stays on the ASIN field.
   assert.match(create, /B0… one per line/);
   assert.match(create, /Your product ASINs/);

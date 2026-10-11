@@ -42,7 +42,9 @@ export function canRetryMobileRequestAfter401(_method: string | null | undefined
   return true;
 }
 
-function decodeJwtPayload(token: string): { sub?: unknown } | null {
+type MobileJwtPayload = { sub?: unknown; exp?: unknown };
+
+function decodeJwtPayload(token: string): MobileJwtPayload | null {
   const parts = token.trim().split(".");
   if (parts.length < 2) return null;
   try {
@@ -52,7 +54,7 @@ function decodeJwtPayload(token: string): { sub?: unknown } | null {
       typeof globalThis.atob === "function"
         ? globalThis.atob(padded)
         : Buffer.from(padded, "base64").toString("utf8");
-    return JSON.parse(json) as { sub?: unknown };
+    return JSON.parse(json) as MobileJwtPayload;
   } catch {
     return null;
   }
@@ -62,6 +64,21 @@ export function readJwtSub(token?: string | null): string | null {
   if (typeof token !== "string" || !token.trim()) return null;
   const sub = decodeJwtPayload(token)?.sub;
   return typeof sub === "string" && sub.trim() ? sub.trim() : null;
+}
+
+export function readJwtExpirySeconds(token?: string | null): number | null {
+  if (typeof token !== "string" || !token.trim()) return null;
+  const exp = decodeJwtPayload(token)?.exp;
+  return typeof exp === "number" && Number.isFinite(exp) ? exp : null;
+}
+
+export function jwtNeedsRefresh(
+  token?: string | null,
+  nowMs = Date.now(),
+  leadSeconds = 30,
+): boolean {
+  const expiry = readJwtExpirySeconds(token);
+  return expiry != null && expiry <= Math.floor(nowMs / 1000) + Math.max(0, leadSeconds);
 }
 
 export function nestTokenMatchesSupabaseUser(input: {

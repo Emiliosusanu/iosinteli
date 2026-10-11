@@ -26,16 +26,63 @@ export type SyncSnapshotPayload = {
   reload?: boolean;
 };
 
+export type FinancialWidgetSnapshotPayload = {
+  verified: boolean;
+  asOfMs?: number | null;
+  periodLabel?: string;
+  scopeKey?: string;
+  currencySymbol?: string;
+  royalties?: number;
+  adSpend?: number;
+  net?: number;
+  reload?: boolean;
+};
+
 export type NativeWakeKind = "recent" | "processing";
+export type ApnsEnvironment = "sandbox" | "production";
 
 type NativeModule = {
+  getApnsEnvironmentAsync(): Promise<string>;
+  getCookieHeaderAsync(url: string): Promise<string>;
+  clearAmazonKdpCookiesAsync(): Promise<number>;
   registerAndScheduleAsync(force: boolean): Promise<boolean>;
   scheduleIfNeededAsync(force: boolean): Promise<boolean>;
   setEnabledAsync(enabled: boolean): Promise<boolean>;
   getStatusAsync(): Promise<NativeSyncStatus>;
+  getPendingWakeDeadlineAsync(): Promise<number | null>;
   consumePendingWakeKindAsync(): Promise<string | null>;
   updateSyncSnapshotAsync(payload: SyncSnapshotPayload): Promise<boolean>;
+  updateFinancialSnapshotAsync(payload: FinancialWidgetSnapshotPayload): Promise<boolean>;
   getSyncSnapshotAsync(): Promise<Record<string, unknown>>;
+  getStoreProductsAsync(): Promise<StoreProduct[]>;
+  purchaseStoreProductAsync(productId: string, appAccountToken: string): Promise<StoreTransaction>;
+  restoreStorePurchasesAsync(): Promise<StoreTransaction[]>;
+  getStoreEntitlementsAsync(): Promise<StoreTransaction[]>;
+  finishStoreTransactionAsync(transactionId: string): Promise<boolean>;
+  showManageStoreSubscriptionsAsync(): Promise<boolean>;
+};
+
+export type StoreProduct = {
+  id: string;
+  displayName: string;
+  description: string;
+  displayPrice: string;
+  price: number;
+  periodUnit?: string;
+  periodValue?: number;
+  introDisplayPrice?: string;
+  introPeriods?: number;
+};
+
+export type StoreTransaction = {
+  status: "verified" | "pending" | "cancelled";
+  productId: string;
+  transactionId?: string;
+  originalTransactionId?: string;
+  signedTransaction?: string;
+  purchaseDateMs?: number;
+  expiresDateMs?: number;
+  revocationDateMs?: number;
 };
 
 const NativeSync =
@@ -49,6 +96,69 @@ export const APP_GROUP_ID = "group.io.inteliads.app";
 
 export function isNativeSyncAvailable(): boolean {
   return NativeSync != null;
+}
+
+export function isStoreKitAvailable(): boolean {
+  return NativeSync != null && Platform.OS === "ios";
+}
+
+export async function getStoreProducts(): Promise<StoreProduct[]> {
+  return NativeSync ? NativeSync.getStoreProductsAsync() : [];
+}
+
+export async function purchaseStoreProduct(productId: string, appAccountToken: string): Promise<StoreTransaction> {
+  if (!NativeSync) throw new Error("App Store purchases are unavailable.");
+  return NativeSync.purchaseStoreProductAsync(productId, appAccountToken);
+}
+
+export async function restoreStorePurchases(): Promise<StoreTransaction[]> {
+  return NativeSync ? NativeSync.restoreStorePurchasesAsync() : [];
+}
+
+export async function getStoreEntitlements(): Promise<StoreTransaction[]> {
+  return NativeSync ? NativeSync.getStoreEntitlementsAsync() : [];
+}
+
+export async function finishStoreTransaction(transactionId: string): Promise<boolean> {
+  if (!NativeSync) return false;
+  return NativeSync.finishStoreTransactionAsync(transactionId);
+}
+
+export async function showManageStoreSubscriptions(): Promise<boolean> {
+  if (!NativeSync) return false;
+  return NativeSync.showManageStoreSubscriptionsAsync();
+}
+
+export async function getNativeApnsEnvironment(): Promise<ApnsEnvironment | null> {
+  if (!NativeSync) return null;
+  try {
+    const environment = await NativeSync.getApnsEnvironmentAsync();
+    return environment === "sandbox" || environment === "production" ? environment : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read cookies that WKWebView would send to this URL, including HttpOnly. */
+export async function getNativeCookieHeader(url: string): Promise<string | null> {
+  if (!NativeSync || !url) return null;
+  try {
+    const value = await NativeSync.getCookieHeaderAsync(url);
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Clear only Amazon/KDP WKWebView cookies before changing import account. */
+export async function clearNativeAmazonKdpCookies(): Promise<boolean> {
+  if (!NativeSync) return Platform.OS !== "ios";
+  try {
+    await NativeSync.clearAmazonKdpCookiesAsync();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function registerNativeMetronome(force = true): Promise<boolean> {
@@ -87,6 +197,18 @@ export async function updateNativeSyncSnapshot(payload: SyncSnapshotPayload): Pr
   }
 }
 
+/** Publish only source-verified finance. `verified: false` clears a mismatched scope. */
+export async function updateNativeFinancialSnapshot(
+  payload: FinancialWidgetSnapshotPayload,
+): Promise<boolean> {
+  if (!NativeSync) return false;
+  try {
+    return await NativeSync.updateFinancialSnapshotAsync(payload);
+  } catch {
+    return false;
+  }
+}
+
 export async function getNativeSyncSnapshot(): Promise<Record<string, unknown> | null> {
   if (!NativeSync) return null;
   try {
@@ -106,4 +228,10 @@ export async function consumeNativeWakeKind(): Promise<NativeWakeKind | null> {
   } catch {
     return null;
   }
+}
+
+/** Read before imports/auth/network work so cold startup spends the same budget. */
+export async function getNativeWakeDeadline(): Promise<number | null> {
+  try { return NativeSync ? await NativeSync.getPendingWakeDeadlineAsync() : null; }
+  catch { return null; }
 }

@@ -33,6 +33,7 @@ import {
   softListedAwaitingLiveConfirm,
   workFamilyKey,
   classifyCreationCampaignTargeting,
+  confirmedDisabledMarketplacesForBook,
 } from "../src/lib/campaignCreationStock.ts";
 
 const profiles = [
@@ -127,6 +128,23 @@ test("normalizes nested or snake_case marketplace payloads", () => {
   assert.equal(nested.failedCount, 2);
   assert.equal(nested.marketplaces[0].id, "111");
   assert.equal(nested.marketplaces[0].countryCode, "US");
+});
+
+test("maps Nest ad-groups/suggestions top-level asin + profileId into book/profile", () => {
+  const preview = normalizeCampaignCreationPreview({
+    asin: "1807973751",
+    profileId: "4138300112469957",
+    productTargets: [
+      {
+        asin: "0241618606",
+        themes: ["Similar items (frequently viewed together)"],
+      },
+    ],
+  });
+  assert.equal(preview.book.asin, "1807973751");
+  assert.equal(preview.profile.profileId, "4138300112469957");
+  assert.equal(preview.profile.id, "4138300112469957");
+  assert.equal(preview.productTargets[0].asin, "0241618606");
 });
 
 test("normalizes preview keywords and product targets", () => {
@@ -290,10 +308,12 @@ test("empty productTargets with recommendationsAvailable false stays empty", () 
   assert.equal(preview.recommendationsAvailable, false);
 });
 
-test("parseCustomAsins accepts only B0 paperbacks", () => {
+test("parseCustomAsins accepts modern and legacy ten-character Amazon ASINs", () => {
   assert.deepEqual(
-    parseCustomAsins("B0G1C3XP9J\nbogus\nB0HFCPQMS8, B0G1C3XP9J"),
-    ["B0G1C3XP9J", "B0HFCPQMS8"],
+    parseCustomAsins(
+      "B0G1C3XP9J\nbogus\nB0HFCPQMS8, B0G1C3XP9J; 156695536X 156695536x B0123456789",
+    ),
+    ["B0G1C3XP9J", "B0HFCPQMS8", "156695536X"],
   );
 });
 
@@ -444,6 +464,85 @@ test("shared ATVPD marketplace id must not relabel VP2 as Emilian Susanu", () =>
   const local = matchLocalProfileForCreationMarketplace(profiles, display[0]);
   assert.equal(local?.profile_id, VP2);
   assert.notEqual(local?.profile_id, EMILIAN);
+});
+
+test("disabled marketplace suggestion requires exact owned profile and live in-stock evidence", () => {
+  const DISABLED_CA = "3896545512891020";
+  const OTHER_US = "2543611550477751";
+  const rows = confirmedDisabledMarketplacesForBook(
+    [
+      {
+        id: "uuid-ca",
+        profile_id: DISABLED_CA,
+        country_code: "CA",
+        currency_code: "CAD",
+        marketplace_id: "A2EUQ1WTGCTBG2",
+        is_enabled: false,
+      },
+      {
+        id: "uuid-us",
+        profile_id: OTHER_US,
+        country_code: "US",
+        currency_code: "USD",
+        marketplace_id: "ATVPDKIKX0DER",
+        is_enabled: true,
+      },
+    ],
+    [
+      {
+        id: DISABLED_CA,
+        profileId: DISABLED_CA,
+        countryCode: "CA",
+        currencyCode: "CAD",
+        marketplaceId: "A2EUQ1WTGCTBG2",
+        availabilityEvidence: "in_stock",
+        stockStatus: "IN_STOCK",
+      },
+      {
+        // Same US marketplace id as the owned account, but a different Ads
+        // profile: this must never be relabelled or offered.
+        id: "unowned-us",
+        profileId: "unowned-us",
+        countryCode: "US",
+        currencyCode: "USD",
+        marketplaceId: "ATVPDKIKX0DER",
+        availabilityEvidence: "in_stock",
+        stockStatus: "IN_STOCK",
+      },
+    ],
+  );
+  assert.deepEqual(rows.map((row) => row.profileId), [DISABLED_CA]);
+});
+
+test("disabled marketplace suggestion rejects soft and out-of-stock evidence", () => {
+  const profile = {
+    id: "uuid-ca",
+    profile_id: "ca-disabled",
+    country_code: "CA",
+    currency_code: "CAD",
+    marketplace_id: "A2EUQ1WTGCTBG2",
+    is_enabled: false,
+  };
+  const rows = confirmedDisabledMarketplacesForBook([profile], [
+    {
+      id: "ca-disabled",
+      profileId: "ca-disabled",
+      countryCode: "CA",
+      currencyCode: "CAD",
+      marketplaceId: "A2EUQ1WTGCTBG2",
+      availabilityEvidence: "existing_product_ad",
+    },
+    {
+      id: "ca-disabled",
+      profileId: "ca-disabled",
+      countryCode: "CA",
+      currencyCode: "CAD",
+      marketplaceId: "A2EUQ1WTGCTBG2",
+      availabilityEvidence: "amazon_catalog",
+      stockStatus: "OUT_OF_STOCK",
+    },
+  ]);
+  assert.deepEqual(rows, []);
 });
 
 test("Kindle DIGITAL ASIN is not a paperback create candidate", () => {

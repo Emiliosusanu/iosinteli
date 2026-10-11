@@ -5,14 +5,17 @@
  * background tick can attach Cookie / User-Agent to reconstructed requests
  * even when WKWebView cookie access is flaky.
  *
- * Cookies are harvested from captured XHR/fetch request headers (includes
- * HttpOnly values the page JS cannot read via document.cookie).
+ * Request metadata is harvested from captured XHR/fetch calls. HttpOnly
+ * cookies come from WKHTTPCookieStore through the native module because page
+ * JavaScript cannot observe browser-added Cookie headers.
  */
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
+import { getNativeCookieHeader } from "inteliads-native-sync";
 import {
   applySessionToHeaders,
   headerLookup,
+  mergeCookieHeaders,
   pickSessionExtraHeaders,
   type KdpWebSession,
 } from "./sessionContract.ts";
@@ -66,13 +69,17 @@ export async function saveKdpWebSession(session: KdpWebSession): Promise<boolean
   }
 }
 
-export async function clearKdpWebSession(): Promise<void> {
+export async function clearKdpWebSession(): Promise<boolean> {
   try {
     await SecureStore.deleteItemAsync(SESSION_KEY, {
       keychainAccessible: ACCESSIBLE,
     });
+    const remaining = await SecureStore.getItemAsync(SESSION_KEY, {
+      keychainAccessible: ACCESSIBLE,
+    });
+    return remaining == null;
   } catch {
-    /* best-effort */
+    return false;
   }
 }
 
@@ -84,10 +91,28 @@ export async function mergeSessionFromCaptureHeaders(
   const userAgent = headerLookup(headers, "user-agent") ?? prev?.userAgent ?? "";
   if (!cookies && !userAgent) return prev;
   const next: KdpWebSession = {
-    cookies,
+    cookies: mergeCookieHeaders(prev?.cookies ?? "", cookies),
     userAgent,
     languages: prev?.languages,
     extraHeaders: pickSessionExtraHeaders(headers, prev?.extraHeaders),
+    updatedAt: new Date().toISOString(),
+  };
+  await saveKdpWebSession(next);
+  return next;
+}
+
+/** Persist the exact cookie header WKWebView would send to a KDP URL. */
+export async function refreshKdpWebSessionFromNativeCookies(
+  url: string,
+): Promise<KdpWebSession | null> {
+  const cookies = await getNativeCookieHeader(url);
+  const prev = await loadKdpWebSession();
+  if (!cookies) return prev;
+  const next: KdpWebSession = {
+    cookies,
+    userAgent: prev?.userAgent ?? "",
+    languages: prev?.languages,
+    extraHeaders: prev?.extraHeaders,
     updatedAt: new Date().toISOString(),
   };
   await saveKdpWebSession(next);
@@ -103,6 +128,7 @@ export async function mergeSessionMeta(meta: {
     cookies: prev?.cookies ?? "",
     userAgent: meta.userAgent?.trim() || prev?.userAgent || "",
     languages: meta.languages?.trim() || prev?.languages,
+    extraHeaders: prev?.extraHeaders,
     updatedAt: new Date().toISOString(),
   };
   if (!next.cookies && !next.userAgent) return;

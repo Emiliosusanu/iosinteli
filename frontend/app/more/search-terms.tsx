@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -13,10 +13,11 @@ import {
   RefreshControl,
   Modal,
   Pressable,
+  ActivityIndicator,
 } from "react-native";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { alertMutationError, blockIfCannotWriteAmazon } from "@/src/components/Mutations";
 import { useApp } from "@/src/contexts/AppContext";
@@ -24,7 +25,8 @@ import { useAuth } from "@/src/contexts/AuthContext";
 import { acosTone, dashboard, layout, spacing, toneColor, useReduceMotion, useTheme } from "@/src/lib/theme";
 import { addSearchTermAsTarget, harvestAmazonWriteAlert, negateSearchTerm } from "@/src/lib/mutations";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
-import { fetchSearchTerms } from "@/src/lib/queries";
+import { fetchNestSearchTermsPage } from "@/src/lib/dashboardApi";
+import { SEARCH_TERMS_PAGE_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { formatCurrency, formatInt, formatPercent } from "@/src/lib/format";
 import type { SearchTerm } from "@/src/lib/types";
 import { EmptyState, ListCard, MetricStrip, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, RetryState, ScreenSpinner, ToneDot } from "@/src/components/Primitives";
@@ -46,6 +48,14 @@ const SORT_CONFIG: { key: SortKey; label: string }[] = [
   { key: "clicks", label: "Clicks" },
   { key: "impressions", label: "Impr" },
 ];
+
+const SORT_FIELDS: Record<SortKey, "total_orders" | "total_acos" | "total_spend" | "total_clicks" | "total_impressions"> = {
+  orders: "total_orders",
+  acos: "total_acos",
+  spend: "total_spend",
+  clicks: "total_clicks",
+  impressions: "total_impressions",
+};
 
 function truthyFlag(value: unknown): boolean {
   return value === true || value === 1 || value === "1" || value === "true";
@@ -188,51 +198,68 @@ export default function SearchTermsScreen() {
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("orders");
   const [perfFilter, setPerfFilter] = useState<PerformanceFilter>("all");
   const [sortOpen, setSortOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const { data = [], isLoading, isError, isRefetching, refetch } = useQuery({
-    queryKey: ["search-terms", selectedProfileIds, dateRange.start, dateRange.end],
-    queryFn: () => fetchSearchTerms(selectedProfileIds, { start: dateRange.start, end: dateRange.end }),
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const {
+    data: pageData,
+    isLoading,
+    isError,
+    isRefetching,
+    isFetchingNextPage,
+    hasNextPage,
+    fetchNextPage,
+    refetch,
+  } = useInfiniteQuery({
+    queryKey: [
+      "search-terms",
+      selectedProfileIds,
+      dateRange.start,
+      dateRange.end,
+      debouncedSearch,
+      perfFilter,
+      sortKey,
+      adminFilterUserId,
+    ],
+    initialPageParam: 1,
+    queryFn: ({ pageParam, signal }) => withQueryTimeout(
+      fetchNestSearchTermsPage({
+        profileIds: selectedProfileIds,
+        filterUserId: adminFilterUserId,
+        startDate: dateRange.start,
+        endDate: dateRange.end,
+        search: debouncedSearch || undefined,
+        performanceFilter: perfFilter === "all" ? undefined : perfFilter,
+        sortBy: SORT_FIELDS[sortKey],
+        page: pageParam,
+        perPage: 100,
+        signal,
+      }),
+      SEARCH_TERMS_PAGE_TIMEOUT_MS,
+      signal,
+    ),
+    getNextPageParam: (lastPage) => lastPage.hasNextPage ? lastPage.page + 1 : undefined,
     enabled: selectedProfileIds.length > 0,
   });
 
-  const filtered = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    const arr = data.filter((item) => {
-      if (
-        needle &&
-        !`${item.search_term ?? ""} ${item.campaign_name ?? ""} ${item.ad_group_name ?? ""}`.toLowerCase().includes(needle)
-      ) {
-        return false;
-      }
-      if (perfFilter === "converting") return Number(item.total_orders) > 0;
-      if (perfFilter === "wasted") return Number(item.total_spend) > 0 && Number(item.total_orders) === 0;
-      return true;
-    });
-
-    return [...arr].sort((a, b) => {
-      const aHasData = Number(a.total_spend) > 0;
-      const bHasData = Number(b.total_spend) > 0;
-      if (aHasData && !bHasData) return -1;
-      if (!aHasData && bHasData) return 1;
-
-      switch (sortKey) {
-        case "acos":
-          return (Number(a.total_acos) || Infinity) - (Number(b.total_acos) || Infinity);
-        case "spend":
-          return Number(b.total_spend) - Number(a.total_spend);
-        case "clicks":
-          return Number(b.total_clicks) - Number(a.total_clicks);
-        case "impressions":
-          return Number(b.total_impressions) - Number(a.total_impressions);
-        default:
-          return Number(b.total_orders) - Number(a.total_orders);
-      }
-    });
-  }, [data, search, sortKey, perfFilter]);
+  const data = useMemo(() => {
+    const byId = new Map<string, SearchTerm>();
+    for (const page of pageData?.pages ?? []) {
+      for (const row of page.data) byId.set(row.id, row);
+    }
+    return [...byId.values()];
+  }, [pageData]);
+  const totalCount = pageData?.pages[0]?.total ?? data.length;
+  const searchSettling = search.trim() !== debouncedSearch;
+  const filtered = searchSettling ? [] : data;
 
   function animateList() {
     if (reduceMotion) return;
@@ -310,7 +337,7 @@ export default function SearchTermsScreen() {
   const sortActive = sortKey !== "orders";
   const showCount = search.trim().length > 0 || perfFilter !== "all" || sortActive;
   const empty = emptyCopy(search, perfFilter);
-  const listLoading = isLoading && data.length === 0;
+  const listLoading = searchSettling || (isLoading && data.length === 0);
   const listFailed = isError && data.length === 0;
 
   if (selectedProfileIds.length === 0) {
@@ -375,7 +402,7 @@ export default function SearchTermsScreen() {
         ) : null}
         {showCount && !listLoading && !listFailed ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>
-            {filtered.length === 1 ? "1 search term" : `${filtered.length} search terms`}
+            {totalCount === 1 ? "1 search term" : `${formatInt(totalCount)} search terms`}
           </Text>
         ) : null}
       </FilterChrome>
@@ -403,6 +430,15 @@ export default function SearchTermsScreen() {
           }
           ItemSeparatorComponent={() => <View style={{ height: t.layout.listGap }} />}
           ListEmptyComponent={<EmptyState icon="search-outline" title={empty.title} subtitle={empty.subtitle} />}
+          ListFooterComponent={isFetchingNextPage ? (
+            <View style={{ paddingVertical: spacing.lg }}>
+              <ActivityIndicator color={t.colors.tone_primary} />
+            </View>
+          ) : null}
+          onEndReached={() => {
+            if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+          }}
+          onEndReachedThreshold={0.6}
           renderItem={({ item }) => (
             <TermRow item={item} currency={primaryCurrency} onOpen={openTerm} onAdd={onAdd} onNegate={onNegate} />
           )}
@@ -490,7 +526,7 @@ const TermRow = React.memo(function TermRow({
             items={[
               {
                 label: "ACoS",
-                value: Number(item.total_sales) > 0 ? formatPercent(Number(item.total_acos)) : "—",
+                value: Number(item.total_sales) > 0 ? formatPercent(Number(item.total_acos)) : "N/A",
                 color: toneColor(acosTone(Number(item.total_acos)), t.colors),
               },
               { label: "Spend", value: formatCurrency(Number(item.total_spend), currency, { compact: true }) },

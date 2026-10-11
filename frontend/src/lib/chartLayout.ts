@@ -66,3 +66,22 @@ export function dayBarStep(count: number, plotWidth: number): number {
   const stretch = Math.max(1, plotWidth) / count;
   return Math.min(stretch, CHART_MAX_DAY_STEP_PX);
 }
+
+/**
+ * Keep the final date label readable when a short range is compacted to the
+ * left of a wide chart. In that layout there is empty trailing space, so the
+ * last label should extend right instead of back over the preceding label.
+ */
+export function dayLabelTextAnchor(
+  index: number,
+  count: number,
+  x: number,
+  plotRight: number,
+  trailingLabelRoom = CHART_MAX_DAY_STEP_PX,
+): "start" | "middle" | "end" {
+  if (index <= 0 || count <= 1) return "start";
+  if (index >= count - 1) {
+    return plotRight - x >= trailingLabelRoom ? "start" : "end";
+  }
+  return "middle";
+}

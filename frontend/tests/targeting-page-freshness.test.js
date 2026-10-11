@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { isTargetingPageFresh, shouldRevalidateTargetingPageOnVisit } from "../src/lib/targetingPageFreshness.ts";
 
@@ -20,4 +21,10 @@ test("a retained Targeting tab revalidates on a warm visit after the cache windo
   assert.equal(shouldRevalidateTargetingPageOnVisit(1_000, 1_045, 45), true);
   assert.equal(shouldRevalidateTargetingPageOnVisit(1_000, 999, 45), true);
   assert.equal(shouldRevalidateTargetingPageOnVisit(0, 1_000, 45), false);
+});
+
+
+test("targeting persisted cache is versioned by ranked page size", () => {
+  const source = readFileSync(new URL("../app/(tabs)/targeting.tsx", import.meta.url), "utf8");
+  assert.match(source, /`page-size-\$\{TARGETING_PAGE_SIZE\}`/);
 });

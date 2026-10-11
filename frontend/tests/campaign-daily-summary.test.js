@@ -20,13 +20,17 @@ test("daily chip includes clicks between impressions and spend", () => {
   assert.equal(chip, "3.0K impr · 14 clk · $8.50 · 1 ord · 30.4%");
 });
 
-test("CampaignDailyChart keeps impr/spend/orders/ACoS series readable", () => {
+test("CampaignDailyChart keeps impr/clicks/spend/orders/ACoS series readable", () => {
   assert.match(charts, /CampaignDailyChart/);
   assert.match(charts, /impressionsData/);
+  assert.match(charts, /clicksData/);
   assert.match(charts, /spendData/);
   assert.match(charts, /ordersData/);
   assert.match(charts, /acosData/);
   assert.match(charts, /impr ·/);
+  assert.match(charts, /clk ·/);
+  assert.match(campaignDetail, /clicksData=\{perf\.clicks\}/);
+  assert.match(campaignDetail, />Orders<\/Text>/);
 });
 
 test("detail screens mount CampaignDailyChart", () => {

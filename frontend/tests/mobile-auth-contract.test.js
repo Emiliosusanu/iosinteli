@@ -8,16 +8,30 @@ import {
   mobileSellerMaySendFilterUserId,
   nestSessionFlagAllowsWrites,
   nestTokenMatchesSupabaseUser,
+  jwtNeedsRefresh,
   pickMobileApiToken,
+  readJwtExpirySeconds,
   readJwtSub,
   shouldRefreshNestToken,
 } from "../src/lib/mobileAuthContract.ts";
 
-function fakeJwt(sub) {
+function fakeJwt(sub, exp) {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify({ sub })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ sub, ...(exp == null ? {} : { exp }) })).toString("base64url");
   return `${header}.${payload}.sig`;
 }
+
+test("JWT expiry is checked before the first Nest request", () => {
+  const now = 1_800_000_000_000;
+  const live = fakeJwt("user-a", Math.floor(now / 1000) + 300);
+  const expiring = fakeJwt("user-a", Math.floor(now / 1000) + 10);
+  assert.equal(readJwtExpirySeconds(live), Math.floor(now / 1000) + 300);
+  assert.equal(jwtNeedsRefresh(live, now), false);
+  assert.equal(jwtNeedsRefresh(expiring, now), true);
+  assert.equal(jwtNeedsRefresh(fakeJwt("user-a"), now), false);
+  assert.match(rulesApi, /jwtNeedsRefresh\(nestAccessToken\)/);
+  assert.match(rulesApi, /await refreshNestToken\(nestAccessToken\)/);
+});
 
 const rulesApi = readFileSync(new URL("../src/lib/rulesApi.ts", import.meta.url), "utf8");
 const queries = readFileSync(new URL("../src/lib/queries.ts", import.meta.url), "utf8");

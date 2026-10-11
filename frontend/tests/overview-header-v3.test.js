@@ -43,53 +43,46 @@ test("OverviewHeaderV3 uses lateral stadium glow instead of wide Refreshing pill
   assert.match(header, /StadiumLateralGlow/);
   assert.match(header, /home-header-refresh-glow/);
   assert.match(header, /showRefreshGlow/);
-  assert.match(header, /syncChipGhost/);
+  assert.match(header, /home-sync-loading/);
+  assert.match(header, /home-sync-ready/);
   assert.match(header, /suppressRefreshingCaption/);
   assert.match(header, /expo-linear-gradient/);
-  // SwiftUI ReportHeaderCard — thin edge light-leak, not neon wash / bands.
-  assert.match(header, /GLOW_BREATHE_MS = 1450/);
-  assert.match(header, /duration: GLOW_BREATHE_MS/);
+  // Quiet primary edge shadow, not neon wash / warning-success animation.
+  assert.match(header, /duration: 2100/);
   assert.match(header, /lateralGlowCore/);
   assert.match(header, /lateralGlowBloom/);
-  assert.match(header, /lateralGlowOutline/);
-  assert.match(header, /home-header-glow-outline/);
+  assert.match(header, /home-header-glow-primary/);
   assert.match(header, /home-header-glow-edge-left/);
   assert.match(header, /width: 3/);
   assert.match(header, /top: 32/);
-  assert.match(header, /\[0\.18, 0\.8\]/);
-  assert.match(header, /\[0\.1, 0\.28\]/);
+  assert.match(header, /\[0\.08, 0\.22\]/);
   assert.doesNotMatch(header, /STADIUM_SMOKE_BANDS/);
   assert.doesNotMatch(header, /lateralGlowWash/);
   assert.doesNotMatch(header, /\$\{mid\}E6/);
   assert.doesNotMatch(header, /shadowOpacity:\s*0\.85/);
   // Busy sync must not paint the orange "Refreshing"/"Syncing" label chip.
-  assert.match(header, /syncBusy \? \(/);
+  assert.match(header, /showRefreshGlow \|\| syncReadyVisible \? \(/);
   assert.doesNotMatch(
-    header.slice(header.indexOf("syncBusy ? ("), header.indexOf(") : (", header.indexOf("syncBusy ? (")) + 40),
+    header.slice(header.indexOf("showRefreshGlow || syncReadyVisible ? ("), header.indexOf(") : (", header.indexOf("showRefreshGlow || syncReadyVisible ? (")) + 40),
     /\{syncCompact\}/,
   );
 });
 
-test("OverviewHeaderV3 stadium glow: amber breathe while busy, soft green settle on OK", () => {
-  assert.match(header, /tone_warning/);
-  assert.match(header, /tone_good/);
-  assert.match(header, /warningColor/);
-  assert.match(header, /successColor/);
-  assert.match(header, /greenMix/);
-  assert.match(header, /wasBusyRef/);
+test("OverviewHeaderV3 moves from primary loading glow to brief green ready state", () => {
+  assert.match(header, /color=\{t\.colors\.tone_primary\}/);
+  assert.match(header, /successColor=\{t\.colors\.tone_good\}/);
   assert.match(header, /failedOrStale/);
-  assert.match(header, /home-header-glow-amber/);
-  assert.match(header, /home-header-glow-green/);
+  assert.match(header, /home-header-glow-primary/);
+  assert.match(header, /home-header-glow-ready/);
+  assert.match(header, /setTimeout\(\(\) => setSyncReadyVisible\(false\), reduceMotion \? 700 : 1150\)/);
   assert.match(header, /StadiumSideGlow/);
   assert.match(header, /EASE_GLOW/);
-  assert.match(header, /GLOW_SETTLE_MS = 1500/);
-  assert.match(header, /Color\.orange\.opacity\(0\.18/);
-  assert.match(header, /Static mid opacity/);
-  assert.match(header, /Failed\/Stale — never glow/);
-  assert.match(header, /Busy → calm OK/);
-  // Soft smoke stops — not full-opaque neon core.
-  assert.match(header, /hexWithAlpha\(color, 0\.72\)/);
+  assert.doesNotMatch(header, /warningColor|greenMix|home-header-glow-amber/);
+  assert.match(header, /hexWithAlpha\(color, 0\.48\)/);
   assert.doesNotMatch(header, /hexWithAlpha\(color, 1\)/);
+  // A healthy idle state is visually quiet after the transient ready check.
+  assert.match(header, /\) : syncNeedsLabel \? \(/);
+  assert.match(header, /\) : null\}/);
 });
 
 test("Home wires OverviewHeaderV3 instead of legacy header stack", () => {
@@ -121,18 +114,18 @@ test("OverviewHeaderV3 expanded shell matches build 209 stadium chrome", () => {
   assert.match(header, /chrome\.colors\.background_secondary/);
 });
 
-test("OverviewHeaderV3 market pill uses overlapping circular flag discs", () => {
+test("OverviewHeaderV3 market pill uses separated circular flag discs", () => {
   assert.match(header, /from "@\/src\/components\/MarketPill"/);
   assert.match(header, /<MarketPill/);
   assert.match(header, /home-market-pill/);
   assert.match(header, /marketCountries/);
   assert.match(header, /hasMarketPill \? \(/);
-  // Glass + overlapping discs live in shared MarketPill.
+  // Glass + separated discs live in shared MarketPill.
   assert.match(marketPill, /MarketFlagStack/);
   assert.match(marketPill, /multi-country-flags/);
   assert.match(marketPill, /marketFlagDisc/);
-  assert.match(marketPill, /MARKET_FLAG_OVERLAP/);
-  assert.match(marketPill, /marginLeft: index > 0 \? MARKET_FLAG_OVERLAP/);
+  assert.match(marketPill, /MARKET_FLAG_GAP/);
+  assert.match(marketPill, /marginLeft: index > 0 \? MARKET_FLAG_GAP/);
   assert.match(marketPill, /zIndex: index \+ 1/);
   assert.match(marketPill, /borderRadius: MARKET_FLAG_SIZE \/ 2/);
   assert.match(marketPill, /market_pill_flag_rim/);
@@ -145,6 +138,11 @@ test("OverviewHeaderV3 market pill uses overlapping circular flag discs", () => 
   assert.match(marketPill, /market_pill_stroke/);
   assert.doesNotMatch(marketPill, /tint="dark"/);
   assert.match(marketPill, /chevron\.down/);
+  assert.match(marketPill, /MAX_VISIBLE_MARKET_FLAGS = 2/);
+  assert.match(marketPill, /countries\.slice\(0, MAX_VISIBLE_MARKET_FLAGS\)/);
+  assert.match(marketPill, /multi-country-overflow/);
+  assert.match(marketPill, /\+\{hiddenCount\}/);
+  assert.match(marketPill, /\$\{resolvedCountries\.length\} markets/);
   // Currency merged into pill — no separate currency chip when markets present.
   const marketStart = header.indexOf("hasMarketPill ? (");
   const marketElse = header.indexOf(") : (", marketStart);
@@ -156,6 +154,27 @@ test("OverviewHeaderV3 market pill uses overlapping circular flag discs", () => 
   assert.match(header.slice(marketElse), /styles\.currencyChip/);
   assert.match(home, /marketCountries=\{marketCountries\}/);
   assert.match(home, /multiCountryCodes/);
+});
+
+test("Gross updating status breathes inside a fixed lane without moving widgets", () => {
+  assert.match(home, /function GrossStatusSlot/);
+  assert.match(home, /testID="home-gross-status"/);
+  assert.match(home, /testID="home-gross-status-glow"/);
+  assert.match(home, /height:\s*34/);
+  assert.match(home, /withRepeat/);
+  assert.match(home, /transform:\s*\[\{ scale:/);
+  assert.match(home, /caption=\{financeCaption\}/);
+  assert.match(home, /updating=\{periodRefreshing\}/);
+});
+
+test("OverviewHeaderV3 lets users select all markets or one detected marketplace", () => {
+  assert.match(header, /selectedMarketCountry/);
+  assert.match(header, /onMarketSelectionChange/);
+  assert.match(header, /styles\.marketSheet/);
+  assert.match(header, /All markets/);
+  assert.match(header, /onMarketSelectionChange\(country\)/);
+  assert.match(home, /selectedMarketCountry=\{selectedAdsMarket\}/);
+  assert.match(home, /onMarketSelectionChange=\{setSelectedAdsMarket\}/);
 });
 
 test("OverviewHeaderV3 keeps currency a11y when markets absent", () => {

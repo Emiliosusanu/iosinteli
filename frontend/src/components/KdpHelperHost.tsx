@@ -8,7 +8,7 @@ import {
   subscribeKdpHelperScreenFocused,
 } from "@/src/lib/kdp/helperUi";
 import { isIosHelperEnabled } from "@/src/lib/kdp/source";
-import { attachKdpWebView } from "@/src/lib/kdp/runtime";
+import { attachKdpWebView, hydrateKdpRuntimeFromPersistence } from "@/src/lib/kdp/runtime";
 
 /**
  * Hidden authenticated KDP WebView. Mounted whenever Royalty source includes
@@ -23,6 +23,10 @@ export function KdpHelperHost() {
   const [helperScreenFocused, setHelperScreenFocused] = useState(isKdpHelperScreenFocused);
 
   useEffect(() => subscribeKdpHelperScreenFocused(setHelperScreenFocused), []);
+
+  useEffect(() => {
+    if (enabled) void hydrateKdpRuntimeFromPersistence();
+  }, [enabled]);
 
   const active = enabled && !helperScreenFocused;
 

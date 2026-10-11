@@ -2,10 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  QA_ACK_KEY,
+  QA_COMMAND_KEY,
   parseQaCommand,
   stashPendingQaFilters,
   takePendingQaFilters,
 } from "../src/lib/qaCommand.ts";
+
+test("physical QA command and acknowledgement keys stay distinct", () => {
+  assert.equal(QA_COMMAND_KEY, "inteliads.qa.command");
+  assert.equal(QA_ACK_KEY, "inteliads.qa.ack");
+  assert.notEqual(QA_COMMAND_KEY, QA_ACK_KEY);
+});
 
 test("parseQaCommand keeps targetsAdvanced ranges", () => {
   const cmd = parseQaCommand(

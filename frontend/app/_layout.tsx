@@ -5,7 +5,7 @@ import * as Notifications from "expo-notifications";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import * as SplashScreen from "expo-splash-screen";
 import { AuthProvider, useAuth } from "@/src/contexts/AuthContext";
 import { AppProvider } from "@/src/contexts/AppContext";
@@ -18,6 +18,7 @@ import { isSafeNotificationHref, parseNotificationPayload, routeForNotification 
 import { resolveDeepLinkHref } from "@/src/lib/deepLinkContract";
 import { markPerf } from "@/src/lib/perf";
 import { debugIngest } from "@/src/lib/debugIngest";
+import { appQueryClient } from "@/src/lib/queryClient";
 import * as Linking from "expo-linking";
 import { ThemeProvider, useTheme } from "@/src/lib/theme";
 
@@ -32,41 +33,33 @@ const MIN_SPLASH_MS = 400;
 // Survives RouteGuard remounts so a consumed tap cannot replay on token refresh.
 const handledNotificationIds = new Set<string>();
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      // Same-key hits stay instant via memory + AsyncStorage hydrate.
-      // Do NOT reuse a prior query's rows under a new period/profile key —
-      // that paints Week numbers under Month labels and wrong entities.
-      staleTime: 45_000,
-      gcTime: 1000 * 60 * 60 * 6,
-      retry: 1,
-      // RN has no window focus; AppState handler below refetches on foreground.
-      refetchOnWindowFocus: false,
-    },
-  },
-});
+// One cache for the provider, background prefetch, Create and Books. A second
+// QueryClient made successful background warming invisible to mounted screens.
+const queryClient = appQueryClient;
 
 /** Pull latest financial reality when returning from background — no stale paint. */
 function FinancialForegroundRefetch() {
   useEffect(() => {
+    void import("@/src/lib/kdp/remoteDiagnostics").then(({ flushKdpRemoteDiagnostics }) => {
+      void flushKdpRemoteDiagnostics();
+    });
     let appState: AppStateStatus = AppState.currentState;
     const sub = AppState.addEventListener("change", (next) => {
       const wasBackground = appState === "background" || appState === "inactive";
       appState = next;
       if (!wasBackground || next !== "active") return;
-      void queryClient.invalidateQueries({
-        predicate: (query) => {
-          const root = query.queryKey?.[0];
-          return typeof root === "string" && (
-            root.startsWith("kdp-royalties")
-            || root.startsWith("campaign-metrics")
-            || root.startsWith("mobile-overview")
-            || root.startsWith("products-range")
-            || root.startsWith("top-books")
-            || root.startsWith("placement-mix")
-          );
-        },
+      void import("@/src/lib/kdp/remoteDiagnostics").then(({ flushKdpRemoteDiagnostics }) => {
+        void flushKdpRemoteDiagnostics();
+      });
+      void import("@/src/lib/backgroundFinancialSync").then(({ backgroundFinancialQueryRoots }) => {
+        const roots = backgroundFinancialQueryRoots();
+        void queryClient.invalidateQueries({
+          predicate: (query) => {
+            const root = query.queryKey?.[0];
+            return typeof root === "string" && roots.includes(root);
+          },
+          refetchType: "active",
+        });
       });
     });
     return () => sub.remove();
@@ -267,6 +260,7 @@ export default function RootLayout() {
                     <Stack.Screen name="more/sync" />
                     <Stack.Screen name="more/data-map" />
                     <Stack.Screen name="more/account" />
+                    <Stack.Screen name="more/billing" />
                     <Stack.Screen name="more/bid-bot" />
                     <Stack.Screen name="more/kdp-source" />
                     <Stack.Screen name="more/kdp-helper" />

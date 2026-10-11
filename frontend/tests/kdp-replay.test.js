@@ -8,6 +8,56 @@ import { buildKdpFromJsons, pickTemplateTypeByUrl } from "../src/lib/kdp/vendor/
 
 const vendor = readFileSync(new URL("../src/lib/kdp/vendor/kdpVendor.generated.js", import.meta.url), "utf8");
 
+test("explicit royalty zero is retained but absent, null, empty and nonnumeric source metrics are incomplete", () => {
+  const day = "2026-10-08";
+  const histogram = values => ({ nestedHistogram: {histogramList: [{title:day,data:[{bin:"B0TEST1234", values}]}]} });
+  const input = {ymd:day, titlesJson:{reportsMetadata:{books:{B0TEST1234:{asins:{digital:"B0TEST1234"}}}}},
+    royaltiesJson:histogram({TotalRoyalties:0,DigitalRoyalties:0}),
+    ordersJson:histogram({TotalOrders:0,DigitalOrders:0}), kenpJson:histogram({TotalKENP:0})};
+  const result=buildKdpFromJsons(input);
+  assert.equal(result.rowDaily.royalties,0); assert.equal(result.rowDaily.orders,0);
+  for(const values of [{FutureRoyalties:0},{TotalRoyalties:null},{TotalRoyalties:''},{TotalRoyalties:'oops'},{TotalRoyalties:false},{TotalRoyalties:[]}]) {
+    assert.throws(()=>buildKdpFromJsons({...input,royaltiesJson:histogram(values)}),/missing explicit numeric metrics/);
+  }
+  for(const value of [null, '', false, [], 'oops']) {
+    assert.throws(()=>buildKdpFromJsons({...input,ordersJson:histogram({TotalOrders:value})}),/missing explicit numeric metrics/);
+    assert.throws(()=>buildKdpFromJsons({...input,kenpJson:histogram({TotalKENP:value})}),/missing explicit numeric metrics/);
+  }
+});
+
+test("captured KDP title tooltips retain book orders and KENP", () => {
+  const day = "2026-10-08";
+  const histogram = (values, bin = "B0TEST1234") => ({ nestedHistogram: {
+    histogramList: [{ title: day, data: [{ bin, values }] }],
+  } });
+  const input = {
+    ymd: day,
+    titlesJson: { reportsMetadata: { books: { "DIGITAL=B0TEST1234:PRINT=B0PRNT1234::": {
+      asins: { digital: "B0TEST1234", print: "B0PRNT1234" },
+    } } } },
+    royaltiesJson: histogram({ TotalRoyalties: 12.5, DigitalRoyalties: 5, PaperbackRoyalties: 7, PagesReadRoyalties: 0.5 }),
+    ordersJson: histogram({ TotalOrders: 2, DigitalOrders: 1, PaperbackOrders: 1 }),
+    kenpJson: histogram({ TotalKENP: 68 }),
+  };
+  const result = buildKdpFromJsons(input);
+  assert.equal(result.rowDaily.orders, 2);
+  assert.equal(result.rowDaily.kenp, 68);
+  assert.equal(result.rowDaily.royalties, 12.5);
+  assert.equal(result.rowsBookDaily.find(row => row.asin === "B0PRNT1234").orders, 1);
+  assert.throws(() => buildKdpFromJsons({ ...input, ordersJson: {
+    histogram: { data: [{ bin: "Amazon.com", values: {
+      TotalMarketplaceOrders: 4, MarketplaceDigitalOrders: 2, MarketplacePaperbackOrders: 2,
+    } }] },
+  } }), /missing book-level histogram/);
+  assert.throws(() => buildKdpFromJsons({ ...input, kenpJson: histogram({ TotalMarketplacePagesRead: 68 }, "Amazon.com") }), /missing book-level histogram/);
+  assert.throws(() => buildKdpFromJsons({ ...input, ordersJson: histogram({ FutureOrders: 2 }) }), /missing book-level metrics/);
+  assert.throws(() => buildKdpFromJsons({ ...input, ymd: "2026-10-07" }), /histogram missing day/);
+  const empty = { nestedHistogram: { histogramList: [{ title: day, data: [] }] } };
+  const zero = buildKdpFromJsons({ ...input, ordersJson: empty, kenpJson: empty });
+  assert.equal(zero.rowDaily.orders, 0);
+  assert.equal(zero.rowDaily.kenp, 0);
+});
+
 test("vendored parser is the full extension function, not a truncated stub", () => {
   assert.match(vendor, /function buildKdpFromJsons/);
   assert.match(vendor, /function extractBooksObj/);
@@ -32,6 +82,19 @@ test("required templates are royalties + orders + kenp", () => {
   t = mergeCapturedTemplate(t, { url: "https://kdpreports.amazon.com/api/reports/orders", method: "POST", requestBody: "{}" });
   t = mergeCapturedTemplate(t, { url: "https://kdpreports.amazon.com/api/reports/kenp", method: "POST", requestBody: "{}" });
   assert.equal(hasRequiredTemplates(t), true);
+});
+
+test("placed orders cannot satisfy or replace processed print-order capture", () => {
+  let templates = {};
+  for (const url of ["/reports/royalties/table/titles", "/reports/orders/placed/table/titles", "/reports/kenp/marketplaceHistogramV2"]) {
+    templates = mergeCapturedTemplate(templates, { url: `https://kdpreports.amazon.com${url}` });
+  }
+  assert.equal(hasRequiredTemplates(templates), false);
+  templates = mergeCapturedTemplate(templates, { url: "https://kdpreports.amazon.com/reports/orders/table/titles" });
+  assert.equal(hasRequiredTemplates(templates), true);
+  const accepted = templates;
+  templates = mergeCapturedTemplate(templates, { url: "https://kdpreports.amazon.com/reports/orders/placed/table/titles" });
+  assert.equal(templates, accepted);
 });
 
 test("rebuild patches YMD dates in url and body", () => {
@@ -101,4 +164,24 @@ test("buildKdpFromJsons writes the same daily tables as the extension", () => {
   assert.equal(built.rowEntry.income, 12.5);
   assert.equal(built.rowEntry.income_currency, "USD");
   assert.ok(built.rowsBookDaily.some((r) => r.asin === "B0TEST1234" && r.royalties === 12.5));
+});
+
+test('positive ebook KENP survives a zero sibling format; ambiguous identity preserves accepted data', () => {
+  const day='2026-10-10',digital='B0TEST1234',print='B0PRNT1234',group=`DIGITAL=${digital}:PRINT=${print}::`;
+  const report=data=>({nestedHistogram:{histogramList:[{title:day,data}]}});
+  const base={ymd:day,titlesJson:{reportsMetadata:{books:{[group]:{asins:{digital,print}}}}},
+    royaltiesJson:report([{bin:group,values:{TotalRoyalties:23.16,DigitalRoyalties:23.16}}]),
+    ordersJson:report([{bin:group,values:{TotalOrders:3,DigitalOrders:3}}])};
+  const run=rows=>buildKdpFromJsons({...base,kenpJson:report(rows.map(([bin,pages])=>({bin,values:{TotalKENP:pages}})))});
+  for(const rows of [[[digital,518],[print,0]],[[print,0],[digital,518]]]) {
+    const result=run(rows);
+    assert.equal(result.rowDaily.kenp,518);
+    assert.equal(result.rowsBookDaily.find(r=>r.asin===digital).kenp,518);
+    assert.equal(result.rowsBookDaily.find(r=>r.asin===print).kenp,0);
+    assert.equal(result.facts.find(r=>r.asin===digital&&r.format==='ku').kenp,518);
+  }
+  assert.equal(run([[digital,0],[print,0]]).rowDaily.kenp,0);
+  assert.throws(()=>run([['B0UNKNOWN1',518]]),/identity missing from catalog/);
+  assert.throws(()=>run([[digital,518],[digital,518]]),/repeated positive book identity/);
+  assert.throws(()=>run([[digital,518],[print,518]]),/repeated positive book identity/);
 });
