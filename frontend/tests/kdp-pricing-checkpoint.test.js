@@ -18,20 +18,22 @@ function storageHarness() {
   return { values, getItem: async (key, fallback) => values.get(key) ?? fallback,
     setItem: async (key, value) => { values.set(key, value); return true; } };
 }
-function harness(storage, { failWrite = null, interruptAfter = null, gateAfter = null, staleFirst = false, marketCount = 2, largeFormats = false, inactiveFirst = false, unknownAll = false, unknownAfter = Infinity } = {}) {
+function harness(storage, { failWrite = null, interruptAfter = null, gateAfter = null, staleFirst = false, marketCount = 2, largeFormats = false, inactiveFirst = false, unknownAll = false, unknownAfter = Infinity, freshReadFailure = false } = {}) {
   const writes = [], probes = [], auth = [], fresh = storage.fresh ??= new Set();
   let lastOptions;
   const dirty = new Set();
   const store = policy.createPricingCheckpointStore(storage);
   const q = () => {
-    let table, selected = '', onlyFresh = false, offset = 0, size = 1000, ids = null;
+    let table, selected = '', onlyFresh = false, cutoff, offset = 0, size = 1000, ids = null;
     const query = {
       from(t) { table = t; return this; }, select(s) { selected = s; return this; },
       eq() { return this; }, in(_field, values) { ids = values; return this; }, not() { return this; },
-      abortSignal() { return this; }, order() { return this; }, range(from, to) { offset = from; size = to - from + 1; return this; }, gte() { onlyFresh = true; return this; },
+      abortSignal() { return this; }, order() { return this; }, range(from, to) { offset = from; size = to - from + 1; return this; }, gte(_field, value) { onlyFresh = true; cutoff = value; return this; },
       then(resolve) {
+        if (onlyFresh && freshReadFailure) return Promise.resolve({ data: null, error: { message: 'database unavailable' } }).then(resolve);
         const data = table === 'kdp_book_formats' ? [...candidates.map(c => ({ asin: c.asin, format: 'paperback' })), ...(largeFormats ? candidates.map((_,i) => ({ asin: `B1TEST${String(i).padStart(4, '0')}`, format: 'ebook' })) : [])]
-          : onlyFresh ? [...fresh].map(asin => ({ asin, pricing_captured_at: 'fresh' }))
+          : onlyFresh ? [...fresh].map(asin => ({ asin, pricing_captured_at: storage.capturedAt?.get(asin) || new Date().toISOString() }))
+            .filter(row => row.pricing_captured_at >= cutoff)
           : selected === 'asin,pricing_captured_at' ? candidates.map(c => ({ asin: c.asin, pricing_captured_at: 'old' }))
           : candidates.map(c => ({ asin: c.asin, kdp_setup_book_id: c.kdpBookId }));
         return Promise.resolve({ data: data.filter(row => !ids || ids.includes(row.asin)).slice(offset, offset + size), error: null }).then(resolve);
@@ -201,7 +203,7 @@ for (const bookCount of [700, 1000]) test(`${bookCount} books ×14 native market
       const h = harness(storage, { marketCount:14, largeFormats:true });
       const result = await h.run({ maxBooks:20 });
       allWrites.push(...h.writes); allProbes.push(...h.probes);
-      storage.fresh.clear(); // time can exceed 15m during a large sweep
+      storage.fresh.clear(); // completed entries may age beyond the audit window
       if (slice <bookCount/20-1) assert.ok(result.pending>0);
       else assert.equal(result.pending,0);
     }
@@ -268,4 +270,61 @@ test('a partial live-status refresh retains unresolved tail while confirmed live
   assert.equal(checkpoint.needsDiscovery,true);
   const fresh=harness(storage);await fresh.run();
   assert.deepEqual(new Set(fresh.probes),new Set(candidates.slice(2).map(row=>row.kdpBookId)));
+});
+
+test('700 verified books skip the second gate; one detected change refreshes only its fourteen markets', async () => {
+  const original = [...candidates];
+  try {
+    candidates.splice(0, candidates.length, ...Array.from({length:700}, (_,i) => ({
+      asin:`B0TEST${String(i).padStart(4,'0')}`, kdpBookId:`SETUP${String(i).padStart(6,'0')}`, title:null,
+    })));
+    const storage=storageHarness();
+    storage.fresh=new Set(candidates.map(row=>row.asin));
+    storage.capturedAt=new Map(candidates.map(row=>[row.asin,new Date(Date.now()-2*60*60*1000).toISOString()]));
+    const steady=harness(storage,{marketCount:14});
+    const result=await steady.run();
+    assert.equal(result.synced,0); assert.equal(result.pending,0);
+    assert.equal(steady.probes.length,0); assert.equal(steady.writes.length,0);
+
+    const changed=candidates[699];
+    const next=harness(storage,{marketCount:14});
+    next.dirty.add(changed.kdpBookId);
+    await next.run();
+    assert.deepEqual(next.probes,[changed.kdpBookId]);
+    assert.equal(next.writes.length,1);
+    assert.equal(next.writes[0].marketplaceRows.length,14);
+    assert.ok(next.writes[0].marketplaceRows.every(row=>row.asin===changed.asin));
+    assert.equal(next.dirty.size,0);
+    const after=harness(storage,{marketCount:14});
+    await after.run(); assert.equal(after.probes.length,0);
+  } finally { candidates.splice(0,candidates.length,...original); }
+});
+
+test('periodic audit selects an expired price while unchanged recent books remain skipped', async () => {
+  const storage=storageHarness();
+  storage.fresh=new Set(candidates.map(row=>row.asin));
+  storage.capturedAt=new Map(candidates.map(row=>[row.asin,new Date(Date.now()-24*60*60*1000).toISOString()]));
+  storage.capturedAt.set(candidates[4].asin,new Date(Date.now()-8*24*60*60*1000).toISOString());
+  const h=harness(storage); await h.run();
+  assert.deepEqual(h.probes,[candidates[4].kdpBookId]);
+});
+
+test('a missing price is captured without rereading the verified catalog', async () => {
+  const storage=storageHarness(); storage.fresh=new Set(candidates.slice(0,4).map(row=>row.asin));
+  const h=harness(storage); await h.run();
+  assert.deepEqual(h.probes,[candidates[4].kdpBookId]);
+});
+
+test('freshness database failure preserves the retry checkpoint instead of sweeping every book', async () => {
+  const storage=storageHarness();
+  const store=policy.createPricingCheckpointStore(storage);
+  await store.save('account-a',{needsDiscovery:false,pending:[candidates[4]],completed:[]});
+  const before=await store.load('account-a');
+  const h=harness(storage,{freshReadFailure:true});
+  await assert.rejects(h.run(),/database unavailable/);
+  assert.equal(h.probes.length,0); assert.equal(h.writes.length,0);
+  const after=await store.load('account-a');
+  assert.deepEqual(after.pending,before.pending);
+  assert.deepEqual(after.completed,before.completed);
+  assert.equal(after.needsDiscovery,true);
 });

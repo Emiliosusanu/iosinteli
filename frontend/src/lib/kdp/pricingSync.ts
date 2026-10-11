@@ -83,12 +83,14 @@ export type PricingSyncResult = {
 };
 
 /**
- * A paperback price is only fresh for one iOS metronome interval.  The
- * lightweight Bookshelf pass runs on every wake, while the setup-page
- * second gate is re-read at least once per 15-minute wake.  This catches a
- * price changed outside the app without waiting for a dirty-save event.
+ * Match Chrome's bounded reconciliation window. Bookshelf observations and
+ * pricing-save events mark individual setups dirty, bypassing this cache.
+ * Missing prices and unfinished writes also remain due. Periodic verification
+ * is still necessary for changes made elsewhere, especially secondary markets
+ * whose prices are not visible on Bookshelf. Do not reprice the catalog on
+ * every report wake merely because fifteen minutes have passed.
  */
-const PRICING_FRESH_MS = 15 * 60 * 1000;
+const PRICING_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_BOOKS = 20;
 /** First-time / onboarding: price more per wake so user can leave the helper. */
 const ONBOARDING_MAX_BOOKS = 40;
@@ -715,7 +717,7 @@ async function syncPricingSlice(
   const forceNewSweep = Boolean(opts.forceRefresh) && !continuingSweep;
   const freshAsins = forceNewSweep
     ? new Set<string>()
-    : await loadFreshPricingAsins(accountId, opts.deadlineAtMs).catch(() => new Set<string>());
+    : await loadFreshPricingAsins(accountId, opts.deadlineAtMs);
 
   let todo = candidates.filter((c) => {
     const setupId = normalizeSetupId(c.kdpBookId);
@@ -760,7 +762,7 @@ async function syncPricingSlice(
     }
     const msg =
       skippedFresh > 0
-        ? `KDP pricing: skipped ${skippedFresh}/${candidates.length} (fresh <15m)`
+        ? `KDP pricing: skipped ${skippedFresh}/${candidates.length} (verified <7d, no detected change)`
         : "KDP pricing: nothing to fetch";
     void appendKdpActivity(msg, "info");
     return {
