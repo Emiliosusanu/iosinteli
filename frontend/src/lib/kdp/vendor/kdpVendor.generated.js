@@ -264,6 +264,7 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
   if (kenpJson) {
     const kNested = Array.isArray(kr?.nestedHistogram?.histogramList) ? kr.nestedHistogram.histogramList : null;
     const rows = kNested ? histogramListRowsForDay(kNested, dateStr) : (kr?.histogram?.data || []);
+    const positiveKenpGroups = new Set();
     for (const r of (Array.isArray(rows) ? rows : [])) {
       const bin = String(r?.bin || '').trim();
       if (!bin) continue;
@@ -275,9 +276,20 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
         const g = asinToGroup.get(bin.toUpperCase());
         if (g) row = ensure(g);
       }
-      if (!row) continue;
       const vals = r?.values || {};
-      row.kenp = Math.max(0, parseInt(vals.TotalKENP || 0, 10));
+      const pages = Math.max(0, parseInt(vals.TotalKENP || 0, 10));
+      if (!row) {
+        if (pages > 0) throw new Error('KENP positive book identity missing from catalog; existing data preserved');
+        continue;
+      }
+      // Zero-valued sibling format rows must not erase the ebook's pages.
+      // More than one positive alias for a grouped book is ambiguous: do not
+      // double-count it or silently choose a maximum from the capture.
+      if (pages > 0 && positiveKenpGroups.has(row.groupKey)) {
+        throw new Error('KENP repeated positive book identity; existing data preserved');
+      }
+      if (pages > 0) positiveKenpGroups.add(row.groupKey);
+      row.kenp += pages;
     }
   }
 

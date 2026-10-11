@@ -165,3 +165,23 @@ test("buildKdpFromJsons writes the same daily tables as the extension", () => {
   assert.equal(built.rowEntry.income_currency, "USD");
   assert.ok(built.rowsBookDaily.some((r) => r.asin === "B0TEST1234" && r.royalties === 12.5));
 });
+
+test('positive ebook KENP survives a zero sibling format; ambiguous identity preserves accepted data', () => {
+  const day='2026-10-10',digital='B0TEST1234',print='B0PRNT1234',group=`DIGITAL=${digital}:PRINT=${print}::`;
+  const report=data=>({nestedHistogram:{histogramList:[{title:day,data}]}});
+  const base={ymd:day,titlesJson:{reportsMetadata:{books:{[group]:{asins:{digital,print}}}}},
+    royaltiesJson:report([{bin:group,values:{TotalRoyalties:23.16,DigitalRoyalties:23.16}}]),
+    ordersJson:report([{bin:group,values:{TotalOrders:3,DigitalOrders:3}}])};
+  const run=rows=>buildKdpFromJsons({...base,kenpJson:report(rows.map(([bin,pages])=>({bin,values:{TotalKENP:pages}})))});
+  for(const rows of [[[digital,518],[print,0]],[[print,0],[digital,518]]]) {
+    const result=run(rows);
+    assert.equal(result.rowDaily.kenp,518);
+    assert.equal(result.rowsBookDaily.find(r=>r.asin===digital).kenp,518);
+    assert.equal(result.rowsBookDaily.find(r=>r.asin===print).kenp,0);
+    assert.equal(result.facts.find(r=>r.asin===digital&&r.format==='ku').kenp,518);
+  }
+  assert.equal(run([[digital,0],[print,0]]).rowDaily.kenp,0);
+  assert.throws(()=>run([['B0UNKNOWN1',518]]),/identity missing from catalog/);
+  assert.throws(()=>run([[digital,518],[digital,518]]),/repeated positive book identity/);
+  assert.throws(()=>run([[digital,518],[print,518]]),/repeated positive book identity/);
+});
