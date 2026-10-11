@@ -70,19 +70,22 @@ export async function selectHelperAccountId(id: string): Promise<void> {
     import("./session.ts"),
     import("inteliads-native-sync"),
   ]);
-  const [, nativeCookiesCleared] = await Promise.all([
+  const [webSessionCleared, nativeCookiesCleared] = await Promise.all([
     clearKdpWebSession(),
     clearNativeAmazonKdpCookies(),
   ]);
-  if (!nativeCookiesCleared) {
+  if (webSessionCleared !== true || nativeCookiesCleared !== true) {
     throw new Error("Unable to clear the current Amazon KDP session safely.");
   }
-  await Promise.all([
+  const progressCleared = await Promise.all([
     storage.removeItem(STATE_KEY),
     storage.removeItem(TEMPLATES_KEY),
     storage.removeItem(DEFERRED_KEY),
     storage.removeItem(REPLAY_CURRENCY_KEY),
   ]);
+  if (progressCleared.some((cleared) => cleared !== true)) {
+    throw new Error("Unable to clear the previous KDP account's progress safely.");
+  }
   // Commit the destination last so a failed cleanup cannot pair a new KDP
   // account with the previous account's Amazon session.
   await saveHelperAccountId(next);

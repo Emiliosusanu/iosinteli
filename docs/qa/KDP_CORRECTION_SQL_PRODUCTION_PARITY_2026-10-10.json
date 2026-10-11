@@ -1,0 +1,32 @@
+[
+  {
+    "function": "apply_kdp_day_snapshot",
+    "matchesProduction": true,
+    "sha256": "b468eb0d6e57cbeb4604bbb9000f5efa76707f7557e83646073814c26859e508"
+  },
+  {
+    "function": "capture_kdp_day_for_review",
+    "matchesProduction": true,
+    "sha256": "d16ca354dd1d5118c0d61d39c40404f89fac1c4a267b03141a85d3a9368c579a"
+  },
+  {
+    "function": "kdp_correction_day_snapshot",
+    "matchesProduction": true,
+    "sha256": "b4f170126ea3b8f117ae52b2947dff86659780904cd348442f3e9cdc2e87754d"
+  },
+  {
+    "function": "replace_kdp_day_snapshot",
+    "matchesProduction": true,
+    "sha256": "c763d5bb8c4a86bb319220d2aadccb582d9bcb6fbf6840a6d30f5dfe3a501542"
+  },
+  {
+    "function": "review_kdp_correction",
+    "matchesProduction": true,
+    "sha256": "714e95b795e4818065d87b7f797565502b8d9e9ac1530dc897f508e2326cdd7a"
+  },
+  {
+    "function": "stage_kdp_day_correction",
+    "matchesProduction": true,
+    "sha256": "733d22cffa241ef83003dfd76c89fd421e4b6a36bb59a9996a7aa49232f48b99"
+  }
+]

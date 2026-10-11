@@ -15,6 +15,7 @@ import { getNativeCookieHeader } from "inteliads-native-sync";
 import {
   applySessionToHeaders,
   headerLookup,
+  mergeCookieHeaders,
   pickSessionExtraHeaders,
   type KdpWebSession,
 } from "./sessionContract.ts";
@@ -68,13 +69,17 @@ export async function saveKdpWebSession(session: KdpWebSession): Promise<boolean
   }
 }
 
-export async function clearKdpWebSession(): Promise<void> {
+export async function clearKdpWebSession(): Promise<boolean> {
   try {
     await SecureStore.deleteItemAsync(SESSION_KEY, {
       keychainAccessible: ACCESSIBLE,
     });
+    const remaining = await SecureStore.getItemAsync(SESSION_KEY, {
+      keychainAccessible: ACCESSIBLE,
+    });
+    return remaining == null;
   } catch {
-    /* best-effort */
+    return false;
   }
 }
 
@@ -86,7 +91,7 @@ export async function mergeSessionFromCaptureHeaders(
   const userAgent = headerLookup(headers, "user-agent") ?? prev?.userAgent ?? "";
   if (!cookies && !userAgent) return prev;
   const next: KdpWebSession = {
-    cookies,
+    cookies: mergeCookieHeaders(prev?.cookies ?? "", cookies),
     userAgent,
     languages: prev?.languages,
     extraHeaders: pickSessionExtraHeaders(headers, prev?.extraHeaders),

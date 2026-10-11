@@ -11,6 +11,7 @@ import {
   mergeTargetingBookOptionSources,
   selectEligibleCreateBookOptions,
   selectEligibleTargetingBookOptions,
+  sponsoredBookAsin,
   unionCampaignIdsForBookAsins,
 } from "../src/lib/targetingBookFilter.ts";
 
@@ -25,6 +26,22 @@ test("book filter keeps distinct ASINs even when titles match", () => {
   ]);
   assert.equal(rows.length, 2);
   assert.match(targeting, /One ASIN per row/);
+});
+
+test("enabled advertised books accept an exact ASIN from SKU when the ASIN column is empty", () => {
+  assert.equal(sponsoredBookAsin({ asin: null, sku: "b0hfkcdpvg" }), "B0HFKCDPVG");
+  assert.equal(sponsoredBookAsin({ asin: null, sku: "LOCAL-NOVA-2027" }), null);
+});
+
+test("parent filter uses the newer edition's matching cover", () => {
+  const books = selectEligibleTargetingBookOptions([
+    { asin: "B0H59KMDF9", title: "Nova Scotia 2026", image_url: "https://example.com/old.jpg", campaignIds: ["old"], groupKey: "KDP:VP2:NOVA", formatAsins: ["B0HFKCDPVG"] },
+    { asin: "B0HFKCDPVG", title: "Nova Scotia 2027", image_url: "https://example.com/new.jpg", campaignIds: ["new"], groupKey: "KDP:VP2:NOVA" },
+  ]);
+  assert.equal(books.length, 1);
+  assert.equal(books[0].title, "Nova Scotia 2027");
+  assert.equal(books[0].image_url, "https://example.com/new.jpg");
+  assert.deepEqual(books[0].campaignIds.sort(), ["new", "old"]);
 });
 
 test("dedupeTargetingBookOptions collapses identical ASINs and merges campaigns", () => {

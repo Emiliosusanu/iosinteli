@@ -855,7 +855,7 @@ export default function CampaignDetail() {
                   adj={placementAdjustments[editor.key] ?? null}
                   row={undefined}
                   performanceState="error"
-                  primaryCurrency={primaryCurrency}
+                  primaryCurrency={campaignCurrency}
                   isLast={idx === PLACEMENT_EDITORS.length - 1}
                   onEdit={() => {
                     if (blockIfCannotWriteAmazon(writeGuard)) return;
@@ -880,7 +880,7 @@ export default function CampaignDetail() {
                   adj={placementAdjustments[editor.key] ?? null}
                   row={undefined}
                   performanceState="loading"
-                  primaryCurrency={primaryCurrency}
+                  primaryCurrency={campaignCurrency}
                   isLast={idx === PLACEMENT_EDITORS.length - 1}
                   onEdit={() => {
                     if (blockIfCannotWriteAmazon(writeGuard)) return;
@@ -902,7 +902,7 @@ export default function CampaignDetail() {
                     adj={placementAdjustments[editor.key] ?? null}
                     row={row}
                     performanceState={row ? "ready" : "empty"}
-                    primaryCurrency={primaryCurrency}
+                    primaryCurrency={campaignCurrency}
                     isLast={idx === PLACEMENT_EDITORS.length - 1 && extraPlacements.length === 0}
                     onEdit={() => {
                     if (blockIfCannotWriteAmazon(writeGuard)) return;
@@ -918,7 +918,7 @@ export default function CampaignDetail() {
                   adj={null}
                   row={row}
                   performanceState="ready"
-                  primaryCurrency={primaryCurrency}
+                  primaryCurrency={campaignCurrency}
                   isLast={idx === extraPlacements.length - 1}
                 />
               ))}
@@ -948,7 +948,7 @@ export default function CampaignDetail() {
               ordersData={perf.orders}
               acosData={perf.acos}
               width={chartWidth}
-              currency={primaryCurrency}
+              currency={campaignCurrency}
             />
             <View style={styles.legend}>
               <View style={styles.legendItem}>
@@ -1064,7 +1064,7 @@ export default function CampaignDetail() {
                   <TouchableOpacity
                     activeOpacity={0.72}
                     accessibilityRole="button"
-                    accessibilityLabel={`${ag.name || "Ad Group"}, ${statusLabel(ag.state)}, ACoS ${agSales > 0 ? formatPercent(agAcos) : "none"}, spend ${formatCurrency(Number(ag.total_spend), primaryCurrency)}, ${formatInt(Number(ag.total_orders))} orders`}
+                    accessibilityLabel={`${ag.name || "Ad Group"}, ${statusLabel(ag.state)}, ACoS ${agSales > 0 ? formatPercent(agAcos) : "none"}, spend ${formatCurrency(Number(ag.total_spend), campaignCurrency)}, ${formatInt(Number(ag.total_orders))} orders`}
                     onPress={() =>
                       router.push({
                         pathname: "/more/ad-group/[id]",
@@ -1072,6 +1072,7 @@ export default function CampaignDetail() {
                           id: ag.id,
                           name: ag.name || "Ad Group",
                           isAuto: String(!!(ag as any).is_auto),
+                          currency: campaignCurrency,
                           spend: String(ag.total_spend ?? 0),
                           orders: String(ag.total_orders ?? 0),
                           acos: String(ag.total_acos ?? 0),
@@ -1091,7 +1092,7 @@ export default function CampaignDetail() {
                         </Text>
                       </View>
                       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginLeft: 16, marginTop: 3 }]} numberOfLines={1}>
-                        {statusLabel(ag.state)} · {formatCurrency(Number(ag.total_spend), primaryCurrency)} spend · {formatInt(Number(ag.total_impressions))} impr · {formatInt(Number(ag.total_clicks))} clicks · {formatInt(Number(ag.total_orders))} orders
+                        {statusLabel(ag.state)} · {formatCurrency(Number(ag.total_spend), campaignCurrency)} spend · {formatInt(Number(ag.total_impressions))} impr · {formatInt(Number(ag.total_clicks))} clicks · {formatInt(Number(ag.total_orders))} orders
                       </Text>
                       <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginLeft: 16, marginTop: 2 }]} numberOfLines={1}>
                         {childCountLabel}{childPreview?.labels.length ? ` · ${childPreview.labels.join(" · ")}` : ""}
@@ -1110,8 +1111,8 @@ export default function CampaignDetail() {
                       testID={`campaign-adgroup-bid-${ag.id}`}
                       label="Bid"
                       compact
-                      value={bidChipValue != null ? formatCurrency(bidChipValue, primaryCurrency) : "Set"}
-                      currency={primaryCurrency}
+                      value={bidChipValue != null ? formatCurrency(bidChipValue, campaignCurrency) : "Set"}
+                      currency={campaignCurrency}
                       cooldownRow={ag as any}
                       onPress={(opts) =>
                         openEntityBidEdit(
@@ -1190,7 +1191,7 @@ export default function CampaignDetail() {
                       {kw.match_type ? " · " : ""}
                       {statusLabel(kw.status)}
                     </Text>
-                    <DenseMetricLine items={campaignTargetMetricItems(kw, primaryCurrency, t)} />
+                    <DenseMetricLine items={campaignTargetMetricItems(kw, campaignCurrency, t)} />
                   </View>
                   <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
                 </TouchableOpacity>
@@ -1201,9 +1202,9 @@ export default function CampaignDetail() {
                     compact
                     value={(() => {
                       const bid = readTargetBid(kw as any, resolveInheritedBid(kw.ad_group_id));
-                      return bid != null ? formatCurrency(bid, primaryCurrency) : "Set";
+                      return bid != null ? formatCurrency(bid, campaignCurrency) : "Set";
                     })()}
-                    currency={primaryCurrency}
+                    currency={campaignCurrency}
                     cooldownRow={kw as any}
                     onPress={(opts) =>
                       openEntityBidEdit(
@@ -1230,7 +1231,7 @@ export default function CampaignDetail() {
                 key={pt.id}
                 pt={pt}
                 isLast={idx === displayedProductTargets.length - 1}
-                primaryCurrency={primaryCurrency}
+                primaryCurrency={campaignCurrency}
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
                 viewAsOtherUser={viewAsOtherUser}
@@ -1286,7 +1287,7 @@ export default function CampaignDetail() {
                 pt={pt}
                 variant="auto"
                 isLast={idx === displayedProductTargets.length - 1}
-                primaryCurrency={primaryCurrency}
+                primaryCurrency={campaignCurrency}
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
                 viewAsOtherUser={viewAsOtherUser}
@@ -1343,7 +1344,7 @@ export default function CampaignDetail() {
                     >
                       <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>{st.search_term}</Text>
                       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                        {isWinner ? "Converting" : "No orders"} · {formatCurrency(st.total_spend, primaryCurrency)} · {formatInt(st.total_orders)}
+                        {isWinner ? "Converting" : "No orders"} · {formatCurrency(st.total_spend, campaignCurrency)} · {formatInt(st.total_orders)}
                       </Text>
                     </TouchableOpacity>
                     <TouchableOpacity
@@ -1395,7 +1396,7 @@ export default function CampaignDetail() {
                 key={pa.id}
                 pa={pa}
                 isLast={idx === visibleProductAds.length - 1}
-                primaryCurrency={primaryCurrency}
+                primaryCurrency={campaignCurrency}
                 t={t}
                 onOpenBook={(asin, title, imageUrl) =>
                   router.push({
@@ -1423,7 +1424,7 @@ export default function CampaignDetail() {
         visible={budgetOpen}
         title={budgetNoun}
         value={displayBudget ?? 0}
-        currency={primaryCurrency}
+        currency={campaignCurrency}
         kind="money"
         onClose={() => setBudgetOpen(false)}
         onSave={async (next) => {
@@ -1451,7 +1452,7 @@ export default function CampaignDetail() {
         visible={entityBidEdit != null}
         title={entityBidEdit?.title ?? "Bid"}
         value={entityBidEdit?.value ?? 0.02}
-        currency={primaryCurrency}
+        currency={campaignCurrency}
         kind="money"
         onClose={() => setEntityBidEdit(null)}
         onSave={async (next) => {

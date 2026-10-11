@@ -35,12 +35,25 @@ export function disableConfirmTitle(name: string): string {
   return `Turn off ${name}?`;
 }
 
-/** Regional-indicator flag emoji from ISO country code (US → 🇺🇸). */
-export function countryFlagEmoji(countryCode: string | null | undefined): string {
-  const cc = String(countryCode || "")
+const FLAG_COUNTRY_ALIASES: Readonly<Record<string, string>> = {
+  // Amazon Ads stores the United Kingdom as UK, while Unicode flags use the
+  // ISO 3166 code GB. Without this normalization iOS renders regional letters.
+  UK: "GB",
+};
+
+/** Canonical ISO country code used by flag glyphs and marketplace deduping. */
+export function normalizeFlagCountryCode(countryCode: string | null | undefined): string | null {
+  const raw = String(countryCode || "")
     .trim()
     .toUpperCase();
-  if (!/^[A-Z]{2}$/.test(cc)) return "🌐";
+  const canonical = FLAG_COUNTRY_ALIASES[raw] ?? raw;
+  return /^[A-Z]{2}$/.test(canonical) ? canonical : null;
+}
+
+/** Regional-indicator flag emoji from marketplace country code (US → 🇺🇸, UK → 🇬🇧). */
+export function countryFlagEmoji(countryCode: string | null | undefined): string {
+  const cc = normalizeFlagCountryCode(countryCode);
+  if (!cc) return "🌐";
   return String.fromCodePoint(...[...cc].map((ch) => 127397 + ch.charCodeAt(0)));
 }
 
@@ -79,15 +92,13 @@ const MARKET_PILL_SHORT: Record<string, string> = {
   AE: "AE",
 };
 
-/** Normalize + unique-sort ISO country codes (UK/GB kept distinct until label). */
+/** Normalize + unique-sort marketplace country codes (UK and GB dedupe to GB). */
 export function sortMarketCountryCodes(codes: Iterable<string>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of codes) {
-    const code = String(raw || "")
-      .trim()
-      .toUpperCase();
-    if (!/^[A-Z]{2}$/.test(code) || seen.has(code)) continue;
+    const code = normalizeFlagCountryCode(raw);
+    if (!code || seen.has(code)) continue;
     seen.add(code);
     out.push(code);
   }
@@ -126,9 +137,7 @@ export function multiCountryFlagIcons(
 
 /** One segment of the market pill label (US, Canada, UK, …). */
 export function marketPillCountryLabel(countryCode: string): string {
-  const cc = String(countryCode || "")
-    .trim()
-    .toUpperCase();
+  const cc = normalizeFlagCountryCode(countryCode);
   if (!cc) return "";
   return MARKET_PILL_SHORT[cc] ?? cc;
 }
@@ -392,7 +401,10 @@ export function displayCurrencyOfSelection(
     const match = profiles.find((p) => p.id === id || p.profile_id === id);
     if (match) codes.push(currencyCodeOf(match));
   }
-  if (codes.includes("USD")) return "USD";
+  // Any multi-currency scope must have one comparable reporting currency.
+  // USD is the canonical total currency even when the selected markets are
+  // all non-USD (for example CAD + GBP); single-market views stay native.
+  if (new Set(codes).size > 1 || codes.includes("USD")) return "USD";
   return codes[0] || "USD";
 }
 

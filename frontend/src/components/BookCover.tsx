@@ -33,6 +33,7 @@ export function BookCover({
   size = "md",
   placeholder = "book",
   recyclingKey,
+  cacheKey,
   style,
   accessibilityElementsHidden = true,
 }: {
@@ -42,6 +43,7 @@ export function BookCover({
   size?: BookCoverSize;
   placeholder?: BookCoverPlaceholder;
   recyclingKey?: string;
+  cacheKey?: string;
   style?: StyleProp<ViewStyle>;
   accessibilityElementsHidden?: boolean;
 }) {
@@ -97,7 +99,7 @@ export function BookCover({
     >
       {coverUrl ? (
         <Image
-          source={{ uri: coverUrl }}
+          source={{ uri: coverUrl, ...(cacheKey ? { cacheKey } : {}) }}
           style={StyleSheet.absoluteFillObject}
           contentFit="cover"
           transition={reduceMotion ? 0 : 220}

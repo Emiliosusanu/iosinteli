@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, StyleSheet, View, ScrollView } from "react-native";
 import { WebView } from "react-native-webview";
 import { PrimaryButton, SecondaryButton } from "@/src/components/Primitives";
@@ -105,9 +105,32 @@ export default function KdpHelperScreen() {
   const automaticRetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [automaticRetryNonce, setAutomaticRetryNonce] = useState(0);
 
+  const onSync = useCallback(() => {
+    void runKdpIosHelperTick("manual", { force: true, profileIds: selectedProfileIds });
+  }, [selectedProfileIds]);
+
   useEffect(() => () => {
     if (automaticRetryTimer.current) clearTimeout(automaticRetryTimer.current);
   }, []);
+
+  const pricingPromptedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!status.pricingAuthRequired) {
+      pricingPromptedFor.current = null;
+      return;
+    }
+    const key = status.pricingAuthBookId || "paperback-pricing";
+    if (pricingPromptedFor.current === key) return;
+    pricingPromptedFor.current = key;
+    Alert.alert(
+      "Amazon access needed",
+      "Reports are already signed in. Open Amazon print setup once so InteliAds can read paperback prices, printing cost, royalty and break-even ACoS. The background sync will retry afterwards.",
+      [
+        { text: "Later", style: "cancel" },
+        { text: "Open KDP pricing", onPress: onSync },
+      ],
+    );
+  }, [onSync, status.pricingAuthBookId, status.pricingAuthRequired]);
 
   useEffect(() => {
     if (!enabled || (!status.loggedIn && !status.savedSession)) {
@@ -138,10 +161,6 @@ export default function KdpHelperScreen() {
     selectedProfileIds,
     automaticRetryNonce,
   ]);
-
-  const onSync = () => {
-    void runKdpIosHelperTick("manual", { force: true, profileIds: selectedProfileIds });
-  };
 
   const statusLabel = status.loggedIn
     ? "Signed in"
@@ -200,7 +219,21 @@ export default function KdpHelperScreen() {
             last={!status.lastMessage && !status.lastError}
           />
           {status.lastMessage ? (
-            <SettingsRow label="Last update" subtitle={status.lastMessage} last={!status.lastError} />
+            <SettingsRow
+              label="Last update"
+              subtitle={status.lastMessage}
+              last={!status.pricingAuthRequired && !status.lastError}
+            />
+          ) : null}
+          {status.pricingAuthRequired ? (
+            <SettingsRow
+              label="Paperback pricing"
+              value="Amazon login required"
+              subtitle="Reports remain signed in. Complete Amazon's pricing check once to update price, printing cost, royalty and break-even ACoS."
+              symbol="lock.open"
+              symbolColor={t.colors.tone_warning}
+              last={!status.lastError}
+            />
           ) : null}
           {status.lastError ? (
             <SettingsRow

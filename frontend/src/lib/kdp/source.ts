@@ -8,16 +8,17 @@
  *
  * The setting is switchable in Settings > KDP data > Royalty source:
  *   - "extension"      → Chrome extension only (default; unchanged behavior).
- *   - "extension_ios"  → Chrome extension AND this iPhone. The iPhone helper
- *                        runs the same tables/logic as the extension:
+ *   - "extension_ios"  → This iPhone is an autonomous KDP collector. Chrome
+ *                        may also remain installed, but it is not required.
+ *                        The iPhone helper runs the same tables/logic:
  *                        today + yesterday every ~15 min, a 90-day onboarding
  *                        backfill only when web history is missing, and a
  *                        nightly last-30-day correction pass. Never skip,
  *                        never miss. Background ticks replay Keychain sessions
  *                        (Royaltix-style) without needing the WebView attached.
  *
- * Both writers target the SAME Supabase tables with the SAME conflict keys, so
- * enabling the iPhone helper alongside the extension is idempotent (upserts).
+ * Both writers target the SAME atomic server replacement with the SAME conflict
+ * keys, so leaving Chrome enabled alongside the iPhone remains idempotent.
  *
  * The storage-backed getter/setter live in `./sourceStore` to keep this module
  * dependency-free.
@@ -35,20 +36,20 @@ export const KDP_ROYALTY_SOURCES: readonly KdpRoyaltySource[] = [
 
 /** Short value shown on the Settings row (right side). */
 export function kdpRoyaltySourceValueLabel(source: KdpRoyaltySource): string {
-  return source === "extension_ios" ? "Chrome + iPhone" : "Chrome extension";
+  return source === "extension_ios" ? "iPhone helper" : "Chrome extension";
 }
 
 /** Title for the option row inside the picker. */
 export function kdpRoyaltySourceOptionTitle(source: KdpRoyaltySource): string {
   return source === "extension_ios"
-    ? "Chrome + iPhone"
+    ? "iPhone helper"
     : "Chrome only";
 }
 
 /** One-line description for the option row inside the picker. */
 export function kdpRoyaltySourceOptionSubtitle(source: KdpRoyaltySource): string {
   return source === "extension_ios"
-    ? "Imports on Chrome and this iPhone"
+    ? "Imports on this iPhone; Chrome can stay off"
     : "Imports on Chrome only";
 }
 

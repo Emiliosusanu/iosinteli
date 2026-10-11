@@ -12,6 +12,7 @@
     "test:unit": "node --test --experimental-strip-types tests/*.test.js",
     "test:stress": "bash ./scripts/stress-test-release.sh",
     "test:cert": "bash ./scripts/certification-super-stress.sh",
+    "ios:release-guard": "bash ./scripts/assert-ios-release-line.sh",
     "release:testflight": "bash ./scripts/testflight-release.sh",
     "postinstall": "node ./scripts/patch-package-if-present.js && node ./scripts/patch-expo-constants-path.js && node ./scripts/patch-react-native-hermes-ios26.js"
   },

@@ -94,8 +94,8 @@ test("importer journals before Amazon and seals nightly only when the window is 
 });
 
 test("auto-link never steals profiles already bound to another KDP account", () => {
-  assert.match(accounts, /linkAccountToProfilesSafe/);
-  assert.match(accounts, /takenByOther/);
+  assert.match(accounts, /server.s ASIN-proven auto-link after capture/);
+  assert.doesNotMatch(accounts, /from\("kdp_account_amazon_profiles"\)\.upsert/);
   assert.match(accounts, /fetchKdpAccounts/);
   assert.doesNotMatch(accounts, /name: "iPhone"/);
 });

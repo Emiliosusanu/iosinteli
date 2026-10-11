@@ -193,7 +193,7 @@ export default function AutomationScreen() {
                     key={ex.id}
                     activeOpacity={0.7}
                     accessibilityRole="button"
-                    accessibilityLabel={`${name}. ${ex.entities} ${ex.entities === 1 ? "change" : "changes"}${ex.errors_count > 0 ? `, ${ex.errors_count} errors` : ""}. ${relativeTime(ex.executed_at)}.`}
+                    accessibilityLabel={`${name}. ${ex.entities} ${ex.entities === 1 ? "match" : "matches"}${ex.errors_count > 0 ? `, ${ex.errors_count} errors` : ""}. ${relativeTime(ex.executed_at)}.`}
                     accessibilityHint="Opens this run."
                     onPress={() =>
                       router.push({
@@ -224,7 +224,7 @@ export default function AutomationScreen() {
                         {name}
                       </Text>
                       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 1 }]} numberOfLines={2}>
-                        {ex.entities} {ex.entities === 1 ? "change" : "changes"}
+                        {ex.entities} {ex.entities === 1 ? "match" : "matches"}
                         {ex.errors_count > 0 ? ` · ${ex.errors_count} errors` : ""} · {relativeTime(ex.executed_at)}
                       </Text>
                       {entityHintByExecution.get(ex.id) ? (

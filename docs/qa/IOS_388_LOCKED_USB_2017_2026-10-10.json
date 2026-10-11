@@ -1,0 +1,143 @@
+{
+  "device": "iPhone 17 Pro Max",
+  "build": "1.0.1 (388)",
+  "userConfirmedLockedAt": "2026-10-10T20:17:00+03:00",
+  "expectedDepartureLocal": "2026-10-10T20:27:00+03:00",
+  "usbConnected": true,
+  "baselineReadback": {
+    "utc": "2026-10-10T17:18:33.731889+00:00",
+    "events": [
+      {
+        "event": "ios.kdp.activity",
+        "msg": "KDP helper tick (interval)",
+        "logged_at": "2026-10-10T17:15:02.981+00:00"
+      },
+      {
+        "event": "ios.kdp.currency",
+        "msg": "Replay currency USD \u00b7 17 marketplace scope(s)",
+        "logged_at": "2026-10-10T17:15:03.322+00:00"
+      },
+      {
+        "event": "ios.kdp.pricing",
+        "msg": "KDP pricing: skipped 10/10 (fresh <15m)",
+        "logged_at": "2026-10-10T17:15:17.691+00:00"
+      },
+      {
+        "event": "ios.kdp.sync",
+        "msg": "Up to date",
+        "logged_at": "2026-10-10T17:15:17.936+00:00"
+      }
+    ],
+    "coverage": [
+      {
+        "date": "2026-10-09",
+        "verified_at": "2026-10-10T17:00:36.254139+00:00",
+        "producer_version": "ios-1.0.1+388",
+        "stores": 17
+      },
+      {
+        "date": "2026-10-10",
+        "verified_at": "2026-10-10T17:00:26.513872+00:00",
+        "producer_version": "ios-1.0.1+388",
+        "stores": 17
+      }
+    ],
+    "lastPush": {
+      "created": "2026-10-10T17:15:00.544591+00:00",
+      "status_code": 200,
+      "result": {
+        "ok": true,
+        "sent": 4,
+        "capped": false,
+        "failed": 0,
+        "pruned": 0,
+        "tokens": 4,
+        "scanned": 36,
+        "collapseId": "inteliads-kdp-1990725",
+        "skippedStale": 1,
+        "skippedDisabled": 31
+      }
+    }
+  },
+  "nativeWakeBaseline": {
+    "enabled": true,
+    "lastRunUtc": "2026-10-10T17:07:59.111768+00:00",
+    "lastSuccessfulWakeUtc": "2026-10-10T17:07:59.111768+00:00",
+    "lastScheduledUtc": "2026-10-10T17:15:17.692926+00:00",
+    "lastError": null,
+    "requestedEarliestEstimateUtc": "2026-10-10T17:22:59Z"
+  },
+  "nextPeriodicPushUtc": "2026-10-10T17:30:00Z",
+  "newLockedWindowCaptureVerified": true,
+  "observations": [
+    {
+      "event": "ios.kdp.activity",
+      "msg": "KDP helper tick (background)",
+      "logged_at": "2026-10-10T17:23:04.215+00:00"
+    },
+    {
+      "event": "ios.kdp.currency",
+      "msg": "Replay currency USD \u00b7 17 marketplace scope(s)",
+      "logged_at": "2026-10-10T17:23:04.393+00:00"
+    },
+    {
+      "event": "ios.kdp.sync",
+      "msg": "15 min sync \u00b7 imported 2 day(s)",
+      "logged_at": "2026-10-10T17:23:17.236+00:00"
+    },
+    {
+      "event": "ios.kdp.pricing",
+      "msg": "KDP pricing: 10/10 candidates",
+      "logged_at": "2026-10-10T17:23:27.052+00:00"
+    }
+  ],
+  "status": "PASS: genuine automatic recent-day reports while user-confirmed screen locked. INCOMPLETE: pricing pass/native task expired; no post-lock price rows yet.",
+  "observedUntilUtc": "2026-10-10T17:25:50.771307+00:00",
+  "reportScope": "October 9 and 10, 17 storefronts each, producer ios-1.0.1+388",
+  "coverageReadback": [
+    {
+      "date": "2026-10-09",
+      "verified_at": "2026-10-10T17:23:16.803774+00:00",
+      "producer_version": "ios-1.0.1+388",
+      "stores": 17
+    },
+    {
+      "date": "2026-10-10",
+      "verified_at": "2026-10-10T17:23:11.378179+00:00",
+      "producer_version": "ios-1.0.1+388",
+      "stores": 17
+    }
+  ],
+  "pricingReadback": {
+    "utc": "2026-10-10T17:25:13.371612+00:00",
+    "recent": [
+      {
+        "date": "2026-10-09",
+        "royalties": 7.32,
+        "orders": 1,
+        "kenp": 62,
+        "updated_at": "2026-10-10T17:23:16.381738+00:00"
+      },
+      {
+        "date": "2026-10-10",
+        "royalties": 0.03,
+        "orders": 0,
+        "kenp": 6,
+        "updated_at": "2026-10-10T17:23:10.94506+00:00"
+      }
+    ],
+    "pricing": {
+      "positiveRows": 140,
+      "updatedAfterLock": 0,
+      "latest": "2026-10-10T17:07:57.357+00:00",
+      "incomplete": 0
+    }
+  },
+  "nativeWakeEnd": {
+    "error": "iOS expired the background slice",
+    "atUtc": "2026-10-10T17:23:26.394058+00:00"
+  },
+  "massDistributionCertified": false,
+  "blockedSecondGateVerified": false,
+  "forcedWakeOrManualImportUsed": false
+}

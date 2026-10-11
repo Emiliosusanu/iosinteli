@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 
 const root = new URL("..", import.meta.url).pathname;
 const notifications = readFileSync(join(root, "src/lib/notifications.ts"), "utf8");
@@ -54,4 +57,45 @@ test("JS registers native metronome and publishes sync snapshots", () => {
 
 test("config plugin is listed for entitlements + BG identifiers", () => {
   assert.match(appJson, /withInteliAdsNativeSync\.js/);
+});
+
+test("expired native wakes reject late completion and only one race winner publishes", () => {
+  const gate = manager.slice(manager.indexOf("private final class CompletionGate"));
+  const dir = mkdtempSync(join(tmpdir(), "inteliads-wake-gate-"));
+  try {
+    const path = join(dir, "gate.swift");
+    writeFileSync(path, `import Foundation\n${gate}\n
+private let expired = CompletionGate()
+precondition(expired.markExpired())
+precondition(!expired.markCompleted())
+precondition(!expired.markExpired())
+private let completed = CompletionGate()
+precondition(completed.markCompleted())
+precondition(!completed.markExpired())
+precondition(!completed.markCompleted())
+for _ in 0..<1000 {
+  let gate = CompletionGate()
+  let lock = NSLock()
+  var winners = 0
+  DispatchQueue.concurrentPerform(iterations: 20) { index in
+    let won = index % 2 == 0 ? gate.markExpired() : gate.markCompleted()
+    if won { lock.lock(); winners += 1; lock.unlock() }
+  }
+  precondition(winners == 1)
+}
+print("wake gate races passed")
+`);
+    assert.match(execFileSync("xcrun", ["swift", path], { encoding: "utf8" }), /races passed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.equal((manager.match(/guard let self, gate\.markCompleted\(\) else \{ return \}/g) ?? []).length, 2);
+  assert.equal((manager.match(/guard gate\.markExpired\(\) else \{ return \}/g) ?? []).length, 2);
+});
+
+test("a healthy native wake preserves the importer's pending or login-required status", () => {
+  assert.doesNotMatch(manager, /status: ok \? "Updated"/);
+  assert.doesNotMatch(manager, /completedAt: ok \? Date\(\)/);
+  assert.match(manager, /"successScope": "task_manager_wake"/);
+  assert.match(manager, /Unknown TaskManager results[\s\S]*ok = false/);
 });

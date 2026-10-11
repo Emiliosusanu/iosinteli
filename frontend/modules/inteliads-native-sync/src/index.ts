@@ -49,6 +49,7 @@ type NativeModule = {
   scheduleIfNeededAsync(force: boolean): Promise<boolean>;
   setEnabledAsync(enabled: boolean): Promise<boolean>;
   getStatusAsync(): Promise<NativeSyncStatus>;
+  getPendingWakeDeadlineAsync(): Promise<number | null>;
   consumePendingWakeKindAsync(): Promise<string | null>;
   updateSyncSnapshotAsync(payload: SyncSnapshotPayload): Promise<boolean>;
   updateFinancialSnapshotAsync(payload: FinancialWidgetSnapshotPayload): Promise<boolean>;
@@ -227,4 +228,10 @@ export async function consumeNativeWakeKind(): Promise<NativeWakeKind | null> {
   } catch {
     return null;
   }
+}
+
+/** Read before imports/auth/network work so cold startup spends the same budget. */
+export async function getNativeWakeDeadline(): Promise<number | null> {
+  try { return NativeSync ? await NativeSync.getPendingWakeDeadlineAsync() : null; }
+  catch { return null; }
 }

@@ -3,7 +3,8 @@ import BackgroundTasks
 import ExpoModulesCore
 import UIKit
 
-/// Slim Royaltix-parity metronome: BGAppRefresh + BGProcessing every ~15 minutes.
+/// Request BGAppRefresh + BGProcessing with a 15-minute earliest delivery.
+/// iOS chooses delivery time; completion here describes a wake, not a KDP import.
 /// On delivery, runs Expo TaskManager background consumers (KDP helper + financial refresh).
 public final class InteliAdsBackgroundRefreshManager {
   public static let shared = InteliAdsBackgroundRefreshManager()
@@ -119,6 +120,8 @@ public final class InteliAdsBackgroundRefreshManager {
       "processingTaskId": Self.processingTaskId,
       "metronomeSeconds": Self.metronomeSeconds,
       "lastSuccessAtMs": lastSuccess > 0 ? Int(lastSuccess * 1000) : 0,
+      "lastSuccessfulWakeAtMs": lastSuccess > 0 ? Int(lastSuccess * 1000) : 0,
+      "successScope": "task_manager_wake",
       "lastRunAtMs": lastRun > 0 ? Int(lastRun * 1000) : 0,
       "lastError": defaults.string(forKey: Self.lastErrorKey) ?? "",
       "nextDelaySeconds": nextDelaySeconds(),
@@ -139,8 +142,18 @@ public final class InteliAdsBackgroundRefreshManager {
   /// Queued for JS before EXTaskService runs — refresh=today+yesterday, processing=2am backfill drain.
   private static let pendingWakeKindKey = "inteliads_native_pending_wake_kind"
 
+  private static let pendingWakeDeadlineKey = "inteliads_native_pending_wake_deadline_ms"
+
+  public static func pendingWakeDeadline() -> Double? {
+    let value = UserDefaults.standard.double(forKey: pendingWakeDeadlineKey)
+    guard value > 0, Date().timeIntervalSince1970 * 1000 - value < 60_000 else { return nil }
+    return value
+  }
+
   public static func setPendingWakeKind(_ kind: String) {
     UserDefaults.standard.set(kind, forKey: pendingWakeKindKey)
+    UserDefaults.standard.set((Date().timeIntervalSince1970 + (kind == "processing" ? 120 : 22)) * 1000,
+                              forKey: pendingWakeDeadlineKey)
   }
 
   /// JS consumes once per wake so Expo-only deliveries fall through to smart mode.
@@ -155,9 +168,11 @@ public final class InteliAdsBackgroundRefreshManager {
   private func handleRefresh(_ task: BGAppRefreshTask) {
     let gate = CompletionGate()
     task.expirationHandler = {
-      if gate.markExpired() {
-        task.setTaskCompleted(success: false)
-      }
+      guard gate.markExpired() else { return }
+      task.setTaskCompleted(success: false)
+      self.defaults.set(Date().timeIntervalSince1970 * 1000, forKey: Self.pendingWakeDeadlineKey)
+      self.recordRun(success: false)
+      self.defaults.set("iOS expired the background slice", forKey: Self.lastErrorKey)
       InteliAdsWidgetSnapshotStore.updateSync(
         status: "Paused",
         detail: "iOS ended the refresh slice",
@@ -182,31 +197,35 @@ public final class InteliAdsBackgroundRefreshManager {
     // Short wake: steady today+yesterday (+ leftover slice). Nightly opens after 2am but full drain waits for processing.
     Self.setPendingWakeKind("recent")
     runExpoBackgroundTasks { [weak self] ok in
-      guard let self else { return }
+      guard let self, gate.markCompleted() else { return }
+      self.defaults.removeObject(forKey: Self.pendingWakeDeadlineKey)
       self.recordRun(success: ok)
-      InteliAdsWidgetSnapshotStore.updateSync(
-        status: ok ? "Updated" : "Retrying",
-        detail: ok ? "Recent KDP pass finished" : "Background pass incomplete",
-        progress: ok ? 1 : nil,
-        isActive: false,
-        completedAt: ok ? Date() : nil
-      )
+      // The JS importer owns capture status (including pending pricing/login).
+      // A successful TaskManager wake can contain no data or deferred work.
+      // Never replace that evidence with a generic "Updated" snapshot.
+      if !ok {
+        InteliAdsWidgetSnapshotStore.updateSync(
+          status: "Retrying",
+          detail: "Background wake incomplete",
+          isActive: false
+        )
 #if canImport(WidgetKit)
-      InteliAdsWidgetSnapshotStore.reloadTimelines(force: true)
+        InteliAdsWidgetSnapshotStore.reloadTimelines(force: true)
 #endif
-      self.scheduleIfNeeded(force: true)
-      if gate.markCompleted() {
-        task.setTaskCompleted(success: ok)
       }
+      self.scheduleIfNeeded(force: true)
+      task.setTaskCompleted(success: ok)
     }
   }
 
   private func handleProcessing(_ task: BGProcessingTask) {
     let gate = CompletionGate()
     task.expirationHandler = {
-      if gate.markExpired() {
-        task.setTaskCompleted(success: false)
-      }
+      guard gate.markExpired() else { return }
+      task.setTaskCompleted(success: false)
+      self.defaults.set(Date().timeIntervalSince1970 * 1000, forKey: Self.pendingWakeDeadlineKey)
+      self.recordRun(success: false)
+      self.defaults.set("iOS expired the background slice", forKey: Self.lastErrorKey)
       InteliAdsWidgetSnapshotStore.updateSync(
         status: "Paused",
         detail: "iOS ended the processing slice",
@@ -231,22 +250,24 @@ public final class InteliAdsBackgroundRefreshManager {
     // Longer wake: onboarding chunks + up to 30 deferred (2am last-30 nightly).
     Self.setPendingWakeKind("processing")
     runExpoBackgroundTasks { [weak self] ok in
-      guard let self else { return }
+      guard let self, gate.markCompleted() else { return }
+      self.defaults.removeObject(forKey: Self.pendingWakeDeadlineKey)
       self.recordRun(success: ok)
-      InteliAdsWidgetSnapshotStore.updateSync(
-        status: ok ? "Updated" : "Retrying",
-        detail: ok ? "Processing pass finished" : "Processing pass incomplete",
-        progress: ok ? 1 : nil,
-        isActive: false,
-        completedAt: ok ? Date() : nil
-      )
+      // The JS importer owns capture status (including pending pricing/login).
+      // A successful TaskManager wake can contain no data or deferred work.
+      // Never replace that evidence with a generic "Updated" snapshot.
+      if !ok {
+        InteliAdsWidgetSnapshotStore.updateSync(
+          status: "Retrying",
+          detail: "Background wake incomplete",
+          isActive: false
+        )
 #if canImport(WidgetKit)
-      InteliAdsWidgetSnapshotStore.reloadTimelines(force: true)
+        InteliAdsWidgetSnapshotStore.reloadTimelines(force: true)
 #endif
-      self.scheduleIfNeeded(force: true)
-      if gate.markCompleted() {
-        task.setTaskCompleted(success: ok)
       }
+      self.scheduleIfNeeded(force: true)
+      task.setTaskCompleted(success: ok)
     }
   }
 
@@ -275,7 +296,8 @@ public final class InteliAdsBackgroundRefreshManager {
         } else if let raw = result as? UInt {
           ok = raw != UIBackgroundFetchResult.failed.rawValue
         } else {
-          ok = true
+          // Unknown TaskManager results cannot establish a completed wake.
+          ok = false
         }
         completion(ok)
       }

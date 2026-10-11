@@ -20,6 +20,7 @@ import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
 import { bookRetailAsins, bookRetailStockLabel, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import {
   formatBreakEvenAcos,
   hasAuthoritativeBreakEven,
@@ -247,7 +248,15 @@ export default function ProductsScreen() {
   const retailAsins = useMemo(() => bookRetailAsins(books), [books]);
   const retailQ = useQuery({
     queryKey: ["book-retail-metadata", user?.id ?? "anonymous", adminFilterUserId ?? "self", retailProfileIds, retailAsins],
-    queryFn: () => fetchBookRetailMetadata({ books, adsProfileIds: retailProfileIds }),
+    queryFn: () => fetchBookRetailMetadata({
+      books,
+      adsProfileIds: retailProfileIds,
+      marketplaceCodes: Object.fromEntries(profiles.flatMap((profile) => {
+        const code = String(profile.country_code ?? "").trim().toUpperCase();
+        return code ? [[profile.id, code], [profile.profile_id, code]] : [];
+      })),
+      preferredMarketplaceCode: profiles.find((profile) => selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id))?.country_code,
+    }),
     enabled: Boolean(user?.id) && !adminFilterUserId && retailProfileIds.length > 0 && retailAsins.length > 0,
     staleTime: 5 * 60_000,
     retry: false,
@@ -339,16 +348,16 @@ export default function ProductsScreen() {
   );
 
   const openBook = useCallback(
-    (item: TopBookRow) => {
-      const asin = item.asin || item.sku;
+    (item: TopBookRow, edition?: { snapshot: BookRetailSnapshot } | null) => {
+      const asin = edition?.snapshot.asin || item.asin || item.sku;
       if (!asin) return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       router.push({
         pathname: "/product/[asin]",
         params: {
           asin,
-          title: item.title ?? "",
-          imageUrl: item.image_url ?? "",
+          title: preferEditionTitle(item.title, edition?.snapshot.title) ?? "",
+          imageUrl: edition?.snapshot.coverUrl ?? item.image_url ?? "",
         },
       });
     },
@@ -527,7 +536,7 @@ const ProductCard = React.memo(function ProductCard({
   currency: string;
   color: string;
   marketplaceIndex: SponsoredMarketplaceIndex;
-  onOpen: (item: TopBookRow) => void;
+  onOpen: (item: TopBookRow, edition?: { snapshot: BookRetailSnapshot } | null) => void;
 }) {
   const t = useTheme();
   const reduceMotion = useReduceMotion();
@@ -580,15 +589,16 @@ const ProductCard = React.memo(function ProductCard({
             if (reduceMotion) return;
             Animated.spring(scale, { toValue: 1, useNativeDriver: true, damping: 15, stiffness: 320 }).start();
           }}
-          onPress={() => onOpen(item)}
+          onPress={() => onOpen(item, retailEdition)}
         >
           <View style={styles.identityRow}>
             <BookCover
-              uri={item.image_url}
+              uri={retailEdition?.snapshot.coverUrl ?? item.image_url}
               fallbackUri={amazonCover}
               asin={item.asin || item.sku}
               size="lg"
               recyclingKey={item.book_key || item.asin || item.sku || undefined}
+              cacheKey={retailEdition?.snapshot.coverCacheKey}
             />
 
             <View style={styles.titleBlock}>
@@ -607,7 +617,7 @@ const ProductCard = React.memo(function ProductCard({
                   ]}
                   numberOfLines={2}
                 >
-                  {bookDisplayTitle(item)}
+                  {bookDisplayTitle({ ...item, title: preferEditionTitle(item.title, retailEdition?.snapshot.title) })}
                 </Text>
                 <BookMarketplaceFlags
                   index={marketplaceIndex}
