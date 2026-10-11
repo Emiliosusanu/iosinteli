@@ -324,7 +324,16 @@ export function ToneDot({ value, target = 30 }: { value: number; target?: number
   );
 }
 
-export function FilterChrome({ children, flush }: { children: React.ReactNode; flush?: boolean }) {
+export function FilterChrome({
+  children,
+  flush,
+  quiet,
+}: {
+  children: React.ReactNode;
+  flush?: boolean;
+  /** Settings/Targeting: hairline well only — no card shadow. */
+  quiet?: boolean;
+}) {
   const t = useTheme();
   return (
     <View
@@ -332,14 +341,14 @@ export function FilterChrome({ children, flush }: { children: React.ReactNode; f
         marginHorizontal: flush ? 0 : dashboard.pageInset,
         marginTop: flush ? 0 : dashboard.chromeGap,
         marginBottom: flush ? 0 : dashboard.compactGap,
-        padding: dashboard.headerShellInset,
-        gap: dashboard.headerRowGap,
-        borderRadius: dashboard.headerShellRadius,
+        padding: quiet ? 10 : dashboard.headerShellInset,
+        gap: quiet ? 8 : dashboard.headerRowGap,
+        borderRadius: quiet ? 12 : dashboard.headerShellRadius,
         borderCurve: "continuous",
         borderWidth: StyleSheet.hairlineWidth,
-        borderColor: t.colors.glass_stroke,
-        backgroundColor: t.colors.glass_background,
-        ...t.shadow.card,
+        borderColor: t.colors.separator,
+        backgroundColor: quiet ? t.colors.background_secondary : t.colors.glass_background,
+        ...(quiet ? {} : t.shadow.card),
       }}
     >
       {children}

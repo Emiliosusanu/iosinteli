@@ -1,7 +1,8 @@
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import * as BackgroundTask from "expo-background-task";
 import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
+import { getNativeApnsEnvironment } from "inteliads-native-sync";
 import type { NotificationPrefs } from "@/src/contexts/AppContext";
 import { storage } from "@/src/utils/storage";
 import { supabase } from "./supabase";
@@ -43,10 +44,14 @@ import {
   activatedProfileIds,
   countFreshCompletedProfiles,
   digestCoverageLine,
-  groupActivatedProfilesByCurrency,
+  digestFetchGroupsForMoney,
+  digestMoneyAdsProfileIds,
+  digestNativeCurrencyFetchGroups,
+  nestMoneyHiddenForDigest,
 } from "./notificationAuthority";
 import { adsProfileIdsForSelection, filterToEnabledProfileSelection, uniqueProfileIds } from "./notificationScope";
 import { nestApiJson } from "./rulesApi";
+import { resolveApnsEnvironment } from "./apnsEnvironment";
 
 export const INTELIADS_BACKGROUND_TASK = "io.inteliads.app.background-refresh";
 export const INTELIADS_NOTIFICATION_TASK = "io.inteliads.app.notification-response";
@@ -190,12 +195,19 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       "./kdpRoyaltyScope"
     );
     const profiles = await fetchAmazonProfiles(userId, scope.viewAs).catch(() => []);
+    // No profile metadata → refuse digests (avoids one Nest call with mixed ids
+    // and a guessed currency — frankensum Spend/ACoS).
+    if (!profiles.length) return 0;
 
-    // Digest/alert authority = activated profiles (is_enabled === true), not Overview alone.
-    let queryIds = activatedAdsProfileIds(profiles);
+    // Spend/orders/ACoS = every activated profile, matching Home's financial
+    // portfolio. The header picker only filters Ads Engine and must never make a
+    // notification look like an account-wide total while showing a subset.
+    let queryIds = digestMoneyAdsProfileIds(scope.profileIds, profiles);
     if (!queryIds.length) {
-      // Soft fallback: Overview-enabled selection only — never all profiles (incl. disabled).
       queryIds = adsProfileIdsForSelection(scope.profileIds, profiles);
+    }
+    if (!queryIds.length) {
+      queryIds = activatedAdsProfileIds(profiles);
     }
     if (!queryIds.length) return 0;
 
@@ -206,6 +218,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const localHour = new Date().getHours();
     const morningDigest = isMorningDigestHour(localHour);
+    const displayCurrency = String(scope.currency || "USD").toUpperCase() || "USD";
 
     type CurrencyGroupFetch = {
       currency: string;
@@ -213,22 +226,23 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       selectionIds: string[];
     };
 
-    const activatedGroups = groupActivatedProfilesByCurrency(profiles);
-    const fetchGroups: CurrencyGroupFetch[] = activatedGroups.length
-      ? activatedGroups.map((group) => ({
-          currency: group.currency,
-          adsIds: uniqueProfileIds(group.profiles.map((p) => p.profile_id || p.id)),
-          selectionIds: uniqueProfileIds(
-            group.profiles.flatMap((p) => [p.id, p.profile_id].filter(Boolean) as string[]),
-          ),
-        }))
-      : [
-          {
-            currency: String(scope.currency || "USD").toUpperCase() || "USD",
-            adsIds: queryIds,
-            selectionIds: uniqueProfileIds([...scope.profileIds, ...queryIds]),
-          },
-        ];
+    // Multi-market USD: one Nest /dashboard/mobile call (Frankfurter FX) so
+    // Spend / orders / ACoS match the Home chip — not separate CAD+USD lines
+    // that looked "wrong" vs Overview.
+    let fetchGroups: CurrencyGroupFetch[] = digestFetchGroupsForMoney(
+      profiles,
+      queryIds,
+      displayCurrency,
+    );
+    if (!fetchGroups.length) {
+      fetchGroups = [
+        {
+          currency: displayCurrency,
+          adsIds: queryIds,
+          selectionIds: uniqueProfileIds([...scope.profileIds, ...queryIds]),
+        },
+      ];
+    }
 
     const todayLines: HonestDigestTotals[] = [];
     const digestLines: HonestDigestTotals[] = [];
@@ -240,13 +254,43 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
       line: HonestDigestTotals;
     }[] = [];
 
+    // Prefer one USD FX Nest call when multi-market; if Nest fail-closes
+    // (currency null / state missing), fall back to native per-currency lines
+    // so Spend/orders/ACoS are not all n/a while Overview still paints.
+    if (
+      fetchGroups.length === 1 &&
+      fetchGroups[0].currency === "USD" &&
+      displayCurrency === "USD"
+    ) {
+      try {
+        const probe = await fetchMobileOverview({
+          profileIds: fetchGroups[0].adsIds,
+          filterUserId: scope.viewAs,
+          timeZone,
+        });
+        if (nestMoneyHiddenForDigest(probe)) {
+          const native = digestNativeCurrencyFetchGroups(profiles, queryIds);
+          if (native.length) fetchGroups = native;
+        } else {
+          // Reuse probe as the only group fetch below via stash.
+          (fetchGroups[0] as CurrencyGroupFetch & { _probe?: typeof probe })._probe = probe;
+        }
+      } catch {
+        const native = digestNativeCurrencyFetchGroups(profiles, queryIds);
+        if (native.length) fetchGroups = native;
+      }
+    }
+
     for (const group of fetchGroups) {
       if (!group.adsIds.length) continue;
-      const snapshot = await fetchMobileOverview({
-        profileIds: group.adsIds,
-        filterUserId: scope.viewAs,
-        timeZone,
-      });
+      const snapshot =
+        (group as CurrencyGroupFetch & { _probe?: Awaited<ReturnType<typeof fetchMobileOverview>> })
+          ._probe ??
+        (await fetchMobileOverview({
+          profileIds: group.adsIds,
+          filterUserId: scope.viewAs,
+          timeZone,
+        }));
       const currency = String(snapshot.scope.currency || group.currency || "USD").toUpperCase() || "USD";
 
       let todayHonest = honestTotalsFromDayPoint(snapshot.today, currency);
@@ -543,6 +587,10 @@ export function installBackgroundSyncWakeHandlers(): void {
       data.event === "kdp-wake" ||
       data["content-available"] === 1;
     void (async () => {
+      if (silent && AppState.currentState !== "active") {
+        await runBudgetedKdpTask("push");
+        return;
+      }
       try {
         const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
         await runDualSourceBackgroundRefresh("push", { force: true });
@@ -623,87 +671,31 @@ function defineLaunchSafeTask(
   }
 }
 
-defineLaunchSafeTask(INTELIADS_BACKGROUND_TASK, async () => {
+/** Critical capture first. Auxiliary finance/alerts/outbox polling have their
+ * own foreground/service paths and must not consume a short Amazon wake. */
+async function runBudgetedKdpTask(reason: "background" | "push"): Promise<(typeof BackgroundTask)["BackgroundTaskResult"]["Success"]> {
+  const enteredAtMs = Date.now();
   try {
-    try {
-      const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
-      await runDualSourceBackgroundRefresh("background");
-    } catch (error) {
-      devWarn("background financial refresh skipped", error);
-    }
-    try {
-      const { runKdpIosHelperTick } = await import("./kdp/importer");
-      const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
-      const wakeMode = await resolveLockedPhoneKdpWakeMode("background");
-      await runKdpIosHelperTick(wakeMode === "processing" ? "processing" : "background", {
-        wakeMode,
-      });
-    } catch (error) {
-      devWarn("KDP helper background wake skipped", error);
-    }
-    try {
-      await runAlertCheck("background");
-    } catch (error) {
-      devWarn("background alert check skipped", error);
-    }
-    try {
-      const { drainBulkOutbox } = await import("./bulkOutbox");
-      await drainBulkOutbox();
-    } catch (error) {
-      devWarn("background outbox drain skipped", error);
-    }
-    try {
-      const { refreshOpenNestBulkJobs } = await import("./nestBulkJobs");
-      await refreshOpenNestBulkJobs();
-    } catch (error) {
-      devWarn("background nest bulk poll skipped", error);
-    }
-    // Leftover nightly/deferred is expected work, not a failed wake (iOS throttles false).
-    return BackgroundTask.BackgroundTaskResult.Success;
-  } catch {
-    return BackgroundTask.BackgroundTaskResult.Success;
-  }
-});
+    const [{ runKdpIosHelperTick }, { resolveLockedPhoneKdpWakeMode },
+      { getNativeWakeDeadline }, { taskDeadline }] = await Promise.all([
+      import("./kdp/importer"), import("./kdp/backgroundWake"),
+      import("inteliads-native-sync"), import("./kdp/backgroundBudget"),
+    ]);
+    const [wakeMode, nativeDeadline] = await Promise.all([
+      resolveLockedPhoneKdpWakeMode(reason), getNativeWakeDeadline(),
+    ]);
+    const deadlineAtMs = taskDeadline(wakeMode, enteredAtMs, nativeDeadline);
+    await runKdpIosHelperTick(wakeMode === "processing" ? "processing" : reason, { wakeMode, deadlineAtMs });
+    // A KDP wake owns a finite native delivery. Finance, alerts and Ads writes
+    // have independent resume/visible-push/service paths. Do not append their
+    // currently unbounded request chains (or detached prefetches) here, even
+    // on a processing delivery: admission time is not an execution deadline.
+  } catch (error) { devWarn("KDP background task deferred", error); }
+  return BackgroundTask.BackgroundTaskResult.Success;
+}
 
-defineLaunchSafeTask(INTELIADS_NOTIFICATION_TASK, async () => {
-  try {
-    try {
-      const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
-      await runDualSourceBackgroundRefresh("background");
-    } catch (error) {
-      devWarn("notification financial refresh skipped", error);
-    }
-    try {
-      const { runKdpIosHelperTick } = await import("./kdp/importer");
-      const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
-      // Push defaults to recent; native pending kind still wins if set.
-      const wakeMode = await resolveLockedPhoneKdpWakeMode("push");
-      await runKdpIosHelperTick("push", { wakeMode });
-    } catch (error) {
-      devWarn("KDP helper notification wake skipped", error);
-    }
-    try {
-      await runAlertCheck("background");
-    } catch (error) {
-      devWarn("notification alert check skipped", error);
-    }
-    try {
-      const { drainBulkOutbox } = await import("./bulkOutbox");
-      await drainBulkOutbox();
-    } catch (error) {
-      devWarn("notification outbox drain skipped", error);
-    }
-    try {
-      const { refreshOpenNestBulkJobs } = await import("./nestBulkJobs");
-      await refreshOpenNestBulkJobs();
-    } catch (error) {
-      devWarn("notification nest bulk poll skipped", error);
-    }
-    return BackgroundTask.BackgroundTaskResult.Success;
-  } catch {
-    return BackgroundTask.BackgroundTaskResult.Success;
-  }
-});
+defineLaunchSafeTask(INTELIADS_BACKGROUND_TASK, () => runBudgetedKdpTask("background"));
+defineLaunchSafeTask(INTELIADS_NOTIFICATION_TASK, () => runBudgetedKdpTask("push"));
 
 export async function registerForPushAsync(opts?: {
   requestPermission?: boolean;
@@ -735,17 +727,16 @@ export async function registerForPushAsync(opts?: {
       }),
     );
 
-    // Prefer explicit env; otherwise Release/TestFlight → production, Metro debug → sandbox.
-    // (A production-only APNs .p8 cannot deliver to sandbox tokens.)
+    // Prefer explicit env, then the environment in the signed iOS provisioning
+    // profile. A locally archived Release build can still be development-signed,
+    // so __DEV__ alone cannot distinguish sandbox from production APNs tokens.
     const configuredEnvironment = process.env.EXPO_PUBLIC_APNS_ENVIRONMENT;
-    const environment =
-      configuredEnvironment === "sandbox"
-        ? "sandbox"
-        : configuredEnvironment === "production"
-          ? "production"
-          : __DEV__
-            ? "sandbox"
-            : "production";
+    const signedEnvironment = Platform.OS === "ios" ? await getNativeApnsEnvironment() : null;
+    const environment = resolveApnsEnvironment({
+      configured: configuredEnvironment,
+      signed: signedEnvironment,
+      isDevelopment: __DEV__,
+    });
 
     if (userId) {
       try {

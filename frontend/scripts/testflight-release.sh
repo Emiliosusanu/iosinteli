@@ -5,6 +5,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+echo "==> Hermes iOS 26 launch guard"
+node "$ROOT/scripts/patch-react-native-hermes-ios26.js"
+
 echo "==> Stress gate"
 bash "$ROOT/scripts/stress-test-release.sh"
 

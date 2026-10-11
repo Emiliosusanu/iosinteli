@@ -11,18 +11,24 @@ import {
 import { useTheme } from "@/src/lib/theme";
 
 const MARKET_FLAG_SIZE = 21;
-const MARKET_FLAG_OVERLAP = -7;
+const MARKET_FLAG_GAP = 4;
+const MAX_VISIBLE_MARKET_FLAGS = 2;
 
-/** Overlapping glossy circular flag discs for the market pill. */
+/** Separated glossy circular flag discs for a centered, readable market pill. */
 export function MarketFlagStack({
   countries,
   rimColor,
   fillColor,
+  textColor,
 }: {
   countries: string[];
   rimColor: string;
   fillColor: string;
+  textColor: string;
 }) {
+  const visibleCountries = countries.slice(0, MAX_VISIBLE_MARKET_FLAGS);
+  const hiddenCount = Math.max(0, countries.length - visibleCountries.length);
+
   return (
     <View
       testID="multi-country-flags"
@@ -30,13 +36,13 @@ export function MarketFlagStack({
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
     >
-      {countries.map((code, index) => (
+      {visibleCountries.map((code, index) => (
         <View
           key={code}
           style={[
             styles.marketFlagDisc,
             {
-              marginLeft: index > 0 ? MARKET_FLAG_OVERLAP : 0,
+              marginLeft: index > 0 ? MARKET_FLAG_GAP : 0,
               zIndex: index + 1,
               borderColor: rimColor,
               backgroundColor: fillColor,
@@ -48,6 +54,23 @@ export function MarketFlagStack({
           </Text>
         </View>
       ))}
+      {hiddenCount > 0 ? (
+        <View
+          testID="multi-country-overflow"
+          style={[
+            styles.marketOverflowBadge,
+            {
+              marginLeft: MARKET_FLAG_GAP,
+              borderColor: rimColor,
+              backgroundColor: fillColor,
+            },
+          ]}
+        >
+          <Text style={[styles.marketOverflowText, { color: textColor }]} allowFontScaling={false} numberOfLines={1}>
+            +{hiddenCount}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -63,7 +86,7 @@ type MarketPillProps = {
 };
 
 /**
- * Frosted glass market pill — overlapping circular flags + `US + Canada • USD` + chevron.
+ * Frosted glass market pill — overlapping circular flags + `US + CA • USD` + chevron.
  * Shared by OverviewHeaderV3 and TopBar (Campaigns / Targets / Books).
  * Wash / tint / label colors follow the active light/dark scheme.
  */
@@ -77,8 +100,11 @@ export function MarketPill({
 }: MarketPillProps) {
   const t = useTheme();
   const resolvedCountries = sortMarketCountryCodes(countries);
-  const label = formatMarketPillLabel(resolvedCountries, currency);
-  const a11y = accessibilityLabel ?? `Profiles, ${label}`;
+  const fullLabel = formatMarketPillLabel(resolvedCountries, currency);
+  const label = resolvedCountries.length > MAX_VISIBLE_MARKET_FLAGS
+    ? `${resolvedCountries.length} markets${currency ? ` • ${currency}` : ""}`
+    : fullLabel;
+  const a11y = accessibilityLabel ?? `Profiles, ${fullLabel}`;
   const chrome = useMemo(
     () => ({
       scheme: t.scheme,
@@ -131,6 +157,7 @@ export function MarketPill({
             countries={resolvedCountries}
             rimColor={chrome.flagRim}
             fillColor={chrome.flagFill}
+            textColor={chrome.chevron}
           />
           <Text
             style={[t.typography.footnote, styles.marketPillText, { color: chrome.label }]}
@@ -151,8 +178,8 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexShrink: 1,
     flexBasis: 0,
-    minWidth: 148,
-    maxWidth: "84%",
+    minWidth: 0,
+    maxWidth: "100%",
   },
   marketPill: {
     minHeight: 40,
@@ -161,16 +188,19 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     overflow: "hidden",
     justifyContent: "center",
+    width: "100%",
   },
   marketPillInner: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 7,
     position: "relative",
+    minWidth: 0,
   },
   marketPillText: {
+    flexGrow: 1,
     flexShrink: 1,
     minWidth: 0,
     fontWeight: "600",
@@ -199,5 +229,22 @@ const styles = StyleSheet.create({
     textAlign: "center",
     includeFontPadding: false,
     transform: [{ scale: 1.05 }],
+  },
+  marketOverflowBadge: {
+    minWidth: 28,
+    height: MARKET_FLAG_SIZE,
+    borderRadius: MARKET_FLAG_SIZE / 2,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  marketOverflowText: {
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: "800",
+    letterSpacing: -0.15,
+    fontVariant: ["tabular-nums"],
   },
 });

@@ -14,7 +14,7 @@ import { rebuildTemplateForDay } from "../src/lib/kdp/replay.ts";
 
 test("preferred currency prefers EUR when mixed Ads profiles are selected", () => {
   assert.equal(normalizeKdpReplayCurrency("eur"), "EUR");
-  assert.equal(normalizeKdpReplayCurrency("GBP"), null);
+  assert.equal(normalizeKdpReplayCurrency("GBP"), "GBP");
   assert.equal(DEFAULT_KDP_REPLAY_CURRENCY, "USD");
   assert.equal(
     preferredCurrencyFromProfiles([{ currency_code: "USD" }, { currency_code: "EUR" }]),

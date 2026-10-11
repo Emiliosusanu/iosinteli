@@ -1,8 +1,12 @@
 import { useCallback } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { FINANCIAL_QUERY_ROOTS } from "./financialReadVersion";
+import { patchEntityInQueryData } from "./entityCachePatch";
+
+export { patchEntityInQueryData } from "./entityCachePatch";
 
 const AD_QUERY_PREFIXES = [
+  "campaign",
   "campaigns-list-range",
   "campaigns-list-range-v2",
   "top-campaigns-range",
@@ -19,12 +23,14 @@ const AD_QUERY_PREFIXES = [
   "mobile-overview-complete-v2",
   "targeting-keywords",
   "targeting-products",
+  "mobile-targeting-page-v1",
   "targeting-placements",
   "targeting-placements-v2",
   "products-range",
   "top-books-range",
   "search-terms",
   "ad-groups",
+  "adgroup",
   "ad-group-detail",
   "optimization-rules",
   "rule-executions",
@@ -72,7 +78,7 @@ export function applyOptimisticEntityBid(
   let previousBid: number | null = null;
   const stamp = new Date().toISOString();
   const patchRow = (row: any) => {
-    if (!row || row.id !== entityId) return row;
+    if (!row || String(row.id) !== String(entityId)) return row;
     if (previousBid == null) {
       const raw = entityKind === "keyword" ? row.bid_amount : row.bid ?? row.bid_amount;
       const n = Number(raw);
@@ -95,15 +101,12 @@ export function applyOptimisticEntityBid(
             key.startsWith("product-target") ||
             key.startsWith("product_target") ||
             key.startsWith("ad-group") ||
+            key.startsWith("adgroup") ||
             key === "ad-groups")
         );
       },
     },
-    (old: unknown) => {
-      if (Array.isArray(old)) return old.map(patchRow);
-      if (old && typeof old === "object" && (old as any).id === entityId) return patchRow(old);
-      return old;
-    },
+    (old: unknown) => patchEntityInQueryData(old, entityId, patchRow),
   );
   return previousBid;
 }
@@ -136,23 +139,29 @@ function entityStateQueryPredicate(entityKind: EntityStateKind) {
     if (entityKind === "keyword") {
       return (
         key.startsWith("targeting-keywords") ||
+        key.startsWith("mobile-targeting-page-v1") ||
+        key.startsWith("campaign") ||
         key.startsWith("keyword") ||
         key.startsWith("ad-group") ||
+        key.startsWith("adgroup") ||
         key === "ad-groups"
       );
     }
     if (entityKind === "product_target") {
       return (
         key.startsWith("targeting-products") ||
+        key.startsWith("mobile-targeting-page-v1") ||
+        key.startsWith("campaign") ||
         key.startsWith("product-target") ||
         key.startsWith("product_target") ||
         key.startsWith("target") ||
         key.startsWith("ad-group") ||
+        key.startsWith("adgroup") ||
         key === "ad-groups"
       );
     }
     if (entityKind === "ad_group") {
-      return key.startsWith("ad-group") || key === "ad-groups" || key.startsWith("campaign");
+      return key.startsWith("ad-group") || key.startsWith("adgroup") || key === "ad-groups" || key.startsWith("campaign");
     }
     return (
       key.startsWith("campaigns-list") ||
@@ -178,7 +187,7 @@ export function applyOptimisticEntityState(
   const nextStatus = enabled ? "enabled" : "paused";
   const stamp = new Date().toISOString();
   const patchRow = (row: any) => {
-    if (!row || row.id !== entityId) return row;
+    if (!row || String(row.id) !== String(entityId)) return row;
     if (previous == null) {
       const raw = row.status ?? row.state;
       previous = raw === "enabled" || raw === true;
@@ -199,11 +208,10 @@ export function applyOptimisticEntityState(
       bid_change_source: "ios",
     };
   };
-  queryClient.setQueriesData({ predicate: entityStateQueryPredicate(entityKind) }, (old: unknown) => {
-    if (Array.isArray(old)) return old.map(patchRow);
-    if (old && typeof old === "object" && (old as any).id === entityId) return patchRow(old);
-    return old;
-  });
+  queryClient.setQueriesData(
+    { predicate: entityStateQueryPredicate(entityKind) },
+    (old: unknown) => patchEntityInQueryData(old, entityId, patchRow),
+  );
   return previous;
 }
 

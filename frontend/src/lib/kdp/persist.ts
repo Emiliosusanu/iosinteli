@@ -56,6 +56,41 @@ export async function saveHelperAccountId(id: string): Promise<void> {
   if (!ok) throw new Error("Couldn't save KDP helper progress on this iPhone.");
 }
 
+/**
+ * Switch the explicit iPhone-helper destination without carrying another
+ * account's session, request templates, coverage, or deferred journal into it.
+ * The InteliAds login and all imported cloud data remain untouched.
+ */
+export async function selectHelperAccountId(id: string): Promise<void> {
+  const next = String(id || "").trim();
+  if (!next) throw new Error("Choose a KDP account.");
+  const previous = await loadHelperAccountId();
+  if (previous === next) return;
+  const [{ clearKdpWebSession }, { clearNativeAmazonKdpCookies }] = await Promise.all([
+    import("./session.ts"),
+    import("inteliads-native-sync"),
+  ]);
+  const [webSessionCleared, nativeCookiesCleared] = await Promise.all([
+    clearKdpWebSession(),
+    clearNativeAmazonKdpCookies(),
+  ]);
+  if (webSessionCleared !== true || nativeCookiesCleared !== true) {
+    throw new Error("Unable to clear the current Amazon KDP session safely.");
+  }
+  const progressCleared = await Promise.all([
+    storage.removeItem(STATE_KEY),
+    storage.removeItem(TEMPLATES_KEY),
+    storage.removeItem(DEFERRED_KEY),
+    storage.removeItem(REPLAY_CURRENCY_KEY),
+  ]);
+  if (progressCleared.some((cleared) => cleared !== true)) {
+    throw new Error("Unable to clear the previous KDP account's progress safely.");
+  }
+  // Commit the destination last so a failed cleanup cannot pair a new KDP
+  // account with the previous account's Amazon session.
+  await saveHelperAccountId(next);
+}
+
 export async function loadHelperSyncState(): Promise<KdpSyncState> {
   try {
     const raw = await storage.getItem<string>(STATE_KEY, "");

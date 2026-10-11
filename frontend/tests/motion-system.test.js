@@ -47,6 +47,29 @@ test("sync chrome stays editorial", () => {
   assert.match(formatUpdatedAgo("2026-08-25T17:30:00.000Z", Date.parse("2026-08-25T17:32:00.000Z")), /Updated 2m ago/);
 });
 
+test("sync chrome names a KDP importer stall without blaming Ads freshness", () => {
+  assert.deepEqual(
+    syncChrome({
+      failedRefresh: false,
+      refreshing: false,
+      stale: false,
+      warning: false,
+      kdpStalled: true,
+    }),
+    { state: "stale", compact: "KDP stale", label: "KDP data stalled" },
+  );
+  assert.equal(
+    syncChrome({
+      failedRefresh: false,
+      refreshing: false,
+      stale: true,
+      warning: false,
+      kdpStalled: true,
+    }).compact,
+    "Stale",
+  );
+});
+
 test("BidBot copy is operational, not an AI mascot", () => {
   assert.equal(bidBotOperationalCopy({ autoMode: "off" }).title, "BidBot Off");
   assert.equal(bidBotOperationalCopy({ autoMode: "high_confidence", pendingCount: 3 }).title, "BidBot Recommendations ready");
@@ -69,9 +92,11 @@ test("Home uses the motion system and does not replay entrance or haptic navigat
   assert.match(tabs, /freezeOnBlur:\s*false/);
   // Period changes must not remount Overview widgets (StaggerReveal flash / freeze feel).
   assert.doesNotMatch(home, /key=\{`[^`$]*\$\{activePeriodKey\}/);
-  assert.match(home, /key=\{`home-ads-engine-\$\{scopeProfiles\.join/);
+  assert.match(home, /key=\{`home-ads-engine-\$\{adsWidgetProfileIds\.join/);
   assert.match(charts, /playHaptic\("select"\)/);
   assert.match(charts, /ChartScrubCursor/);
+  assert.match(charts, /Gesture\.Tap\(\)/);
+  assert.match(charts, /Gesture\.Race\(tap, pan\)/);
   assert.match(charts, /VerifiedValue/);
   assert.match(charts, /makeSmoothPath/);
   assert.match(charts, /netPosFill/);

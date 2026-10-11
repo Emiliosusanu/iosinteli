@@ -34,16 +34,13 @@ test("dashboardApi paginates Nest keywords past NEST_TARGETING_MAX_PAGE_SIZE", (
   );
 });
 
-test("ad group detail loads keywords/products without a hard 200 client slice", () => {
-  assert.match(adGroupDetail, /fetchKeywords\([\s\S]*?adGroupId:\s*id/);
-  assert.match(adGroupDetail, /fetchProductTargets\([\s\S]*?adGroupId:\s*id/);
-  // No explicit limit:200 on the detail fetch (Nest pagination handles completeness).
-  assert.doesNotMatch(
-    adGroupDetail,
-    /fetchKeywords\([\s\S]{0,200}limit:\s*200/,
-  );
-  assert.doesNotMatch(
-    adGroupDetail,
-    /fetchProductTargets\([\s\S]{0,200}limit:\s*200/,
-  );
+test("ad group detail ranks the complete exact-period catalog before progressive rendering", () => {
+  assert.match(adGroupDetail, /fetchExactCampaignTargetingCatalog/);
+  assert.match(adGroupDetail, /catalog\.keywords\.filter/);
+  assert.match(adGroupDetail, /catalog\.productTargets\.filter/);
+  assert.match(adGroupDetail, /AD_GROUP_TARGET_PAGE_SIZE\s*=\s*200/);
+  assert.match(adGroupDetail, /keywords\.slice\(0, keywordLimit\)/);
+  assert.match(adGroupDetail, /setKeywordLimit\(\(limit\) => limit \+ AD_GROUP_TARGET_PAGE_SIZE\)/);
+  // The render page is applied after the full RPC catalog and can be extended.
+  assert.doesNotMatch(adGroupDetail, /pageSize:\s*AD_GROUP_TARGET_PAGE_SIZE/);
 });

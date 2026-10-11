@@ -3,7 +3,7 @@
 
 import { supabase } from "./supabase";
 import { parseNestError, rulesApiFetch, hasNestToken, nestApiJson } from "./rulesApi";
-import { fetchNestAmazonProfiles } from "./mutations";
+import { fetchAmazonProfileBooks, fetchNestAmazonProfiles, type AmazonProfileBookPreview } from "./mutations";
 import {
   fetchAggregatedCampaigns,
   fetchNestCampaignById,
@@ -16,10 +16,16 @@ import {
   noteNestKeywordSortFailure,
 } from "./dashboardApi";
 import {
+  BOOK_CAMPAIGN_METRICS_BUDGET_MS,
+  BOOK_CAMPAIGN_PLACEMENT_BUDGET_MS,
+  CAMPAIGNS_PLACEMENT_BUDGET_MS,
   NEST_TARGETING_LIST_BUDGET_MS,
+  TARGETING_PAGE_DISPLAY_ENRICH_MS,
   TARGETING_PAGE_METRICS_BUDGET_MS,
+  isHomeQueryTimeout,
   withQueryTimeout,
 } from "./queryTimeout";
+import { createReadQueue } from "./readRequest";
 import {
   campaignPlacementSharesFromBuckets,
   emptyCampaignPlacementShares,
@@ -67,6 +73,7 @@ import {
   dedupeTargetingBookOptions,
   filterTargetingBookOptions,
   hasMeaningfulKdpDailySignal,
+  sponsoredBookAsin,
   selectEligibleTargetingBookOptions,
   type TargetingBookEligibilityContext,
 } from "./targetingBookFilter";
@@ -83,6 +90,12 @@ import {
   mergeTopBookCatalogRows,
   preferEditionTitle,
 } from "./booksListActivity";
+import {
+  bookRetailAsins,
+  indexProfileBookRetailSnapshots,
+  type BookRetailSnapshot,
+  type RetailBookIdentity,
+} from "./bookRetailMetadata";
 
 export {
   collapseTargetingBookOptionsByParent,
@@ -145,6 +158,15 @@ export const POSTGREST_PAGE_SIZE = 1000;
 /** Defensive cap so a stuck page cannot loop forever. 2500 × 1000 = 2.5M rows. */
 export const POSTGREST_MAX_PAGES = 2500;
 
+/**
+ * Metric hydration is shared by Campaigns, Ad groups, Products and detail
+ * screens. A per-call limit still let several mounted screens issue 5-8 large
+ * metric reads together. Keep DB pressure bounded across the app; queued work
+ * remains complete and keeps the same date/entity scope.
+ * (From Codex `codex/ios-speed` - Bound iOS targeting refresh pressure.)
+ */
+const runMetricRead = createReadQueue(2);
+
 export type MobileTargetingSegment = "keywords" | "asins" | "auto" | "category" | "placement";
 export type MobileTargetingSort = "acos" | "spend" | "orders" | "clicks" | "impressions" | "bid";
 
@@ -199,6 +221,8 @@ export async function fetchMobileTargetingPage(input: {
   advanced?: Record<string, number | null>;
   snapshot?: string | null;
   signal?: AbortSignal;
+  /** Skip title/cover fill — used for catalog-tail pages so first paint stays fast. */
+  skipDisplayEnrich?: boolean;
 }): Promise<MobileTargetingPage> {
   if (!input.profiles.length) {
     throw new Error("At least one targeting profile is required");
@@ -257,26 +281,237 @@ export async function fetchMobileTargetingPage(input: {
   // Display-only title/cover fill — never drop, re-sort, or invent catalog rows.
   // RPC pages omit Nest/KDP enrichment; without this ASINs show bare codes and
   // Auto/Category/Placement show cube placeholders instead of book covers.
-  try {
-    if (input.segment === "asins" || input.segment === "auto" || input.segment === "category") {
-      page.rows = await enrichProductTargetDisplay(
-        page.rows as ProductTarget[],
-        input.profiles,
-        { skipKdp: false },
-      );
-    } else if (input.segment === "placement") {
-      page.rows = await enrichPlacementPageBookCovers(
-        page.rows as Record<string, unknown>[],
-        input.profiles,
-      );
+  // Critical path: local Supabase only + hard budget. Open Library / Amazon retail
+  // HTML must not block Targets → ASINs (build 305 hung the spinner for minutes).
+  if (!input.skipDisplayEnrich) {
+    try {
+      if (input.segment === "asins" || input.segment === "auto" || input.segment === "category") {
+        page.rows = await withQueryTimeout(
+          enrichProductTargetDisplay(page.rows as ProductTarget[], input.profiles, {
+            skipKdp: false,
+            // Open Library OK; Amazon retail HTML is what hung Targets → ASINs for minutes.
+            skipRetail: true,
+          }),
+          TARGETING_PAGE_DISPLAY_ENRICH_MS,
+          input.signal,
+        );
+      } else if (input.segment === "placement") {
+        page.rows = await withQueryTimeout(
+          enrichPlacementPageBookCovers(page.rows as Record<string, unknown>[], input.profiles),
+          TARGETING_PAGE_DISPLAY_ENRICH_MS,
+          input.signal,
+        );
+      }
+    } catch (error) {
+      // Soft-degrade: keep ranked page rows even if title/cover lookup flakes/times out.
+      // A display-only budget expiry is an expected handoff to the post-paint
+      // viewport enrichment, not a failed data read and not a warning/error.
+      if (!isHomeQueryTimeout(error) && (error as Error)?.name !== "AbortError") {
+        console.warn("[inteliads:targeting] page display enrichment failed", error);
+      }
     }
-  } catch (error) {
-    // Soft-degrade: keep ranked page rows even if title/cover lookup flakes.
-    // eslint-disable-next-line no-console
-    console.warn("[inteliads:targeting] page display enrichment failed", error);
   }
 
   return page;
+}
+
+/** Bound parallel RPC walks so one segment cannot starve the others. */
+async function mapPoolLimited<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const limit = Math.max(1, Math.min(concurrency, items.length || 1));
+  const results = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: limit }, async () => {
+      while (next < items.length) {
+        const i = next;
+        next += 1;
+        results[i] = await worker(items[i]!, i);
+      }
+    }),
+  );
+  return results;
+}
+
+/**
+ * Pages 2..N for a stable snapshot — ordered, no re-sort, no invent.
+ * Display enrich runs once on the concatenated tail (not per page) so Keywords
+ * and other segments are not penalized by repeated ASIN title work.
+ */
+export async function fetchMobileTargetingCatalogTail(input: {
+  head: MobileTargetingPage;
+  segment: MobileTargetingSegment;
+  sort: MobileTargetingSort;
+  pageSize?: number;
+  start: string;
+  end: string;
+  profiles: string[];
+  ownerId?: string | null;
+  campaignIds?: string[];
+  state?: "all" | "enabled" | "active" | "paused";
+  search?: string;
+  perf?: string;
+  advanced?: Record<string, number | null>;
+  signal?: AbortSignal;
+}): Promise<MobileTargetingPage["rows"]> {
+  const head = input.head;
+  const pageSize = Math.max(1, head.pageSize || TARGETING_LIST_LIMIT);
+  const totalPages = Math.max(1, Math.ceil(Math.max(0, head.total) / pageSize));
+  if (totalPages <= 1 || head.rows.length >= head.total) return [];
+
+  const pageNumbers = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+  const byPage = new Map<number, MobileTargetingPage["rows"]>();
+  await mapPoolLimited(pageNumbers, 3, async (page) => {
+    if (input.signal?.aborted) throw new Error("Targeting catalog tail aborted");
+    const result = await fetchMobileTargetingPage({
+      segment: input.segment,
+      sort: input.sort,
+      page,
+      pageSize,
+      start: input.start,
+      end: input.end,
+      profiles: input.profiles,
+      ownerId: input.ownerId,
+      campaignIds: input.campaignIds,
+      state: input.state,
+      search: input.search,
+      perf: input.perf,
+      advanced: input.advanced,
+      snapshot: head.snapshot,
+      signal: input.signal,
+      skipDisplayEnrich: true,
+    });
+    if (result.snapshot !== head.snapshot) {
+      throw new MobileTargetingSnapshotChangedError();
+    }
+    byPage.set(page, result.rows);
+  });
+
+  // The tail can contain thousands of rows. Enriching all of them here made an
+  // otherwise complete ranked catalog issue huge `IN (...)` reads and hit the
+  // display-only timeout. Return the authoritative rows immediately; the screen
+  // enriches only currently visible ASIN rows while the user scrolls. This does
+  // not change totals, global order, filters, or any Amazon entity.
+  return pageNumbers.flatMap((page) => byPage.get(page) ?? []);
+}
+
+export type ExactCampaignTargetingCatalog = {
+  keywords: Keyword[];
+  productTargets: ProductTarget[];
+  /** Oldest metric coverage marker across the requested segments. */
+  metricsCoveredThrough: string | null;
+  /** Newest database observation time across the requested segments. */
+  asOf: string | null;
+};
+
+// Campaign and ad-group detail render at most 200 rows per entity section.
+// Enriching the first 200 rows from each already globally ranked product
+// segment covers every row that can enter that visible window without turning
+// a large campaign catalog into an unbounded metadata query.
+const EXACT_CAMPAIGN_VISIBLE_PRODUCT_META_LIMIT = 200;
+
+/**
+ * Exact-period targeting rows for Campaign and Ad-group detail screens.
+ *
+ * These screens historically read the entity tables ordered by lifetime spend,
+ * then overlaid period metrics with a best-effort timeout. That could make the
+ * same keyword show a different value/order than Targets, or silently retain a
+ * lifetime value after the period lookup timed out. Use the same authoritative
+ * RPC contract as Targets and walk its immutable snapshot before applying any
+ * client display cap.
+ */
+export async function fetchExactCampaignTargetingCatalog(input: {
+  campaignId: string;
+  profiles: string[];
+  start: string;
+  end: string;
+  ownerId?: string | null;
+  state?: "all" | "active";
+  includeKeywords?: boolean;
+  includeProductTargets?: boolean;
+  signal?: AbortSignal;
+}): Promise<ExactCampaignTargetingCatalog> {
+  const campaignId = String(input.campaignId || "").trim();
+  if (!campaignId || input.profiles.length === 0) {
+    return { keywords: [], productTargets: [], metricsCoveredThrough: null, asOf: null };
+  }
+
+  const segments: MobileTargetingSegment[] = [];
+  if (input.includeKeywords !== false) segments.push("keywords");
+  if (input.includeProductTargets !== false) segments.push("asins", "auto", "category");
+
+  const pages = await mapPoolLimited(segments, 2, async (segment) => {
+    const common = {
+      segment,
+      sort: "acos" as const,
+      pageSize: 500,
+      start: input.start,
+      end: input.end,
+      profiles: uniqueStrings(input.profiles.map(String)).sort(),
+      ownerId: input.ownerId,
+      campaignIds: [campaignId],
+      state: input.state ?? "all",
+      signal: input.signal,
+    };
+    const head = await fetchMobileTargetingPage({
+      ...common,
+      page: 1,
+      skipDisplayEnrich: true,
+    });
+    const tail = await fetchMobileTargetingCatalogTail({ ...common, head });
+    return { segment, head, rows: [...head.rows, ...tail] };
+  });
+
+  const keywords = new Map<string, Keyword>();
+  const productTargets = new Map<string, ProductTarget>();
+  const coverageMarkers: string[] = [];
+  const observationMarkers: string[] = [];
+  for (const page of pages) {
+    if (page.head.metricsCoveredThrough) coverageMarkers.push(page.head.metricsCoveredThrough);
+    if (page.head.asOf) observationMarkers.push(page.head.asOf);
+    for (const row of page.rows) {
+      const id = String((row as { id?: unknown }).id ?? "");
+      if (!id) continue;
+      if (page.segment === "keywords") keywords.set(id, row as Keyword);
+      else productTargets.set(id, row as ProductTarget);
+    }
+  }
+
+  // mobile_targeting_page_v1 intentionally returns ranking/metrics first. Keep
+  // that authoritative order and fill titles/covers only for the bounded rows
+  // that can be shown. Metadata failure never changes or removes a target.
+  const asinPage = pages.find((page) => page.segment === "asins");
+  if (asinPage?.rows.length) {
+    const visible = asinPage.rows.slice(0, EXACT_CAMPAIGN_VISIBLE_PRODUCT_META_LIMIT) as ProductTarget[];
+    try {
+      const enriched = await withQueryTimeout(
+        enrichProductTargetDisplay(visible, input.profiles, {
+          skipKdp: false,
+          skipRetail: true,
+        }),
+        TARGETING_PAGE_DISPLAY_ENRICH_MS,
+        input.signal,
+      );
+      for (const row of enriched) {
+        const id = String(row.id ?? "");
+        if (id) productTargets.set(id, row);
+      }
+    } catch (error) {
+      if (!isHomeQueryTimeout(error) && (error as Error)?.name !== "AbortError") {
+        console.warn("[inteliads:campaign-targeting] product metadata enrichment failed", error);
+      }
+    }
+  }
+
+  return {
+    keywords: [...keywords.values()],
+    productTargets: [...productTargets.values()],
+    metricsCoveredThrough: coverageMarkers.sort()[0] ?? null,
+    asOf: observationMarkers.sort().at(-1) ?? null,
+  };
 }
 /** Targets tab: first-window size so multi-profile keyword reads stay responsive. Not an Amazon write limit — Load more grows past this until the filtered catalog is exhausted. */
 export const TARGETING_LIST_LIMIT = 500;
@@ -573,40 +808,43 @@ async function fetchMetricTotalsByEntity(
   const totals = new Map<string, MetricsTotals>();
   if (!ids.length || !start || !end) return totals;
   const selectColumns = [entityColumn, "impressions", "clicks", "orders", "spend", "sales"].join(",");
-  // Larger chunks + bounded parallelism — full Active keyword exhaust (~9k ids) must finish
-  // inside TARGETING_EXHAUST_TIMEOUT_MS without re-fetching the whole id set each growth step.
-  const idChunks = chunkArray(ids, 150);
-  const concurrency = 4;
+  // Keep each indexed IN read small enough for Supabase I/O. Module-wide queue
+  // bounds overlap from independently mounted screens (Codex ios-speed).
+  const idChunks = chunkArray(ids, 80);
+  const concurrency = 2;
 
   async function enrichChunk(chunk: string[]) {
     try {
-      let from = 0;
-      for (;;) {
-        const { data, error } = await supabase
-          .from(table)
-          .select(selectColumns)
-          .in(entityColumn, chunk)
-          .gte("date", start)
-          .lte("date", end)
-          .order(entityColumn, { ascending: true })
-          .order("date", { ascending: true })
-          .range(from, from + POSTGREST_PAGE_SIZE - 1);
-        if (error) throw error;
-        const pageRows = data ?? [];
-        for (const row of pageRows) {
-          const candidate: unknown = row;
-          if (!isUnknownRecord(candidate)) continue;
-          const record = candidate;
-          const id = record[entityColumn];
-          if (!id) continue;
-          const key = String(id);
-          const current = totals.get(key) ?? emptyTotals();
-          addMetricRow(current, record);
-          totals.set(key, current);
+      await runMetricRead(async (signal) => {
+        let from = 0;
+        for (;;) {
+          const { data, error } = await supabase
+            .from(table)
+            .select(selectColumns)
+            .in(entityColumn, chunk)
+            .gte("date", start)
+            .lte("date", end)
+            .order(entityColumn, { ascending: true })
+            .order("date", { ascending: true })
+            .range(from, from + POSTGREST_PAGE_SIZE - 1)
+            .abortSignal(signal);
+          if (error) throw error;
+          const pageRows = data ?? [];
+          for (const row of pageRows) {
+            const candidate: unknown = row;
+            if (!isUnknownRecord(candidate)) continue;
+            const record = candidate;
+            const id = record[entityColumn];
+            if (!id) continue;
+            const key = String(id);
+            const current = totals.get(key) ?? emptyTotals();
+            addMetricRow(current, record);
+            totals.set(key, current);
+          }
+          if (pageRows.length < POSTGREST_PAGE_SIZE) break;
+          from += POSTGREST_PAGE_SIZE;
         }
-        if (pageRows.length < POSTGREST_PAGE_SIZE) break;
-        from += POSTGREST_PAGE_SIZE;
-      }
+      });
     } catch (error) {
       // One metrics chunk must not fail the whole catalog enrich (append grow / exhaust).
       // eslint-disable-next-line no-console
@@ -1826,6 +2064,50 @@ export async function fetchAdGroupDefaultBids(profileIds: string[]): Promise<Rec
 /** List fetch cap — same honesty as Campaigns/Targets (not an Amazon write ceiling). */
 export const AD_GROUPS_LIST_LIMIT = 500;
 
+/**
+ * Read one ad group without loading and aggregating the account-wide list.
+ * Detail and add-target screens only need this row; their keyword/product
+ * queries provide the live target counts separately.
+ */
+export async function fetchAdGroupById(
+  id: string,
+  profileIds: string[],
+  range?: { start?: string; end?: string },
+): Promise<AdGroupEnriched | null> {
+  if (!id || !profileIds.length) return null;
+  const { data, error } = await supabase
+    .from("ad_groups")
+    .select("*")
+    .eq("id", id)
+    .in("amazon_profile_id", profileIds)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+
+  const row = data as AdGroup;
+  const totals =
+    range?.start && range?.end
+      ? await fetchMetricTotalsByEntity(
+          "ad_group_metrics",
+          "ad_group_id",
+          [row.id],
+          range.start,
+          range.end,
+        )
+      : null;
+  const enriched = applyMetricTotals(
+    row,
+    totals ? totals.get(row.id) ?? emptyTotals() : undefined,
+  );
+  return {
+    ...enriched,
+    keyword_count: 0,
+    product_target_count: 0,
+    auto_target_count: 0,
+    is_auto: String(row.targeting_type ?? "").toLowerCase() === "auto",
+  };
+}
+
 export async function fetchAdGroups(
   profileIds: string[],
   campaignId?: string,
@@ -2807,13 +3089,14 @@ export async function fetchProductTargets(
   return attachParentEntityStates(displayed);
 }
 
-function productTargetDisplayAsin(row: ProductTarget): string {
+/** Shared ASIN key for retail title fill + Targets merge — keep UI and queries in sync. */
+export function productTargetDisplayAsin(row: ProductTarget): string {
   return (
     extractTargetAsin(row.resolved_expression) ||
     extractTargetAsin(row.expression) ||
     extractAsinFromExpression(row.expression) ||
     ""
-  );
+  ).toUpperCase();
 }
 
 function productTargetNeedsDisplayMeta(row: ProductTarget): boolean {
@@ -2832,11 +3115,85 @@ function applyProductTargetDisplayMeta(
   }
 }
 
+/**
+ * Post-paint retail title fill for Targets → ASINs (and product rows on Auto/Category).
+ * Page load uses skipRetail so the spinner never hangs; this finishes competitor
+ * titles after the list is already visible. Mutates row copies — callers patch
+ * React Query cache with the returned array.
+ */
+export async function fillMissingProductTargetTitlesFromRetail(
+  rows: ProductTarget[],
+  opts: {
+    countryCode?: string | null;
+    signal?: AbortSignal;
+    /** Cap per wave so we never re-block the UI thread for minutes. */
+    maxAsins?: number;
+  } = {},
+): Promise<{ rows: ProductTarget[]; filled: number }> {
+  if (!rows.length) return { rows, filled: 0 };
+  if (opts.signal?.aborted) return { rows, filled: 0 };
+
+  const need: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const asin = productTargetDisplayAsin(row);
+    if (!asin || isUsableBookTitle(row.title)) continue;
+    const key = asin.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    need.push(asin);
+  }
+  const maxAsins = Math.max(1, Math.floor(opts.maxAsins ?? 60));
+  const wave = need.slice(0, maxAsins);
+  if (!wave.length) return { rows, filled: 0 };
+
+  const { fetchAmazonRetailTitles } = await import("./amazonCampaignSuggestions");
+  const primaryCc = opts.countryCode ? String(opts.countryCode).trim().toUpperCase() : "US";
+  const titles = await fetchAmazonRetailTitles(wave, {
+    concurrency: 3,
+    retries: 2,
+    timeoutMs: 10_000,
+    countryCode: primaryCc,
+  });
+  // US+CA (and similar): retry missing on the sibling .com/.ca host.
+  const stillNeed = wave.filter((asin) => !titles.has(asin.toUpperCase()) && !titles.has(asin));
+  if (stillNeed.length && !opts.signal?.aborted) {
+    const altCc =
+      primaryCc === "CA" ? "US" : primaryCc === "US" ? "CA" : null;
+    if (altCc) {
+      const alt = await fetchAmazonRetailTitles(stillNeed, {
+        concurrency: 3,
+        retries: 2,
+        timeoutMs: 10_000,
+        countryCode: altCc,
+      });
+      for (const [asin, title] of alt) {
+        if (!titles.has(asin)) titles.set(asin, title);
+      }
+    }
+  }
+  if (opts.signal?.aborted || !titles.size) return { rows, filled: 0 };
+
+  let filled = 0;
+  const next = rows.map((row) => {
+    const asin = productTargetDisplayAsin(row);
+    if (!asin || isUsableBookTitle(row.title)) return row;
+    const title =
+      titles.get(asin.toUpperCase()) ??
+      titles.get(asin) ??
+      null;
+    if (!isUsableBookTitle(title)) return row;
+    filled += 1;
+    return { ...row, title: String(title).trim() };
+  });
+  return { rows: next, filled };
+}
+
 /** Fill missing book title/cover for ASINs; for Auto/Category use the campaign's advertised product. */
 export async function enrichProductTargetDisplay(
   enriched: ProductTarget[],
   profileIds: string[],
-  opts: { skipKdp?: boolean } = {},
+  opts: { skipKdp?: boolean; skipRetail?: boolean; skipRemoteGapFill?: boolean } = {},
 ): Promise<ProductTarget[]> {
   if (!enriched.length || !profileIds.length) return enriched;
 
@@ -2942,61 +3299,66 @@ export async function enrichProductTargetDisplay(
 
       // product_ads / amazon_catalog are often RLS-blocked on the client; kdp_titles
       // only covers owned ASINs. Gap-fill remaining Exact/Expanded titles the same
-      // way Create does (Open Library + optional retail) so covers aren't alone.
-      const gapAsins = uniqueStrings(
-        enriched
-          .filter((row) => {
-            const asin = productTargetDisplayAsin(row);
-            return asin && !isUsableBookTitle(row.title);
-          })
-          .map((row) => productTargetDisplayAsin(row)),
-      );
-      if (gapAsins.length) {
-        try {
-          const { fetchAsinDisplayMeta } = await import("./amazonCampaignSuggestions");
-          const applyMeta = (
-            meta: Map<string, { title?: string | null; coverUrl?: string | null }>,
-          ) => {
-            for (const row of enriched) {
+      // way Create does (Open Library + optional retail). Targets page load passes
+      // skipRetail: true so retail HTML never blocks the list spinner.
+      if (!opts.skipRemoteGapFill) {
+        const gapAsins = uniqueStrings(
+          enriched
+            .filter((row) => {
               const asin = productTargetDisplayAsin(row);
-              if (!asin || isUsableBookTitle(row.title)) continue;
-              const key = asin.toUpperCase();
-              const hit = meta.get(key) ?? meta.get(asin);
-              if (!hit) continue;
-              applyProductTargetDisplayMeta(row, {
-                title: hit.title,
-                image_url: hit.coverUrl,
-              });
-            }
-          };
-          // Open Library covers ISBN-10 print ASINs; skip retail on huge pages.
-          applyMeta(
-            await fetchAsinDisplayMeta({
-              asins: gapAsins,
-              profileIds,
-              skipRetail: true,
-            }),
-          );
-          const stillGap = uniqueStrings(
-            enriched
-              .filter((row) => {
+              return asin && !isUsableBookTitle(row.title);
+            })
+            .map((row) => productTargetDisplayAsin(row)),
+        );
+        if (gapAsins.length) {
+          try {
+            const { fetchAsinDisplayMeta } = await import("./amazonCampaignSuggestions");
+            const applyMeta = (
+              meta: Map<string, { title?: string | null; coverUrl?: string | null }>,
+            ) => {
+              for (const row of enriched) {
                 const asin = productTargetDisplayAsin(row);
-                return asin && !isUsableBookTitle(row.title);
-              })
-              .map((row) => productTargetDisplayAsin(row)),
-          );
-          // Small visible pages: Amazon retail HTML for competitor B0 ASINs.
-          if (stillGap.length > 0 && stillGap.length <= 40) {
+                if (!asin || isUsableBookTitle(row.title)) continue;
+                const key = asin.toUpperCase();
+                const hit = meta.get(key) ?? meta.get(asin);
+                if (!hit) continue;
+                applyProductTargetDisplayMeta(row, {
+                  title: hit.title,
+                  image_url: hit.coverUrl,
+                });
+              }
+            };
             applyMeta(
               await fetchAsinDisplayMeta({
-                asins: stillGap,
+                asins: gapAsins,
                 profileIds,
-                skipRetail: false,
+                skipRetail: true,
               }),
             );
+            if (!opts.skipRetail) {
+              const stillGap = uniqueStrings(
+                enriched
+                  .filter((row) => {
+                    const asin = productTargetDisplayAsin(row);
+                    return asin && !isUsableBookTitle(row.title);
+                  })
+                  .map((row) => productTargetDisplayAsin(row)),
+              );
+              const RETAIL_CHUNK = 40;
+              for (let i = 0; i < stillGap.length; i += RETAIL_CHUNK) {
+                const slice = stillGap.slice(i, i + RETAIL_CHUNK);
+                applyMeta(
+                  await fetchAsinDisplayMeta({
+                    asins: slice,
+                    profileIds,
+                    skipRetail: false,
+                  }),
+                );
+              }
+            }
+          } catch {
+            // Soft-degrade: keep CDN covers; titles may stay "Title unavailable".
           }
-        } catch {
-          // Soft-degrade: keep CDN covers; titles may stay "Title unavailable".
         }
       }
     }
@@ -3361,6 +3723,8 @@ async function fetchKdpBooksForTargetingFilter(
     paperback_royalties?: unknown;
     kenp_royalties?: unknown;
   }> = [];
+  // Match the account/date/ASIN primary key so each page avoids sorting and
+  // evaluating RLS over the full history. Keep all dates and both schema paths.
   try {
     dailyRows = await fetchOptionalInPages<any>(
       "targeting_filter_kdp_daily",
@@ -3372,6 +3736,8 @@ async function fetchKdpBooksForTargetingFilter(
             "asin, group_key, royalties, orders, ebook_royalties, paperback_royalties, kenp_royalties",
           )
           .in("account_id", chunk)
+          .order("account_id", { ascending: true })
+          .order("date", { ascending: true })
           .order("asin", { ascending: true })
           .range(from, to),
     );
@@ -3386,6 +3752,8 @@ async function fetchKdpBooksForTargetingFilter(
             .from("kdp_book_daily_data")
             .select("asin, group_key, royalties, orders")
             .in("account_id", chunk)
+            .order("account_id", { ascending: true })
+            .order("date", { ascending: true })
             .order("asin", { ascending: true })
             .range(from, to),
       );
@@ -3533,12 +3901,11 @@ async function fetchEnabledSponsoredBooksForProfiles(
     data = await fetchAllPages<any>((from, to) =>
       supabase
         .from("product_ads")
-        .select("asin, title, campaign_id, image_url, status, campaigns!inner(state)")
+        .select("asin, sku, title, campaign_id, image_url, status, campaigns!inner(state)")
         .in("amazon_profile_id", profileIds)
         .in("status", ["enabled"])
         .in("campaigns.state", ["enabled"])
-        .not("asin", "is", null)
-        .order("asin", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, to),
     );
   } catch {
@@ -3546,11 +3913,10 @@ async function fetchEnabledSponsoredBooksForProfiles(
     const ads = await fetchAllPages<any>((from, to) =>
       supabase
         .from("product_ads")
-        .select("asin, title, campaign_id, image_url, status")
+        .select("asin, sku, title, campaign_id, image_url, status")
         .in("amazon_profile_id", profileIds)
         .in("status", ["enabled"])
-        .not("asin", "is", null)
-        .order("asin", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, to),
     );
     const campaignIds = [
@@ -3577,10 +3943,8 @@ async function fetchEnabledSponsoredBooksForProfiles(
     { title: string; image_url: string | null; campaignIds: Set<string>; hasKdpData: boolean }
   >();
   for (const row of data ?? []) {
-    const asin = String((row as any).asin || "")
-      .trim()
-      .toUpperCase();
-    if (!/^[A-Z0-9]{10}$/.test(asin)) continue;
+    const asin = sponsoredBookAsin(row);
+    if (!asin) continue;
     const adStatus = String((row as any).status || "").toLowerCase();
     if (!liveAdStates.has(adStatus)) continue;
     const title = String((row as any).title || "").trim() || asin;
@@ -3666,6 +4030,9 @@ async function fetchEnabledSponsoredBooksForProfiles(
 function extractAsinFromExpression(expression: any): string | null {
   if (!expression) return null;
   try {
+    // Prefer shared extractor so array/object value shapes stay in sync with UI.
+    const fromShared = extractTargetAsin(expression);
+    if (fromShared) return fromShared;
     const parsed = typeof expression === "string" ? JSON.parse(expression) : expression;
     const items = Array.isArray(parsed) ? parsed : [parsed];
     for (const item of items) {
@@ -3676,6 +4043,13 @@ function extractAsinFromExpression(expression: any): string | null {
         const value = item?.[key];
         if (typeof value === "string" && /^[A-Z0-9]{10}$/i.test(value)) {
           return value.toUpperCase();
+        }
+        if (Array.isArray(value)) {
+          for (const entry of value) {
+            if (typeof entry === "string" && /^[A-Z0-9]{10}$/i.test(entry)) {
+              return entry.toUpperCase();
+            }
+          }
         }
       }
     }
@@ -4350,6 +4724,11 @@ interface RangeOpts {
   state?: string;
   /** Book filter: load these campaigns (not global top-N by spend). */
   campaignIds?: string[];
+  /**
+   * Skip placement-share enrichment (multi-profile children). Parent attaches
+   * placement once after merge so we don't burn 8s×N nested soft budgets.
+   */
+  skipPlacementShares?: boolean;
 }
 
 /** A book/campaign association is valid only when Amazon Ads exposes its advertised ASIN/SKU. */
@@ -4482,25 +4861,51 @@ async function withCampaignPlacementShares(
   endDate: string,
 ): Promise<TopCampaignRow[]> {
   if (!rows.length) return rows;
-  const shares = await fetchCampaignPlacementShares(
-    rows.map((row) => row.id),
-    startDate,
-    endDate,
-  );
-  return rows.map((row) => ({
-    ...row,
-    ...(shares.get(row.id) ?? emptyCampaignPlacementShares()),
-  }));
+  // Soft budget: placement bars are decorative. Hard-waiting here made
+  // Campaigns tab hit HOME 20s timeout on multi-profile Nest lists.
+  try {
+    const shares = await withQueryTimeout(
+      fetchCampaignPlacementShares(
+        rows.map((row) => row.id),
+        startDate,
+        endDate,
+      ),
+      CAMPAIGNS_PLACEMENT_BUDGET_MS,
+    );
+    return rows.map((row) => ({
+      ...row,
+      ...(shares.get(row.id) ?? emptyCampaignPlacementShares()),
+    }));
+  } catch {
+    return rows.map((row) => ({
+      ...row,
+      ...emptyCampaignPlacementShares(),
+    }));
+  }
 }
 
 export async function fetchTopCampaignsRange(
   opts: RangeOpts & { royaltyRate?: number },
 ): Promise<TopCampaignRow[]> {
-  const { profileIds, start, end, limit = 5, royaltyRate = 0, filterUserId, state } = opts;
+  const {
+    profileIds,
+    start,
+    end,
+    limit = 5,
+    royaltyRate = 0,
+    filterUserId,
+    state,
+    skipPlacementShares = false,
+  } = opts;
   if (!profileIds.length) return [];
   const scopedCampaignIds = uniqueStrings((opts.campaignIds ?? []).map(String).filter(Boolean));
   /** `limit <= 0` = complete Campaigns list (no silent Nest/app truncate). */
   const capped = typeof limit === "number" && Number.isFinite(limit) && limit > 0;
+
+  const attachPlacement = async (rows: TopCampaignRow[]): Promise<TopCampaignRow[]> => {
+    if (skipPlacementShares) return rows;
+    return withCampaignPlacementShares(rows, start, end);
+  };
 
   const fairSlice = (rows: TopCampaignRow[]): TopCampaignRow[] => {
     if (!capped) return rows;
@@ -4541,32 +4946,31 @@ export async function fetchTopCampaignsRange(
       if (profileIds.length > 1) {
         const per = capped ? Math.max(80, Math.ceil(limit / profileIds.length)) : 0;
         const byId = new Map<string, TopCampaignRow>();
-        // A failed profile must invalidate the whole list. Bounded reads also
-        // avoid six simultaneous heavy Nest aggregations on the same account.
-        for (let i = 0; i < profileIds.length; i += 2) {
-          const profileBatch = profileIds.slice(i, i + 2);
-          const batches = await Promise.all(
-            profileBatch.map(async (id) => {
-              const rows = await fetchTopCampaignsRange({ ...opts, profileIds: [id], limit: per });
-              // The Nest aggregation response does not currently echo the
-              // profile id. This request is scoped to exactly one profile, so
-              // attaching that id is authoritative and lets currency/flag UI
-              // resolve the campaign marketplace without guessing from names.
-              return rows.map((row) => ({
-                ...row,
-                amazon_profile_id: row.amazon_profile_id || id,
-              }));
-            }),
-          );
-          for (const rows of batches) {
-            for (const row of rows) byId.set(row.id, row);
-          }
+        // A failed profile must invalidate the whole list. Three concurrent
+        // profile reads keep six-profile accounts to two waves without opening
+        // an unbounded burst against the aggregation endpoint.
+        const batches = await mapPoolLimited(profileIds, 3, async (id) => {
+          const rows = await fetchTopCampaignsRange({
+            ...opts,
+            profileIds: [id],
+            limit: per,
+            // Parent attaches placement once after merge.
+            skipPlacementShares: true,
+          });
+          // The Nest aggregation response does not currently echo the profile
+          // id. This request is scoped to exactly one profile, so attaching it
+          // is authoritative for currency and marketplace flags.
+          return rows.map((row) => ({
+            ...row,
+            amazon_profile_id: row.amazon_profile_id || id,
+          }));
+        });
+        for (const rows of batches) {
+          for (const row of rows) byId.set(row.id, row);
         }
         const merged = sortCampaignRows([...byId.values()]);
         const limited = capped ? merged.slice(0, limit) : merged;
-        return enrichTopCampaignsWithSettingsCooldown(
-          await withCampaignPlacementShares(limited, start, end),
-        );
+        return enrichTopCampaignsWithSettingsCooldown(await attachPlacement(limited));
       }
       const rows = await fetchAggregatedCampaigns({
         startDate: start,
@@ -4576,9 +4980,7 @@ export async function fetchTopCampaignsRange(
         state,
       });
       const limited = capped ? rows.slice(0, limit) : rows;
-      return enrichTopCampaignsWithSettingsCooldown(
-        await withCampaignPlacementShares(limited, start, end),
-      );
+      return enrichTopCampaignsWithSettingsCooldown(await attachPlacement(limited));
     }
   } catch (error) {
     console.warn("[inteliads] Nest campaign aggregation failed; falling back to Supabase", error);
@@ -4598,7 +5000,17 @@ export async function fetchTopCampaignsRange(
   if (!campaigns.length) return [];
 
   const campaignIds = campaigns.map((c: any) => c.id);
-  const placementShares = await fetchCampaignPlacementShares(campaignIds, start, end);
+  let placementShares = new Map<string, CampaignPlacementShares>();
+  if (!skipPlacementShares) {
+    try {
+      placementShares = await withQueryTimeout(
+        fetchCampaignPlacementShares(campaignIds, start, end),
+        CAMPAIGNS_PLACEMENT_BUDGET_MS,
+      );
+    } catch {
+      // Soft: Supabase fallback list still paints without placement mix.
+    }
+  }
   const campaignBookById = new Map<
     string,
     {
@@ -4857,7 +5269,26 @@ export async function fetchBookCampaignsRange(
     : new Map<string, number>();
 
   const campaignById = new Map((campaigns as any[]).map((campaign) => [campaign.id, campaign]));
-  const placementShares = await fetchCampaignPlacementShares(matchedCampaignIds, start, end);
+  // Placement + metrics are soft — never let either hold the book Campaigns
+  // spinner open until the outer 45s abort. Rows paint with zeros if metrics lag.
+  const [placementShares, metricRows] = await Promise.all([
+    withQueryTimeout(
+      fetchCampaignPlacementShares(matchedCampaignIds, start, end),
+      BOOK_CAMPAIGN_PLACEMENT_BUDGET_MS,
+    ).catch((error) => {
+      // eslint-disable-next-line no-console
+      console.warn("[inteliads:book-campaigns] placement shares skipped", error);
+      return new Map<string, CampaignPlacementShares>();
+    }),
+    withQueryTimeout(
+      fetchCampaignMetricRows(matchedCampaignIds, start, end),
+      BOOK_CAMPAIGN_METRICS_BUDGET_MS,
+    ).catch((error) => {
+      // eslint-disable-next-line no-console
+      console.warn("[inteliads:book-campaigns] metrics soft-timed out", error);
+      return [] as Awaited<ReturnType<typeof fetchCampaignMetricRows>>;
+    }),
+  ]);
 
   const totals = new Map<string, TopCampaignRow>();
   for (const id of matchedCampaignIds) {
@@ -4883,7 +5314,7 @@ export async function fetchBookCampaignsRange(
     });
   }
 
-  for (const metric of await fetchCampaignMetricRows(matchedCampaignIds, start, end)) {
+  for (const metric of metricRows) {
     const row = totals.get((metric as any).campaign_id);
     if (!row) continue;
     const nativeCurrency = currencyByProfileId.get(String(row.amazon_profile_id || ""));
@@ -5046,6 +5477,37 @@ export interface TopBookRow {
   published_at?: string | null;
   first_seen_at?: string | null;
   created_at?: string | null;
+}
+
+/** Same authenticated profile-books API used by the web /amazon book preview. */
+export async function fetchBookRetailMetadata(opts: {
+  books: readonly RetailBookIdentity[];
+  adsProfileIds: string[];
+  filterUserId?: string | null;
+  marketplaceCodes?: Readonly<Record<string, string>>;
+  preferredMarketplaceCode?: string | null;
+}): Promise<Record<string, BookRetailSnapshot>> {
+  const asins = bookRetailAsins(opts.books);
+  const profileIds = [...new Set(opts.adsProfileIds.map((id) => String(id).trim()).filter(Boolean))];
+  if (!asins.length || !profileIds.length) return {};
+  const rows: Array<AmazonProfileBookPreview> = [];
+  // Keep profile requests bounded so the Books screen is not blocked by a burst
+  // of large profile-book responses. React Query renders the books independently.
+  for (const group of chunkArray(profileIds, 3)) {
+    const results = await Promise.all(group.map((id) =>
+      fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId }),
+    ));
+    group.forEach((id, index) => {
+      const marketplaceCode = String(opts.marketplaceCodes?.[id] ?? "").trim().toUpperCase() || null;
+      for (const row of results[index]) rows.push({ ...row, marketplaceCode });
+    });
+  }
+  const quarantineEntries = await loadShelfHealQuarantineEntries();
+  const { isQuarantined } = await import("./kdp/shelfHeal.ts");
+  const safeRows = rows.filter((row) =>
+    !row.accountId || !isQuarantined(row.accountId, row.asin, quarantineEntries),
+  );
+  return indexProfileBookRetailSnapshots(safeRows, asins, opts.preferredMarketplaceCode ?? "");
 }
 
 /** Book keys (group_key / asin / sku) with KDP or Ads signal in the activity window. */
@@ -6133,7 +6595,9 @@ export async function fetchAdGroupAutomationHistory(
 ): Promise<Array<RuleExecutionEntity & { rule_name?: string | null; executed_at?: string | null }>> {
   if (!profileIds.length || !adGroupId) return [];
 
-  const adGroup = await fetchAdGroups(profileIds).then((rows) => rows.find((row) => row.id === adGroupId));
+  // Scope ownership with a direct row read. Loading the account-wide top-500
+  // list here made the History tab pay the full list + metrics cost on mount.
+  const adGroup = await fetchAdGroupById(adGroupId, profileIds);
   if (!adGroup) return [];
 
   const { data, error } = await supabase

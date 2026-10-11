@@ -17,6 +17,10 @@ const addTargets = readFileSync(
   join(root, "app/adgroup/add-targets.tsx"),
   "utf8",
 );
+const campaignCreate = readFileSync(
+  join(root, "app/campaign/create.tsx"),
+  "utf8",
+);
 
 test("clusterKeywordSuggestionsByPhrase keeps phrase groups adjacent Broad→Phrase→Exact", () => {
   const rows = [
@@ -79,6 +83,29 @@ test("Add targets wires select-all controls + suggested bids default on", () => 
   assert.match(addTargets, /clusterKeywordSuggestionsByPhrase/);
   assert.match(addTargets, /useState\(true\)/);
   assert.match(addTargets, /!asinResolving/);
+});
+
+test("AI suggestions start unselected and selection follows stable entity identity", () => {
+  for (const screen of [campaignCreate, adGroupCreate, addTargets]) {
+    assert.match(screen, /keywordDedupeKey/);
+    assert.match(screen, /productTargetDedupeKey/);
+    assert.match(screen, /useState<Set<string>>/);
+    assert.doesNotMatch(screen, /useState<Set<number>>/);
+    assert.doesNotMatch(
+      screen,
+      /setSelected(?:Keywords|Products)\(\s*new Set\(filtered(?:Keyword|Product)Rows/,
+    );
+  }
+  assert.match(addTargets, /availableKeywordRows/);
+  assert.match(addTargets, /availableProductRows/);
+  assert.match(addTargets, /prepareProductTargetAdds/);
+});
+
+test("suggestion screens keep one bounded retry owner", () => {
+  assert.match(adGroupCreate, /retry:\s*false/);
+  assert.match(addTargets, /retry:\s*false/);
+  assert.doesNotMatch(adGroupCreate, /retry:\s*2/);
+  assert.doesNotMatch(addTargets, /retry:\s*2/);
 });
 
 test("ad-group create reads targeting from URL params", () => {

@@ -17,7 +17,7 @@ struct InteliAdsSyncStatusWidget: Widget {
         }
     }
     .configurationDisplayName("InteliAds sync")
-    .description("KDP helper sync status and last update.")
+    .description("Verified Gross, Ad spend, Net, and KDP helper sync status.")
     .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular, .accessoryInline])
   }
 }
@@ -66,25 +66,85 @@ private struct SyncStatusView: View {
     return snapshot.syncDetail
   }
 
+  /// Financial values are never rendered after their verified cache window.
+  /// The widget falls back to sync state instead of presenting stale money.
+  private var hasFreshFinancials: Bool {
+    guard snapshot.financialsVerified == true, let asOf = snapshot.financialsAsOf else {
+      return false
+    }
+    let age = Date().timeIntervalSince(asOf)
+    return age >= -300 && age <= 6 * 60 * 60
+  }
+
+  private var periodLabel: String {
+    let value = snapshot.financialPeriodLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return value.isEmpty ? "Last 7 days" : value
+  }
+
+  private func money(_ value: Double) -> String {
+    let symbol = snapshot.currencySymbol.isEmpty ? "$" : snapshot.currencySymbol
+    let absValue = abs(value)
+    let body: String
+    if absValue >= 1_000_000 {
+      body = String(format: "%.1fM", absValue / 1_000_000)
+    } else if absValue >= 1_000 {
+      body = String(format: "%.1fK", absValue / 1_000)
+    } else if absValue >= 100 {
+      body = String(format: "%.0f", absValue)
+    } else {
+      body = String(format: "%.2f", absValue)
+    }
+    return "\(value < 0 ? "−" : "")\(symbol)\(body)"
+  }
+
+  private func metric(_ label: String, _ value: Double, color: Color = .white) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(label.uppercased())
+        .font(.system(size: 9, weight: .semibold, design: .rounded))
+        .foregroundStyle(.white.opacity(0.55))
+      Text(money(value))
+        .font(.system(size: 15, weight: .bold, design: .rounded))
+        .foregroundStyle(color)
+        .lineLimit(1)
+        .minimumScaleFactor(0.65)
+    }
+  }
+
   var body: some View {
     switch family {
     case .systemMedium:
-      HStack(alignment: .top, spacing: 12) {
-        VStack(alignment: .leading, spacing: 6) {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack(spacing: 8) {
           Text("InteliAds")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.white.opacity(0.7))
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.white)
+          Spacer(minLength: 0)
+          Text(hasFreshFinancials ? periodLabel : primary)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.62))
+            .lineLimit(1)
+        }
+        if hasFreshFinancials {
+          HStack(alignment: .top, spacing: 16) {
+            metric("Gross", snapshot.royalties)
+            metric("Ad spend", snapshot.adSpend)
+            metric("Net", snapshot.net, color: snapshot.net >= 0 ? Color.green : Color.red)
+          }
+          Spacer(minLength: 0)
+          Text(detail)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.white.opacity(0.55))
+            .lineLimit(1)
+        } else {
           Text(primary)
             .font(.system(size: 22, weight: .bold, design: .rounded))
             .foregroundStyle(.white)
-            .lineLimit(2)
-            .minimumScaleFactor(0.7)
+            .lineLimit(1)
           Text(detail)
             .font(.caption.weight(.semibold))
             .foregroundStyle(.white.opacity(0.65))
             .lineLimit(2)
         }
-        Spacer(minLength: 0)
       }
       .padding(14)
     case .accessoryRectangular, .accessoryInline:
@@ -96,16 +156,33 @@ private struct SyncStatusView: View {
           .font(.caption.weight(.semibold))
           .foregroundStyle(.white.opacity(0.7))
         Spacer(minLength: 0)
-        Text(primary)
-          .font(.system(size: 28, weight: .bold, design: .rounded))
-          .foregroundStyle(.white)
-          .lineLimit(1)
-          .minimumScaleFactor(0.6)
-        Text(detail)
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(.white.opacity(0.68))
-          .lineLimit(2)
-          .minimumScaleFactor(0.7)
+        if hasFreshFinancials {
+          Text("NET · \(periodLabel)")
+            .font(.system(size: 9, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white.opacity(0.55))
+            .lineLimit(1)
+          Text(money(snapshot.net))
+            .font(.system(size: 25, weight: .bold, design: .rounded))
+            .foregroundStyle(snapshot.net >= 0 ? Color.green : Color.red)
+            .lineLimit(1)
+            .minimumScaleFactor(0.58)
+          Text("Gross \(money(snapshot.royalties)) · Ads \(money(snapshot.adSpend))")
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white.opacity(0.65))
+            .lineLimit(1)
+            .minimumScaleFactor(0.55)
+        } else {
+          Text(primary)
+            .font(.system(size: 28, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+          Text(detail)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.68))
+            .lineLimit(2)
+            .minimumScaleFactor(0.7)
+        }
       }
       .padding(14)
     }

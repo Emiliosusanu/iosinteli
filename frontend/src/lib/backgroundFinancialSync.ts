@@ -5,7 +5,6 @@
  */
 import { storage } from "@/src/utils/storage";
 import { supabase } from "./supabase";
-import { toDateString } from "./format";
 import { FINANCIAL_QUERY_ROOTS } from "./financialReadVersion";
 import {
   loadLastMobileHomeScope,
@@ -14,6 +13,8 @@ import {
   type MobileHomeCacheScope,
 } from "./mobileHomeSnapshot";
 import { adsProfileIdsForSelection, filterToEnabledProfileSelection, mergeBackgroundScope, parseSelectedProfileIds } from "./notificationScope";
+import { activatedAdsProfileIds, activatedProfileIds } from "./notificationAuthority";
+import { buildVerifiedFinancialWidgetPayload, nativeFinancialScopeKey } from "./widgetFinance";
 
 export const BACKGROUND_REFRESH_COOLDOWN_MS = 15 * 60_000;
 export const ADS_SYNC_TRIGGER_COOLDOWN_MS = 30 * 60_000;
@@ -81,7 +82,7 @@ async function maybeTriggerAdsSync(snapshotGeneratedAt: string | null | undefine
   }
 }
 
-/** Refresh Home snapshot + today's KDP royalties from cloud (Chrome may be offline). */
+/** Refresh Home + verified rolling-7-day widget finance from cloud (Chrome may be offline). */
 export async function refreshDualSourceFinancialCache(
   source: "background" | "foreground" | "push" = "background",
 ): Promise<boolean> {
@@ -93,29 +94,75 @@ export async function refreshDualSourceFinancialCache(
     const { fetchAmazonProfiles, fetchKdpRoyaltiesRange } = await import("./queries");
     const { selectKdpRoyaltyScopeForSelection } = await import("./kdpRoyaltyScope");
     const profiles = await fetchAmazonProfiles(scope.userId, scope.viewAs).catch(() => []);
-    const adsIds = adsProfileIdsForSelection(scope.profileIds, profiles);
-    const queryIds = adsIds.length ? adsIds : filterToEnabledProfileSelection(scope.profileIds, profiles);
+    // Home financials are full-portfolio. The header/profile picker only filters
+    // Ads Engine, so a background wake must not persist a narrower snapshot
+    // under a different scope and leave Home cold on the next launch.
+    const portfolioAdsIds = activatedAdsProfileIds(profiles);
+    const selectedAdsIds = adsProfileIdsForSelection(scope.profileIds, profiles);
+    const queryIds = portfolioAdsIds.length
+      ? portfolioAdsIds
+      : selectedAdsIds.length
+        ? selectedAdsIds
+        : filterToEnabledProfileSelection(scope.profileIds, profiles);
+    if (!queryIds.length) return false;
+    const portfolioScope = { ...scope, profileIds: queryIds };
     const snapshot = await fetchMobileOverview({
       profileIds: queryIds,
       filterUserId: scope.viewAs,
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
     await persistMobileHomeSnapshot(
-      { ...scope, profileIds: queryIds },
+      portfolioScope,
       stampMobileHomeSource(snapshot, "nest"),
     );
 
-    const today = toDateString(new Date());
+    let widgetRoyaltiesReadCompleted = false;
+    let widgetPayload: ReturnType<typeof buildVerifiedFinancialWidgetPayload> = null;
     try {
+      const portfolioSelection = activatedProfileIds(profiles);
       const royaltyIds = selectKdpRoyaltyScopeForSelection(
         profiles,
-        filterToEnabledProfileSelection(scope.profileIds, profiles),
+        portfolioSelection.length
+          ? portfolioSelection
+          : filterToEnabledProfileSelection(scope.profileIds, profiles),
       ).profileIds;
       if (royaltyIds.length) {
-        await fetchKdpRoyaltiesRange(royaltyIds, today, today);
+        const royalties = await fetchKdpRoyaltiesRange(
+          royaltyIds,
+          snapshot.sevenDay.start,
+          snapshot.sevenDay.end,
+        );
+        widgetRoyaltiesReadCompleted = true;
+        widgetPayload = buildVerifiedFinancialWidgetPayload({
+          snapshot,
+          royalties,
+          currencySymbol: "$",
+        });
+      } else {
+        widgetRoyaltiesReadCompleted = true;
       }
     } catch (error) {
       devWarn("KDP background read skipped", error);
+    }
+
+    // WidgetKit never receives partial money. A verified empty/unlinked KDP
+    // scope clears the prior scope; a transient read error leaves the last
+    // verified value until WidgetKit's six-hour freshness gate expires.
+    try {
+      const { updateNativeFinancialSnapshot } = await import("inteliads-native-sync");
+      if (widgetPayload) {
+        await updateNativeFinancialSnapshot(widgetPayload);
+      } else if (widgetRoyaltiesReadCompleted) {
+        await updateNativeFinancialSnapshot({
+          verified: false,
+          asOfMs: Date.now(),
+          periodLabel: "Last 7 days",
+          scopeKey: nativeFinancialScopeKey(snapshot),
+          reload: true,
+        });
+      }
+    } catch (error) {
+      devWarn("Widget finance publish skipped", error);
     }
 
     if (source === "background") {
@@ -139,9 +186,31 @@ export async function runDualSourceBackgroundRefresh(
   }
   const ok = await refreshDualSourceFinancialCache(source);
   if (ok) await writeLastRun(LAST_REFRESH_KEY);
+  // Warm Create book catalog even when Create isn't mounted — kill/relaunch
+  // stress otherwise hits a cold Nest /book-candidates under the screen timeout.
+  void warmCampaignCreationBooksCache();
 }
 
-/** React Query roots worth invalidating after a background refresh. */
+/** Prefetch Nest Create book-candidates into React Query (best-effort). */
+export async function warmCampaignCreationBooksCache(): Promise<void> {
+  try {
+    const { fetchCampaignCreationBooks } = await import("./mutations");
+    const { CAMPAIGN_CREATION_BOOKS_QUERY_KEY } = await import("./campaignCreationStock");
+    const { appQueryClient } = await import("./queryClient");
+    const { CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS, withQueryTimeout } = await import("./queryTimeout");
+    const existing = appQueryClient.getQueryData(CAMPAIGN_CREATION_BOOKS_QUERY_KEY);
+    if (existing) return;
+    const data = await withQueryTimeout(
+      fetchCampaignCreationBooks(),
+      CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS,
+    );
+    appQueryClient.setQueryData(CAMPAIGN_CREATION_BOOKS_QUERY_KEY, data);
+  } catch (error) {
+    devWarn("Create books warm skipped", error);
+  }
+}
+
+/** React Query roots worth invalidating after a background refresh / AppState resume. */
 export function backgroundFinancialQueryRoots(): string[] {
   return [
     FINANCIAL_QUERY_ROOTS.mobileOverview,
@@ -150,6 +219,15 @@ export function backgroundFinancialQueryRoots(): string[] {
     FINANCIAL_QUERY_ROOTS.kdpRoyaltiesYesterday,
     FINANCIAL_QUERY_ROOTS.kdpRoyaltiesSevenDay,
     FINANCIAL_QUERY_ROOTS.topBooks,
+    FINANCIAL_QUERY_ROOTS.products,
+    FINANCIAL_QUERY_ROOTS.campaignMetrics,
     FINANCIAL_QUERY_ROOTS.campaignMetricsToday,
+    // List tabs + Create: resume must not keep overnight / background-stale rows.
+    "campaigns-list-range-v3",
+    "mobile-targeting-page-v1",
+    "targeting-book-options-v2",
+    "campaign-filter-books",
+    "campaign-creation-books",
+    "campaign-creation-book-activity",
   ];
 }

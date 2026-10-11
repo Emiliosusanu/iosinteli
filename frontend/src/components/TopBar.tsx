@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   View,
   Text,
@@ -15,20 +16,27 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import { useRouter, type Href } from "expo-router";
+import {
+  fetchKdpAccountsForUser,
+  updateKdpAccountName,
+  type KdpAccountSummary,
+} from "../lib/mutations";
 import { useApp } from "../contexts/AppContext";
 import { dashboard, density, layout, useTheme } from "../lib/theme";
-import { formatDateRangeLabel, rangePresets } from "../lib/format";
+import { formatDateRangeLabel, rangePresets, shortDateRangeContextLabel } from "../lib/format";
 import { DateRange } from "../lib/types";
 import { IOSDateField, SFSymbol, sfFromIonicon } from "./ios/Native";
 import { GlassPanel } from "./GlassPanel";
 import { MarketPill } from "./MarketPill";
 import { PressableScale } from "./Motion";
-import { ProfileCoverStrip } from "./ProfileCoverStrip";
 import {
   NEST_DISABLED_VIEW_MESSAGE,
   NEST_DISABLED_VIEW_TITLE,
   PROFILE_LIST_ALL_LABEL,
+  PROFILE_LIST_ADS_ONLY_LABEL,
+  PROFILE_LIST_KDP_ADS_LABEL,
   PROFILE_LIST_READY_LABEL,
+  type ProfileSheetMode,
   VIEW_SWITCH_HINT_OFF,
   VIEW_SWITCH_HINT_ON,
   adsAccountGroupHeading,
@@ -50,6 +58,7 @@ interface TopBarProps {
   title?: string;
   showProfileSelector?: boolean;
   showDateRange?: boolean;
+  showKdpAccountGroups?: boolean;
   rightAction?: { icon: keyof typeof Ionicons.glyphMap; onPress: () => void; testID?: string };
 }
 
@@ -76,21 +85,25 @@ function DatePresetList({
       {presets.map((preset) => {
         const selected = preset.range.start === dateRange.start && preset.range.end === dateRange.end;
         return (
-          <TouchableOpacity
+          <Pressable
             key={preset.key}
             testID={`date-preset-${preset.key}`}
-            style={[styles.profileRow, { borderBottomColor: t.colors.separator }]}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={`${preset.range.label}, ${preset.range.start} to ${preset.range.end}`}
+            style={[styles.profileRow, { borderBottomColor: t.colors.separator, minHeight: layout.minTap }]}
             onPress={() => onPick(preset.range)}
-            activeOpacity={0.6}
           >
-            <View style={{ flex: 1 }}>
+            <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{preset.range.label}</Text>
               <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                {preset.range.start} {"->"} {preset.range.end}
+                {preset.range.start} – {preset.range.end}
               </Text>
             </View>
-            {selected ? <SFSymbol name="checkmark" size={16} color={t.colors.tone_primary} /> : null}
-          </TouchableOpacity>
+            {selected ? (
+              <SFSymbol name="checkmark" size={16} color={t.colors.tone_primary} />
+            ) : null}
+          </Pressable>
         );
       })}
       <View style={[styles.profileRow, { borderBottomWidth: 0, flexDirection: "column", alignItems: "stretch", gap: 8 }]}>
@@ -167,19 +180,37 @@ function HeaderPill({
         <View
           style={[
             styles.iconBubble,
-            {
-              backgroundColor: t.colors.tone_primary + "14",
-              borderColor: t.colors.tone_primary + "2E",
-            },
+            caption
+              ? {
+                  backgroundColor: t.colors.tone_primary + "14",
+                  borderColor: t.colors.tone_primary + "2E",
+                }
+              : {
+                  backgroundColor: "transparent",
+                  borderColor: "transparent",
+                },
           ]}
         >
-          <SFSymbol name={icon} size={15} color={t.colors.tone_primary} />
+          <SFSymbol
+            name={icon}
+            size={caption ? 15 : 14}
+            color={caption ? t.colors.tone_primary : t.colors.text_secondary}
+          />
         </View>
         <View style={styles.pillLabel}>
-          <Text style={[styles.pillCaption, { color: t.colors.text_tertiary }]} numberOfLines={1}>
-            {caption}
-          </Text>
-          <Text style={[styles.pillValue, { color: t.colors.text_primary }]} numberOfLines={1}>
+          {caption ? (
+            <Text style={[styles.pillCaption, { color: t.colors.text_tertiary }]} numberOfLines={1}>
+              {caption}
+            </Text>
+          ) : null}
+          <Text
+            style={[
+              styles.pillValue,
+              { color: t.colors.text_primary },
+              !caption ? { fontSize: 13, lineHeight: 16, marginTop: 0 } : null,
+            ]}
+            numberOfLines={1}
+          >
             {value}
           </Text>
         </View>
@@ -205,7 +236,8 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
     { key: "last90", range: presets.last90 },
     { key: "allTime", range: presets.allTime },
   ];
-  const dateLabel = formatDateRangeLabel(dateRange);
+  const dateLabel = shortDateRangeContextLabel(dateRange);
+  const dateDetailLabel = formatDateRangeLabel(dateRange);
   const [customStart, setCustomStart] = useState(dateRange.start);
   const [customEnd, setCustomEnd] = useState(dateRange.end);
 
@@ -221,12 +253,12 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
       <HeaderPill
         testID="date-range-btn"
         icon="calendar"
-        caption="Period"
+        caption=""
         value={dateLabel}
         onPress={() => setDateOpen(true)}
-        accessibilityLabel={`Date range: ${dateLabel}`}
+        accessibilityLabel={`Date range: ${dateLabel}. ${dateDetailLabel}`}
         fullWidth={fullWidth}
-        maxWidth={220}
+        maxWidth={168}
       />
 
       <Modal
@@ -294,7 +326,13 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
   );
 }
 
-export function TopBar({ title, showProfileSelector = true, showDateRange = true, rightAction }: TopBarProps) {
+export function TopBar({
+  title,
+  showProfileSelector = true,
+  showDateRange = true,
+  showKdpAccountGroups = true,
+  rightAction,
+}: TopBarProps) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -310,7 +348,15 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
   } = useApp();
   const viewingUser = adminUsers.find((user) => user.id === adminFilterUserId);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [listMode, setListMode] = useState<"ready" | "all">("ready");
+  const [listMode, setListMode] = useState<ProfileSheetMode>("ready");
+  const [pendingKdpAccountId, setPendingKdpAccountId] = useState<string | null>(null);
+
+  const kdpAccountsQ = useQuery({
+    queryKey: ["profile-picker-kdp-accounts", adminFilterUserId ?? "self"],
+    queryFn: () => fetchKdpAccountsForUser(adminFilterUserId),
+    enabled: profileOpen && listMode === "kdp_ads",
+    staleTime: 60_000,
+  });
 
   const visibleProfiles = useMemo(
     () => filterProfilesBySheetMode(profiles, listMode),
@@ -322,6 +368,14 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
   );
   const readyCount = useMemo(
     () => profiles.filter((p) => isReadyToEnable(p) || profileEnabled(p)).length,
+    [profiles],
+  );
+  const kdpAdsCount = useMemo(
+    () => profiles.filter((p) => (p.kdp_account_count ?? 0) > 0).length,
+    [profiles],
+  );
+  const adsOnlyCount = useMemo(
+    () => filterProfilesBySheetMode(profiles, "ads_only").length,
     [profiles],
   );
   const enabledProfiles = useMemo(
@@ -373,6 +427,135 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
     toggleProfile(profileId);
   }
 
+  function renameKdpAccount(account: KdpAccountSummary) {
+    if (adminFilterUserId) return;
+    Alert.prompt(
+      "Rename KDP account",
+      "This name is shown only in InteliAds.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Save",
+          onPress: (value?: string) => {
+            const name = String(value || "").trim();
+            if (!name || name === account.name) return;
+            void updateKdpAccountName(account.id, name)
+              .then(() => kdpAccountsQ.refetch())
+              .catch((error) => Alert.alert("Couldn't rename KDP account", error instanceof Error ? error.message : String(error)));
+          },
+        },
+      ],
+      "plain-text",
+      account.name,
+    );
+  }
+
+  function openKdpManager(account: KdpAccountSummary) {
+    if (Platform.OS === "ios" && profileOpen) {
+      setPendingKdpAccountId(account.id);
+      setProfileOpen(false);
+      return;
+    }
+    setProfileOpen(false);
+    router.push({ pathname: "/more/kdp-manager", params: { accountId: account.id } });
+  }
+
+  function finishProfileDismiss() {
+    if (!pendingKdpAccountId) return;
+    const accountId = pendingKdpAccountId;
+    setPendingKdpAccountId(null);
+    router.push({ pathname: "/more/kdp-manager", params: { accountId } });
+  }
+
+  function renderProfileToggle(p: (typeof profiles)[number], groupItems: (typeof profiles)) {
+    const selected = profileInView(p, selectedProfileIds);
+    const nestOn = profileEnabled(p);
+    const displayName = profileDisplayName(p);
+    const association = profileAssociationHint(p, groupItems);
+    const switchDisabled = !nestOn && !selected;
+    return (
+      <TouchableOpacity
+        key={p.id}
+        testID={`profile-row-${p.profile_id}`}
+        style={[styles.profileRow, { borderBottomColor: t.colors.separator, opacity: switchDisabled ? 0.55 : 1 }]}
+        onPress={() => onViewToggle(p.id)}
+        activeOpacity={0.6}
+      >
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={1}>
+            {countryFlagEmoji(p.country_code)} {displayName}
+          </Text>
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
+            {[p.country_code, p.currency_code, nestOn ? null : "Off in InteliAds"].filter(Boolean).join(" · ")}
+          </Text>
+          {association ? (
+            <Text testID={`profile-assoc-${p.profile_id}`} style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}>
+              {association}
+            </Text>
+          ) : null}
+          <Text style={[t.typography.caption2, { color: selected ? t.colors.tone_primary : t.colors.text_tertiary, marginTop: 2, fontWeight: "600" }]}>
+            {viewStatusLabel(selected)}
+          </Text>
+        </View>
+        <Switch
+          value={selected}
+          onValueChange={() => onViewToggle(p.id)}
+          disabled={switchDisabled}
+          trackColor={{ false: t.colors.background_tertiary, true: t.colors.tone_primary }}
+          ios_backgroundColor={t.colors.background_tertiary}
+          accessibilityLabel={viewSwitchAccessibilityLabel(displayName, selected)}
+          accessibilityHint={selected ? VIEW_SWITCH_HINT_ON : VIEW_SWITCH_HINT_OFF}
+          accessibilityValue={{ text: viewStatusLabel(selected) }}
+          testID={`profile-view-toggle-${p.profile_id}`}
+        />
+      </TouchableOpacity>
+    );
+  }
+
+  function renderKdpGroups() {
+    if (kdpAccountsQ.isPending) {
+      return <Text style={[t.typography.body, { color: t.colors.text_secondary, padding: 16 }]}>Loading KDP groups…</Text>;
+    }
+    if (kdpAccountsQ.isError) {
+      return (
+        <TouchableOpacity onPress={() => void kdpAccountsQ.refetch()} style={{ padding: 16 }}>
+          <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Retry KDP groups</Text>
+        </TouchableOpacity>
+      );
+    }
+    const accounts = kdpAccountsQ.data ?? [];
+    if (!accounts.length) {
+      return <Text style={[t.typography.body, { color: t.colors.text_secondary, padding: 16 }]}>No linked KDP accounts.</Text>;
+    }
+    return accounts.map((account) => {
+      const linked = new Set(account.linked_amazon_profile_ids.map(String));
+      const items = profiles.filter((profile) => linked.has(String(profile.profile_id)) || linked.has(String(profile.id)));
+      return (
+        <View key={account.id} testID={`profile-kdp-group-${account.id}`} style={[styles.kdpGroup, { borderColor: t.colors.separator, backgroundColor: t.colors.background_secondary }]}>
+          <View style={styles.kdpGroupHeader}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={1}>{account.name || "KDP account"}</Text>
+              <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
+                {items.length} Ads marketplace{items.length === 1 ? "" : "s"} · {account.book_count ?? 0} books
+              </Text>
+            </View>
+            {!adminFilterUserId ? (
+              <TouchableOpacity testID={`rename-kdp-${account.id}`} onPress={() => renameKdpAccount(account)} hitSlop={8}>
+                <SFSymbol name="pencil" size={16} color={t.colors.tone_primary} />
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity testID={`view-kdp-books-${account.id}`} onPress={() => openKdpManager(account)} style={[styles.kdpBooksButton, { backgroundColor: t.colors.tone_primary + "16" }]}>
+              <Text style={[t.typography.caption1, { color: t.colors.tone_primary, fontWeight: "700" }]}>Books</Text>
+            </TouchableOpacity>
+          </View>
+          {items.length ? items.map((profile) => renderProfileToggle(profile, items)) : (
+            <Text style={[t.typography.footnote, { color: t.colors.text_secondary, paddingHorizontal: 14, paddingBottom: 12 }]}>No linked Ads marketplaces</Text>
+          )}
+        </View>
+      );
+    });
+  }
+
   function renderProfileRows() {
     if (profiles.length === 0) {
       return (
@@ -409,76 +592,7 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
         >
           {adsAccountGroupHeading(group)}
         </Text>
-        {group.items.map((p) => {
-          const selected = profileInView(p, selectedProfileIds);
-          const nestOn = profileEnabled(p);
-          const displayName = profileDisplayName(p);
-          const association = profileAssociationHint(p, group.items);
-          const switchDisabled = !nestOn && !selected;
-          return (
-            <TouchableOpacity
-              key={p.id}
-              testID={`profile-row-${p.profile_id}`}
-              style={[
-                styles.profileRow,
-                {
-                  borderBottomColor: t.colors.separator,
-                  opacity: switchDisabled ? 0.55 : 1,
-                },
-              ]}
-              onPress={() => onViewToggle(p.id)}
-              activeOpacity={0.6}
-            >
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={[t.typography.headline, { color: t.colors.text_primary }]} numberOfLines={1}>
-                  {countryFlagEmoji(p.country_code)} {displayName}
-                </Text>
-                <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                  {[p.country_code, p.currency_code, nestOn ? null : "Off in InteliAds"]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </Text>
-                {association ? (
-                  <Text
-                    testID={`profile-assoc-${p.profile_id}`}
-                    style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}
-                  >
-                    {association}
-                  </Text>
-                ) : null}
-                <Text
-                  style={[
-                    t.typography.caption2,
-                    {
-                      color: selected ? t.colors.tone_primary : t.colors.text_tertiary,
-                      marginTop: 2,
-                      fontWeight: "600",
-                    },
-                  ]}
-                >
-                  {viewStatusLabel(selected)}
-                </Text>
-                <ProfileCoverStrip
-                  profile={p}
-                  filterUserId={adminFilterUserId}
-                  enabled={profileOpen}
-                  testID={`profile-covers-${p.profile_id}`}
-                />
-              </View>
-              <Switch
-                value={selected}
-                onValueChange={() => onViewToggle(p.id)}
-                disabled={switchDisabled}
-                trackColor={{ false: t.colors.background_tertiary, true: t.colors.tone_primary }}
-                ios_backgroundColor={t.colors.background_tertiary}
-                accessibilityLabel={viewSwitchAccessibilityLabel(displayName, selected)}
-                accessibilityHint={selected ? VIEW_SWITCH_HINT_ON : VIEW_SWITCH_HINT_OFF}
-                accessibilityValue={{ text: viewStatusLabel(selected) }}
-                testID={`profile-view-toggle-${p.profile_id}`}
-              />
-            </TouchableOpacity>
-          );
-        })}
+        {group.items.map((p) => renderProfileToggle(p, group.items))}
       </View>
     ));
   }
@@ -570,6 +684,7 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
         presentationStyle={Platform.OS === "ios" ? "pageSheet" : undefined}
         transparent={Platform.OS !== "ios"}
         onRequestClose={() => setProfileOpen(false)}
+        onDismiss={finishProfileDismiss}
       >
         {Platform.OS === "ios" ? (
           <View style={[styles.sheetFill, { backgroundColor: t.colors.background_secondary }]}>
@@ -606,6 +721,52 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                 >
                   {PROFILE_LIST_READY_LABEL}
                   {readyCount ? ` (${readyCount})` : ""}
+                </Text>
+              </TouchableOpacity>
+              {showKdpAccountGroups ? (
+                <TouchableOpacity
+                  testID="profiles-filter-kdp-ads"
+                  onPress={() => setListMode("kdp_ads")}
+                  style={[
+                    styles.filterChip,
+                    {
+                      backgroundColor: listMode === "kdp_ads" ? t.colors.tone_primary + "1A" : t.colors.background_tertiary,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      t.typography.caption1,
+                      {
+                        color: listMode === "kdp_ads" ? t.colors.tone_primary : t.colors.text_secondary,
+                        fontWeight: "700",
+                      },
+                    ]}
+                  >
+                    {PROFILE_LIST_KDP_ADS_LABEL} ({kdpAdsCount})
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                testID="profiles-filter-ads-only"
+                onPress={() => setListMode("ads_only")}
+                style={[
+                  styles.filterChip,
+                  {
+                    backgroundColor: listMode === "ads_only" ? t.colors.tone_primary + "1A" : t.colors.background_tertiary,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    t.typography.caption1,
+                    {
+                      color: listMode === "ads_only" ? t.colors.tone_primary : t.colors.text_secondary,
+                      fontWeight: "700",
+                    },
+                  ]}
+                >
+                  {PROFILE_LIST_ADS_ONLY_LABEL} ({adsOnlyCount})
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -658,7 +819,7 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                   })}
                 </View>
               ) : null}
-              {renderProfileRows()}
+              {listMode === "kdp_ads" ? renderKdpGroups() : renderProfileRows()}
             </ScrollView>
           </View>
         ) : (
@@ -680,13 +841,25 @@ export function TopBar({ title, showProfileSelector = true, showDateRange = true
                     {PROFILE_LIST_READY_LABEL}
                   </Text>
                 </TouchableOpacity>
+                {showKdpAccountGroups ? (
+                  <TouchableOpacity testID="profiles-filter-kdp-ads" onPress={() => setListMode("kdp_ads")}>
+                    <Text style={{ color: listMode === "kdp_ads" ? t.colors.tone_primary : t.colors.text_secondary }}>
+                      {PROFILE_LIST_KDP_ADS_LABEL} ({kdpAdsCount})
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity testID="profiles-filter-ads-only" onPress={() => setListMode("ads_only")}>
+                  <Text style={{ color: listMode === "ads_only" ? t.colors.tone_primary : t.colors.text_secondary }}>
+                    {PROFILE_LIST_ADS_ONLY_LABEL} ({adsOnlyCount})
+                  </Text>
+                </TouchableOpacity>
                 <TouchableOpacity testID="profiles-filter-all" onPress={() => setListMode("all")}>
                   <Text style={{ color: listMode === "all" ? t.colors.tone_primary : t.colors.text_secondary }}>
                     {PROFILE_LIST_ALL_LABEL}
                   </Text>
                 </TouchableOpacity>
               </View>
-              <ScrollView style={{ maxHeight: 480 }}>{renderProfileRows()}</ScrollView>
+              <ScrollView style={{ maxHeight: 480 }}>{listMode === "kdp_ads" ? renderKdpGroups() : renderProfileRows()}</ScrollView>
             </Pressable>
           </Pressable>
         )}
@@ -767,6 +940,7 @@ const styles = StyleSheet.create({
   },
   filterRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: density.chromeGap,
     paddingHorizontal: dashboard.pageInset,
     paddingBottom: density.chromeGap,
@@ -829,6 +1003,36 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  kdpGroup: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: dashboard.cardRadius,
+    borderCurve: "continuous",
+    overflow: "hidden",
+  },
+  kdpGroupHeader: {
+    minHeight: 62,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  kdpBooksButton: {
+    minHeight: 32,
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    borderCurve: "continuous",
+  },
+  bookRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   dateInput: {

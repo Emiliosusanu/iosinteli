@@ -4,6 +4,7 @@
  * The WebView is the authenticated fetch proxy (same role as the extension
  * page hook). React Native owns schedule, parse, and Supabase writes.
  */
+import { AppState } from "react-native";
 import type { PageFetchResult } from "./replay.ts";
 import {
   hasRequiredTemplates,
@@ -13,20 +14,26 @@ import {
 } from "./templates.ts";
 import {
   applySessionToHeaders,
+  clearKdpWebSession,
   loadKdpWebSession,
   mergeSessionFromCaptureHeaders,
   mergeSessionMeta,
+  refreshKdpWebSessionFromNativeCookies,
 } from "./session.ts";
+import { loadHelperTemplates } from "./persist.ts";
 
 type FetchWaiter = {
   resolve: (value: PageFetchResult) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  invalidateSessionOnAuthFailure: boolean;
 };
 
 export type KdpHelperStatus = {
   ready: boolean;
   loggedIn: boolean;
+  savedSession: boolean;
+  sessionChecked: boolean;
   currentUrl: string;
   templates: Partial<Record<KdpTemplateType, KdpCapturedTemplate>>;
   lastError: string | null;
@@ -51,6 +58,8 @@ const listeners = new Set<StatusListener>();
 let status: KdpHelperStatus = {
   ready: false,
   loggedIn: false,
+  savedSession: false,
+  sessionChecked: false,
   currentUrl: "",
   templates: {},
   lastError: null,
@@ -59,6 +68,35 @@ let status: KdpHelperStatus = {
   pricingAuthRequired: false,
   pricingAuthBookId: null,
 };
+
+let hydrationPromise: Promise<KdpHelperStatus> | null = null;
+
+/**
+ * Restore only persisted request templates and the presence of an Amazon
+ * cookie. A stored cookie is not labelled "Signed in" until Amazon proves it
+ * through live navigation or a successful replay; it can still power the
+ * native background fetch without forcing the user through the WebView again.
+ */
+export function hydrateKdpRuntimeFromPersistence(): Promise<KdpHelperStatus> {
+  if (hydrationPromise) return hydrationPromise;
+  hydrationPromise = Promise.all([loadHelperTemplates(), loadKdpWebSession()])
+    .then(([templates, session]) => {
+      status = {
+        ...status,
+        templates: { ...templates, ...status.templates },
+        savedSession: Boolean(session?.cookies?.trim()),
+        sessionChecked: true,
+      };
+      emit();
+      return status;
+    })
+    .catch(() => {
+      status = { ...status, sessionChecked: true };
+      emit();
+      return status;
+    });
+  return hydrationPromise;
+}
 
 export function getKdpHelperStatus(): KdpHelperStatus {
   return status;
@@ -100,6 +138,11 @@ export function isKdpWebViewAttached(): boolean {
   return injectFn !== null;
 }
 
+/** An attached WebView can be suspended after the phone locks. */
+export function isKdpWebViewActive(): boolean {
+  return injectFn !== null && AppState.currentState === "active";
+}
+
 export function setKdpHelperPricingAuth(input: {
   required: boolean;
   bookId: string | null;
@@ -138,6 +181,17 @@ function inferLoggedIn(url: string): boolean {
   return u.includes("kdpreports.amazon.com") || u.includes("kdp.amazon.com");
 }
 
+function isAmazonSignInUrl(url: string): boolean {
+  const value = String(url || "").toLowerCase();
+  return value.includes("/ap/signin") || value.includes("signin.amazon") || value.includes("/ap/mfa");
+}
+
+function invalidateSavedKdpSession() {
+  void clearKdpWebSession();
+  status = { ...status, loggedIn: false, savedSession: false, sessionChecked: true };
+  emit();
+}
+
 export function handleKdpWebViewMessage(raw: string) {
   let data: {
     channel?: string;
@@ -159,12 +213,27 @@ export function handleKdpWebViewMessage(raw: string) {
   }
 
   if (data.kind === "NAV" && typeof data.url === "string") {
+    const loggedIn = inferLoggedIn(data.url);
+    const signingIn = isAmazonSignInUrl(data.url);
     status = {
       ...status,
       currentUrl: data.url,
-      loggedIn: inferLoggedIn(data.url),
+      loggedIn,
+      // A print-pricing step-up can land on Amazon sign-in while the reports
+      // session remains valid. Keep Keychain until a reports replay proves the
+      // session was rejected; account switching still clears it explicitly.
+      savedSession: status.savedSession,
+      sessionChecked: true,
     };
     emit();
+    if (!signingIn && loggedIn) {
+      const navigatedUrl = data.url;
+      void refreshKdpWebSessionFromNativeCookies(navigatedUrl).then((session) => {
+        if (status.currentUrl !== navigatedUrl || !status.loggedIn) return;
+        status = { ...status, savedSession: Boolean(session?.cookies?.trim()), sessionChecked: true };
+        emit();
+      });
+    }
     return;
   }
 
@@ -184,7 +253,11 @@ export function handleKdpWebViewMessage(raw: string) {
       p.requestHeaders && typeof p.requestHeaders === "object"
         ? (p.requestHeaders as Record<string, string>)
         : undefined;
-    void mergeSessionFromCaptureHeaders(requestHeaders);
+    void mergeSessionFromCaptureHeaders(requestHeaders).then((session) => {
+      if (!session?.cookies?.trim()) return;
+      status = { ...status, savedSession: true, sessionChecked: true };
+      emit();
+    });
     status = {
       ...status,
       templates: mergeCapturedTemplate(status.templates, {
@@ -221,6 +294,15 @@ export function handleKdpWebViewMessage(raw: string) {
       finalUrl: p.finalUrl,
       redirected: p.redirected,
     });
+    if (waiter.invalidateSessionOnAuthFailure && looksLoggedOut({
+      ok: Boolean(p.ok),
+      status: Number(p.status || 0),
+      text: String(p.text || ""),
+      finalUrl: p.finalUrl,
+      redirected: p.redirected,
+    })) {
+      invalidateSavedKdpSession();
+    }
   }
 }
 
@@ -233,9 +315,10 @@ async function kdpNativeFetch(req: {
   method: string;
   headers: Record<string, string>;
   body: string | null;
+  timeoutMs?: number;
 }): Promise<PageFetchResult> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), req.timeoutMs ?? FETCH_TIMEOUT_MS);
   try {
     const method = String(req.method || "GET").toUpperCase();
     const res = await fetch(req.url, {
@@ -288,9 +371,18 @@ function mergeCookieHeader(
 }
 
 function looksLoggedOut(result: PageFetchResult): boolean {
-  if (result.status === 401 || result.status === 403) return true;
-  const text = String(result.text || "").slice(0, 400).toLowerCase();
-  return text.includes("ap/signin") || text.includes("sign-in") || text.includes("<html");
+  if (result.status === 401) return true;
+  if (isAmazonSignInUrl(result.finalUrl || "")) return true;
+  const text = String(result.text || "").slice(0, 1200).toLowerCase();
+  return text.includes("/ap/signin") || text.includes("signin.amazon");
+}
+
+function looksLikeHtmlDocument(result: PageFetchResult): boolean {
+  const contentType = String(result.contentType || "").toLowerCase();
+  if (contentType.includes("text/html") || contentType.includes("application/xhtml")) {
+    return true;
+  }
+  return /^\s*(?:<!doctype\s+html|<html\b)/i.test(String(result.text || ""));
 }
 
 export async function kdpPageFetch(req: {
@@ -298,19 +390,32 @@ export async function kdpPageFetch(req: {
   method: string;
   headers: Record<string, string>;
   body: string | null;
+  /** Pricing uses a separate Amazon step-up gate; it must not erase reports auth. */
+  authScope?: "reports" | "pricing";
+  timeoutMs?: number;
 }): Promise<PageFetchResult> {
-  const session = await loadKdpWebSession();
+  const invalidateSessionOnAuthFailure = req.authScope !== "pricing";
+  const session =
+    (await refreshKdpWebSessionFromNativeCookies(req.url).catch(() => null)) ||
+    (await loadKdpWebSession());
   const headers = applySessionToHeaders(req.headers, session);
 
   // Prefer native Keychain replay (works in background without WKWebView).
   if (session?.cookies?.trim()) {
     try {
       const native = await kdpNativeFetch({ ...req, headers });
-      if (!looksLoggedOut(native)) return native;
+      const loggedOut = looksLoggedOut(native);
+      const pricingHtmlShell =
+        req.authScope === "pricing" && isKdpWebViewActive() && looksLikeHtmlDocument(native);
+      if (!loggedOut && !pricingHtmlShell) return native;
+      if (loggedOut && invalidateSessionOnAuthFailure) invalidateSavedKdpSession();
       // Fall through to WebView when attached so the user can re-auth.
-      if (!injectFn) return native;
+      // Pricing can also return KDP's HTTP-200 SPA shell through native replay
+      // even though the visible WKWebView has the completed print-setup step-up.
+      // In that case use the authenticated page context, as Chrome does.
+      if (!isKdpWebViewActive()) return native;
     } catch (err) {
-      if (!injectFn) {
+      if (!isKdpWebViewActive()) {
         const message = err instanceof Error ? err.message : String(err);
         return Promise.reject(
           new Error(
@@ -323,7 +428,7 @@ export async function kdpPageFetch(req: {
     }
   }
 
-  if (!injectFn) {
+  if (!isKdpWebViewActive()) {
     return Promise.reject(
       new Error(
         session?.cookies?.trim()
@@ -338,8 +443,8 @@ export async function kdpPageFetch(req: {
     const timer = setTimeout(() => {
       waiters.delete(reqId);
       reject(new Error("KDP page fetch timed out"));
-    }, FETCH_TIMEOUT_MS);
-    waiters.set(reqId, { resolve, reject, timer });
+    }, req.timeoutMs ?? FETCH_TIMEOUT_MS);
+    waiters.set(reqId, { resolve, reject, timer, invalidateSessionOnAuthFailure });
     const payload = JSON.stringify({
       reqId,
       url: req.url,
@@ -373,6 +478,8 @@ export function resetKdpRuntime() {
   status = {
     ready: status.ready,
     loggedIn: false,
+    savedSession: false,
+    sessionChecked: false,
     currentUrl: "",
     templates: {},
     lastError: null,
@@ -381,5 +488,6 @@ export function resetKdpRuntime() {
     pricingAuthRequired: false,
     pricingAuthBookId: null,
   };
+  hydrationPromise = null;
   emit();
 }

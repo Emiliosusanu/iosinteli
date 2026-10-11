@@ -22,6 +22,7 @@ import {
   amsEventLabel,
   deriveSyncHero,
   formatSyncWhen,
+  isActiveProfileSyncStale,
   latestLogPerProfile,
   looksLikeExpiredAmazonToken,
   needsReviewNote,
@@ -33,6 +34,34 @@ import {
   syncHeroAccessibilityLabel,
   syncHeroDetail,
 } from "../src/lib/syncContract.ts";
+
+test("large active profile sync stays live through the server ownership window", () => {
+  const startedAt = "2026-10-01T12:00:00Z";
+  assert.equal(
+    isActiveProfileSyncStale({
+      status: "pending",
+      startedAt,
+      now: Date.parse("2026-10-01T13:59:59Z"),
+    }),
+    false,
+  );
+  assert.equal(
+    isActiveProfileSyncStale({
+      status: "pending",
+      startedAt,
+      now: Date.parse("2026-10-01T14:00:01Z"),
+    }),
+    true,
+  );
+  assert.equal(
+    isActiveProfileSyncStale({
+      status: "completed",
+      startedAt,
+      now: Date.parse("2026-10-01T18:00:00Z"),
+    }),
+    false,
+  );
+});
 
 const screen = readFileSync(new URL("../app/more/sync.tsx", import.meta.url), "utf8");
 

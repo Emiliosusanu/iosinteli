@@ -13,6 +13,22 @@ export class SessionUnavailableError extends Error {
 
 type Result<S> = { data: { session: S | null }; error?: unknown };
 
+/** Collapse concurrent recoveries for the same credential into one request.
+ * Once that request settles, the next generation may start normally.
+ */
+export function createTokenRefreshSingleFlight<T>() {
+  let pending: Promise<T> | null = null;
+  return (work: () => Promise<T>): Promise<T> => {
+    if (pending) return pending;
+    const current = Promise.resolve().then(work);
+    pending = current;
+    void current.finally(() => {
+      if (pending === current) pending = null;
+    }).catch(() => {});
+    return current;
+  };
+}
+
 /** One recovery shared by startup, foreground, notifications and API callers.
  * Never retry an invalid refresh token or return an expired access token.
  */

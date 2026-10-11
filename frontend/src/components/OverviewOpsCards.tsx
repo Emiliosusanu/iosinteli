@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
@@ -35,7 +35,6 @@ function OpsCardShell({
   toneWash: string;
   testID?: string;
 }) {
-  const t = useTheme();
   // Below-fold: card glass (lighter blur) — chrome stacks caused Overview scroll jank.
   return (
     <StaggerReveal index={staggerIndex}>
@@ -46,7 +45,7 @@ function OpsCardShell({
           marginTop: dashboard.sectionGap,
           borderRadius: dashboard.cardRadius,
           borderCurve: "continuous",
-          borderColor: t.colors.glass_stroke,
+          borderWidth: 0,
           overflow: "hidden",
         }}
         contentStyle={{ padding: 0 }}
@@ -58,7 +57,7 @@ function OpsCardShell({
           end={{ x: 1, y: 1 }}
           style={StyleSheet.absoluteFill}
         />
-        <View style={{ padding: dashboard.cardPadding }}>{children}</View>
+        <View style={{ padding: Math.max(12, dashboard.cardPadding - 2) }}>{children}</View>
       </GlassPanel>
     </StaggerReveal>
   );
@@ -257,6 +256,10 @@ export function OverviewBudgetTodayCard({
   usedPct,
   danger,
   todaySynced = true,
+  monthToDate,
+  projectedMonthSpend,
+  monthlyBudget,
+  daysRemaining,
   staggerIndex = 0,
 }: {
   spent: number;
@@ -266,6 +269,10 @@ export function OverviewBudgetTodayCard({
   danger: boolean;
   /** False when today's Ads metrics are not imported yet — do not imply $0 spend. */
   todaySynced?: boolean;
+  monthToDate?: number;
+  projectedMonthSpend?: number;
+  monthlyBudget?: number;
+  daysRemaining?: number;
   staggerIndex?: number;
 }) {
   const t = useTheme();
@@ -284,7 +291,7 @@ export function OverviewBudgetTodayCard({
           spent={todaySynced ? spent : 0}
           budget={budget}
           currency={currency}
-          size={108}
+          size={96}
         />
         <View style={styles.budgetCopy}>
           <Text style={[t.typography.metric_compact, { color: t.colors.text_primary }]} numberOfLines={1}>
@@ -307,8 +314,85 @@ export function OverviewBudgetTodayCard({
               <StatusChip label="Spend so far" tone="neutral" t={t} />
             )}
           </View>
+          {todaySynced && projectedMonthSpend != null ? (
+            <View style={styles.forecastRows}>
+              <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>
+                Month to date {formatCurrency(monthToDate ?? 0, currency, { compact: true })}
+              </Text>
+              <Text style={[t.typography.caption1, { color: t.colors.text_primary, fontWeight: "600" }]}>
+                Forecast {formatCurrency(projectedMonthSpend, currency, { compact: true })}
+                {monthlyBudget && monthlyBudget > 0
+                  ? ` of ${formatCurrency(monthlyBudget, currency, { compact: true })}`
+                  : ""}
+              </Text>
+              <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>
+                {Math.max(0, daysRemaining ?? 0)} days remaining
+              </Text>
+            </View>
+          ) : null}
         </View>
       </View>
+    </OpsCardShell>
+  );
+}
+
+export type MarketplaceAdsSummary = {
+  country: string;
+  spend: number;
+  orders: number;
+  clicks: number;
+  acos: number | null;
+};
+
+export function OverviewMarketplaceAdsCard({
+  rows,
+  selectedCountry,
+  currency,
+  onSelect,
+  staggerIndex = 5,
+}: {
+  rows: MarketplaceAdsSummary[];
+  selectedCountry: string | null;
+  currency: string;
+  onSelect: (country: string | null) => void;
+  staggerIndex?: number;
+}) {
+  const t = useTheme();
+  if (!rows.length) return null;
+  return (
+    <OpsCardShell staggerIndex={staggerIndex} toneWash={t.colors.tone_primary + "14"} testID="overview-marketplace-ads">
+      <OverviewCardHeader title="Ads marketplaces" icon="campaigns" />
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityState={{ selected: selectedCountry == null }}
+        onPress={() => onSelect(null)}
+        style={[styles.marketRow, { borderBottomColor: t.colors.separator }]}
+      >
+        <Text style={[t.typography.subhead, { color: t.colors.text_primary, flex: 1 }]}>All markets</Text>
+        {selectedCountry == null ? <SFSymbol name="checkmark" size={14} color={t.colors.tone_primary} /> : null}
+      </TouchableOpacity>
+      {rows.map((row) => (
+        <TouchableOpacity
+          key={row.country}
+          accessibilityRole="button"
+          accessibilityState={{ selected: selectedCountry === row.country }}
+          accessibilityLabel={`${row.country}, spend ${formatCurrency(row.spend, currency)}, ${formatInt(row.orders)} orders, ${formatInt(row.clicks)} clicks${row.acos == null ? "" : `, ACoS ${formatPercent(row.acos, 1)}`}`}
+          onPress={() => onSelect(row.country)}
+          style={[styles.marketRow, { borderBottomColor: t.colors.separator }]}
+        >
+          <Text style={[t.typography.headline, { color: t.colors.text_primary, width: 38 }]}>{row.country}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[t.typography.subhead, { color: t.colors.text_primary }]}>
+              {formatCurrency(row.spend, currency, { compact: true })} spend
+            </Text>
+            <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
+              {formatInt(row.orders)} orders · {formatInt(row.clicks)} clicks
+              {row.acos == null ? "" : ` · ${formatPercent(row.acos, 1)} ACoS`}
+            </Text>
+          </View>
+          {selectedCountry === row.country ? <SFSymbol name="checkmark" size={14} color={t.colors.tone_primary} /> : null}
+        </TouchableOpacity>
+      ))}
     </OpsCardShell>
   );
 }
@@ -356,7 +440,7 @@ export function OverviewBidBotCard({
             style={{
               borderRadius: dashboard.cardRadius,
               borderCurve: "continuous",
-              borderColor: t.colors.glass_stroke,
+              borderWidth: 0,
               overflow: "hidden",
             }}
             contentStyle={{ padding: 0 }}
@@ -366,7 +450,7 @@ export function OverviewBidBotCard({
               style={[StyleSheet.absoluteFill, { backgroundColor: accent, opacity: live ? 0.08 : 0.04 }]}
             />
             <View style={[styles.accentEdge, { backgroundColor: accent }]} />
-            <View style={{ padding: dashboard.cardPadding, paddingLeft: dashboard.cardPadding + 4 }}>
+            <View style={{ padding: Math.max(12, dashboard.cardPadding - 2), paddingLeft: dashboard.cardPadding + 2 }}>
               <OverviewCardHeader title="BidBot" icon="bidBot" />
               {statusError ? (
                 <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 10 }]}>
@@ -422,12 +506,14 @@ export function OverviewAutomationCard({
   rulesRun,
   edits,
   batches,
+  statusError = false,
   onOpenRules,
   staggerIndex = 2,
 }: {
   rulesRun: number;
   edits: number;
   batches: number;
+  statusError?: boolean;
   onOpenRules: () => void;
   staggerIndex?: number;
 }) {
@@ -452,7 +538,7 @@ export function OverviewAutomationCard({
             style={{
               borderRadius: dashboard.cardRadius,
               borderCurve: "continuous",
-              borderColor: t.colors.glass_stroke,
+              borderWidth: 0,
               overflow: "hidden",
             }}
             contentStyle={{ padding: 0 }}
@@ -464,7 +550,7 @@ export function OverviewAutomationCard({
               end={{ x: 1, y: 1 }}
               style={StyleSheet.absoluteFill}
             />
-            <View style={{ padding: dashboard.cardPadding }}>
+            <View style={{ padding: Math.max(12, dashboard.cardPadding - 2) }}>
               <OverviewCardHeader
                 title="Automation"
                 icon="automation"
@@ -479,7 +565,6 @@ export function OverviewAutomationCard({
                       styles.autoTile,
                       {
                         backgroundColor: t.scheme === "dark" ? "#FFFFFF0A" : "#FFFFFFCC",
-                        borderColor: t.colors.border,
                       },
                     ]}
                   >
@@ -490,7 +575,7 @@ export function OverviewAutomationCard({
                       {stat.label}
                     </Text>
                     <VerifiedValue
-                      value={formatInt(stat.value)}
+                      value={statusError ? "Unavailable" : formatInt(stat.value)}
                       style={[
                         t.typography.title2,
                         {
@@ -516,12 +601,23 @@ const styles = StyleSheet.create({
   budgetBody: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 14,
-    marginTop: 12,
+    gap: 10,
+    marginTop: 8,
   },
   budgetCopy: {
     flex: 1,
     minWidth: 0,
+  },
+  forecastRows: {
+    marginTop: 7,
+    gap: 3,
+  },
+  marketRow: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   arcGlow: {
     position: "absolute",
@@ -534,14 +630,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 6,
-    marginTop: 10,
+    marginTop: 7,
   },
   chip: {
     paddingHorizontal: 9,
-    paddingVertical: 5,
+    paddingVertical: 4,
     borderRadius: dashboard.chipRadius,
     borderCurve: "continuous",
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 0,
   },
   accentEdge: {
     position: "absolute",
@@ -582,16 +678,16 @@ const styles = StyleSheet.create({
   autoGrid: {
     flexDirection: "row",
     gap: 8,
-    marginTop: 12,
+    marginTop: 8,
   },
   autoTile: {
     flex: 1,
     borderRadius: dashboard.metricChipRadius,
     borderCurve: "continuous",
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 0,
     paddingHorizontal: 10,
-    paddingVertical: 12,
-    minHeight: 96,
+    paddingVertical: 9,
+    minHeight: 82,
   },
   autoIconWell: {
     width: 28,

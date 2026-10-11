@@ -42,11 +42,11 @@ test("exact harvest bid module remains the default Exact bid source", () => {
 });
 
 test("settings exposes Default Exact bid and campaign Exact uses App default", () => {
-  const settings = readFileSync(new URL("../app/more/settings.tsx", import.meta.url), "utf8");
+  const appContext = readFileSync(new URL("../src/contexts/AppContext.tsx", import.meta.url), "utf8");
   const campaign = readFileSync(new URL("../app/campaign/[id].tsx", import.meta.url), "utf8");
-  assert.match(settings, /settings-exact-harvest-bid/);
-  assert.match(settings, /EXACT_HARVEST_BID_LABEL|Default Exact bid/);
-  assert.match(settings, /setDefaultExactBid/);
+  assert.match(appContext, /defaultExactBid/);
+  assert.match(appContext, /setDefaultExactBid/);
+  assert.match(appContext, /EXACT_HARVEST_BID_SETTING_KEY/);
   assert.match(campaign, /bid:\s*defaultExactBid/);
   assert.match(campaign, /fastAddSearchTermExact/);
 });

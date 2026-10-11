@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -94,6 +95,7 @@ import {
   CAMPAIGN_CREATION_BOOKS_QUERY_KEY,
   CAMPAIGN_CREATION_SELECTED_BOOK_KEY,
   createPaperbackSearchEmptyMessage,
+  confirmedDisabledMarketplacesForBook,
   ineligibleOutOfStockPaperbacks,
   isKindleAsinOnPrintWork,
   isPaperbackCreateCandidate,
@@ -115,11 +117,19 @@ import {
 } from "@/src/lib/campaignCreationStock";
 import { formatCurrency } from "@/src/lib/format";
 import {
+  keywordDedupeKey,
+  prepareKeywordAdds,
+  prepareProductTargetAdds,
+  productTargetDedupeKey,
+} from "@/src/lib/adGroupTargets";
+import {
   createCampaign,
   fetchCampaignCreationBooks,
   fetchCampaignCreationMarketplaces,
   previewCampaignCreation,
   resolveCreationProfileId,
+  toggleAmazonProfile,
+  triggerSync,
   type CampaignCreationBook,
   type CampaignCreationMarketplace,
   type CampaignCreationPreview,
@@ -127,6 +137,7 @@ import {
 } from "@/src/lib/mutations";
 import { fetchActiveCampaignsForBookProfile, fetchTargetingBookOptions } from "@/src/lib/queries";
 import { sortedProfileIds } from "@/src/lib/periodQuery";
+import { CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS, CAMPAIGN_CREATION_MARKETPLACES_TIMEOUT_MS, isHomeQueryTimeout, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { targetingBookHasCampaigns } from "@/src/lib/targetingBookFilter";
 import { appQueryClient } from "@/src/lib/queryClient";
 import { NestApiError, userMessageForNestError } from "@/src/lib/rulesApi";
@@ -166,15 +177,14 @@ function StepHeader({
 }) {
   const t = useTheme();
   return (
-    <View style={{ gap: 4 }}>
+    <View style={{ gap: 2 }}>
       <Text
         style={[
           t.typography.caption2,
           {
             color: t.colors.text_tertiary,
             fontWeight: "600",
-            letterSpacing: 1.1,
-            textTransform: "uppercase",
+            fontVariant: ["tabular-nums"],
           },
         ]}
       >
@@ -182,8 +192,8 @@ function StepHeader({
       </Text>
       <Text
         style={[
-          t.typography.title3,
-          { color: t.colors.text_primary, fontWeight: "600", letterSpacing: -0.3 },
+          t.typography.headline,
+          { color: t.colors.text_primary, fontWeight: "600", letterSpacing: -0.2 },
         ]}
       >
         {title}
@@ -192,7 +202,7 @@ function StepHeader({
         <Text
           style={[
             t.typography.footnote,
-            { color: t.colors.text_secondary, lineHeight: 18 },
+            { color: t.colors.text_tertiary, lineHeight: 18 },
           ]}
         >
           {hint}
@@ -218,6 +228,9 @@ function amount(value: string, min: number, max: number) {
 }
 
 function catalogErrorSubtitle(error: unknown) {
+  if (isHomeQueryTimeout(error)) {
+    return "Book catalog is taking longer than usual. Try again.";
+  }
   if (error instanceof NestApiError) {
     if (error.status === 429)
       return "Amazon is busy. Wait a moment, then retry.";
@@ -260,6 +273,23 @@ function emptyBooksCopy(
   return {
     title: "No paperbacks yet",
     subtitle: "Refresh the KDP catalog, then retry.",
+  };
+}
+
+/** Soft shell while Amazon/AI loads — keeps Create paused + Filtering chrome honest. */
+function pendingKeywordCountsShell(): NonNullable<
+  CampaignCreationPreview["keywordCounts"]
+> {
+  return {
+    amazonApiRowCount: 0,
+    amazonApiPhraseCount: 0,
+    amazonRowCount: 0,
+    amazonPhraseCount: 0,
+    keptRowCount: 0,
+    keptPhraseCount: 0,
+    grokFiltered: false,
+    grokPending: true,
+    relevanceOutcome: "pending",
   };
 }
 
@@ -428,17 +458,41 @@ export default function CreateCampaignScreen() {
     prefTargetingRaw === "products"
       ? prefTargetingRaw
       : null;
-  const { profiles, adminFilterUserId } = useApp();
+  const { profiles, adminFilterUserId, refetchProfiles } = useApp();
   const { guestMode, user } = useAuth();
   const viewAsOtherUser = Boolean(
     adminFilterUserId && adminFilterUserId !== user?.id,
   );
+  const [locallyEnabledProfileIds, setLocallyEnabledProfileIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [marketplaceChooserOpen, setMarketplaceChooserOpen] = useState(false);
+  const [enablingMarketplaceId, setEnablingMarketplaceId] = useState<string | null>(null);
+  const promptedMarketplaceAsinsRef = useRef<Set<string>>(new Set());
   const availableProfiles = useMemo(() => {
     // Create campaign must see every enabled Ads profile the seller owns —
     // selected Overview filters must not hide the only profile that carries
     // this paperback.
-    return profiles.filter(profileEnabled);
-  }, [profiles]);
+    return profiles.filter(
+      (profile) =>
+        profileEnabled(profile) ||
+        locallyEnabledProfileIds.has(profile.id) ||
+        locallyEnabledProfileIds.has(profile.profile_id),
+    );
+  }, [profiles, locallyEnabledProfileIds]);
+
+  useEffect(() => {
+    if (!locallyEnabledProfileIds.size) return;
+    setLocallyEnabledProfileIds((current) => {
+      const next = new Set(current);
+      for (const profile of profiles) {
+        if (!profileEnabled(profile)) continue;
+        next.delete(profile.id);
+        next.delete(profile.profile_id);
+      }
+      return next.size === current.size ? current : next;
+    });
+  }, [profiles, locallyEnabledProfileIds.size]);
   const [profileId, setProfileId] = useState(prefProfileId);
   const [adsProfileId, setAdsProfileId] = useState(prefProfileId);
   const [book, setBook] = useState<CampaignCreationBook | null>(null);
@@ -460,10 +514,12 @@ export default function CreateCampaignScreen() {
   );
   const [prefillApplied, setPrefillApplied] = useState(false);
   const [preview, setPreview] = useState<CampaignCreationPreview | null>(null);
-  const [selectedKeywords, setSelectedKeywords] = useState<Set<number>>(
+  // Stable entity identities prevent an AI/meta re-rank from moving a checkmark
+  // onto a different keyword or ASIN before Create is pressed.
+  const [selectedKeywords, setSelectedKeywords] = useState<Set<string>>(
     new Set(),
   );
-  const [selectedProducts, setSelectedProducts] = useState<Set<number>>(
+  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(
     new Set(),
   );
   const [visibleSuggestionCount, setVisibleSuggestionCount] =
@@ -511,6 +567,12 @@ export default function CreateCampaignScreen() {
   const suggestionMetaByAsinRef = useRef(suggestionMetaByAsin);
   suggestionMetaByAsinRef.current = suggestionMetaByAsin;
   const prefTargetingPrefetchRef = useRef(false);
+  /** One-shot recover when soft shell is left after a discarded paint. */
+  const softShellRecoverRef = useRef(false);
+  /** Bumps on each preview request / marketplace reset so late callbacks cannot overwrite. */
+  const previewRequestGenRef = useRef(0);
+  const targetingRef = useRef(targeting);
+  targetingRef.current = targeting;
   const [suggestionsError, setSuggestionsError] = useState<string | null>(null);
   const [strategy, setStrategy] = useState<Strategy>("LEGACY_FOR_SALES");
   const [topPlacement, setTopPlacement] = useState("0");
@@ -520,9 +582,12 @@ export default function CreateCampaignScreen() {
 
   const booksQ = useQuery({
     queryKey: CAMPAIGN_CREATION_BOOKS_QUERY_KEY,
-    queryFn: fetchCampaignCreationBooks,
-    retry: false,
-    staleTime: 0,
+    queryFn: ({ signal }) =>
+      withQueryTimeout(fetchCampaignCreationBooks(), CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS, signal),
+    // One soft retry on timeout — kill/relaunch stress often races Nest cold start.
+    retry: (count, error) => count < 1 && isHomeQueryTimeout(error),
+    retryDelay: 1_500,
+    staleTime: 60_000,
     refetchOnMount: "always",
   });
 
@@ -584,7 +649,12 @@ export default function CreateCampaignScreen() {
 
   const marketplacesQ = useQuery({
     queryKey: ["campaign-creation-marketplaces", book?.asin],
-    queryFn: () => fetchCampaignCreationMarketplaces(book!.asin),
+    queryFn: ({ signal }) =>
+      withQueryTimeout(
+        fetchCampaignCreationMarketplaces(book!.asin),
+        CAMPAIGN_CREATION_MARKETPLACES_TIMEOUT_MS,
+        signal,
+      ),
     enabled: Boolean(book),
     retry: (count, error) =>
       count < 3 &&
@@ -618,46 +688,79 @@ export default function CreateCampaignScreen() {
   );
 
   const previewM = useMutation({
-    mutationFn: (nextTargeting?: CampaignCreationTargeting) =>
-      previewCampaignCreation({
-        profileId: adsProfileId || profileId,
-        advertisedAsin: book!.asin,
-        targeting: nextTargeting ?? targeting,
-        onAmazonReady: (partial) => {
-          // Step 1: paint Amazon totals immediately. Do NOT select-all raw rows —
-          // Step 2 (AI filter) must finish before we pre-select the kept set.
-          setPreview(partial);
-          setVisibleSuggestionCount(SUGGESTION_PAGE_SIZE);
-          setSelectedKeywords(new Set());
-          setSelectedProducts(new Set());
-        },
-      }),
+    mutationFn: async (nextTargeting?: CampaignCreationTargeting) => {
+      const gen = ++previewRequestGenRef.current;
+      const requestTargeting = nextTargeting ?? targetingRef.current;
+      try {
+        const result = await previewCampaignCreation({
+          profileId: adsProfileId || profileId,
+          advertisedAsin: book!.asin,
+          targeting: requestTargeting,
+          onAmazonReady: (partial) => {
+            // Step 1: paint Amazon totals immediately. Do NOT select-all raw rows —
+            // Step 2 (AI filter) must finish before we pre-select the kept set.
+            if (gen !== previewRequestGenRef.current) {
+              console.log(
+                `[inteliads:create-preview] paint discarded gen=${gen} current=${previewRequestGenRef.current} phase=onAmazonReady`,
+              );
+              return;
+            }
+            if (targetingRef.current !== requestTargeting) {
+              console.log(
+                `[inteliads:create-preview] paint discarded targeting=${requestTargeting}→${targetingRef.current} phase=onAmazonReady`,
+              );
+              return;
+            }
+            setPreview(partial);
+            setVisibleSuggestionCount(SUGGESTION_PAGE_SIZE);
+            setSelectedKeywords(new Set());
+            setSelectedProducts(new Set());
+          },
+        });
+        return { result, gen, requestTargeting };
+      } catch (error) {
+        // Stale errors must not wipe a newer successful paint (soft shell / Kept).
+        if (error && typeof error === "object") {
+          (error as { previewGen?: number; requestTargeting?: string }).previewGen =
+            gen;
+          (
+            error as { previewGen?: number; requestTargeting?: string }
+          ).requestTargeting = requestTargeting;
+        }
+        throw error;
+      }
+    },
     onMutate: () => {
       setSuggestionsError(null);
     },
-    onSuccess: (result) => {
+    onSuccess: (payload) => {
+      const { result, gen, requestTargeting } = payload;
+      if (gen !== previewRequestGenRef.current) {
+        console.log(
+          `[inteliads:create-preview] paint discarded gen=${gen} current=${previewRequestGenRef.current} phase=onSuccess kept=${result.keywords?.length ?? 0}/${result.productTargets?.length ?? 0}`,
+        );
+        return;
+      }
+      if (targetingRef.current !== requestTargeting) {
+        console.log(
+          `[inteliads:create-preview] paint discarded targeting=${requestTargeting}→${targetingRef.current} phase=onSuccess`,
+        );
+        return;
+      }
+      console.log(
+        `[inteliads:create-preview] paint applied keywords=${result.keywords?.length ?? 0} products=${result.productTargets?.length ?? 0} outcome=${result.keywordCounts?.relevanceOutcome ?? "n/a"}`,
+      );
       setSuggestionsError(null);
       // Advance generation so in-flight enrich from a prior preview is ignored.
       // Late meta for THIS gen still applies when gen matches (progressive).
-      const gen = ++suggestionMetaGenRef.current;
+      const metaGen = ++suggestionMetaGenRef.current;
       suggestionRetailAttemptedRef.current = new Set();
       setPreview(result);
       setVisibleSuggestionCount(SUGGESTION_PAGE_SIZE);
-      // Never auto-select raw Amazon after AI failure / empty-restore.
-      const needsConfirm = suggestionRelevanceNeedsUserConfirm(
-        result.keywordCounts,
-      );
-      if (needsConfirm) {
-        setSelectedKeywords(new Set());
-        setSelectedProducts(new Set());
-      } else {
-        setSelectedKeywords(
-          new Set((result.keywords ?? []).map((_, index) => index)),
-        );
-        setSelectedProducts(
-          new Set((result.productTargets ?? []).map((_, index) => index)),
-        );
-      }
+      // Suggestions are recommendations, not user intent. A completed AI
+      // filter must never silently choose rows on the seller's behalf.
+      setSelectedKeywords(new Set());
+      setSelectedProducts(new Set());
       setProductBidModes({});
       setProductCustomBids({});
       setGlobalProductBidMode("default");
@@ -702,7 +805,7 @@ export default function CreateCampaignScreen() {
 
       const profileKey = adsProfileId || profileId;
       const applyMetaPatch = (partial: Map<string, AsinDisplayMeta> | Record<string, AsinDisplayMeta>) => {
-        if (gen !== suggestionMetaGenRef.current) return false;
+        if (metaGen !== suggestionMetaGenRef.current) return false;
         const entries =
           partial instanceof Map ? [...partial.entries()] : Object.entries(partial);
         if (!entries.length) return true;
@@ -733,7 +836,7 @@ export default function CreateCampaignScreen() {
           const visibleSeed = asins.slice(0, SUGGESTION_PAGE_SIZE);
           const prioritized = priorityAsinsForTitleEnrichment(asins, visibleSeed);
           const needTitles = prioritized.filter((asin) => !meta.get(asin)?.title);
-          if (gen === suggestionMetaGenRef.current) {
+          if (metaGen === suggestionMetaGenRef.current) {
             setSuggestionTitlesLoading(false);
           }
           if (!needTitles.length) return;
@@ -747,7 +850,7 @@ export default function CreateCampaignScreen() {
             suggestionRetailAttemptedRef.current.add(asin);
           }
           for (let i = 0; i < capped.length; i += chunkSize) {
-            if (gen !== suggestionMetaGenRef.current) return;
+            if (metaGen !== suggestionMetaGenRef.current) return;
             const chunk = capped.slice(i, i + chunkSize);
             const retail = await fetchAmazonRetailTitles(chunk, {
               concurrency: RETAIL_TAIL_CONCURRENCY,
@@ -775,7 +878,7 @@ export default function CreateCampaignScreen() {
         } catch {
           // Soft-fail: covers still work via CDN; paste ASINs still available.
         } finally {
-          if (gen === suggestionMetaGenRef.current) {
+          if (metaGen === suggestionMetaGenRef.current) {
             setSuggestionTitlesLoading(false);
           }
         }
@@ -783,13 +886,36 @@ export default function CreateCampaignScreen() {
 
     },
     onError: (error, nextTargeting) => {
+      const errMeta =
+        error && typeof error === "object"
+          ? (error as { previewGen?: number; requestTargeting?: string })
+          : {};
+      // Stale failure from a superseded gen must not clobber Kept / in-flight paint.
+      if (
+        typeof errMeta.previewGen === "number" &&
+        errMeta.previewGen !== previewRequestGenRef.current
+      ) {
+        console.log(
+          `[inteliads:create-preview] onError discarded gen=${errMeta.previewGen} current=${previewRequestGenRef.current}`,
+        );
+        return;
+      }
       setSelectedKeywords(new Set());
       setSelectedProducts(new Set());
       setSuggestionTitlesLoading(false);
-      const activeTargeting = nextTargeting ?? targeting;
+      const activeTargeting =
+        (errMeta.requestTargeting as CampaignCreationTargeting | undefined) ??
+        nextTargeting ??
+        targetingRef.current;
       // Soft-fail: keep an empty preview shell so sellers can still paste
       // custom keywords / ASINs when Amazon rate-limits recommendations.
-      if (book && (activeTargeting === "keywords" || activeTargeting === "products")) {
+      // Ignore stale errors from a superseded targeting switch.
+      if (
+        targetingRef.current === activeTargeting &&
+        book &&
+        (activeTargeting === "keywords" || activeTargeting === "products")
+      ) {
+        // Soft shell stays; Refresh retries. Do not clear prefetch or we loop onError.
         setPreview({
           source: "amazon_ads",
           fetchedAt: new Date().toISOString(),
@@ -810,10 +936,12 @@ export default function CreateCampaignScreen() {
             coverUrl: book.coverUrl,
           },
           duplicateAuto: null,
+          amazonKeywordApi: { rowCount: 0, phraseCount: 0 },
           keywords: [],
           productTargets: [],
+          keywordCounts: pendingKeywordCountsShell(),
         });
-      } else {
+      } else if (targetingRef.current === activeTargeting) {
         setPreview(null);
       }
       const message = userMessageForNestError(
@@ -829,16 +957,24 @@ export default function CreateCampaignScreen() {
       if (status === 429 || status >= 500 || status === 0 || rateLimited) {
         return;
       }
+      // Soft-fallback / linked CA·US rows mean Nest bulk already tied this
+      // paperback to the profile (often with active campaigns). Do NOT append
+      // the "pick an in-stock paperback" scare — that contradicts the picker
+      // and mislabels Amazon eligibility flakes as OOS (NE CA 1807973751).
       const advertisableHint =
         /advertisable|not confirm this ASIN|unpublished|suppressed|ineligible/i.test(
           message,
         );
-      Alert.alert(
-        "Couldn't load suggestions",
-        advertisableHint
-          ? `${message}\n\nPick an in-stock, currently published paperback for this marketplace. Unpublished or suppressed ASINs cannot load Amazon suggestions.`
-          : message,
-      );
+      const softLinked =
+        usingFallbackMarketplaces ||
+        Boolean(selectedMarketplace && adsStockSoftListed(selectedMarketplace)) ||
+        (existingCampaignsQ.data?.length ?? 0) > 0;
+      const alertBody = advertisableHint
+        ? softLinked
+          ? `${message}\n\nThis marketplace is linked and may already advertise this book. Retry Refresh — Amazon's eligibility check can flake even when the paperback is in stock.`
+          : `${message}\n\nPick an in-stock, currently published paperback for this marketplace. Unpublished or suppressed ASINs cannot load Amazon suggestions.`
+        : message;
+      Alert.alert("Couldn't load suggestions", alertBody);
     },
   });
 
@@ -865,72 +1001,63 @@ export default function CreateCampaignScreen() {
         requestId: requestId(),
         keywords:
           targeting === "keywords"
-            ? [
-                ...keywordSuggestionRows
-                  .map((row, index) => ({ row, index }))
-                  .filter(({ index }) => selectedKeywords.has(index))
-                  .map(({ row, index }) => {
-                    const mode = keywordBidModes[index] ?? globalKeywordBidMode;
-                    const customRaw = Number(
-                      String(keywordCustomBids[index] ?? "").replace(",", "."),
-                    );
-                    return {
-                      keyword: row.keyword,
-                      matchType: row.matchType,
-                      bid: resolveSuggestionBid({
-                        mode,
-                        customBid: Number.isFinite(customRaw) ? customRaw : null,
-                        suggestedBid: recommendationBidMajorUnits(row.suggestedBid),
-                        defaultBid: bid,
-                        useSuggestedBids,
-                      }),
-                      source: "suggested" as const,
-                    };
-                  }),
+            ? prepareKeywordAdds([
+                ...selectedKeywordIndexes.map((index) => {
+                  const row = keywordSuggestionRows[index];
+                  const mode = keywordBidModes[index] ?? globalKeywordBidMode;
+                  const customRaw = Number(
+                    String(keywordCustomBids[index] ?? "").replace(",", "."),
+                  );
+                  return {
+                    keyword: row.keyword,
+                    matchType: row.matchType,
+                    bid: resolveSuggestionBid({
+                      mode,
+                      customBid: Number.isFinite(customRaw) ? customRaw : null,
+                      suggestedBid: recommendationBidMajorUnits(row.suggestedBid),
+                      defaultBid: bid,
+                      useSuggestedBids,
+                    }),
+                    source: "suggested" as const,
+                  };
+                }),
                 ...parseCustomKeywords(customKeywordText).map((keyword) => ({
                   keyword,
                   matchType: customKeywordMatch,
                   bid,
                   source: "custom" as const,
                 })),
-              ]
+              ]).keywords
             : undefined,
         productTargets:
           targeting === "products"
-            ? [
-                ...(preview?.productTargets ?? [])
-                  .map((row, index) => ({ row, index }))
-                  .filter(({ index }) => {
-                    if (!selectedProducts.has(index)) return false;
-                    // Never create with client-hidden stale/OOS suggestions.
-                    return rankedProductSuggestions.some(
-                      (ranked) => ranked.originalIndex === index,
-                    );
-                  })
-                  .map(({ row, index }) => {
-                    const mode = productBidModes[index] ?? globalProductBidMode;
-                    const customRaw = Number(
-                      String(productCustomBids[index] ?? "").replace(",", "."),
-                    );
-                    return {
-                      asin: row.asin,
-                      matchType: normalizeProductMatchType(row.matchType),
-                      bid: resolveSuggestionBid({
-                        mode,
-                        customBid: Number.isFinite(customRaw) ? customRaw : null,
-                        suggestedBid: recommendationBidMajorUnits(row.suggestedBid),
-                        defaultBid: bid,
-                        useSuggestedBids,
-                      }),
-                      source: "suggested" as const,
-                    };
-                  }),
+            ? prepareProductTargetAdds([
+                ...selectedProductIndexes.map((index) => {
+                  const row = preview!.productTargets[index];
+                  const mode = productBidModes[index] ?? globalProductBidMode;
+                  const customRaw = Number(
+                    String(productCustomBids[index] ?? "").replace(",", "."),
+                  );
+                  return {
+                    asin: row.asin,
+                    matchType: normalizeProductMatchType(row.matchType),
+                    bid: resolveSuggestionBid({
+                      mode,
+                      customBid: Number.isFinite(customRaw) ? customRaw : null,
+                      suggestedBid: recommendationBidMajorUnits(row.suggestedBid),
+                      defaultBid: bid,
+                      useSuggestedBids,
+                    }),
+                    source: "suggested" as const,
+                  };
+                }),
                 ...customAsins.map((asin) => ({
                   asin,
+                  matchType: "exact" as const,
                   bid,
                   source: "custom" as const,
                 })),
-              ]
+              ]).productTargets
             : undefined,
       });
     },
@@ -965,6 +1092,7 @@ export default function CreateCampaignScreen() {
 
   function resetAfterMarketplace(next: CampaignCreationMarketplace) {
     suggestionMetaGenRef.current += 1;
+    previewRequestGenRef.current += 1;
     prefTargetingPrefetchRef.current = false;
     setProfileId(next.id);
     setAdsProfileId(resolveCreationProfileId(next));
@@ -1074,6 +1202,7 @@ export default function CreateCampaignScreen() {
       setProfileId("");
       setAdsProfileId("");
     }
+    previewRequestGenRef.current += 1;
     setPreview(null);
     setSuggestionMetaByAsin({});
     setSuggestionTitlesLoading(false);
@@ -1231,6 +1360,39 @@ export default function CreateCampaignScreen() {
     returnedMarketplaces,
     { allowSoftFallback },
   );
+  const disabledConfirmedMarketplaces = confirmedDisabledMarketplacesForBook(
+    profiles,
+    returnedMarketplaces,
+  ).filter(
+    (marketplace) =>
+      !locallyEnabledProfileIds.has(marketplace.id) &&
+      !locallyEnabledProfileIds.has(marketplace.profileId),
+  );
+  const marketplaceChoices = [
+    ...displayMarketplaces,
+    ...disabledConfirmedMarketplaces.filter(
+      (candidate) =>
+        !displayMarketplaces.some(
+          (enabled) => enabled.profileId === candidate.profileId,
+        ),
+    ),
+  ];
+  const marketplaceChoiceKey = marketplaceChoices
+    .map((marketplace) => marketplace.profileId)
+    .join("|");
+
+  useEffect(() => {
+    if (!book?.asin || !liveFinished || !disabledConfirmedMarketplaces.length) return;
+    const asin = String(book.asin).toUpperCase();
+    if (promptedMarketplaceAsinsRef.current.has(asin)) return;
+    promptedMarketplaceAsinsRef.current.add(asin);
+    setMarketplaceChooserOpen(true);
+  }, [
+    book?.asin,
+    liveFinished,
+    marketplaceChoiceKey,
+    disabledConfirmedMarketplaces.length,
+  ]);
   const usingFallbackMarketplaces =
     Boolean(book) &&
     liveFinished &&
@@ -1265,6 +1427,77 @@ export default function CreateCampaignScreen() {
   const confirmedMarketplaceKey = displayMarketplaces
     .map((marketplace) => marketplace.profileId)
     .join("|");
+
+  async function enableAndChooseMarketplace(
+    marketplace: CampaignCreationMarketplace,
+  ) {
+    if (blockIfCannotWriteAmazon({ guestMode, viewAsOtherUser })) return;
+    const local = matchLocalProfileForCreationMarketplace(profiles, marketplace);
+    if (!local) {
+      Alert.alert(
+        "Marketplace unavailable",
+        "This Ads marketplace is no longer connected to this account.",
+      );
+      return;
+    }
+    const pendingKey = marketplace.profileId || marketplace.id;
+    setEnablingMarketplaceId(pendingKey);
+    try {
+      await toggleAmazonProfile(marketplace.profileId, true, {
+        rowId: local.id,
+        adsProfileId: marketplace.profileId,
+      });
+      setLocallyEnabledProfileIds((current) => {
+        const next = new Set(current);
+        next.add(local.id);
+        next.add(marketplace.profileId);
+        return next;
+      });
+      setMarketplaceChooserOpen(false);
+      resetAfterMarketplace(marketplace);
+      void refetchProfiles();
+      void triggerSync().catch(() => {});
+    } catch (error) {
+      alertMutationError(error, "Couldn't enable this Ads marketplace.");
+    } finally {
+      setEnablingMarketplaceId(null);
+    }
+  }
+
+  function chooseMarketplace(marketplace: CampaignCreationMarketplace) {
+    const needsEnable = disabledConfirmedMarketplaces.some(
+      (candidate) => candidate.profileId === marketplace.profileId,
+    );
+    if (!needsEnable) {
+      setMarketplaceChooserOpen(false);
+      resetAfterMarketplace(marketplace);
+      return;
+    }
+    const local = matchLocalProfileForCreationMarketplace(profiles, marketplace);
+    const country = String(
+      marketplace.countryCode || local?.country_code || "this market",
+    ).toUpperCase();
+    const account = local
+      ? profileDisplayName({
+          nickname:
+            (local as { nickname?: string | null }).nickname ?? null,
+          account_name:
+            (local as { account_name?: string | null }).account_name ?? null,
+        })
+      : "Amazon Ads";
+    setMarketplaceChooserOpen(false);
+    Alert.alert(
+      `Enable ${country}?`,
+      `${book?.title || "This book"} is confirmed sponsorable on ${country} through ${account}. Enable this Ads marketplace and use it for the new campaign?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Enable & choose",
+          onPress: () => void enableAndChooseMarketplace(marketplace),
+        },
+      ],
+    );
+  }
   // Drop a previously selected profile the moment the book no longer lists it
   // (e.g. Aruba/US Emilian Susanu must not stick after picking Puerto Rico).
   // Wait until live marketplace rows settle — clearing mid-fetch wiped
@@ -1313,6 +1546,7 @@ export default function CreateCampaignScreen() {
       });
     if (listed) return;
     suggestionMetaGenRef.current += 1;
+    previewRequestGenRef.current += 1;
     prefTargetingPrefetchRef.current = false;
     setProfileId("");
     setAdsProfileId("");
@@ -1443,11 +1677,56 @@ export default function CreateCampaignScreen() {
 
   // Auto-fetch Amazon suggestions (+ AI filter) when book + marketplace are ready.
   // Segment onChange does not fire for the initial Keywords default.
+  // Soft shell alone (pending + empty rows) must not block a one-shot retry after a
+  // discarded paint left Filtering chrome with no Amazon rows forever.
+  useEffect(() => {
+    softShellRecoverRef.current = false;
+  }, [targeting, book?.asin, adsProfileId]);
   useEffect(() => {
     if (targeting === "auto") return;
     if (!book || !adsProfileId || bookLiveIneligible) return;
-    if (preview || previewM.isPending || prefTargetingPrefetchRef.current) return;
+    if (previewM.isPending) return;
+    const shellStuck =
+      preview != null &&
+      preview.keywordCounts?.grokPending === true &&
+      !preview.recommendationsAvailable &&
+      (preview.keywords?.length ?? 0) === 0 &&
+      (preview.productTargets?.length ?? 0) === 0;
+    if (preview && !shellStuck) return;
+    if (shellStuck) {
+      if (softShellRecoverRef.current) return;
+      softShellRecoverRef.current = true;
+    } else if (prefTargetingPrefetchRef.current) {
+      return;
+    }
     prefTargetingPrefetchRef.current = true;
+    if (!preview) {
+      setPreview({
+        source: "amazon_ads",
+        fetchedAt: new Date().toISOString(),
+        recommendationsAvailable: false,
+        profile: {
+          id: adsProfileId || profileId,
+          profileId: adsProfileId || profileId,
+          countryCode: selectedMarketplace?.countryCode ?? null,
+          currencyCode: selectedMarketplace?.currencyCode ?? null,
+          marketplaceId: selectedMarketplace?.marketplaceId ?? null,
+        },
+        book: {
+          asin: book.asin,
+          title: book.title,
+          subtitle: null,
+          author: null,
+          topic: null,
+          coverUrl: book.coverUrl,
+        },
+        duplicateAuto: null,
+        amazonKeywordApi: { rowCount: 0, phraseCount: 0 },
+        keywords: [],
+        productTargets: [],
+        keywordCounts: pendingKeywordCountsShell(),
+      });
+    }
     previewM.mutate(targeting);
   }, [
     targeting,
@@ -1590,7 +1869,7 @@ export default function CreateCampaignScreen() {
       withMeta,
       book?.title ?? preview.book?.title ?? "",
       titleByAsin,
-    );
+    ).filter((row) => /^[A-Z0-9]{10}$/.test(String(row.asin).toUpperCase()));
   }, [
     targeting,
     preview?.productTargets,
@@ -1603,22 +1882,61 @@ export default function CreateCampaignScreen() {
     targeting === "products"
       ? rankedProductSuggestions.length
       : suggestionRows.length;
-  const selectedProductVisibleCount = useMemo(() => {
-    if (targeting !== "products") return selectedProducts.size;
-    const visible = new Set(
-      rankedProductSuggestions.map((row) => row.originalIndex),
+  const selectedKeywordIndexes = useMemo(
+    () =>
+      keywordSuggestionRows
+        .map((row, index) => ({ row, index }))
+        .filter(({ row }) =>
+          selectedKeywords.has(keywordDedupeKey(row.keyword, row.matchType)),
+        )
+        .map(({ index }) => index),
+    [selectedKeywords, keywordSuggestionRows],
+  );
+  const selectedProductIndexes = useMemo(
+    () =>
+      (preview?.productTargets ?? [])
+        .map((row, index) => ({ row, index }))
+        .filter(({ row }) =>
+          selectedProducts.has(productTargetDedupeKey(row.asin, row.matchType)),
+        )
+        .map(({ index }) => index),
+    [selectedProducts, preview?.productTargets],
+  );
+  const selectedKeywordIdentityCount = useMemo(() => {
+    const keys = new Set(
+      selectedKeywordIndexes.map((index) => {
+        const row = keywordSuggestionRows[index];
+        return keywordDedupeKey(row.keyword, row.matchType);
+      }),
     );
-    let count = 0;
-    for (const index of selectedProducts) {
-      if (visible.has(index)) count += 1;
+    for (const keyword of customKeywords) {
+      keys.add(keywordDedupeKey(keyword, customKeywordMatch));
     }
-    return count;
-  }, [targeting, selectedProducts, rankedProductSuggestions]);
+    return keys.size;
+  }, [
+    selectedKeywordIndexes,
+    keywordSuggestionRows,
+    customKeywords,
+    customKeywordMatch,
+  ]);
+  const selectedProductIdentityCount = useMemo(() => {
+    const keys = new Set(
+      selectedProductIndexes.map((index) => {
+        const row = preview?.productTargets[index];
+        return productTargetDedupeKey(row?.asin ?? "", row?.matchType);
+      }),
+    );
+    for (const asin of customAsins) {
+      keys.add(productTargetDedupeKey(asin, "exact"));
+    }
+    return keys.size;
+  }, [selectedProductIndexes, preview?.productTargets, customAsins]);
+  const selectedProductVisibleCount = selectedProductIndexes.length;
   const selectedTargetCount =
     targeting === "keywords"
-      ? selectedKeywords.size + customKeywords.length
+      ? selectedKeywordIdentityCount
       : targeting === "products"
-        ? selectedProductVisibleCount + customAsins.length
+        ? selectedProductIdentityCount
         : 0;
   const hasTargets = targeting === "auto" || selectedTargetCount > 0;
   const aiFilterPending = Boolean(preview?.keywordCounts?.grokPending);
@@ -1646,15 +1964,12 @@ export default function CreateCampaignScreen() {
       };
     });
     if (targeting === "keywords") {
-      setSelectedKeywords(
-        new Set((preview?.keywords ?? []).map((_, index) => index)),
-      );
+      setSelectedKeywords(new Set());
     } else if (targeting === "products") {
-      setSelectedProducts(
-        new Set((preview?.productTargets ?? []).map((_, index) => index)),
-      );
+      setSelectedProducts(new Set());
     }
-  }, [preview?.keywords, preview?.productTargets, targeting]);
+  }, [targeting]);
+
   const productReasonKeys = useMemo(
     () => uniqueReasonKeys(rankedProductSuggestions),
     [rankedProductSuggestions],
@@ -1736,15 +2051,25 @@ export default function CreateCampaignScreen() {
   function toggleSuggestion(index: number, kind: "keywords" | "products") {
     // Block selecting raw Amazon rows while Step 2 is pending or needs confirm.
     if (aiFilterBlocksSelect) return;
-    const setter =
-      kind === "keywords" ? setSelectedKeywords : setSelectedProducts;
+    const key =
+      kind === "keywords"
+        ? (() => {
+            const row = keywordSuggestionRows[index];
+            return row ? keywordDedupeKey(row.keyword, row.matchType) : null;
+          })()
+        : (() => {
+            const row = preview?.productTargets[index];
+            return row ? productTargetDedupeKey(row.asin, row.matchType) : null;
+          })();
+    if (!key) return;
+    const setter = kind === "keywords" ? setSelectedKeywords : setSelectedProducts;
     setter((old) => {
       const next = new Set(old);
-      if (next.has(index)) {
-        next.delete(index);
+      if (next.has(key)) {
+        next.delete(key);
         return next;
       }
-      next.add(index);
+      next.add(key);
       return next;
     });
   }
@@ -1752,9 +2077,11 @@ export default function CreateCampaignScreen() {
   /** Exclusive: select all of this match type, deselect other types. */
   function selectKeywordsByMatchType(match: KeywordMatchType) {
     if (aiFilterBlocksSelect) return;
-    const next = new Set<number>();
-    keywordSuggestionRows.forEach((row, index) => {
-      if (row.matchType === match) next.add(index);
+    const next = new Set<string>();
+    keywordSuggestionRows.forEach((row) => {
+      if (row.matchType === match) {
+        next.add(keywordDedupeKey(row.keyword, row.matchType));
+      }
     });
     setSelectedKeywords(next);
   }
@@ -1764,27 +2091,29 @@ export default function CreateCampaignScreen() {
     // or while failure/empty-restore still needs an explicit confirm.
     if (aiFilterBlocksSelect) return;
     if (targeting === "keywords") {
-      const indexes = keywordSuggestionRows.map((_, index) => index);
+      const keys = keywordSuggestionRows.map((row) =>
+        keywordDedupeKey(row.keyword, row.matchType),
+      );
       const allOn =
-        indexes.length > 0 &&
-        indexes.every((index) => selectedKeywords.has(index));
-      setSelectedKeywords(allOn ? new Set() : new Set(indexes));
+        keys.length > 0 && keys.every((key) => selectedKeywords.has(key));
+      setSelectedKeywords(allOn ? new Set() : new Set(keys));
       return;
     }
     if (targeting === "products") {
-      const indexes = rankedProductSuggestions.map((row) => row.originalIndex);
+      const keys = rankedProductSuggestions.map((row) =>
+        productTargetDedupeKey(row.asin, row.matchType),
+      );
       const allOn =
-        indexes.length > 0 &&
-        indexes.every((index) => selectedProducts.has(index));
-      setSelectedProducts(allOn ? new Set() : new Set(indexes));
+        keys.length > 0 && keys.every((key) => selectedProducts.has(key));
+      setSelectedProducts(allOn ? new Set() : new Set(keys));
     }
   }
 
   function selectProductsByMatchType(match: ProductMatchType) {
-    const next = new Set<number>();
+    const next = new Set<string>();
     for (const row of rankedProductSuggestions) {
       if (normalizeProductMatchType(row.matchType) === match) {
-        next.add(row.originalIndex);
+        next.add(productTargetDedupeKey(row.asin, row.matchType));
       }
     }
     setSelectedProducts(next);
@@ -1794,7 +2123,9 @@ export default function CreateCampaignScreen() {
     setSelectedProducts((old) => {
       const next = new Set(old);
       for (const row of rankedProductSuggestions) {
-        if (rowMatchesReasonKey(row.themes, key)) next.add(row.originalIndex);
+        if (rowMatchesReasonKey(row.themes, key)) {
+          next.add(productTargetDedupeKey(row.asin, row.matchType));
+        }
       }
       return next;
     });
@@ -1804,7 +2135,9 @@ export default function CreateCampaignScreen() {
     setSelectedProducts((old) => {
       const next = new Set(old);
       for (const row of rankedProductSuggestions) {
-        if (rowMatchesReasonKey(row.themes, key)) next.delete(row.originalIndex);
+        if (rowMatchesReasonKey(row.themes, key)) {
+          next.delete(productTargetDedupeKey(row.asin, row.matchType));
+        }
       }
       return next;
     });
@@ -1818,24 +2151,24 @@ export default function CreateCampaignScreen() {
       setGlobalKeywordBidMode("custom");
       setKeywordBidModes((old) => {
         const next = { ...old };
-        for (const index of selectedKeywords) next[index] = "custom";
+        for (const index of selectedKeywordIndexes) next[index] = "custom";
         return next;
       });
       setKeywordCustomBids((old) => {
         const next = { ...old };
-        for (const index of selectedKeywords) next[index] = amountText;
+        for (const index of selectedKeywordIndexes) next[index] = amountText;
         return next;
       });
     } else {
       setGlobalProductBidMode("custom");
       setProductBidModes((old) => {
         const next = { ...old };
-        for (const index of selectedProducts) next[index] = "custom";
+        for (const index of selectedProductIndexes) next[index] = "custom";
         return next;
       });
       setProductCustomBids((old) => {
         const next = { ...old };
-        for (const index of selectedProducts) next[index] = amountText;
+        for (const index of selectedProductIndexes) next[index] = amountText;
         return next;
       });
     }
@@ -1881,9 +2214,9 @@ export default function CreateCampaignScreen() {
   }
 
   const stickyReserve = 88 + Math.max(insets.bottom, 10);
-  // Sticky book/targeting chrome was eating the ScrollView on phones so
-  // "Amazon suggestions" / "Your keywords" sat off-screen. Keep everything
-  // in-flow and scrollable; create bar still reserves bottom space.
+  // Active campaigns used to sit above Targeting and pushed "Your keywords" /
+  // Amazon suggestions off the first viewport (Refresh-only + Create paused).
+  // Keep suggestions in-flow under Targeting; Active lists below Budget.
   const bookCollapsed = Boolean(book) && !bookPickerExpanded;
   const showSuggestionStickyChrome = false;
   const keywordPhraseCount = useMemo(
@@ -2096,6 +2429,9 @@ export default function CreateCampaignScreen() {
                     `${book!.title.slice(0, 82)} - ${type === "auto" ? "Auto" : type === "keywords" ? "Keywords" : "Products"}`,
                   );
                   if (type === "keywords" || type === "products") {
+                    // Invalidate any in-flight products/keywords preview paint.
+                    previewRequestGenRef.current += 1;
+                    prefTargetingPrefetchRef.current = false;
                     setPreview({
                       source: "amazon_ads",
                       fetchedAt: new Date().toISOString(),
@@ -2118,27 +2454,38 @@ export default function CreateCampaignScreen() {
                         coverUrl: book!.coverUrl,
                       },
                       duplicateAuto: null,
+                      amazonKeywordApi: { rowCount: 0, phraseCount: 0 },
                       keywords: [],
                       productTargets: [],
+                      keywordCounts: pendingKeywordCountsShell(),
                     });
-                    if (adsProfileId) previewM.mutate(type);
+                    if (adsProfileId) {
+                      prefTargetingPrefetchRef.current = true;
+                      previewM.mutate(type);
+                    }
                   } else {
+                    previewRequestGenRef.current += 1;
+                    prefTargetingPrefetchRef.current = false;
                     setPreview(null);
                   }
                 }}
               />
               <View style={styles.stickyActionRow}>
-                {displayMarketplaces.length > 1 ? (
+                {marketplaceChoices.length > 1 ? (
                   <ScrollView
                     horizontal
                     showsHorizontalScrollIndicator={false}
                     contentContainerStyle={styles.stickyMarketRow}
                   >
-                    {displayMarketplaces.map(
+                    {marketplaceChoices.map(
                       (marketplace: CampaignCreationMarketplace) => {
                         const local = matchLocalProfileForCreationMarketplace(
-                          availableProfiles,
+                          profiles,
                           marketplace,
+                        );
+                        const needsEnable = disabledConfirmedMarketplaces.some(
+                          (candidate) =>
+                            candidate.profileId === marketplace.profileId,
                         );
                         const selected =
                           profileId === marketplace.id ||
@@ -2150,7 +2497,8 @@ export default function CreateCampaignScreen() {
                           <CreateScalePressable
                             key={`${marketplace.profileId}-${marketplace.id}`}
                             hapticSelect
-                            onPress={() => resetAfterMarketplace(marketplace)}
+                            disabled={enablingMarketplaceId === marketplace.profileId}
+                            onPress={() => chooseMarketplace(marketplace)}
                             style={[
                               styles.stickyMarketChip,
                               {
@@ -2180,7 +2528,7 @@ export default function CreateCampaignScreen() {
                                 },
                               ]}
                             >
-                              {label}
+                              {label}{needsEnable ? " · Enable" : ""}
                             </Text>
                           </CreateScalePressable>
                         );
@@ -2543,23 +2891,27 @@ export default function CreateCampaignScreen() {
           <CreateReveal delay={40}>
           <ListCard compact>
             <StepHeader step={2} title="Marketplace" />
-            {marketplacesQ.isPending && !displayMarketplaces.length ? (
+            {marketplacesQ.isPending && !marketplaceChoices.length ? (
               <ScreenSpinner />
-            ) : displayMarketplaces.length ? (
+            ) : marketplaceChoices.length ? (
               <>
                 <View style={[styles.wrap, { marginTop: 10 }]}>
-                  {displayMarketplaces.map(
+                  {marketplaceChoices.map(
                     (marketplace: CampaignCreationMarketplace) => {
                       const local = matchLocalProfileForCreationMarketplace(
-                        availableProfiles,
+                        profiles,
                         marketplace,
+                      );
+                      const needsEnable = disabledConfirmedMarketplaces.some(
+                        (candidate) =>
+                          candidate.profileId === marketplace.profileId,
                       );
                       const label = local
                         ? `${countryFlagEmoji(local.country_code)} ${String(local.country_code || "").toUpperCase() || "Ads"} · ${profileDisplayName({
                             nickname: (local as { nickname?: string | null }).nickname ?? null,
                             account_name:
                               (local as { account_name?: string | null }).account_name ?? null,
-                          })} · ${marketplace.currencyCode || local.currency_code || "—"}`
+                            })} · ${marketplace.currencyCode || local.currency_code || "—"}${needsEnable ? " · Enable" : ""}`
                         : `${countryFlagEmoji(marketplace.countryCode)} ${String(marketplace.countryCode || "").toUpperCase() || "Ads"} · ${marketplace.currencyCode || "—"}`;
                       return (
                         <Choice
@@ -2569,7 +2921,8 @@ export default function CreateCampaignScreen() {
                             profileId === marketplace.id ||
                             adsProfileId === marketplace.profileId
                           }
-                          onPress={() => resetAfterMarketplace(marketplace)}
+                          disabled={enablingMarketplaceId === marketplace.profileId}
+                          onPress={() => chooseMarketplace(marketplace)}
                         />
                       );
                     },
@@ -2638,86 +2991,12 @@ export default function CreateCampaignScreen() {
           </CreateReveal>
         ) : null}
 
-        {book && (adsProfileId || profileId) ? (
-          <CreateReveal delay={90}>
-          <ListCard compact testID="campaign-create-existing-campaigns">
-            <Text
-              style={[
-                t.typography.headline,
-                { color: t.colors.text_primary },
-              ]}
-            >
-              Active on this marketplace
-            </Text>
-            {existingCampaignsQ.isPending ? (
-              <ScreenSpinner />
-            ) : existingCampaignsQ.isError ? (
-              <RetryState
-                title="Couldn't load campaigns"
-                onRetry={() => void existingCampaignsQ.refetch()}
-                retrying={existingCampaignsQ.isFetching}
-              />
-            ) : existingCampaigns.length ? (
-              <View style={{ gap: 8, marginTop: 10 }}>
-                {existingCampaigns.map((row) => (
-                  <CreateScalePressable
-                    key={row.id}
-                    testID={`campaign-create-existing-${row.id}`}
-                    onPress={() => router.push(`/campaign/${row.id}`)}
-                    style={[
-                      styles.existingCampaignRow,
-                      {
-                        backgroundColor: t.colors.background_tertiary,
-                        borderColor: t.colors.separator,
-                      },
-                    ]}
-                  >
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text
-                        numberOfLines={2}
-                        style={[
-                          t.typography.callout,
-                          {
-                            color: t.colors.text_primary,
-                            fontWeight: "600",
-                          },
-                        ]}
-                      >
-                        {row.name}
-                      </Text>
-                      <Text
-                        style={[
-                          t.typography.caption1,
-                          { color: t.colors.text_secondary },
-                        ]}
-                      >
-                        {row.label}
-                      </Text>
-                    </View>
-                    <Pill label="Active" tone="good" size="sm" />
-                  </CreateScalePressable>
-                ))}
-              </View>
-            ) : (
-              <Text
-                style={[
-                  t.typography.footnote,
-                  { color: t.colors.text_tertiary, marginTop: 8 },
-                ]}
-              >
-                None yet.
-              </Text>
-            )}
-          </ListCard>
-          </CreateReveal>
-        ) : null}
-
         {showSuggestionStickyChrome ? null : (
         <CreateReveal delay={130}>
         <ListCard compact>
           <StepHeader
             step={3}
-            title="Targeting + AI filter"
+            title="Targeting"
           />
           {!book ||
           !(adsProfileId || profileId || (prefProfileId && book)) ? (
@@ -2727,7 +3006,7 @@ export default function CreateCampaignScreen() {
                 { color: t.colors.text_tertiary, marginTop: 8 },
               ]}
             >
-              Choose a book and marketplace first.
+              Select a book and marketplace.
             </Text>
           ) : (
             <>
@@ -2753,6 +3032,9 @@ export default function CreateCampaignScreen() {
                     // Seed an empty preview shell so paste ASINs/keywords works
                     // while Amazon recommendations load (avoids stuck wait).
                     if (type === "keywords" || type === "products") {
+                      // Invalidate any in-flight products/keywords preview paint.
+                      previewRequestGenRef.current += 1;
+                      prefTargetingPrefetchRef.current = false;
                       setPreview({
                         source: "amazon_ads",
                         fetchedAt: new Date().toISOString(),
@@ -2775,11 +3057,18 @@ export default function CreateCampaignScreen() {
                           coverUrl: book.coverUrl,
                         },
                         duplicateAuto: null,
+                        amazonKeywordApi: { rowCount: 0, phraseCount: 0 },
                         keywords: [],
                         productTargets: [],
+                        keywordCounts: pendingKeywordCountsShell(),
                       });
-                      if (adsProfileId) previewM.mutate(type);
+                      if (adsProfileId) {
+                        prefTargetingPrefetchRef.current = true;
+                        previewM.mutate(type);
+                      }
                     } else {
+                      previewRequestGenRef.current += 1;
+                      prefTargetingPrefetchRef.current = false;
                       setPreview(null);
                     }
                   }}
@@ -2807,6 +3096,25 @@ export default function CreateCampaignScreen() {
                   }}
                 />
               </View>
+              {/* Kept chrome under Refresh so Amazon · N · Kept stays above-fold
+                  (Your keywords / ASINs paste used to push it under Create paused). */}
+              {preview && targeting !== "auto" ? (
+                <SuggestionAiFilterChrome
+                  testIDPrefix="campaign-create-ai-filter"
+                  targeting={targeting}
+                  stats={preview.keywordCounts}
+                  loading={
+                    previewM.isPending ||
+                    (!preview.recommendationsAvailable && !suggestionsError)
+                  }
+                  retrying={previewM.isPending}
+                  onRetry={() => {
+                    setSuggestionsError(null);
+                    previewM.mutate(undefined);
+                  }}
+                  onAcceptUnfiltered={acceptAmazonUnfiltered}
+                />
+              ) : null}
             </>
           )}
         </ListCard>
@@ -2844,112 +3152,9 @@ export default function CreateCampaignScreen() {
 
             {targeting !== "auto" ? (
               <>
-              {/* Paste first in its own card — nesting under Amazon ListCard
-                  historically half-clipped Broad/Phrase/Exact (Host + overflow). */}
+              {/* Amazon suggestions list first so Kept chips are reachable without
+                  scrolling past a tall paste card under the sticky Create bar. */}
               <CreateReveal delay={80}>
-                {targeting === "keywords" ? (
-                  <ListCard
-                    compact
-                    testID="campaign-create-your-keywords"
-                    style={{ overflow: "visible" }}
-                  >
-                    <Text
-                      style={[
-                        t.typography.callout,
-                        { color: t.colors.text_primary, fontWeight: "600" },
-                      ]}
-                    >
-                      Your keywords
-                    </Text>
-                    <View style={styles.matchTypeRow}>
-                      <IOSSegmentedControl
-                        forceFallback
-                        options={[
-                          { key: "broad", label: "Broad" },
-                          { key: "phrase", label: "Phrase" },
-                          { key: "exact", label: "Exact" },
-                        ]}
-                        value={customKeywordMatch}
-                        onChange={setCustomKeywordMatch}
-                      />
-                    </View>
-                    <TextInput
-                      value={customKeywordText}
-                      onChangeText={setCustomKeywordText}
-                      placeholder="Paste keywords, one per line"
-                      placeholderTextColor={t.colors.text_tertiary}
-                      multiline
-                      autoCorrect={false}
-                      style={[
-                        t.typography.body,
-                        styles.keywordInput,
-                        {
-                          color: t.colors.text_primary,
-                          backgroundColor: t.colors.background_tertiary,
-                          borderColor: t.colors.separator,
-                        },
-                      ]}
-                    />
-                    {customKeywords.length ? (
-                      <Text
-                        style={[
-                          t.typography.caption1,
-                          { color: t.colors.text_secondary, marginTop: 6 },
-                        ]}
-                      >
-                        {customKeywords.length} custom keyword
-                        {customKeywords.length === 1 ? "" : "s"}
-                      </Text>
-                    ) : null}
-                  </ListCard>
-                ) : (
-                  <ListCard
-                    compact
-                    testID="campaign-create-your-asins"
-                    style={{ overflow: "visible" }}
-                  >
-                    <Text
-                      style={[
-                        t.typography.callout,
-                        { color: t.colors.text_primary, fontWeight: "600" },
-                      ]}
-                    >
-                      Your product ASINs
-                    </Text>
-                    <TextInput
-                      value={customAsinText}
-                      onChangeText={setCustomAsinText}
-                      placeholder="B0… one per line"
-                      placeholderTextColor={t.colors.text_tertiary}
-                      multiline
-                      autoCorrect={false}
-                      autoCapitalize="characters"
-                      style={[
-                        t.typography.body,
-                        styles.keywordInput,
-                        {
-                          color: t.colors.text_primary,
-                          backgroundColor: t.colors.background_tertiary,
-                          borderColor: t.colors.separator,
-                        },
-                      ]}
-                    />
-                    {customAsins.length ? (
-                      <Text
-                        style={[
-                          t.typography.caption1,
-                          { color: t.colors.text_secondary, marginTop: 6 },
-                        ]}
-                      >
-                        {customAsins.length} custom ASIN
-                        {customAsins.length === 1 ? "" : "s"}
-                      </Text>
-                    ) : null}
-                  </ListCard>
-                )}
-              </CreateReveal>
-
-              <CreateReveal delay={100}>
               <ListCard compact style={{ overflow: "visible" }}>
                 <Text
                   style={[
@@ -2959,23 +3164,6 @@ export default function CreateCampaignScreen() {
                 >
                   Amazon suggestions
                 </Text>
-                {targeting === "auto" ? null : (
-                  <SuggestionAiFilterChrome
-                    testIDPrefix="campaign-create-ai-filter"
-                    targeting={targeting}
-                    stats={preview.keywordCounts}
-                    loading={
-                      previewM.isPending ||
-                      (!preview.recommendationsAvailable && !suggestionsError)
-                    }
-                    retrying={previewM.isPending}
-                    onRetry={() => {
-                      setSuggestionsError(null);
-                      previewM.mutate(undefined);
-                    }}
-                    onAcceptUnfiltered={acceptAmazonUnfiltered}
-                  />
-                )}
                 {suggestionsError && !preview.recommendationsAvailable && !previewM.isPending ? (
                   <RetryState
                     title="Couldn't load suggestions"
@@ -2994,21 +3182,24 @@ export default function CreateCampaignScreen() {
                         accessibilityRole="button"
                         accessibilityState={{
                           selected:
-                            selectedKeywords.size > 0 &&
-                            selectedKeywords.size === keywordSuggestionRows.length,
+                            selectedKeywordIndexes.length > 0 &&
+                            selectedKeywordIndexes.length ===
+                              keywordSuggestionRows.length,
                         }}
                         onPress={toggleSelectAllSuggestions}
                         style={({ pressed }) => [
                           styles.choice,
                           {
                             borderColor:
-                              selectedKeywords.size > 0 &&
-                              selectedKeywords.size === keywordSuggestionRows.length
+                              selectedKeywordIndexes.length > 0 &&
+                              selectedKeywordIndexes.length ===
+                                keywordSuggestionRows.length
                                 ? t.colors.tone_primary
                                 : t.colors.separator,
                             backgroundColor:
-                              selectedKeywords.size > 0 &&
-                              selectedKeywords.size === keywordSuggestionRows.length
+                              selectedKeywordIndexes.length > 0 &&
+                              selectedKeywordIndexes.length ===
+                                keywordSuggestionRows.length
                                 ? t.colors.tone_primary
                                 : t.colors.background_secondary,
                             opacity: pressed ? 0.88 : 1,
@@ -3020,8 +3211,8 @@ export default function CreateCampaignScreen() {
                             t.typography.caption1,
                             {
                               color:
-                                selectedKeywords.size > 0 &&
-                                selectedKeywords.size ===
+                                selectedKeywordIndexes.length > 0 &&
+                                selectedKeywordIndexes.length ===
                                   keywordSuggestionRows.length
                                   ? t.colors.text_inverse
                                   : t.colors.text_primary,
@@ -3029,21 +3220,23 @@ export default function CreateCampaignScreen() {
                             },
                           ]}
                         >
-                          {selectedKeywords.size > 0 &&
-                          selectedKeywords.size === keywordSuggestionRows.length
+                          {selectedKeywordIndexes.length > 0 &&
+                          selectedKeywordIndexes.length ===
+                            keywordSuggestionRows.length
                             ? `Deselect all · ${keywordSuggestionRows.length}`
                             : `Select all · ${keywordSuggestionRows.length}`}
                         </Text>
                       </Pressable>
-                      {selectedKeywords.size > 0 &&
-                      selectedKeywords.size < keywordSuggestionRows.length ? (
+                      {selectedKeywordIndexes.length > 0 &&
+                      selectedKeywordIndexes.length <
+                        keywordSuggestionRows.length ? (
                         <Text
                           style={[
                             t.typography.caption1,
                             { color: t.colors.text_secondary, fontWeight: "600" },
                           ]}
                         >
-                          {selectedKeywords.size} selected
+                          {selectedKeywordIndexes.length} selected
                         </Text>
                       ) : null}
                     </View>
@@ -3060,14 +3253,15 @@ export default function CreateCampaignScreen() {
                       </Text>
                       <View style={styles.wrap}>
                         {keywordMatchKeys.map((key) => {
-                          const indexes = keywordSuggestionRows
-                            .map((row, index) => ({ row, index }))
-                            .filter(({ row }) => row.matchType === key)
-                            .map(({ index }) => index);
+                          const keys = keywordSuggestionRows
+                            .filter((row) => row.matchType === key)
+                            .map((row) =>
+                              keywordDedupeKey(row.keyword, row.matchType),
+                            );
                           const allOn =
-                            indexes.length > 0 &&
-                            indexes.every((index) => selectedKeywords.has(index)) &&
-                            selectedKeywords.size === indexes.length;
+                            keys.length > 0 &&
+                            keys.every((identity) => selectedKeywords.has(identity)) &&
+                            selectedKeywordIndexes.length === keys.length;
                           return (
                             <Pressable
                               key={key}
@@ -3098,7 +3292,7 @@ export default function CreateCampaignScreen() {
                                 ]}
                               >
                                 {key}
-                                {indexes.length ? ` · ${indexes.length}` : ""}
+                                {keys.length ? ` · ${keys.length}` : ""}
                               </Text>
                             </Pressable>
                           );
@@ -3325,16 +3519,18 @@ export default function CreateCampaignScreen() {
                       </Text>
                       <View style={styles.wrap}>
                         {productMatchKeys.map((key) => {
-                          const indexes = rankedProductSuggestions
+                          const keys = rankedProductSuggestions
                             .filter(
                               (row) =>
                                 normalizeProductMatchType(row.matchType) === key,
                             )
-                            .map((row) => row.originalIndex);
+                            .map((row) =>
+                              productTargetDedupeKey(row.asin, row.matchType),
+                            );
                           const allOn =
-                            indexes.length > 0 &&
-                            indexes.every((index) => selectedProducts.has(index)) &&
-                            selectedProductVisibleCount === indexes.length;
+                            keys.length > 0 &&
+                            keys.every((identity) => selectedProducts.has(identity)) &&
+                            selectedProductVisibleCount === keys.length;
                           return (
                             <Pressable
                               key={key}
@@ -3364,7 +3560,7 @@ export default function CreateCampaignScreen() {
                                 ]}
                               >
                                 {productMatchSelectLabel(key)}
-                                {indexes.length ? ` · ${indexes.length}` : ""}
+                                {keys.length ? ` · ${keys.length}` : ""}
                               </Text>
                             </Pressable>
                           );
@@ -3384,12 +3580,14 @@ export default function CreateCampaignScreen() {
                       </Text>
                       <View style={styles.wrap}>
                         {productReasonKeys.map((key) => {
-                          const indexes = rankedProductSuggestions
+                          const keys = rankedProductSuggestions
                             .filter((row) => rowMatchesReasonKey(row.themes, key))
-                            .map((row) => row.originalIndex);
+                            .map((row) =>
+                              productTargetDedupeKey(row.asin, row.matchType),
+                            );
                           const allOn =
-                            indexes.length > 0 &&
-                            indexes.every((index) => selectedProducts.has(index));
+                            keys.length > 0 &&
+                            keys.every((identity) => selectedProducts.has(identity));
                           return (
                             <Pressable
                               key={key}
@@ -3423,7 +3621,7 @@ export default function CreateCampaignScreen() {
                                 ]}
                               >
                                 {reasonSelectLabel(key)}
-                                {indexes.length ? ` · ${indexes.length}` : ""}
+                                {keys.length ? ` · ${keys.length}` : ""}
                               </Text>
                             </Pressable>
                           );
@@ -3617,7 +3815,9 @@ export default function CreateCampaignScreen() {
                               key={`${row.keyword}-${row.matchType}-${index}`}
                               keyword={row.keyword}
                               matchType={row.matchType}
-                              selected={selectedKeywords.has(index)}
+                              selected={selectedKeywords.has(
+                                keywordDedupeKey(row.keyword, row.matchType),
+                              )}
                               suggestedBid={suggested}
                               defaultBid={defaultBidAmount}
                               currency={currency}
@@ -3666,7 +3866,9 @@ export default function CreateCampaignScreen() {
                             coverUrl={meta?.coverUrl ?? row.coverUrl ?? null}
                             themes={row.themes ?? []}
                             matchType={row.matchType}
-                            selected={selectedProducts.has(index)}
+                            selected={selectedProducts.has(
+                              productTargetDedupeKey(row.asin, row.matchType),
+                            )}
                             suggestedBid={suggested}
                             defaultBid={defaultBidAmount}
                             currency={currency}
@@ -3724,6 +3926,111 @@ export default function CreateCampaignScreen() {
                   ) : null}
                 </View>
               </ListCard>
+              </CreateReveal>
+
+              {/* Paste in its own card — nesting under Amazon ListCard
+                  historically half-clipped Broad/Phrase/Exact (Host + overflow). */}
+              <CreateReveal delay={100}>
+                {targeting === "keywords" ? (
+                  <ListCard
+                    compact
+                    testID="campaign-create-your-keywords"
+                    style={{ overflow: "visible" }}
+                  >
+                    <Text
+                      style={[
+                        t.typography.callout,
+                        { color: t.colors.text_primary, fontWeight: "600" },
+                      ]}
+                    >
+                      Your keywords
+                    </Text>
+                    <View style={styles.matchTypeRow}>
+                      <IOSSegmentedControl
+                        forceFallback
+                        options={[
+                          { key: "broad", label: "Broad" },
+                          { key: "phrase", label: "Phrase" },
+                          { key: "exact", label: "Exact" },
+                        ]}
+                        value={customKeywordMatch}
+                        onChange={setCustomKeywordMatch}
+                      />
+                    </View>
+                    <TextInput
+                      value={customKeywordText}
+                      onChangeText={setCustomKeywordText}
+                      placeholder="Paste keywords, one per line"
+                      placeholderTextColor={t.colors.text_tertiary}
+                      multiline
+                      autoCorrect={false}
+                      style={[
+                        t.typography.body,
+                        styles.keywordInput,
+                        {
+                          color: t.colors.text_primary,
+                          backgroundColor: t.colors.background_tertiary,
+                          borderColor: t.colors.separator,
+                        },
+                      ]}
+                    />
+                    {customKeywords.length ? (
+                      <Text
+                        style={[
+                          t.typography.caption1,
+                          { color: t.colors.text_secondary, marginTop: 6 },
+                        ]}
+                      >
+                        {customKeywords.length} custom keyword
+                        {customKeywords.length === 1 ? "" : "s"}
+                      </Text>
+                    ) : null}
+                  </ListCard>
+                ) : (
+                  <ListCard
+                    compact
+                    testID="campaign-create-your-asins"
+                    style={{ overflow: "visible" }}
+                  >
+                    <Text
+                      style={[
+                        t.typography.callout,
+                        { color: t.colors.text_primary, fontWeight: "600" },
+                      ]}
+                    >
+                      Your product ASINs
+                    </Text>
+                    <TextInput
+                      value={customAsinText}
+                      onChangeText={setCustomAsinText}
+                      placeholder="B0… one per line"
+                      placeholderTextColor={t.colors.text_tertiary}
+                      multiline
+                      autoCorrect={false}
+                      autoCapitalize="characters"
+                      style={[
+                        t.typography.body,
+                        styles.keywordInput,
+                        {
+                          color: t.colors.text_primary,
+                          backgroundColor: t.colors.background_tertiary,
+                          borderColor: t.colors.separator,
+                        },
+                      ]}
+                    />
+                    {customAsins.length ? (
+                      <Text
+                        style={[
+                          t.typography.caption1,
+                          { color: t.colors.text_secondary, marginTop: 6 },
+                        ]}
+                      >
+                        {customAsins.length} custom ASIN
+                        {customAsins.length === 1 ? "" : "s"}
+                      </Text>
+                    ) : null}
+                  </ListCard>
+                )}
               </CreateReveal>
               </>
             ) : null}
@@ -3853,6 +4160,80 @@ export default function CreateCampaignScreen() {
             </CreateReveal>
           </>
         ) : null}
+
+        {book && (adsProfileId || profileId) ? (
+          <CreateReveal delay={90}>
+          <ListCard compact testID="campaign-create-existing-campaigns">
+            <Text
+              style={[
+                t.typography.headline,
+                { color: t.colors.text_primary },
+              ]}
+            >
+              Active on this marketplace
+            </Text>
+            {existingCampaignsQ.isPending ? (
+              <ScreenSpinner />
+            ) : existingCampaignsQ.isError ? (
+              <RetryState
+                title="Couldn't load campaigns"
+                onRetry={() => void existingCampaignsQ.refetch()}
+                retrying={existingCampaignsQ.isFetching}
+              />
+            ) : existingCampaigns.length ? (
+              <View style={{ gap: 8, marginTop: 10 }}>
+                {existingCampaigns.map((row) => (
+                  <CreateScalePressable
+                    key={row.id}
+                    testID={`campaign-create-existing-${row.id}`}
+                    onPress={() => router.push(`/campaign/${row.id}`)}
+                    style={[
+                      styles.existingCampaignRow,
+                      {
+                        backgroundColor: t.colors.background_tertiary,
+                        borderColor: t.colors.separator,
+                      },
+                    ]}
+                  >
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text
+                        numberOfLines={2}
+                        style={[
+                          t.typography.callout,
+                          {
+                            color: t.colors.text_primary,
+                            fontWeight: "600",
+                          },
+                        ]}
+                      >
+                        {row.name}
+                      </Text>
+                      <Text
+                        style={[
+                          t.typography.caption1,
+                          { color: t.colors.text_secondary },
+                        ]}
+                      >
+                        {row.label}
+                      </Text>
+                    </View>
+                    <Pill label="Active" tone="good" size="sm" />
+                  </CreateScalePressable>
+                ))}
+              </View>
+            ) : (
+              <Text
+                style={[
+                  t.typography.footnote,
+                  { color: t.colors.text_tertiary, marginTop: 8 },
+                ]}
+              >
+                None yet.
+              </Text>
+            )}
+          </ListCard>
+          </CreateReveal>
+        ) : null}
         </ScrollView>
 
         {preview ? (
@@ -3903,6 +4284,141 @@ export default function CreateCampaignScreen() {
         ) : null}
       </View>
       </KeyboardAvoidingView>
+      <Modal
+        visible={marketplaceChooserOpen && marketplaceChoices.length > 0}
+        transparent
+        animationType="slide"
+        presentationStyle="overFullScreen"
+        onRequestClose={() => setMarketplaceChooserOpen(false)}
+      >
+        <View style={styles.marketplaceModalBackdrop}>
+          <Pressable
+            accessibilityLabel="Close marketplace chooser"
+            style={StyleSheet.absoluteFill}
+            onPress={() => setMarketplaceChooserOpen(false)}
+          />
+          <View
+            style={[
+              styles.marketplaceModalCard,
+              {
+                paddingBottom: Math.max(insets.bottom, 18),
+                backgroundColor: t.colors.background_secondary,
+                borderColor: t.colors.separator,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.marketplaceModalHandle,
+                { backgroundColor: t.colors.text_tertiary },
+              ]}
+            />
+            <Text
+              style={[
+                t.typography.title3,
+                { color: t.colors.text_primary, fontWeight: "800" },
+              ]}
+            >
+              Choose a marketplace
+            </Text>
+            <Text
+              style={[
+                t.typography.footnote,
+                { color: t.colors.text_secondary, lineHeight: 20 },
+              ]}
+            >
+              {book?.title || "This book"} can be sponsored in these confirmed
+              Amazon Ads marketplaces. A marketplace that is off will be enabled
+              only after you approve it.
+            </Text>
+            <ScrollView
+              style={styles.marketplaceModalList}
+              contentContainerStyle={{ gap: 8 }}
+              showsVerticalScrollIndicator={false}
+            >
+              {marketplaceChoices.map((marketplace) => {
+                const local = matchLocalProfileForCreationMarketplace(
+                  profiles,
+                  marketplace,
+                );
+                const needsEnable = disabledConfirmedMarketplaces.some(
+                  (candidate) => candidate.profileId === marketplace.profileId,
+                );
+                const pending = enablingMarketplaceId === marketplace.profileId;
+                const country = String(
+                  marketplace.countryCode || local?.country_code || "Ads",
+                ).toUpperCase();
+                const currency =
+                  marketplace.currencyCode || local?.currency_code || "";
+                return (
+                  <CreateScalePressable
+                    key={`modal-${marketplace.profileId}-${marketplace.id}`}
+                    testID={`campaign-create-market-${marketplace.profileId}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${country} ${currency}${needsEnable ? ", enable marketplace" : ", choose marketplace"}`}
+                    disabled={pending}
+                    hapticSelect
+                    onPress={() => chooseMarketplace(marketplace)}
+                    style={[
+                      styles.marketplaceModalChoice,
+                      {
+                        backgroundColor: t.colors.background_tertiary,
+                        borderColor: needsEnable
+                          ? t.colors.tone_primary
+                          : t.colors.separator,
+                        opacity: pending ? 0.55 : 1,
+                      },
+                    ]}
+                  >
+                    <Text style={styles.marketplaceModalFlag}>
+                      {countryFlagEmoji(country)}
+                    </Text>
+                    <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          t.typography.callout,
+                          { color: t.colors.text_primary, fontWeight: "700" },
+                        ]}
+                      >
+                        {country}{currency ? ` · ${currency}` : ""}
+                      </Text>
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          t.typography.caption1,
+                          { color: t.colors.text_secondary },
+                        ]}
+                      >
+                        {local
+                          ? profileDisplayName({
+                              nickname:
+                                (local as { nickname?: string | null })
+                                  .nickname ?? null,
+                              account_name:
+                                (local as { account_name?: string | null })
+                                  .account_name ?? null,
+                            })
+                          : "Amazon Ads"}
+                      </Text>
+                    </View>
+                    <Pill
+                      label={pending ? "Enabling…" : needsEnable ? "Enable & use" : "Choose"}
+                      tone={needsEnable ? "primary" : "good"}
+                      size="sm"
+                    />
+                  </CreateScalePressable>
+                );
+              })}
+            </ScrollView>
+            <SecondaryButton
+              label="Keep current marketplace"
+              full
+              onPress={() => setMarketplaceChooserOpen(false)}
+            />
+          </View>
+        </View>
+      </Modal>
     </SubScreen>
   );
 }
@@ -4078,4 +4594,39 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 10,
   },
+  marketplaceModalBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.48)",
+  },
+  marketplaceModalCard: {
+    maxHeight: "78%",
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  marketplaceModalHandle: {
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    alignSelf: "center",
+    opacity: 0.45,
+  },
+  marketplaceModalList: { flexGrow: 0 },
+  marketplaceModalChoice: {
+    minHeight: 64,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 15,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  marketplaceModalFlag: { fontSize: 25 },
 });

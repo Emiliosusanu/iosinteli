@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { useQueryClient } from "@tanstack/react-query";
-import { supabase } from "../lib/supabase";
+import { ensureFreshSupabaseSession, supabase } from "../lib/supabase";
 import { storage } from "@/src/utils/storage";
 import { nestLogin, nestLogout } from "@/src/lib/rulesApi";
 import { ADMIN_FILTER_KEY } from "@/src/lib/queries";
@@ -9,6 +9,7 @@ import { clearPersistedQueryCache } from "@/src/lib/queryPersist";
 import { clearNotificationIdentity } from "@/src/lib/notifications";
 import { markPerf } from "@/src/lib/perf";
 import { debugIngest } from "@/src/lib/debugIngest";
+import { userLookupProvesSessionInvalid } from "@/src/lib/authRestore";
 
 type AuthState = "loading" | "authenticated" | "unauthenticated";
 
@@ -81,19 +82,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         debugIngest("AuthContext.tsx:getSession", "auth getSession done", { ms: Date.now() - authT0, hasSession: !!s, sessionError: !!sessionError }, "B");
         // #endregion
         let session = s ?? null;
-        if (sessionError || (session && !session.refresh_token)) {
+        if ((sessionError && !session) || (session && !session.refresh_token)) {
           await supabase.auth.signOut({ scope: "local" });
           session = null;
           await clearStaleAuthCaches();
         } else if (session) {
+          // Share the same guarded refresh used by API callers. A temporary
+          // refresh outage keeps a still-usable access token instead of
+          // destroying the persisted mobile session.
+          session = await ensureFreshSupabaseSession() ?? session;
           const { data: { user: liveUser }, error: userError } = await supabase.auth.getUser();
           // #region agent log
           debugIngest("AuthContext.tsx:getUser", "auth getUser done", { ms: Date.now() - authT0, hasLiveUser: !!liveUser, userError: !!userError }, "B");
           // #endregion
-          if (userError || !liveUser) {
+          if (userLookupProvesSessionInvalid(userError, !!liveUser)) {
             await supabase.auth.signOut({ scope: "local" });
             session = null;
             await clearStaleAuthCaches();
+          } else if (userError) {
+            console.warn("[auth] User verification is temporarily unavailable; keeping the valid local session");
           }
         }
 

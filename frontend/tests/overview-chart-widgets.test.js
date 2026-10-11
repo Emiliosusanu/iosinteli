@@ -191,9 +191,10 @@ test("Ads Engine readout keeps Impr / Clicks / Orders / ACoS tags", () => {
   assert.match(adsBlock, /ACoS \$\{/);
 });
 
-test("Campaign / search-term widget rows keep Spend · Orders · ACoS labels", () => {
+test("Compact widget rows keep spend, orders, clicks and ACoS labels", () => {
   const rows = readFileSync(new URL("../src/components/OverviewWidgetRows.tsx", import.meta.url), "utf8");
-  assert.match(rows, /spend · \{formatInt\(campaign\.orders\)\} orders/);
-  assert.match(rows, /spend · \{formatInt\(Number\(row\.total_orders\)\)\} orders/);
+  assert.match(rows, /formatInt\(campaign\.orders\)\} orders · \{formatInt\(campaign\.clicks\)\} clicks/);
+  assert.match(rows, /formatInt\(Number\(row\.total_orders\)\)\} orders · \{formatInt\(Number\(row\.total_clicks\)\)\} clicks/);
+  assert.match(rows, /minHeight: 40/);
   assert.match(rows, />ACoS</);
 });

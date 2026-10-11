@@ -35,12 +35,25 @@ export function disableConfirmTitle(name: string): string {
   return `Turn off ${name}?`;
 }
 
-/** Regional-indicator flag emoji from ISO country code (US → 🇺🇸). */
-export function countryFlagEmoji(countryCode: string | null | undefined): string {
-  const cc = String(countryCode || "")
+const FLAG_COUNTRY_ALIASES: Readonly<Record<string, string>> = {
+  // Amazon Ads stores the United Kingdom as UK, while Unicode flags use the
+  // ISO 3166 code GB. Without this normalization iOS renders regional letters.
+  UK: "GB",
+};
+
+/** Canonical ISO country code used by flag glyphs and marketplace deduping. */
+export function normalizeFlagCountryCode(countryCode: string | null | undefined): string | null {
+  const raw = String(countryCode || "")
     .trim()
     .toUpperCase();
-  if (!/^[A-Z]{2}$/.test(cc)) return "🌐";
+  const canonical = FLAG_COUNTRY_ALIASES[raw] ?? raw;
+  return /^[A-Z]{2}$/.test(canonical) ? canonical : null;
+}
+
+/** Regional-indicator flag emoji from marketplace country code (US → 🇺🇸, UK → 🇬🇧). */
+export function countryFlagEmoji(countryCode: string | null | undefined): string {
+  const cc = normalizeFlagCountryCode(countryCode);
+  if (!cc) return "🌐";
   return String.fromCodePoint(...[...cc].map((ch) => 127397 + ch.charCodeAt(0)));
 }
 
@@ -52,39 +65,40 @@ const MARKET_COUNTRY_RANK: Record<string, number> = {
   UK: 2,
 };
 
-/** Short labels for the Overview top market pill (not full country names). */
+/**
+ * Compact ISO-style labels for the market pill.
+ * Full names (Canada, Germany, …) truncate on narrow TopBar rows — keep codes.
+ */
 const MARKET_PILL_SHORT: Record<string, string> = {
   US: "US",
-  CA: "Canada",
+  CA: "CA",
   UK: "UK",
   GB: "UK",
-  DE: "Germany",
-  FR: "France",
-  IT: "Italy",
-  ES: "Spain",
-  AU: "Australia",
-  JP: "Japan",
-  MX: "Mexico",
-  IN: "India",
-  NL: "Netherlands",
-  SE: "Sweden",
-  PL: "Poland",
-  BE: "Belgium",
-  TR: "Turkey",
-  SG: "Singapore",
-  BR: "Brazil",
-  AE: "UAE",
+  DE: "DE",
+  FR: "FR",
+  IT: "IT",
+  ES: "ES",
+  AU: "AU",
+  JP: "JP",
+  MX: "MX",
+  IN: "IN",
+  NL: "NL",
+  SE: "SE",
+  PL: "PL",
+  BE: "BE",
+  TR: "TR",
+  SG: "SG",
+  BR: "BR",
+  AE: "AE",
 };
 
-/** Normalize + unique-sort ISO country codes (UK/GB kept distinct until label). */
+/** Normalize + unique-sort marketplace country codes (UK and GB dedupe to GB). */
 export function sortMarketCountryCodes(codes: Iterable<string>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of codes) {
-    const code = String(raw || "")
-      .trim()
-      .toUpperCase();
-    if (!/^[A-Z]{2}$/.test(code) || seen.has(code)) continue;
+    const code = normalizeFlagCountryCode(raw);
+    if (!code || seen.has(code)) continue;
     seen.add(code);
     out.push(code);
   }
@@ -123,15 +137,13 @@ export function multiCountryFlagIcons(
 
 /** One segment of the market pill label (US, Canada, UK, …). */
 export function marketPillCountryLabel(countryCode: string): string {
-  const cc = String(countryCode || "")
-    .trim()
-    .toUpperCase();
+  const cc = normalizeFlagCountryCode(countryCode);
   if (!cc) return "";
   return MARKET_PILL_SHORT[cc] ?? cc;
 }
 
 /**
- * Overview top market pill copy — e.g. US+CA+USD → `US + Canada • USD`.
+ * Overview top market pill copy — e.g. US+CA+USD → `US + CA • USD`.
  * Currency-only when no countries; empty when both missing.
  */
 export function formatMarketPillLabel(
@@ -254,11 +266,28 @@ export function groupProfilesByAdsAccount(profiles: AmazonProfile[]): AdsAccount
     });
 }
 
+export type ProfileSheetMode = "ready" | "kdp_ads" | "ads_only" | "all";
+
+/**
+ * Profile-picker scope. KDP membership comes from the live
+ * kdp_account_amazon_profiles bridge enrichment on AmazonProfile; it is never
+ * inferred from a marketplace, account name, or campaign presence.
+ */
 export function filterProfilesBySheetMode(
   profiles: AmazonProfile[],
-  mode: "ready" | "all",
+  mode: ProfileSheetMode,
 ): AmazonProfile[] {
   if (mode === "all") return profiles;
+  if (mode === "kdp_ads") {
+    return profiles.filter((profile) => (profile.kdp_account_count ?? 0) > 0);
+  }
+  if (mode === "ads_only") {
+    return profiles.filter(
+      (profile) =>
+        (profile.kdp_account_count ?? 0) === 0 &&
+        (profile.campaigns_enabled_count ?? 0) > 0,
+    );
+  }
   const ready = profiles.filter(matchesReadyDefaultFilter);
   const keepKeys = new Set(ready.map((profile) => adsAccountGroupKey(profile)));
   // Keep CA/UK siblings of a ready US (or any ready marketplace) so grouping is visible.
@@ -372,7 +401,10 @@ export function displayCurrencyOfSelection(
     const match = profiles.find((p) => p.id === id || p.profile_id === id);
     if (match) codes.push(currencyCodeOf(match));
   }
-  if (codes.includes("USD")) return "USD";
+  // Any multi-currency scope must have one comparable reporting currency.
+  // USD is the canonical total currency even when the selected markets are
+  // all non-USD (for example CAD + GBP); single-market views stay native.
+  if (new Set(codes).size > 1 || codes.includes("USD")) return "USD";
   return codes[0] || "USD";
 }
 
@@ -586,6 +618,8 @@ export const NEST_DISABLED_VIEW_MESSAGE = "Enable in Amazon Accounts first";
 export const ENABLE_PROFILE_FAILED_TITLE = "Couldn't enable profile";
 
 export const PROFILE_LIST_READY_LABEL = "Ready";
+export const PROFILE_LIST_KDP_ADS_LABEL = "KDP + Ads";
+export const PROFILE_LIST_ADS_ONLY_LABEL = "Ads only";
 export const PROFILE_LIST_ALL_LABEL = "All profiles";
 
 export const DISABLE_CONFIRM_MESSAGE =

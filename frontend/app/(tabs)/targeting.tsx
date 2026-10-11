@@ -19,17 +19,18 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { markPerf } from "@/src/lib/perf";
 import { noPeriodPlaceholder, financialPeriodQueryKey, LIST_PERIOD_QUERY_CACHE, STABLE_SCOPED_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
-import { isHomeQueryTimeout, queryStillWaiting, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
+import { isHomeQueryTimeout, queryStillWaiting, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import {
   fetchAdGroupDefaultBids,
   fetchMobileTargetingPage,
   fetchTargetingBookOptions,
+  fillMissingProductTargetTitlesFromRetail,
   isMobileTargetingSnapshotChanged,
+  productTargetDisplayAsin,
   type MobileTargetingSort,
   type TargetingBookOption,
 } from "@/src/lib/queries";
-import { TargetingPagination } from "@/src/components/TargetingPagination";
-import { TARGETING_PAGE_SIZE, targetingTotalPages } from "@/src/lib/targetingPage";
+import { appendTargetingPageRows, TARGETING_PAGE_SIZE } from "@/src/lib/targetingPage";
 import { filterTargetingBookOptions } from "@/src/lib/targetingBookFilter";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
@@ -80,11 +81,11 @@ import {
 } from "@/src/lib/bulkOutboxContract";
 import {
   describeProductTarget,
-  extractTargetAsin,
   fallbackAsinCoverUrl,
   formatMatchTypeLabel,
   isCategoryTarget,
   isExactMatchType,
+  isUsableBookTitle,
   productTargetHeading,
   readTargetBid,
 } from "@/src/lib/targeting";
@@ -133,11 +134,12 @@ import {
 import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
-import { useTheme, acosTone, dashboard, toneColor, layout, radii, spacing } from "@/src/lib/theme";
+import { useTheme, acosTone, dashboard, density, toneColor, layout, radii, spacing } from "@/src/lib/theme";
 import { formatCurrency, formatPercent, formatInt, formatOptionalPercent } from "@/src/lib/format";
 import { TopBar } from "@/src/components/TopBar";
-import { EmptyState, ToneDot, RetryState, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard } from "@/src/components/Primitives";
+import { EmptyState, RetryState, DenseMetricLine, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard } from "@/src/components/Primitives";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
+import { PressableScale } from "@/src/components/Motion";
 import {
   TargetingModePills,
   type TargetingModeKey,
@@ -229,9 +231,9 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
 ];
 
 const PLACEMENT_FIELDS: { key: PlacementField; label: string; title: string }[] = [
-  { key: "top_of_search", label: "Top", title: "Top of search" },
-  { key: "product_pages", label: "Product", title: "Product pages" },
-  { key: "rest_of_search", label: "Rest", title: "Rest of search" },
+  { key: "top_of_search", label: "Top of search", title: "Top of search bid adjustment" },
+  { key: "product_pages", label: "Product pages", title: "Product pages bid adjustment" },
+  { key: "rest_of_search", label: "Rest of search", title: "Rest of search bid adjustment" },
 ];
 
 function rowMetrics(item: any) {
@@ -329,15 +331,15 @@ function formatPlacementAdjustmentValue(
 function targetingMetricItems(item: any, currency: string, t: any) {
   const m = rowMetrics(item);
   return [
-    { label: "Spend", value: formatCurrency(m.spend, currency, { compact: true }) },
-    { label: "Impr", value: formatInt(m.impressions) },
-    { label: "Clicks", value: formatInt(m.clicks) },
-    { label: "Ord", value: formatInt(m.orders) },
     {
       label: "ACoS",
       value: m.sales > 0 ? formatPercent(m.acos) : "—",
       color: toneColor(acosTone(m.acos), t.colors),
     },
+    { label: "Spend", value: formatCurrency(m.spend, currency, { compact: true }) },
+    { label: "Impr", value: formatInt(m.impressions) },
+    { label: "Clicks", value: formatInt(m.clicks) },
+    { label: "Ord", value: formatInt(m.orders) },
   ];
 }
 
@@ -390,14 +392,14 @@ function searchPlaceholder(segment: Segment) {
 function emptyCopy(segment: Segment, stateFilter: EntityStateFilter = DEFAULT_TARGETING_STATE_FILTER) {
   const title =
     segment === "keywords"
-      ? "No keywords found"
+      ? "No keywords"
       : segment === "auto"
-        ? "No auto targets found"
+        ? "No auto targets"
         : segment === "category"
-          ? "No category targets found"
+          ? "No categories"
           : segment === "placement"
-            ? "No campaigns found"
-            : "No ASIN targets found";
+            ? "No campaigns"
+            : "No ASINs";
   const icon =
     segment === "keywords"
       ? ("search-outline" as const)
@@ -458,6 +460,7 @@ export default function TargetingScreen() {
     id: string;
     title: string;
     value: number;
+    currency: string;
     forceCooldown?: boolean;
   } | null>(null);
   const [percentEditor, setPercentEditor] = useState<{
@@ -475,8 +478,14 @@ export default function TargetingScreen() {
   const [topChromeVisible, setTopChromeVisible] = useState(true);
   const topChromeVisibleRef = useRef(true);
   const [outboxFailed, setOutboxFailed] = useState(0);
-  const [pageNumber, setPageNumber] = useState(1);
   const [pageSnapshot, setPageSnapshot] = useState<string | null>(null);
+  /** Ranked pages 2..N appended under the same snapshot — never re-sorted or invented. */
+  const [catalogTail, setCatalogTail] = useState<any[]>([]);
+  const [catalogTailLoading, setCatalogTailLoading] = useState(false);
+  const [catalogTailIncomplete, setCatalogTailIncomplete] = useState(false);
+  const [catalogNextPage, setCatalogNextPage] = useState(2);
+  const catalogPageRequestRef = useRef<string | null>(null);
+  const catalogGenerationRef = useRef(0);
   const listRef = useRef<FlatList>(null);
 
   useEffect(() => {
@@ -504,6 +513,10 @@ export default function TargetingScreen() {
         console.log(
           `[inteliads:qa] targets filters segment=${qa.targetsSegment ?? "-"} perf=${qa.targetsPerf ?? "-"} sort=${qa.targetsSort ?? "-"} advanced=${adv || "-"}`,
         );
+      }
+      if (qa.targetsOpenFilter) {
+        console.log("[inteliads:qa] targets open Filter sheet");
+        setFilterOpen(true);
       }
       return;
     }
@@ -576,8 +589,12 @@ export default function TargetingScreen() {
 
   const booksQ = useQuery({
     queryKey: ["targeting-book-options-v2", adminFilterUserId ?? "self", profileScopeKey],
-    queryFn: () =>
-      fetchTargetingBookOptions(scopeProfiles, { filterUserId: adminFilterUserId }),
+    queryFn: ({ signal }) =>
+      withQueryTimeout(
+        fetchTargetingBookOptions(scopeProfiles, { filterUserId: adminFilterUserId }),
+        TARGETING_BOOK_OPTIONS_TIMEOUT_MS,
+        signal,
+      ),
     enabled: scopeProfiles.length > 0,
     ...STABLE_SCOPED_CACHE,
   });
@@ -585,6 +602,7 @@ export default function TargetingScreen() {
   const selectedBook = bookAsin ? bookOptions.find((b) => b.asin === bookAsin) ?? null : null;
   const bookFilterActive = Boolean(bookAsin);
   // Nest aggregated campaigns often omit book_asin — match via book→campaign map.
+  // bookCampaignIds.has(campaignId) scope is passed as campaignIds to the RPC.
   const bookCampaignIdList = useMemo(
     () => [...new Set(selectedBook?.campaignIds ?? [])].map(String).sort(),
     [selectedBook],
@@ -604,11 +622,16 @@ export default function TargetingScreen() {
     setBookAsin(null);
   }, [bookAsin, booksQ.isFetched, booksQ.isFetching, booksQ.isLoading, selectedBook]);
 
-  // Numbered pages: any scope / filter / sort / segment / period / book change
-  // restarts at page 1 so we never paint another selection's ranking.
+  // Scope / filter / sort / segment / period / book change: drop tail + snapshot so
+  // we never paint another selection's ranking under a stale catalog.
   useEffect(() => {
-    setPageNumber(1);
     setPageSnapshot(null);
+    setCatalogTail([]);
+    setCatalogTailLoading(false);
+    setCatalogTailIncomplete(false);
+    setCatalogNextPage(2);
+    catalogPageRequestRef.current = null;
+    catalogGenerationRef.current += 1;
   }, [
     periodKey,
     profileScopeKey,
@@ -648,35 +671,41 @@ export default function TargetingScreen() {
     perf,
     serverSort,
     advancedScopeKey,
-    pageNumber,
-    pageNumber === 1 ? "page-1" : pageSnapshot ?? "waiting-snapshot",
+    `page-size-${TARGETING_PAGE_SIZE}`,
+    "catalog-head",
   ] as const;
 
+  // Book filter: wait for options before enabling the page query (so we don't
+  // send campaignIds:[] and paint an unscoped list). On books error, enable
+  // without campaignIds so RetryState can paint — never infinite blank.
   // Don't apply book filter until options are fetched — otherwise a remembered
   // ASIN empties the list while booksQ is still loading (misleading "no matches").
-  // bookCampaignIds.has(campaignId) scope is passed as campaignIds to the RPC.
+  const booksPendingForFilter =
+    bookFilterActive && !booksQ.isSuccess && !booksQ.isError;
   const canReadPage =
-    scopeProfiles.length > 0 &&
-    (!bookFilterActive || booksQ.isSuccess) &&
-    (pageNumber === 1 || Boolean(pageSnapshot));
+    scopeProfiles.length > 0 && (!bookFilterActive || booksQ.isSuccess || booksQ.isError);
 
   const mobilePageQ = useQuery({
     queryKey: mobilePageQueryKey,
     queryFn: async ({ signal }) => {
       markPerf("targets.page.start");
       try {
+        const bookCampaignScope =
+          bookFilterActive && booksQ.isSuccess && bookCampaignIdList.length > 0
+            ? { campaignIds: bookCampaignIdList }
+            : {};
         return await withQueryTimeout(
           fetchMobileTargetingPage({
             segment,
             sort: serverSort,
-            page: pageNumber,
+            page: 1,
             pageSize: TARGETING_PAGE_SIZE,
             start: dateRange.start,
             end: dateRange.end,
             profiles: scopeProfiles,
             // Keep parent ownership: view-as uses admin filter; self uses signed-in user.
             ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
-            ...(bookFilterActive ? { campaignIds: bookCampaignIdList } : {}),
+            ...bookCampaignScope,
             // Active = keyword enabled + ad group enabled + campaign enabled (fail-closed).
             // ASINs / Auto / Category: Active = target + ad group + campaign enabled.
             // Placement rows are campaigns — Active = campaign enabled (no ad-group parent).
@@ -686,8 +715,11 @@ export default function TargetingScreen() {
             search: searchNeedle,
             perf,
             advanced: advancedForRpc,
-            snapshot: pageNumber > 1 ? pageSnapshot : null,
             signal,
+            // The RPC result is authoritative and must paint immediately.
+            // Title/cover metadata is filled for the visible viewport below;
+            // never hold the ranked page behind optional catalog lookups.
+            skipDisplayEnrich: true,
           }),
           TARGETING_QUERY_TIMEOUT_MS,
           signal,
@@ -701,22 +733,247 @@ export default function TargetingScreen() {
   });
 
   useEffect(() => {
-    if (pageNumber !== 1) return;
     const snap = mobilePageQ.data?.snapshot;
     if (typeof snap === "string" && snap.length > 0 && snap !== pageSnapshot) {
+      // A refreshed head starts a new immutable ranking. Never append pages from
+      // the previous snapshot under it.
       setPageSnapshot(snap);
+      setCatalogTail([]);
+      setCatalogTailLoading(false);
+      setCatalogTailIncomplete(false);
+      setCatalogNextPage(2);
+      catalogPageRequestRef.current = null;
+      catalogGenerationRef.current += 1;
     }
-  }, [mobilePageQ.data?.snapshot, pageNumber, pageSnapshot]);
+  }, [mobilePageQ.data?.snapshot, pageSnapshot]);
 
   useEffect(() => {
     if (!isMobileTargetingSnapshotChanged(mobilePageQ.error)) return;
-    setPageNumber(1);
     setPageSnapshot(null);
+    setCatalogTail([]);
+    setCatalogTailIncomplete(false);
+    setCatalogNextPage(2);
+    catalogPageRequestRef.current = null;
+    catalogGenerationRef.current += 1;
   }, [mobilePageQ.error]);
+
+  // Page 1 is globally filtered and ranked by the RPC. Fetch one following page
+  // only when the user asks for it; eagerly walking every page made Targeting
+  // download tens of MB even when the user only needed the first ranked rows.
+  // Snapshot continuity preserves the exact server order across pages.
+  const catalogHeadRef = useRef(mobilePageQ.data);
+  catalogHeadRef.current = mobilePageQ.data;
+  const loadNextCatalogPage = async () => {
+    const head = catalogHeadRef.current;
+    if (!head?.rows || mobilePageQ.isFetching || catalogTailLoading) return;
+    if (head.rows.length + catalogTail.length >= head.total) return;
+
+    const snapshot = head.snapshot;
+    const page = catalogNextPage;
+    const generation = catalogGenerationRef.current;
+    const requestKey = `${generation}:${snapshot}:${page}`;
+    if (catalogPageRequestRef.current === requestKey) return;
+    catalogPageRequestRef.current = requestKey;
+    setCatalogTailLoading(true);
+    setCatalogTailIncomplete(false);
+    try {
+      const next = await withQueryTimeout(fetchMobileTargetingPage({
+        segment,
+        sort: serverSort,
+        page,
+        pageSize: TARGETING_PAGE_SIZE,
+        start: dateRange.start,
+        end: dateRange.end,
+        profiles: scopeProfiles,
+        ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+        ...(bookFilterActive && booksQ.isSuccess && bookCampaignIdList.length > 0
+          ? { campaignIds: bookCampaignIdList }
+          : {}),
+        state: stateFilter,
+        search: searchNeedle,
+        perf,
+        advanced: advancedForRpc,
+        snapshot,
+        skipDisplayEnrich: true,
+      }), TARGETING_QUERY_TIMEOUT_MS);
+      if (catalogGenerationRef.current !== generation) return;
+      if (next.snapshot !== snapshot || catalogHeadRef.current?.snapshot !== snapshot) {
+        throw new Error("Targeting snapshot changed");
+      }
+      setCatalogTail((previous) => appendTargetingPageRows(head.rows, previous, next.rows));
+      setCatalogNextPage(page + 1);
+      setCatalogTailIncomplete(false);
+    } catch (error) {
+      if (catalogGenerationRef.current !== generation) return;
+      if (isMobileTargetingSnapshotChanged(error) || /snapshot changed/i.test(String(error))) {
+        setPageSnapshot(null);
+        setCatalogTail([]);
+        setCatalogNextPage(2);
+        void queryClient.invalidateQueries({ queryKey: mobilePageQueryKey });
+      } else {
+        setCatalogTailIncomplete(true);
+      }
+      // eslint-disable-next-line no-console
+      console.warn("[inteliads:targeting] next catalog page failed", error);
+    } finally {
+      if (catalogPageRequestRef.current === requestKey) {
+        catalogPageRequestRef.current = null;
+        setCatalogTailLoading(false);
+      }
+    }
+  };
+
+  // Page load skips Amazon retail HTML (spinner hang). Fill remaining titles
+  // after paint — covers already work via CDN; titles need retail for competitors.
+  // Serialize waves + merge by ASIN; retry misses (never permanent one-shot blacklist).
+  const retailTitleDoneRef = useRef<Set<string>>(new Set());
+  const retailTitleAttemptsRef = useRef<Map<string, number>>(new Map());
+  const retailTitleInFlightRef = useRef<Set<string>>(new Set());
+  const retailFillBusyRef = useRef(false);
+  const retailFillQueuedRef = useRef(false);
+  const visibleRetailRowsRef = useRef<any[]>([]);
+  const visibleRetailSignatureRef = useRef("");
+  const [visibleRetailKick, setVisibleRetailKick] = useState(0);
+  const [retailFillKick, setRetailFillKick] = useState(0);
+  const resetRetailTitleFill = () => {
+    retailTitleDoneRef.current = new Set();
+    retailTitleAttemptsRef.current = new Map();
+    retailTitleInFlightRef.current = new Set();
+    retailFillBusyRef.current = false;
+    retailFillQueuedRef.current = false;
+  };
+  useEffect(() => {
+    resetRetailTitleFill();
+  }, [segment, mobilePageQ.data?.snapshot]);
+
+  useEffect(() => {
+    if (segment !== "asins" && segment !== "auto" && segment !== "category") return;
+    const page = mobilePageQ.data;
+    if (!page?.rows?.length) return;
+    if (retailFillBusyRef.current) {
+      retailFillQueuedRef.current = true;
+      return;
+    }
+    const headRows = page.rows as any[];
+    // First paint has no viewability callback yet. Once the list reports visible
+    // rows, enrich only that viewport instead of walking thousands of catalog
+    // rows and issuing display reads for items the user has not reached.
+    const rows = visibleRetailRowsRef.current.length
+      ? visibleRetailRowsRef.current
+      : headRows.slice(0, 24);
+    const RETAIL_MAX_ATTEMPTS = 3;
+    const pendingAsins: string[] = [];
+    for (const row of rows) {
+      const asin = productTargetDisplayAsin(row);
+      if (!asin || isUsableBookTitle(row.title)) continue;
+      if (retailTitleDoneRef.current.has(asin)) continue;
+      if (retailTitleInFlightRef.current.has(asin)) continue;
+      const attempts = retailTitleAttemptsRef.current.get(asin) ?? 0;
+      if (attempts >= RETAIL_MAX_ATTEMPTS) continue;
+      pendingAsins.push(asin);
+    }
+    if (!pendingAsins.length) return;
+
+    const profileHit = profiles.find(
+      (p) =>
+        scopeProfiles.includes(String((p as { id?: string }).id ?? "")) ||
+        scopeProfiles.includes(String((p as { profile_id?: string }).profile_id ?? "")),
+    ) as { country_code?: string; countryCode?: string } | undefined;
+    const countryCode = profileHit?.country_code ?? profileHit?.countryCode ?? null;
+
+    const wave = pendingAsins.slice(0, 80);
+    for (const asin of wave) retailTitleInFlightRef.current.add(asin);
+    retailFillBusyRef.current = true;
+    void (async () => {
+      try {
+        const { rows: nextRows, filled } = await fillMissingProductTargetTitlesFromRetail(
+          rows,
+          {
+            countryCode: countryCode ? String(countryCode) : null,
+            maxAsins: 80,
+          },
+        );
+        const titleByAsin = new Map<string, string>();
+        for (const row of nextRows as any[]) {
+          const asin = productTargetDisplayAsin(row);
+          if (!asin || !isUsableBookTitle(row.title)) continue;
+          titleByAsin.set(asin, String(row.title).trim());
+        }
+        for (const asin of wave) {
+          retailTitleInFlightRef.current.delete(asin);
+          const got = titleByAsin.has(asin);
+          if (got) {
+            retailTitleDoneRef.current.add(asin);
+            retailTitleAttemptsRef.current.delete(asin);
+          } else {
+            const next = (retailTitleAttemptsRef.current.get(asin) ?? 0) + 1;
+            retailTitleAttemptsRef.current.set(asin, next);
+            if (next >= RETAIL_MAX_ATTEMPTS) retailTitleDoneRef.current.add(asin);
+          }
+        }
+        if (filled > 0) {
+          // Merge by ASIN into the *latest* head/tail — never replace wholesale.
+          const patchTitles = (list: any[]) =>
+            list.map((row) => {
+              const asin = productTargetDisplayAsin(row);
+              if (!asin || isUsableBookTitle(row.title)) return row;
+              const title = titleByAsin.get(asin);
+              return title ? { ...row, title } : row;
+            });
+          queryClient.setQueryData(mobilePageQueryKey, (prev: typeof page | undefined) => {
+            if (!prev || prev.snapshot !== page.snapshot) return prev;
+            return { ...prev, rows: patchTitles(prev.rows as any[]) };
+          });
+          setCatalogTail((prev) => (prev.length ? patchTitles(prev) : prev));
+        }
+        // Keep waving until pending ASINs are titled or exhausted.
+        retailFillQueuedRef.current = true;
+      } catch {
+        for (const asin of wave) {
+          retailTitleInFlightRef.current.delete(asin);
+          const next = (retailTitleAttemptsRef.current.get(asin) ?? 0) + 1;
+          retailTitleAttemptsRef.current.set(asin, next);
+          if (next >= RETAIL_MAX_ATTEMPTS) retailTitleDoneRef.current.add(asin);
+        }
+        retailFillQueuedRef.current = true;
+      } finally {
+        retailFillBusyRef.current = false;
+        if (retailFillQueuedRef.current) {
+          retailFillQueuedRef.current = false;
+          setRetailFillKick((n) => n + 1);
+        }
+      }
+    })();
+  }, [
+    segment,
+    catalogTail,
+    mobilePageQ.data,
+    mobilePageQueryKey,
+    profiles,
+    queryClient,
+    scopeProfiles,
+    retailFillKick,
+    visibleRetailKick,
+  ]);
+
+  const onViewableTargetRowsChanged = useRef(
+    ({ viewableItems }: { viewableItems: { item?: any; isViewable?: boolean }[] }) => {
+      const visible = viewableItems
+        .filter((entry) => entry.isViewable !== false && entry.item)
+        .map((entry) => entry.item);
+      const signature = visible.map((row) => String(row.id ?? "")).join("|");
+      if (signature === visibleRetailSignatureRef.current) return;
+      visibleRetailSignatureRef.current = signature;
+      visibleRetailRowsRef.current = visible;
+      setVisibleRetailKick((value) => value + 1);
+    },
+  ).current;
+  const targetViewabilityConfig = useRef({ itemVisiblePercentThreshold: 20 }).current;
 
   // Display-only enrichment — do not re-filter or re-sort a server page.
   const data = useMemo(() => {
-    const rows = (mobilePageQ.data?.rows ?? []) as any[];
+    const headRows = (mobilePageQ.data?.rows ?? []) as any[];
+    const rows = catalogTail.length ? [...headRows, ...catalogTail] : headRows;
     return rows.map((row) => {
       if (segment === "placement") {
         const campaignId = String(row.campaign_id || String(row.id || "").split("::")[0] || "");
@@ -743,7 +1000,7 @@ export default function TargetingScreen() {
         __targetingIsCategory: isCategoryTarget(row.expression, row.expression_type),
       };
     });
-  }, [mobilePageQ.data?.rows, segment, campaignBookById]);
+  }, [mobilePageQ.data?.rows, catalogTail, segment, campaignBookById]);
 
   // Prefetch real Amazon placement % (never invent 0 when Amazon returns null).
   useEffect(() => {
@@ -766,13 +1023,6 @@ export default function TargetingScreen() {
   }, [segment, mobilePageQ.data?.snapshot, data.length]);
 
   const serverTotal = Number(mobilePageQ.data?.total ?? 0);
-  const serverPageSize = Number(mobilePageQ.data?.pageSize ?? TARGETING_PAGE_SIZE) || TARGETING_PAGE_SIZE;
-  const totalPages = targetingTotalPages(serverTotal, serverPageSize);
-
-  useEffect(() => {
-    if (!mobilePageQ.isSuccess) return;
-    if (pageNumber > totalPages) setPageNumber(totalPages);
-  }, [mobilePageQ.isSuccess, pageNumber, totalPages]);
 
   const activeQuery = mobilePageQ;
   const isError = activeQuery.isError || (bookFilterActive && booksQ.isError);
@@ -782,15 +1032,16 @@ export default function TargetingScreen() {
     const err = activeQuery.error instanceof Error ? activeQuery.error.message : activeQuery.isError ? "error" : "ok";
     console.log(
       `[inteliads:targeting] segment=${segment} period=${dateRange.start}..${dateRange.end} ` +
-        `page=${pageNumber}/${totalPages} total=${mobilePageQ.data?.total ?? "-"} ` +
-        `rows=${data.length} status=${activeQuery.fetchStatus} active=${err}`,
+        `loaded=${data.length}/${mobilePageQ.data?.total ?? "-"} ` +
+        `tail=${catalogTailLoading ? "loading" : catalogTailIncomplete ? "incomplete" : "ok"} ` +
+        `status=${activeQuery.fetchStatus} active=${err}`,
     );
   }, [
     segment,
     dateRange.start,
     dateRange.end,
-    pageNumber,
-    totalPages,
+    catalogTailLoading,
+    catalogTailIncomplete,
     mobilePageQ.data?.total,
     data.length,
     activeQuery.fetchStatus,
@@ -798,27 +1049,31 @@ export default function TargetingScreen() {
     activeQuery.error,
   ]);
 
+  // Never block the list forever on a disabled query (isPending + idle) or book
+  // options that never resolve — paint empty/error instead of an infinite spinner.
+  // While a remembered book filter waits on booksQ, show spinner even if the page
+  // query is still disabled (canReadPage false) — otherwise FlatList flashes empty.
   const showBlockingSpinner =
     data.length === 0 &&
     !activeQuery.isPlaceholderData &&
     !isError &&
-    (queryStillWaiting(activeQuery) || activeQuery.isFetching || (bookFilterActive && !booksQ.isSuccess));
+    (booksPendingForFilter ||
+      (canReadPage &&
+        (queryStillWaiting(activeQuery) || activeQuery.isFetching)));
   const listUpdating =
-    (activeQuery.isFetching || !!activeQuery.isPlaceholderData) && data.length > 0 && !isError;
+    ((activeQuery.isFetching || !!activeQuery.isPlaceholderData || catalogTailLoading) &&
+      data.length > 0 &&
+      !isError);
 
-  // Server owns ranked totals via mobile_targeting_page_v1 — prefer page total over client 500-cap.
+  // Honest catalog footer — total is the globally filtered RPC count. Only
+  // transfer more ranked rows when requested; never pretend the loaded window
+  // is the complete result set and never invent a 500-cap story.
+  const hasMoreCatalogRows = Boolean(mobilePageQ.data && data.length < serverTotal);
   const pageSummary = mobilePageQ.data
-    ? `Page ${pageNumber} of ${totalPages} · ${serverTotal} rows${listUpdating ? " · updating" : ""}`
+    ? hasMoreCatalogRows
+      ? `${data.length} of ${serverTotal} loaded`
+      : `${serverTotal} rows${listUpdating ? " · updating" : ""}`
     : null;
-
-  const changePage = (page: number) => {
-    const next = Math.max(1, Math.min(Math.floor(page) || 1, totalPages));
-    if (next === pageNumber) return;
-    setSelectedIds([]);
-    setSelectMode(false);
-    setPageNumber(next);
-    listRef.current?.scrollToOffset({ offset: 0, animated: false });
-  };
 
   // Placement list is 3 rows per campaign; Amazon writes once per campaign.
   const visibleWriteCount = useMemo(() => {
@@ -835,8 +1090,15 @@ export default function TargetingScreen() {
   const onRefresh = async () => {
     setRefreshing(true);
     try {
+      resetRetailTitleFill();
+      setCatalogTail([]);
+      setCatalogTailIncomplete(false);
+      setCatalogNextPage(2);
+      catalogPageRequestRef.current = null;
+      catalogGenerationRef.current += 1;
       if (bookFilterActive && booksQ.isError) await booksQ.refetch();
       else await activeQuery.refetch();
+      setRetailFillKick((n) => n + 1);
     } finally {
       setRefreshing(false);
     }
@@ -886,6 +1148,25 @@ export default function TargetingScreen() {
   const clearSelection = () => {
     setSelectedIds([]);
     setSelectMode(false);
+  };
+
+  const selectedBidCurrencies = useMemo(() => {
+    const selected = new Set(selectedIds);
+    const currencies = data
+      .filter((row) => selected.has(row.id))
+      .map((row) => rowCurrencyOfProfile(profiles, row.amazon_profile_id, primaryCurrency));
+    return [...new Set(currencies)].sort();
+  }, [data, primaryCurrency, profiles, selectedIds]);
+
+  const openBulkMoneyEditor = (mode: "increase_usd" | "decrease_usd") => {
+    if (selectedBidCurrencies.length > 1) {
+      Alert.alert(
+        "Choose one marketplace",
+        `The selected targets use ${selectedBidCurrencies.join(", ")}. Choose one country in the Markets filter for an amount change, or use a percentage across currencies.`,
+      );
+      return;
+    }
+    setBulkDeltaEditor(mode);
   };
 
   const enqueueSelected = async (
@@ -1428,7 +1709,7 @@ export default function TargetingScreen() {
   if (selectedProfileIds.length === 0) {
     return (
       <AppScreen>
-        <TopBar />
+        <TopBar showKdpAccountGroups={false} />
         <EmptyState
           icon="business-outline"
           title={isAdminViewer ? "No Amazon account" : "No account connected"}
@@ -1451,10 +1732,14 @@ export default function TargetingScreen() {
       : null;
   const advancedCount = countActiveAdvancedFilters(advanced);
   const canBulkBid = segment !== "placement";
-
   const filtersActive =
-    perf !== "all" || sort !== "acos" || !!bookAsin || stateFilter !== "enabled" || hasActiveAdvancedFilters(advanced);
+    stateFilter !== "enabled" ||
+    perf !== "all" ||
+    sort !== "acos" ||
+    !!bookAsin ||
+    hasActiveAdvancedFilters(advanced);
   const filterSummary = [
+    stateFilter !== "enabled" ? (stateFilter === "paused" ? "Paused" : "All") : null,
     bookFilterLabel ? `Book: ${bookFilterLabel}` : null,
     perf !== "all" ? perfLabel : null,
     sort !== "acos" ? `Sort: ${sortLabel}` : null,
@@ -1463,10 +1748,18 @@ export default function TargetingScreen() {
 
   return (
     <AppScreen>
-      {topChromeVisible ? <TopBar /> : null}
+      {topChromeVisible ? <TopBar showKdpAccountGroups={false} /> : null}
 
       {topChromeVisible ? (
-      <FilterChrome>
+      <View
+        style={{
+          marginHorizontal: dashboard.pageInset,
+          marginTop: dashboard.chromeGap,
+          marginBottom: 8,
+          // Keep mode switcher clear of the search row (label must not clip into search).
+          gap: 12,
+        }}
+      >
         <TargetingModePills
           value={segment}
           onChange={(next) => {
@@ -1483,37 +1776,57 @@ export default function TargetingScreen() {
               onChangeText={setSearch}
             />
           </View>
-          <ActiveFilterChip
+          <PressableScale
             testID="targeting-select-btn"
-            label={selectMode ? "Done" : "Select"}
-            accessibilityLabel={selectMode ? "Exit bulk select" : "Bulk select"}
+            accessibilityRole="button"
+            accessibilityLabel={selectMode ? "Done selecting" : `Select all ${visibleWriteCount} loaded rows`}
+            hitSlop={8}
             onPress={() => {
               if (selectMode) clearSelection();
-              else setSelectMode(true);
+              else selectAllVisible();
             }}
-          />
+            style={{
+              minWidth: 44,
+              minHeight: 44,
+              paddingHorizontal: 8,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text
+              style={[
+                t.typography.subhead,
+                {
+                  color: selectMode ? t.colors.tone_primary : t.colors.text_secondary,
+                  fontWeight: selectMode ? "700" : "600",
+                },
+              ]}
+            >
+              {selectMode ? "Done" : "Select all"}
+            </Text>
+          </PressableScale>
           <FilterIconButton
             testID="targeting-filter-btn"
             active={filtersActive}
-            accessibilityLabel={filtersActive ? `Filters: ${filterSummary}` : "Filters and sort"}
-            accessibilityHint="Opens performance, ranges, and sort options"
+            accessibilityLabel={
+              filtersActive
+                ? `Filter, ${[
+                    stateFilter !== "enabled" ? 1 : 0,
+                    bookAsin ? 1 : 0,
+                    perf !== "all" ? 1 : 0,
+                    sort !== "acos" ? 1 : 0,
+                    advancedCount,
+                  ]
+                    .reduce((a, b) => a + b, 0)} filters active. ${filterSummary}`
+                : "Filters and sort"
+            }
             onPress={() => setFilterOpen(true)}
           />
         </FilterSearchRow>
-        <IOSSegmentedControl
-          testID="targeting-state-filter"
-          value={stateFilter}
-          onChange={(key) => setStateFilter(key)}
-          options={[
-            { key: "enabled", label: "Active", testID: "targeting-state-enabled" },
-            { key: "paused", label: "Paused", testID: "targeting-state-paused" },
-            { key: "all", label: "All", testID: "targeting-state-all" },
-          ]}
-        />
         {viewAsOtherUser ? (
           <Text
             testID="targeting-view-as-write-warning"
-            style={[t.typography.caption2, { color: t.colors.tone_warning, marginTop: 4 }]}
+            style={[t.typography.caption2, { color: t.colors.tone_warning }]}
           >
             Viewing customer — edits off
           </Text>
@@ -1552,8 +1865,17 @@ export default function TargetingScreen() {
             ) : null}
           </ActiveFilterRow>
         ) : null}
-        {filtersActive ? (
+        {filtersActive &&
+        (stateFilter !== "enabled" || bookAsin || perf !== "all" || sort !== "acos" || advancedCount > 0) ? (
           <ActiveFilterRow>
+            {stateFilter !== "enabled" ? (
+              <ActiveFilterChip
+                testID="targeting-filter-chip-state"
+                label={stateFilter === "paused" ? "Paused" : "All"}
+                accessibilityLabel={`Clear status filter. Currently ${stateFilter === "paused" ? "Paused" : "All"}`}
+                onPress={() => setStateFilter(DEFAULT_TARGETING_STATE_FILTER)}
+              />
+            ) : null}
             {bookAsin ? (
               <ActiveFilterChip
                 testID="targeting-filter-chip-book"
@@ -1660,7 +1982,7 @@ export default function TargetingScreen() {
             </View>
           </View>
         ) : null}
-      </FilterChrome>
+      </View>
       ) : null}
 
       {showBlockingSpinner ? (
@@ -1671,12 +1993,12 @@ export default function TargetingScreen() {
             segment === "keywords"
               ? "Couldn't load keywords"
               : segment === "auto"
-                ? "Couldn't load auto targets"
+                ? "Couldn't load auto"
                 : segment === "category"
-                  ? "Couldn't load category targets"
+                  ? "Couldn't load categories"
                   : segment === "placement"
                     ? "Couldn't load campaigns"
-                    : "Couldn't load product targets"
+                    : "Couldn't load ASINs"
           }
           subtitle={
             isHomeQueryTimeout(activeQuery.error)
@@ -1688,9 +2010,10 @@ export default function TargetingScreen() {
                 : "Couldn't load"
           }
           onRetry={() => {
-            void activeQuery.refetch();
+            if (bookFilterActive && booksQ.isError) void booksQ.refetch();
+            else void activeQuery.refetch();
           }}
-          retrying={isRefetching}
+          retrying={isRefetching || (bookFilterActive && booksQ.isFetching)}
         />
       ) : (
         <FlatList
@@ -1703,10 +2026,12 @@ export default function TargetingScreen() {
             padding: t.layout.pagePad,
             paddingBottom: selectedIds.length > 0 ? t.layout.tabClearance + 110 : t.layout.tabClearance,
           }}
-          initialNumToRender={18}
-          maxToRenderPerBatch={24}
-          windowSize={9}
-          removeClippedSubviews={false}
+          initialNumToRender={14}
+          maxToRenderPerBatch={16}
+          windowSize={7}
+          onViewableItemsChanged={onViewableTargetRowsChanged}
+          viewabilityConfig={targetViewabilityConfig}
+          removeClippedSubviews={Platform.OS !== "ios"}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />
           }
@@ -1738,13 +2063,39 @@ export default function TargetingScreen() {
                     {pageSummary}
                   </Text>
                 ) : null}
-                {totalPages > 1 ? (
-                  <TargetingPagination page={pageNumber} totalPages={totalPages} onChange={changePage} theme={t} />
+                {hasMoreCatalogRows ? (
+                  <TouchableOpacity
+                    testID="targeting-load-more"
+                    accessibilityRole="button"
+                    accessibilityLabel={catalogTailIncomplete ? "Retry loading more results" : "Load more results"}
+                    disabled={catalogTailLoading}
+                    onPress={() => void loadNextCatalogPage()}
+                    style={{
+                      alignSelf: "center",
+                      minWidth: 132,
+                      minHeight: 40,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingHorizontal: 18,
+                      borderRadius: 20,
+                      backgroundColor: t.colors.tone_primary + "18",
+                      opacity: catalogTailLoading ? 0.65 : 1,
+                    }}
+                  >
+                    <Text
+                      style={[
+                        t.typography.caption1,
+                        { color: t.colors.tone_primary, fontWeight: "700" },
+                      ]}
+                    >
+                      {catalogTailLoading ? "Loading…" : catalogTailIncomplete ? "Retry" : "Load more"}
+                    </Text>
+                  </TouchableOpacity>
                 ) : null}
               </View>
             ) : null
           }
-          // Server owns ranked totals via mobile_targeting_page_v1 — prefer page total over client 500-cap.
+          // Server owns ranked totals via mobile_targeting_page_v1 — full catalog, no page chrome.
           renderItem={({ item }: any) => {
             const selected = selectedIds.includes(item.id);
             const rowCurrency = rowCurrencyOfProfile(profiles, item.amazon_profile_id, primaryCurrency);
@@ -1779,6 +2130,7 @@ export default function TargetingScreen() {
                       id: item.id,
                       title: item.keyword_text ?? "Keyword bid",
                       value: baseBidForRow("keywords", item, defaultBidByAdGroupId) ?? 0.02,
+                      currency: rowCurrency,
                       forceCooldown: opts?.forceCooldown === true,
                     });
                   }}
@@ -1805,6 +2157,11 @@ export default function TargetingScreen() {
                 />
               );
             }
+            const rowAsin = productTargetDisplayAsin(item);
+            const titleLoading =
+              !!rowAsin &&
+              !isUsableBookTitle(item.title) &&
+              !retailTitleDoneRef.current.has(rowAsin);
             return (
               <ProductTargetRow
                 item={item}
@@ -1813,6 +2170,7 @@ export default function TargetingScreen() {
                   item.ad_group_id ? defaultBidByAdGroupId[String(item.ad_group_id)] : undefined
                 }
                 t={t}
+                titleLoading={titleLoading}
                 viewAsOtherUser={viewAsOtherUser}
                 onPress={onRowPress}
                 onEditBid={(opts) => {
@@ -1822,6 +2180,7 @@ export default function TargetingScreen() {
                     id: item.id,
                     title: item.title || describeProductTarget(item.expression, item.expression_type).label,
                     value: baseBidForRow(segment, item, defaultBidByAdGroupId) ?? 0.02,
+                    currency: rowCurrency,
                     forceCooldown: opts?.forceCooldown === true,
                   });
                 }}
@@ -1864,20 +2223,20 @@ export default function TargetingScreen() {
                 <TouchableOpacity
                   testID="targeting-bulk-increase"
                   accessibilityRole="button"
-                  accessibilityLabel="Increase bid by dollar amount"
-                  onPress={() => setBulkDeltaEditor("increase_usd")}
+                  accessibilityLabel="Increase bid by a native currency amount"
+                  onPress={() => openBulkMoneyEditor("increase_usd")}
                   style={[styles.bulkBtn, { backgroundColor: t.colors.tone_good + "22" }]}
                 >
-                  <Text style={[t.typography.caption1, { color: t.colors.tone_good, fontWeight: "800" }]}>Bid +$</Text>
+                  <Text style={[t.typography.caption1, { color: t.colors.tone_good, fontWeight: "800" }]}>Bid + amount</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   testID="targeting-bulk-decrease"
                   accessibilityRole="button"
-                  accessibilityLabel="Decrease bid by dollar amount"
-                  onPress={() => setBulkDeltaEditor("decrease_usd")}
+                  accessibilityLabel="Decrease bid by a native currency amount"
+                  onPress={() => openBulkMoneyEditor("decrease_usd")}
                   style={[styles.bulkBtn, { backgroundColor: t.colors.tone_warning + "22" }]}
                 >
-                  <Text style={[t.typography.caption1, { color: t.colors.tone_warning, fontWeight: "800" }]}>Bid −$</Text>
+                  <Text style={[t.typography.caption1, { color: t.colors.tone_warning, fontWeight: "800" }]}>Bid − amount</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   testID="targeting-bulk-increase-pct"
@@ -1925,15 +2284,15 @@ export default function TargetingScreen() {
         visible={bulkDeltaEditor != null}
         title={
           bulkDeltaEditor === "decrease_usd"
-            ? "Decrease bid by $"
+            ? `Decrease bid by ${selectedBidCurrencies[0] ?? primaryCurrency}`
             : bulkDeltaEditor === "increase_usd"
-              ? "Increase bid by $"
+              ? `Increase bid by ${selectedBidCurrencies[0] ?? primaryCurrency}`
               : bulkDeltaEditor === "decrease_pct"
                 ? "Decrease bid by %"
                 : "Increase bid by %"
         }
         value={bulkDeltaEditor?.endsWith("pct") ? 10 : 0.05}
-        currency={primaryCurrency}
+        currency={selectedBidCurrencies[0] ?? primaryCurrency}
         kind={bulkDeltaEditor?.endsWith("pct") ? "percent" : "money"}
         min={0.01}
         max={bulkDeltaEditor?.endsWith("pct") ? 200 : 50}
@@ -1952,7 +2311,7 @@ export default function TargetingScreen() {
         visible={moneyEditor != null}
         title={moneyEditor?.title ?? "Bid"}
         value={moneyEditor?.value ?? 0}
-        currency={primaryCurrency}
+        currency={moneyEditor?.currency ?? primaryCurrency}
         min={0.01}
         testID={moneyEditor ? `targeting-bid-editor-${moneyEditor.id}` : undefined}
         onClose={() => setMoneyEditor(null)}
@@ -2039,12 +2398,14 @@ export default function TargetingScreen() {
           <View style={[styles.filterSheet, { backgroundColor: t.colors.background_secondary }]}>
             <FilterSheetFields
               t={t}
+              stateFilter={stateFilter}
               perf={perf}
               sort={sort}
               bookAsin={bookAsin}
               bookOptions={bookOptions}
               advanced={advanced}
               segment={segment}
+              onStateFilter={setStateFilter}
               onPerf={setPerf}
               onSort={setSort}
               onBookAsin={setBookAsin}
@@ -2060,12 +2421,14 @@ export default function TargetingScreen() {
             >
               <FilterSheetFields
                 t={t}
+                stateFilter={stateFilter}
                 perf={perf}
                 sort={sort}
                 bookAsin={bookAsin}
                 bookOptions={bookOptions}
                 advanced={advanced}
                 segment={segment}
+                onStateFilter={setStateFilter}
                 onPerf={setPerf}
                 onSort={setSort}
                 onBookAsin={setBookAsin}
@@ -2080,14 +2443,67 @@ export default function TargetingScreen() {
   );
 }
 
+/** Settings-style checkmark row for Filter sheet Sort / Performance. */
+function FilterCheckRow({
+  t,
+  testID,
+  label,
+  hint,
+  selected,
+  onPress,
+}: {
+  t: any;
+  testID: string;
+  label: string;
+  hint?: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityLabel={hint ? `${label}. ${hint}` : label}
+      onPress={onPress}
+      style={[
+        styles.filterCheckRow,
+        { borderBottomColor: t.colors.separator, minHeight: layout.minTap },
+      ]}
+    >
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text
+          style={[
+            t.typography.body,
+            {
+              color: selected ? t.colors.tone_primary : t.colors.text_primary,
+              fontWeight: selected ? "600" : "400",
+            },
+          ]}
+        >
+          {label}
+        </Text>
+        {hint ? (
+          <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]} numberOfLines={2}>
+            {hint}
+          </Text>
+        ) : null}
+      </View>
+      {selected ? <SFSymbol name="checkmark" size={16} color={t.colors.tone_primary} /> : null}
+    </Pressable>
+  );
+}
+
 function FilterSheetFields({
   t,
+  stateFilter,
   perf,
   sort,
   bookAsin,
   bookOptions,
   advanced,
   segment = "keywords",
+  onStateFilter,
   onPerf,
   onSort,
   onBookAsin,
@@ -2095,6 +2511,7 @@ function FilterSheetFields({
   onDone,
 }: {
   t: any;
+  stateFilter: EntityStateFilter;
   perf: PerfFilter;
   sort: SortKey;
   bookAsin: string | null;
@@ -2107,14 +2524,18 @@ function FilterSheetFields({
   }[];
   advanced: TargetingAdvancedFilters;
   segment?: Segment;
+  onStateFilter: (next: EntityStateFilter) => void;
   onPerf: (next: PerfFilter) => void;
   onSort: (next: SortKey) => void;
   onBookAsin: (next: string | null) => void;
   onAdvanced: (next: TargetingAdvancedFilters) => void;
   onDone: () => void;
 }) {
+  const rangesActive = hasActiveAdvancedFilters(advanced);
   const [advDrafts, setAdvDrafts] = useState<Partial<Record<keyof TargetingAdvancedFilters, string>>>({});
   const [bookQuery, setBookQuery] = useState("");
+  const [rangesOpen, setRangesOpen] = useState(rangesActive);
+  const [booksExpanded, setBooksExpanded] = useState(false);
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const INT_RANGE_KEYS = new Set<keyof TargetingAdvancedFilters>([
     "clicksMin",
@@ -2122,6 +2543,7 @@ function FilterSheetFields({
     "impressionsMin",
     "impressionsMax",
   ]);
+  const BOOK_PREVIEW = 8;
 
   const visibleBooks = useMemo(() => {
     const filtered = filterTargetingBookOptions(bookOptions, bookQuery);
@@ -2130,6 +2552,12 @@ function FilterSheetFields({
     const selected = bookOptions.find((b) => b.asin === bookAsin);
     return selected ? [selected, ...filtered] : filtered;
   }, [bookOptions, bookQuery, bookAsin]);
+
+  const shownBooks =
+    booksExpanded || bookQuery.trim() || visibleBooks.length <= BOOK_PREVIEW
+      ? visibleBooks
+      : visibleBooks.slice(0, BOOK_PREVIEW);
+  const hiddenBookCount = Math.max(0, visibleBooks.length - shownBooks.length);
 
   const setAdvField = (key: keyof TargetingAdvancedFilters, raw: string) => {
     setAdvDrafts((prev) => ({ ...prev, [key]: raw }));
@@ -2148,28 +2576,104 @@ function FilterSheetFields({
     return v == null ? "" : String(v);
   };
   const bidRangesIgnoredOnPlacement = segment === "placement";
+  const sortLabel = SORT_OPTIONS.find((entry) => entry.key === sort)?.label ?? "ACoS";
+  const perfLabel = PERF_FILTERS.find((entry) => entry.key === perf)?.label ?? "All";
+  const advancedCount = countActiveAdvancedFilters(advanced);
 
   return (
     <>
       <View style={styles.filterSheetHeader}>
         <Text style={[t.typography.headline, { color: t.colors.text_primary }]}>Filter</Text>
-        <TouchableOpacity
+        <Pressable
           testID="targeting-filter-done"
           accessibilityRole="button"
           accessibilityLabel="Done"
           accessibilityHint="Closes filters and sort"
           onPress={onDone}
           hitSlop={spacing.sm}
+          style={{ minHeight: layout.minTap, justifyContent: "center", paddingHorizontal: 4 }}
         >
           <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Done</Text>
-        </TouchableOpacity>
+        </Pressable>
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.filterSheetBody} keyboardShouldPersistTaps="handled">
-        <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginBottom: t.spacing.xs }]}>
+        {/* 1. Status — Active / Paused / All */}
+        <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginBottom: t.spacing.sm }]}>
+          Status
+        </Text>
+        <IOSSegmentedControl
+          testID="targeting-state-filter"
+          value={stateFilter}
+          onChange={(key) => onStateFilter(key as EntityStateFilter)}
+          options={[
+            { key: "enabled", label: "Active", testID: "targeting-state-enabled" },
+            { key: "paused", label: "Paused", testID: "targeting-state-paused" },
+            { key: "all", label: "All", testID: "targeting-state-all" },
+          ]}
+        />
+        {/* 2. Sort */}
+        <Text
+          style={[
+            t.typography.footnote,
+            { color: t.colors.text_secondary, marginBottom: t.spacing.xs, marginTop: t.spacing.md },
+          ]}
+        >
+          Sort
+        </Text>
+        <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: t.spacing.sm }]}>
+          High to low · {sortLabel}
+        </Text>
+        <View style={[styles.filterGroup, { backgroundColor: t.colors.background_tertiary }]}>
+          {SORT_OPTIONS.map((f) => (
+            <FilterCheckRow
+              key={f.key}
+              t={t}
+              testID={`targeting-sort-${f.key}`}
+              label={f.label}
+              hint={`Sort by ${f.label} high to low`}
+              selected={sort === f.key}
+              onPress={() => onSort(f.key)}
+            />
+          ))}
+        </View>
+
+        {/* 2. Performance */}
+        <Text
+          style={[
+            t.typography.footnote,
+            { color: t.colors.text_secondary, marginTop: t.spacing.lg, marginBottom: t.spacing.xs },
+          ]}
+        >
+          Performance
+        </Text>
+        <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: t.spacing.sm }]}>
+          {perfLabel}
+        </Text>
+        <View style={[styles.filterGroup, { backgroundColor: t.colors.background_tertiary }]}>
+          {PERF_FILTERS.map((f) => (
+            <FilterCheckRow
+              key={f.key}
+              t={t}
+              testID={`targeting-perf-${f.key}`}
+              label={f.label}
+              hint={f.hint}
+              selected={perf === f.key}
+              onPress={() => onPerf(f.key)}
+            />
+          ))}
+        </View>
+
+        {/* 3. Book — title-primary rows */}
+        <Text
+          style={[
+            t.typography.footnote,
+            { color: t.colors.text_secondary, marginTop: t.spacing.lg, marginBottom: t.spacing.xs },
+          ]}
+        >
           Book
         </Text>
         <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: t.spacing.sm }]}>
-          Each row is one ASIN. The same title can be a different edition or format.
+          One ASIN per row. Same title can be a different edition.
         </Text>
         {bookOptions.length ? (
           <View style={{ marginBottom: t.spacing.sm }}>
@@ -2181,62 +2685,44 @@ function FilterSheetFields({
             />
           </View>
         ) : null}
-        <View style={styles.bookList}>
-          <TouchableOpacity
+        <View style={[styles.filterGroup, { backgroundColor: t.colors.background_tertiary }]}>
+          <Pressable
             testID="targeting-book-all"
             onPress={() => onBookAsin(null)}
-            style={[
-              styles.bookRow,
-              {
-                backgroundColor: !bookAsin ? t.colors.tone_primary + "22" : t.colors.background_tertiary,
-                borderColor: !bookAsin ? t.colors.tone_primary : t.colors.separator,
-              },
-            ]}
+            style={[styles.bookListRow, { borderBottomColor: t.colors.separator, minHeight: layout.minTap }]}
             accessibilityRole="button"
             accessibilityState={{ selected: !bookAsin }}
             accessibilityLabel="All books"
           >
-            <View style={[styles.bookRowCoverSlot, { backgroundColor: t.colors.background_secondary }]}>
-              <SFSymbol name="books.vertical" size={20} color={!bookAsin ? t.colors.tone_primary : t.colors.text_tertiary} />
+            <View style={[styles.bookRowCoverSlotXs, { backgroundColor: t.colors.background_secondary }]}>
+              <SFSymbol name="books.vertical" size={16} color={!bookAsin ? t.colors.tone_primary : t.colors.text_tertiary} />
             </View>
             <View style={styles.bookRowText}>
               <Text
                 numberOfLines={2}
                 style={[
-                  t.typography.subhead,
+                  t.typography.body,
                   {
                     color: !bookAsin ? t.colors.tone_primary : t.colors.text_primary,
-                    fontWeight: !bookAsin ? "700" : "600",
+                    fontWeight: !bookAsin ? "600" : "400",
                   },
                 ]}
               >
                 All books
               </Text>
-              <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>
-                No book filter
-              </Text>
+              <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>No book filter</Text>
             </View>
-            <SFSymbol
-              name={!bookAsin ? "checkmark.circle.fill" : "circle"}
-              size={22}
-              color={!bookAsin ? t.colors.tone_primary : t.colors.text_tertiary}
-            />
-          </TouchableOpacity>
-          {visibleBooks.map((book) => {
+            {!bookAsin ? <SFSymbol name="checkmark" size={16} color={t.colors.tone_primary} /> : null}
+          </Pressable>
+          {shownBooks.map((book) => {
             const active = bookAsin === book.asin;
             const camps = book.campaignCount ?? book.campaignIds.length;
             return (
-              <TouchableOpacity
+              <Pressable
                 key={book.asin}
                 testID={`targeting-book-${book.asin}`}
                 onPress={() => onBookAsin(active ? null : book.asin)}
-                style={[
-                  styles.bookRow,
-                  {
-                    backgroundColor: active ? t.colors.tone_primary + "22" : t.colors.background_tertiary,
-                    borderColor: active ? t.colors.tone_primary : t.colors.separator,
-                  },
-                ]}
+                style={[styles.bookListRow, { borderBottomColor: t.colors.separator, minHeight: layout.minTap }]}
                 accessibilityRole="button"
                 accessibilityState={{ selected: active }}
                 accessibilityLabel={`${book.title}, ASIN ${book.asin}, ${camps} campaigns`}
@@ -2245,7 +2731,7 @@ function FilterSheetFields({
                   uri={book.image_url}
                   fallbackUri={null}
                   asin={book.asin}
-                  size="sm"
+                  size="xs"
                   placeholder="book"
                   recyclingKey={`filter-${book.asin}`}
                   style={styles.bookRowCover}
@@ -2255,10 +2741,10 @@ function FilterSheetFields({
                     <Text
                       numberOfLines={2}
                       style={[
-                        t.typography.subhead,
+                        t.typography.body,
                         {
                           color: active ? t.colors.tone_primary : t.colors.text_primary,
-                          fontWeight: active ? "700" : "600",
+                          fontWeight: active ? "600" : "400",
                           flex: 1,
                           minWidth: 0,
                         },
@@ -2266,22 +2752,31 @@ function FilterSheetFields({
                     >
                       {book.title}
                     </Text>
-                    <BookMarketplaceFlags index={marketplaceIndex} book={book} style={t.typography.subhead} />
+                    <BookMarketplaceFlags index={marketplaceIndex} book={book} style={t.typography.caption1} />
                   </View>
                   <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>
                     {book.asin}
                     {camps > 0 ? ` · ${camps} camp.` : ""}
                   </Text>
                 </View>
-                <SFSymbol
-                  name={active ? "checkmark.circle.fill" : "circle"}
-                  size={22}
-                  color={active ? t.colors.tone_primary : t.colors.text_tertiary}
-                />
-              </TouchableOpacity>
+                {active ? <SFSymbol name="checkmark" size={16} color={t.colors.tone_primary} /> : null}
+              </Pressable>
             );
           })}
         </View>
+        {hiddenBookCount > 0 ? (
+          <Pressable
+            testID="targeting-book-show-more"
+            onPress={() => setBooksExpanded(true)}
+            accessibilityRole="button"
+            accessibilityLabel={`Show ${hiddenBookCount} more books`}
+            style={{ marginTop: t.spacing.sm, minHeight: layout.minTap, justifyContent: "center" }}
+          >
+            <Text style={[t.typography.callout, { color: t.colors.tone_primary, fontWeight: "600" }]}>
+              Show {hiddenBookCount} more
+            </Text>
+          </Pressable>
+        ) : null}
         {!bookOptions.length ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: t.spacing.xs }]}>
             No books with active campaigns on these profiles yet.
@@ -2291,153 +2786,112 @@ function FilterSheetFields({
             No books match “{bookQuery.trim()}”.
           </Text>
         ) : null}
-        <Text
+
+        {/* 4. Ranges — progressive disclosure */}
+        <Pressable
+          testID="targeting-ranges-toggle"
+          accessibilityRole="button"
+          accessibilityState={{ expanded: rangesOpen }}
+          accessibilityLabel={
+            rangesOpen
+              ? "Hide min max ranges"
+              : advancedCount > 0
+                ? `Min max ranges, ${advancedCount} active`
+                : "Min max ranges"
+          }
+          onPress={() => setRangesOpen((prev) => !prev)}
           style={[
-            t.typography.footnote,
-            { color: t.colors.text_secondary, marginTop: t.spacing.lg, marginBottom: t.spacing.sm },
+            styles.rangesToggle,
+            {
+              borderColor: t.colors.separator,
+              backgroundColor: t.colors.background_tertiary,
+              marginTop: t.spacing.lg,
+              minHeight: layout.minTap,
+            },
           ]}
         >
-          Performance
-        </Text>
-        <View style={styles.chipWrap}>
-          {PERF_FILTERS.map((f) => {
-            const active = perf === f.key;
-            return (
-              <TouchableOpacity
-                key={f.key}
-                testID={`targeting-perf-${f.key}`}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
-                accessibilityLabel={`${f.label}. ${f.hint}`}
-                onPress={() => onPerf(f.key)}
-                style={[
-                  styles.filterChip,
-                  {
-                    backgroundColor: active ? t.colors.tone_primary + "22" : t.colors.background_tertiary,
-                    borderColor: active ? t.colors.tone_primary + "66" : t.colors.separator,
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    t.typography.caption1,
-                    { color: active ? t.colors.tone_primary : t.colors.text_secondary, fontWeight: active ? "700" : "500" },
-                  ]}
-                >
-                  {f.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-        <Text
-          style={[
-            t.typography.footnote,
-            { color: t.colors.text_secondary, marginTop: t.spacing.lg, marginBottom: t.spacing.sm },
-          ]}
-        >
-          Sort
-        </Text>
-        <View style={styles.chipWrap}>
-          {SORT_OPTIONS.map((f) => {
-            const active = sort === f.key;
-            return (
-              <TouchableOpacity
-                key={f.key}
-                testID={`targeting-sort-${f.key}`}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
-                accessibilityLabel={`Sort by ${f.label} high to low`}
-                onPress={() => onSort(f.key)}
-                style={[
-                  styles.filterChip,
-                  {
-                    backgroundColor: active ? t.colors.tone_primary + "22" : t.colors.background_tertiary,
-                    borderColor: active ? t.colors.tone_primary + "66" : t.colors.separator,
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    t.typography.caption1,
-                    { color: active ? t.colors.tone_primary : t.colors.text_secondary, fontWeight: active ? "700" : "500" },
-                  ]}
-                >
-                  {f.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-        <Text
-          style={[
-            t.typography.footnote,
-            { color: t.colors.text_secondary, marginTop: t.spacing.lg, marginBottom: t.spacing.sm },
-          ]}
-        >
-          Ranges
-        </Text>
-        <View style={styles.advGrid}>
-          {(
-            [
-              ["Bid min", "bidMin", "targeting-adv-bid-min"],
-              ["Bid max", "bidMax", "targeting-adv-bid-max"],
-              ["ACoS min %", "acosMin", "targeting-adv-acos-min"],
-              ["ACoS max %", "acosMax", "targeting-adv-acos-max"],
-              ["Clicks min", "clicksMin", "targeting-adv-clicks-min"],
-              ["Clicks max", "clicksMax", "targeting-adv-clicks-max"],
-              ["Impr min", "impressionsMin", "targeting-adv-impr-min"],
-              ["Impr max", "impressionsMax", "targeting-adv-impr-max"],
-            ] as const
-          ).map(([label, key, testID]) => {
-            const bidDisabled = bidRangesIgnoredOnPlacement && (key === "bidMin" || key === "bidMax");
-            return (
-            <View key={key} style={styles.advField}>
-              <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: 4 }]}>{label}</Text>
-              <TextInput
-                testID={testID}
-                value={fieldValue(key)}
-                onChangeText={(raw) => setAdvField(key, raw)}
-                editable={!bidDisabled}
-                onBlur={() =>
-                  setAdvDrafts((prev) => {
-                    if (!Object.prototype.hasOwnProperty.call(prev, key)) return prev;
-                    const next = { ...prev };
-                    delete next[key];
-                    return next;
-                  })
-                }
-                keyboardType="decimal-pad"
-                placeholder="—"
-                placeholderTextColor={t.colors.text_tertiary}
-                accessibilityLabel={bidDisabled ? `${label}, not used on Placement` : label}
-                style={[
-                  t.typography.callout,
-                  styles.advInput,
-                  {
-                    color: t.colors.text_primary,
-                    borderColor: t.colors.separator,
-                    backgroundColor: t.colors.background_primary,
-                    opacity: bidDisabled ? 0.45 : 1,
-                  },
-                ]}
-              />
-            </View>
-            );
-          })}
-        </View>
-        {hasActiveAdvancedFilters(advanced) ? (
-          <TouchableOpacity
-            testID="targeting-adv-clear"
-            onPress={() => onAdvanced({ ...EMPTY_TARGETING_ADVANCED_FILTERS })}
-            style={{ marginTop: t.spacing.md }}
-            accessibilityRole="button"
-            accessibilityLabel="Clear min max ranges"
-          >
-            <Text style={[t.typography.caption1, { color: t.colors.tone_danger, fontWeight: "700" }]}>
-              Clear ranges
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[t.typography.body, { color: t.colors.text_primary, fontWeight: "600" }]}>
+              Min / max ranges
             </Text>
-          </TouchableOpacity>
+            <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}>
+              {advancedCount > 0 ? `${advancedCount} active` : "Bid, ACoS, clicks, impressions"}
+            </Text>
+          </View>
+          <SFSymbol
+            name={rangesOpen ? "chevron.up" : "chevron.down"}
+            size={14}
+            color={t.colors.text_tertiary}
+          />
+        </Pressable>
+        {rangesOpen ? (
+          <>
+            <View style={[styles.advGrid, { marginTop: t.spacing.md }]}>
+              {(
+                [
+                  ["Bid min", "bidMin", "targeting-adv-bid-min"],
+                  ["Bid max", "bidMax", "targeting-adv-bid-max"],
+                  ["ACoS min %", "acosMin", "targeting-adv-acos-min"],
+                  ["ACoS max %", "acosMax", "targeting-adv-acos-max"],
+                  ["Clicks min", "clicksMin", "targeting-adv-clicks-min"],
+                  ["Clicks max", "clicksMax", "targeting-adv-clicks-max"],
+                  ["Impr min", "impressionsMin", "targeting-adv-impr-min"],
+                  ["Impr max", "impressionsMax", "targeting-adv-impr-max"],
+                ] as const
+              ).map(([label, key, testID]) => {
+                const bidDisabled = bidRangesIgnoredOnPlacement && (key === "bidMin" || key === "bidMax");
+                return (
+                  <View key={key} style={styles.advField}>
+                    <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginBottom: 4 }]}>
+                      {label}
+                    </Text>
+                    <TextInput
+                      testID={testID}
+                      value={fieldValue(key)}
+                      onChangeText={(raw) => setAdvField(key, raw)}
+                      editable={!bidDisabled}
+                      onBlur={() =>
+                        setAdvDrafts((prev) => {
+                          if (!Object.prototype.hasOwnProperty.call(prev, key)) return prev;
+                          const next = { ...prev };
+                          delete next[key];
+                          return next;
+                        })
+                      }
+                      keyboardType="decimal-pad"
+                      placeholder="—"
+                      placeholderTextColor={t.colors.text_tertiary}
+                      accessibilityLabel={bidDisabled ? `${label}, not used on Placement` : label}
+                      style={[
+                        t.typography.callout,
+                        styles.advInput,
+                        {
+                          color: t.colors.text_primary,
+                          borderColor: t.colors.separator,
+                          backgroundColor: t.colors.background_primary,
+                          opacity: bidDisabled ? 0.45 : 1,
+                          minHeight: layout.minTap,
+                        },
+                      ]}
+                    />
+                  </View>
+                );
+              })}
+            </View>
+            {rangesActive ? (
+              <Pressable
+                testID="targeting-adv-clear"
+                onPress={() => onAdvanced({ ...EMPTY_TARGETING_ADVANCED_FILTERS })}
+                style={{ marginTop: t.spacing.md, minHeight: layout.minTap, justifyContent: "center" }}
+                accessibilityRole="button"
+                accessibilityLabel="Clear min max ranges"
+              >
+                <Text style={[t.typography.caption1, { color: t.colors.tone_danger, fontWeight: "700" }]}>
+                  Clear ranges
+                </Text>
+              </Pressable>
+            ) : null}
+          </>
         ) : null}
       </ScrollView>
     </>
@@ -2449,10 +2903,10 @@ function keywordStatus(item: any): { label: string; tone: "good" | "warning" | "
   const orders = Number(item.total_orders) || 0;
   const sales = Number(item.total_sales) || 0;
   const acos = Number(item.total_acos) || 0;
-  if (spend > 0 && orders === 0) return { label: "Spending without sales", tone: "danger" };
+  if (spend > 0 && orders === 0) return { label: "No sales", tone: "danger" };
   if (sales > 0 && acos > 35) return { label: "High ACoS", tone: "warning" };
   if (sales > 0) return { label: "Profitable", tone: "good" };
-  return { label: "No spend yet", tone: "inactive" };
+  return { label: "No spend", tone: "inactive" };
 }
 
 function KeywordRow({
@@ -2483,11 +2937,11 @@ function KeywordRow({
   const rowLabel = targetingSpeech([
     item.keyword_text ?? "Keyword",
     matchTypeSpoken(item.match_type),
-    status.label,
+    status.tone !== "inactive" && status.tone !== "good" ? status.label : null,
     enabledSpoken(item.status === "enabled"),
-    `ACoS ${sales > 0 ? formatPercent(Number(item.total_acos)) : "not available"}`,
-    `Spend ${formatCurrency(Number(item.total_spend) || 0, currency)}`,
+    `ACoS ${sales > 0 ? formatPercent(Number(item.total_acos)) : "—"}`,
   ]);
+  const cooldown = getEntityBidCooldown(item, entityCooldownHours);
   return (
     <ListCard testID={`keywords-row-${item.id}`} compact>
       <View style={styles.leadRow}>
@@ -2510,6 +2964,7 @@ function KeywordRow({
                 testID={`targeting-state-${item.id}`}
                 enabled={item.status === "enabled"}
                 noun="keyword"
+                compact
                 onChange={async (next) => {
                   assertNotViewingAsOtherUser(viewAsOtherUser);
                   const previous = applyOptimisticEntityState(queryClient, "keyword", item.id, next);
@@ -2537,14 +2992,12 @@ function KeywordRow({
           <View style={styles.titleRow}>
             <Text
               style={[
-                t.typography.subhead,
+                t.typography.callout,
                 {
                   color: t.colors.text_primary,
-                  fontWeight: "700",
+                  fontWeight: "600",
                   flex: 1,
                   minWidth: 0,
-                  letterSpacing: -0.25,
-                  lineHeight: 20,
                 },
               ]}
               numberOfLines={2}
@@ -2566,10 +3019,6 @@ function KeywordRow({
             </ResponderBox>
           </View>
           <View style={styles.metaRow}>
-            <ToneDot value={Number(item.total_acos)} />
-            <Text style={[t.typography.caption2, { color: toneColor(status.tone, t.colors), fontWeight: "600" }]}>
-              {status.label}
-            </Text>
             {item.match_type ? (
               <Text
                 style={[
@@ -2583,17 +3032,19 @@ function KeywordRow({
                 {formatMatchTypeLabel(item.match_type)}
               </Text>
             ) : null}
-            {(() => {
-              const cooldown = getEntityBidCooldown(item, entityCooldownHours);
-              return cooldown.isInCooldown ? (
+            {status.tone !== "inactive" && status.tone !== "good" ? (
+              <Text style={[t.typography.caption2, { color: toneColor(status.tone, t.colors), fontWeight: "600" }]}>
+                {status.label}
+              </Text>
+            ) : null}
+            {cooldown.isInCooldown ? (
               <Text
                 testID={`targeting-cooldown-badge-${item.id}`}
-                style={[t.typography.caption2, { color: t.colors.tone_warning, fontWeight: "700" }]}
+                style={[t.typography.caption2, { color: t.colors.tone_warning, fontWeight: "600" }]}
               >
-                {`Cooldown · ${cooldown.sourceTag}`}
+                Cooldown
               </Text>
-              ) : null;
-            })()}
+            ) : null}
           </View>
           <DenseMetricLine items={targetingMetricItems(item, currency, t)} />
         </TouchableOpacity>
@@ -2607,6 +3058,7 @@ function ProductTargetRow({
   currency,
   inheritedDefaultBid,
   t,
+  titleLoading = false,
   viewAsOtherUser = false,
   onPress,
   onEditBid,
@@ -2618,6 +3070,8 @@ function ProductTargetRow({
   currency: string;
   inheritedDefaultBid?: number;
   t: any;
+  /** True while post-paint retail fill is still trying this ASIN. */
+  titleLoading?: boolean;
   viewAsOtherUser?: boolean;
   onPress: () => void;
   onEditBid: (opts?: { forceCooldown?: boolean }) => void;
@@ -2628,18 +3082,36 @@ function ProductTargetRow({
   const queryClient = useQueryClient();
   const { entityCooldownHours } = useApp();
   const target = describeProductTarget(item.expression, item.expression_type, item.resolved_expression);
-  const displayTitle = productTargetHeading(item);
+  const rawHeading = productTargetHeading(item);
+  // Prefer ASIN over a loading placeholder so rows stay stable while retail titles fill.
+  const displayTitle =
+    rawHeading === "Title unavailable" && target.asin
+      ? target.asin
+      : titleLoading && rawHeading === "Title unavailable"
+        ? target.asin || "Title unavailable"
+        : rawHeading;
   const category = isCategoryTarget(item.expression, item.expression_type);
   const coverAsin = target.asin || item.cover_asin || null;
   const sales = Number(item.total_sales) || 0;
+  const status = keywordStatus(item);
   const rowLabel = targetingSpeech([
     displayTitle,
-    target.label,
-    keywordStatus(item).label,
+    target.isAuto || category ? target.label : formatMatchTypeLabel(target.label) || target.label,
+    status.tone !== "inactive" && status.tone !== "good" ? status.label : null,
     enabledSpoken(item.state === "enabled"),
-    `ACoS ${sales > 0 ? formatPercent(Number(item.total_acos)) : "not available"}`,
-    `Spend ${formatCurrency(Number(item.total_spend) || 0, currency)}`,
+    `ACoS ${sales > 0 ? formatPercent(Number(item.total_acos)) : "—"}`,
   ]);
+  const cooldown = getEntityBidCooldown(item, entityCooldownHours);
+  const titleMissing = displayTitle === "Title unavailable" || displayTitle === coverAsin;
+  const identitySecondary = target.isAuto
+    ? target.label
+    : category
+      ? target.asin
+        ? `Category · ${target.asin}`
+        : "Category"
+      : target.asin && displayTitle !== target.asin
+        ? `${formatMatchTypeLabel(target.label) || target.label} · ${target.asin}`
+        : formatMatchTypeLabel(target.label) || target.label;
 
   return (
     <ListCard testID={`products-row-${item.id}`} compact>
@@ -2663,6 +3135,7 @@ function ProductTargetRow({
                 testID={`targeting-state-${item.id}`}
                 enabled={item.state === "enabled"}
                 noun="target"
+                compact
                 onChange={async (next) => {
                   assertNotViewingAsOtherUser(viewAsOtherUser);
                   const previous = applyOptimisticEntityState(queryClient, "product_target", item.id, next);
@@ -2692,7 +3165,7 @@ function ProductTargetRow({
               uri={item.image_url}
               fallbackUri={fallbackAsinCoverUrl(coverAsin)}
               asin={coverAsin}
-              size="md"
+              size="xs"
               placeholder={target.isAuto ? "auto" : category ? "category" : coverAsin ? "book" : "cube"}
               recyclingKey={coverAsin || item.id}
             />
@@ -2701,72 +3174,62 @@ function ProductTargetRow({
               <View style={styles.titleRow}>
                 <Text
                   style={[
-                    t.typography.subhead,
+                    t.typography.callout,
                     {
-                      color: t.colors.text_primary,
-                      fontWeight: "700",
+                      color: titleMissing ? t.colors.text_secondary : t.colors.text_primary,
+                      fontWeight: "600",
                       flex: 1,
+                      flexShrink: 1,
                       minWidth: 0,
-                      letterSpacing: -0.25,
-                      lineHeight: 20,
                     },
                   ]}
                   numberOfLines={2}
+                  ellipsizeMode="tail"
                 >
                   {displayTitle}
                 </Text>
                 <ResponderBox>
-                  <MutationTap
-                    testID={`targeting-bid-${item.id}`}
-                    label="Bid"
-                    compact
-                    value={(() => {
-                      const bid = readTargetBid(item, inheritedDefaultBid);
-                      return bid != null ? formatCurrency(bid, currency) : "Set";
-                    })()}
-                    cooldownRow={item}
-                    onPress={onEditBid}
-                  />
+                  <View style={{ flexShrink: 0, maxWidth: 148 }}>
+                    <MutationTap
+                      testID={`targeting-bid-${item.id}`}
+                      label="Bid"
+                      compact
+                      value={(() => {
+                        const bid = readTargetBid(item, inheritedDefaultBid);
+                        return bid != null ? formatCurrency(bid, currency) : "Set";
+                      })()}
+                      cooldownRow={item}
+                      onPress={onEditBid}
+                    />
+                  </View>
                 </ResponderBox>
               </View>
               <View style={styles.metaRow}>
-                <ToneDot value={Number(item.total_acos)} />
                 <Text
                   style={[
                     t.typography.caption2,
                     {
-                      color:
-                        category || target.isAuto
-                          ? toneColor(target.tone, t.colors)
-                          : t.colors.text_secondary,
-                      fontWeight:
-                        category || target.isAuto || isExactMatchType(target.label)
-                          ? "700"
-                          : "500",
+                      color: t.colors.text_secondary,
+                      fontWeight: isExactMatchType(target.label) ? "700" : "500",
                     },
                   ]}
+                  numberOfLines={2}
                 >
-                  {target.isAuto
-                    ? `Auto · ${target.label}`
-                    : category
-                      ? target.asin
-                        ? `Category · ${target.asin}`
-                        : "Category"
-                      : target.asin
-                        ? `${formatMatchTypeLabel(target.label) || target.label} · ${target.asin}`
-                        : formatMatchTypeLabel(target.label) || target.label}
+                  {identitySecondary}
                 </Text>
-                {(() => {
-                  const cooldown = getEntityBidCooldown(item, entityCooldownHours);
-                  return cooldown.isInCooldown ? (
+                {status.tone !== "inactive" && status.tone !== "good" ? (
+                  <Text style={[t.typography.caption2, { color: toneColor(status.tone, t.colors), fontWeight: "600" }]}>
+                    {status.label}
+                  </Text>
+                ) : null}
+                {cooldown.isInCooldown ? (
                   <Text
                     testID={`targeting-cooldown-badge-${item.id}`}
-                    style={[t.typography.caption2, { color: t.colors.tone_warning, fontWeight: "700" }]}
+                    style={[t.typography.caption2, { color: t.colors.tone_warning, fontWeight: "600" }]}
                   >
-                    {`Cooldown · ${cooldown.sourceTag}`}
+                    Cooldown
                   </Text>
-                  ) : null;
-                })()}
+                ) : null}
               </View>
               <DenseMetricLine items={targetingMetricItems(item, currency, t)} />
             </View>
@@ -2921,9 +3384,9 @@ function PlacementRow({
 
 const styles = StyleSheet.create({
   leadRow: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: layout.minTap },
-  switchWell: { minWidth: 44, minHeight: layout.minTap, alignItems: "flex-start", justifyContent: "center" },
+  switchWell: { minWidth: 42, alignItems: "flex-start", justifyContent: "center" },
   selectHit: { minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" },
-  cardHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
+  cardHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
   titleRow: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 28 },
   metaRow: {
     flexDirection: "row",
@@ -2938,27 +3401,32 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 8,
   },
-  chipWrap: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
+  filterGroup: {
+    borderRadius: dashboard.chipRadius,
+    borderCurve: "continuous",
+    overflow: "hidden",
   },
-  bookList: {
-    gap: 8,
-  },
-  bookRow: {
+  filterCheckRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth * 2,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    paddingHorizontal: dashboard.pageInset,
+    paddingVertical: density.listRowPad,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  bookRowCoverSlot: {
-    width: 40,
-    height: 58,
-    borderRadius: 9,
+  bookListRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: dashboard.pageInset,
+    paddingVertical: density.listRowPad,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  bookRowCoverSlotXs: {
+    width: 36,
+    height: 52,
+    borderRadius: 8,
+    borderCurve: "continuous",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2969,6 +3437,16 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     gap: 2,
+  },
+  rangesToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: dashboard.pageInset,
+    paddingVertical: density.listRowPad,
+    borderRadius: dashboard.chipRadius,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
   },
   advGrid: {
     flexDirection: "row",
@@ -2983,14 +3461,9 @@ const styles = StyleSheet.create({
   advInput: {
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 10,
+    borderCurve: "continuous",
     paddingHorizontal: 10,
     paddingVertical: 8,
-  },
-  filterChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
   },
   outboxBanner: {
     marginTop: 8,
@@ -3058,7 +3531,8 @@ const styles = StyleSheet.create({
   },
   filterSheetBody: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
+    // Extra clearance so Book / ranges clear the home indicator (and dev toast).
+    paddingBottom: layout.tabClearance,
     gap: spacing.xxs,
   },
 });

@@ -16,10 +16,13 @@ test("load errors never say failed to load", () => {
   assert.doesNotMatch(couldntLoad("books"), /failed to load/i);
 });
 
-test("background scope prefers selected profiles over last Home", () => {
+test("background refresh expands the picker scope to the full financial portfolio", () => {
   assert.match(background, /parseSelectedProfileIds/);
   assert.match(background, /mergeBackgroundScope/);
   assert.match(background, /adsProfileIdsForSelection/);
+  assert.match(background, /activatedAdsProfileIds/);
+  assert.match(background, /activatedProfileIds/);
+  assert.match(background, /const portfolioScope = \{ \.\.\.scope, profileIds: queryIds \}/);
 });
 
 test("dual-source background refresh is wired to notifications and resume", () => {
@@ -32,10 +35,27 @@ test("dual-source background refresh is wired to notifications and resume", () =
   assert.match(notifications, /resolveBackgroundScope/);
   assert.match(appContext, /runDualSourceBackgroundRefresh/);
   assert.match(appContext, /backgroundFinancialQueryRoots/);
+  // Resume must also bust list-tab + Create caches (not only Overview KPIs).
+  assert.match(background, /campaigns-list-range-v3/);
+  assert.match(background, /mobile-targeting-page-v1/);
+  assert.match(background, /campaign-creation-books/);
+  assert.match(background, /targeting-book-options-v2/);
+  assert.match(background, /warmCampaignCreationBooksCache/);
+  // _layout foreground path must share the same root list (no divergent omit).
+  const layout = readFileSync(new URL("../app/_layout.tsx", import.meta.url), "utf8");
+  assert.match(layout, /backgroundFinancialQueryRoots/);
+  assert.match(layout, /FinancialForegroundRefetch/);
+  const create = readFileSync(new URL("../app/campaign/create.tsx", import.meta.url), "utf8");
+  assert.match(create, /CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS/);
+  assert.match(create, /isHomeQueryTimeout\(error\)/);
+  assert.match(appContext, /warmCampaignCreationBooksCache/);
+  assert.match(layout, /import \{ appQueryClient \} from "@\/src\/lib\/queryClient"/);
+  assert.match(layout, /const queryClient = appQueryClient/);
+  assert.doesNotMatch(layout, /new QueryClient\(/);
 });
 
 test("supabase bearer always retries once after refresh on 401", () => {
   assert.match(rulesApi, /picked\?\.source === "supabase"/);
-  assert.match(rulesApi, /refreshSupabaseAccessToken\(\)/);
+  assert.match(rulesApi, /refreshSupabaseAccessToken\(picked\.token\)/);
   assert.doesNotMatch(rulesApi, /freshSupabase !== picked\.token/);
 });

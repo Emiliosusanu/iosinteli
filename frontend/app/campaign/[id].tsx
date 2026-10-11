@@ -16,9 +16,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchCampaignById,
   fetchAdGroups,
-  fetchKeywords,
+  fetchExactCampaignTargetingCatalog,
   fetchProductAds,
-  fetchProductTargets,
   fetchSearchTerms,
   fetchCampaignPlacements,
   aggregateDailyMetrics,
@@ -35,9 +34,10 @@ import {
   formatOptionalPercent,
   formatInt,
   formatDateShort,
+  formatDateRangeLabel,
   safeDivide,
 } from "@/src/lib/format";
-import { EmptyState, ToneDot, SectionCard, MetricStrip, RetryState, ScreenSpinner } from "@/src/components/Primitives";
+import { DenseMetricLine, EmptyState, ToneDot, SectionCard, MetricStrip, RetryState, ScreenSpinner } from "@/src/components/Primitives";
 import { alertMutationError, assertCanWriteAmazon, assertNotViewingAsOtherUser, BidBudgetEditor, blockIfCannotWriteAmazon, EntityStateSwitch, MutationTap } from "@/src/components/Mutations";
 import { CampaignDailyChart, Funnel } from "@/src/components/Charts";
 import { SubScreen } from "@/src/components/SubScreen";
@@ -56,18 +56,22 @@ import {
   updateAdGroupManual,
   updateCampaign,
   updateCampaignState,
+  updateKeywordManual,
+  updateProductTargetManual,
   type PlacementAdjustments,
 } from "@/src/lib/mutations";
 import { applyOptimisticEntityBid, applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityBid, revertOptimisticEntityState, useInvalidateAds } from "@/src/lib/invalidateAds";
 import { enqueueEntityBidWrite } from "@/src/lib/bulkOutbox";
 import { describeProductTarget, fallbackAsinCoverUrl, formatMatchTypeLabel, isExactMatchType, productTargetHeading, readTargetBid } from "@/src/lib/targeting";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
+import { compareByTargetingRpcAcos } from "@/src/lib/targetingPage";
 import { sortSearchTermsAcosThenSpend } from "@/src/lib/searchTermSort";
 import { fastAddSearchTermExact, searchTermLooksTargeted } from "@/src/lib/searchTermHarvest";
 import { countriesForCampaignIdentity, countriesForSponsoredCampaign, identityFlagsA11y } from "@/src/lib/bookMarketplaces";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { CampaignMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 import { fetchNestBookProfitabilityDetail } from "@/src/lib/dashboardApi";
+import { useVisibleProductTargetTitles } from "@/src/lib/useVisibleProductTargetTitles";
 
 const PLACEMENT_EDITORS: {
   key: keyof PlacementAdjustments;
@@ -78,6 +82,9 @@ const PLACEMENT_EDITORS: {
   { key: "product_pages", label: "Product pages", testID: "campaign-placement-product" },
   { key: "rest_of_search", label: "Rest of search", testID: "campaign-placement-rest" },
 ];
+
+/** Keep detail ScrollViews responsive after the server has ranked the full scope. */
+const CAMPAIGN_TARGET_DISPLAY_LIMIT = 200;
 
 function placementEditorFor(placement: string) {
   const key = placement === "other" ? "rest_of_search" : placement;
@@ -142,7 +149,10 @@ export default function CampaignDetail() {
   const router = useRouter();
   const { width: viewportWidth } = useWindowDimensions();
   const { id, childState } = useLocalSearchParams<{ id: string; childState?: string }>();
-  const activeChildrenOnly = childState !== "all";
+  // Campaign detail is also the recovery surface for paused children. Showing
+  // enabled rows only made a paused keyword/target disappear before the user
+  // could turn it back on. Explicit `childState=enabled` keeps the narrow view.
+  const activeChildrenOnly = childState === "enabled";
   const { primaryCurrency, dateRange, selectedProfileIds, profilesLoading, adminFilterUserId, entityCooldownHours, profiles, defaultExactBid } = useApp();
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const { user, guestMode } = useAuth();
@@ -229,29 +239,34 @@ export default function CampaignDetail() {
   // For manual campaigns, fetch BOTH keywords and product targets — show whichever
   // has data (handles keyword, product-targeting, and mixed campaigns correctly).
   const keywordsQ = useQuery({
-    queryKey: ["campaign-keywords", adminFilterUserId ?? "self", id, c?.amazon_profile_id, activeAdGroupKey, dateRange.start, dateRange.end],
-    queryFn: () => fetchKeywords([c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean), {
+    queryKey: ["campaign-keywords-exact-period", adminFilterUserId ?? "self", user?.id ?? "anon", id, c?.amazon_profile_id, activeAdGroupKey, dateRange.start, dateRange.end],
+    queryFn: () => fetchExactCampaignTargetingCatalog({
       campaignId: id!,
-      ...childAdGroupFilter,
-      status: activeChildrenOnly ? "enabled" : undefined,
-      limit: 500,
+      profiles: [c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean),
       start: dateRange.start,
       end: dateRange.end,
-      filterUserId: adminFilterUserId,
+      ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+      state: activeChildrenOnly ? "active" : "all",
+      includeKeywords: true,
+      includeProductTargets: false,
     }),
+    select: (catalog) => catalog.keywords,
     enabled: canLoadActiveChildren && !isAuto,
   });
 
   const productTargetsQ = useQuery({
-    queryKey: ["campaign-product-targets", adminFilterUserId ?? "self", id, c?.amazon_profile_id, activeAdGroupKey, dateRange.start, dateRange.end],
-    queryFn: () => fetchProductTargets([c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean), {
+    queryKey: ["campaign-product-targets-exact-period", adminFilterUserId ?? "self", user?.id ?? "anon", id, c?.amazon_profile_id, activeAdGroupKey, dateRange.start, dateRange.end],
+    queryFn: () => fetchExactCampaignTargetingCatalog({
       campaignId: id!,
-      ...childAdGroupFilter,
-      state: activeChildrenOnly ? "enabled" : undefined,
+      profiles: [c!.amazon_profile_id || selectedProfileIds[0]].filter(Boolean),
       start: dateRange.start,
       end: dateRange.end,
-      filterUserId: adminFilterUserId,
+      ownerId: viewAsOtherUser ? adminFilterUserId : user?.id ?? null,
+      state: activeChildrenOnly ? "active" : "all",
+      includeKeywords: false,
+      includeProductTargets: true,
     }),
+    select: (catalog) => catalog.productTargets,
     enabled: canLoadActiveChildren,
   });
 
@@ -309,6 +324,7 @@ export default function CampaignDetail() {
 
   const perf = useMemo(() => ({
     impressions: daily.map((m) => ({ value: m.impressions, label: formatDateShort(m.date) })),
+    clicks:      daily.map((m) => ({ value: m.clicks, label: formatDateShort(m.date) })),
     spend:       daily.map((m) => ({ value: m.spend, label: formatDateShort(m.date) })),
     orders:      daily.map((m) => ({ value: m.orders, label: formatDateShort(m.date) })),
     acos:        daily.map((m) => ({ value: m.sales > 0 ? (m.spend / m.sales) * 100 : 0, label: formatDateShort(m.date) })),
@@ -351,19 +367,52 @@ export default function CampaignDetail() {
       [...(productTargetsQ.data ?? []).filter((pt) => activeChildrenOnly
         ? matchesEntityStateFilter((pt as any).state, "enabled")
         : shouldShowActiveOrPausedWithData(pt as any, (pt as any).state))].sort(
-        compareByAcosSpendImpressionsSync,
+        compareByTargetingRpcAcos,
       ),
     [activeChildrenOnly, productTargetsQ.data],
   );
   const visibleKeywords = useMemo(
     () =>
-      [...(keywordsQ.data ?? []).filter((kw) => activeChildrenOnly
+      (keywordsQ.data ?? []).filter((kw) => activeChildrenOnly
         ? matchesEntityStateFilter(kw.status, "enabled")
-        : shouldShowActiveOrPausedWithData(kw as any, kw.status))].sort(
-        compareByAcosSpendImpressionsSync,
-      ),
+        : shouldShowActiveOrPausedWithData(kw as any, kw.status)),
     [activeChildrenOnly, keywordsQ.data],
   );
+  const displayedKeywords = useMemo(
+    () => visibleKeywords.slice(0, CAMPAIGN_TARGET_DISPLAY_LIMIT),
+    [visibleKeywords],
+  );
+  const baseDisplayedProductTargets = useMemo(
+    () => visibleProductTargets.slice(0, CAMPAIGN_TARGET_DISPLAY_LIMIT),
+    [visibleProductTargets],
+  );
+  const displayedProductTargets = useVisibleProductTargetTitles(
+    baseDisplayedProductTargets,
+    `${id}:${dateRange.start}:${dateRange.end}:${productTargetsQ.dataUpdatedAt}`,
+  );
+  const campaignChildPreviewByAdGroup = useMemo(() => {
+    const previews = new Map<string, { keywordCount: number; targetCount: number; labels: string[] }>();
+    const ensure = (id: string) => {
+      const current = previews.get(id) ?? { keywordCount: 0, targetCount: 0, labels: [] };
+      previews.set(id, current);
+      return current;
+    };
+    for (const keyword of visibleKeywords) {
+      if (!keyword.ad_group_id) continue;
+      const preview = ensure(String(keyword.ad_group_id));
+      preview.keywordCount += 1;
+      const label = String(keyword.keyword_text ?? "").trim();
+      if (label && preview.labels.length < 3 && !preview.labels.includes(label)) preview.labels.push(label);
+    }
+    for (const target of visibleProductTargets) {
+      if (!target.ad_group_id) continue;
+      const preview = ensure(String(target.ad_group_id));
+      preview.targetCount += 1;
+      const label = productTargetHeading(target).trim();
+      if (label && preview.labels.length < 3 && !preview.labels.includes(label)) preview.labels.push(label);
+    }
+    return previews;
+  }, [visibleKeywords, visibleProductTargets]);
   const visibleProductAds = useMemo(
     () =>
       [...(productAdsQ.data ?? []).filter((pa) => activeChildrenOnly
@@ -599,6 +648,8 @@ export default function CampaignDetail() {
     !hasKeywords &&
     !hasProductTargets &&
     (keywordsQ.isError || productTargetsQ.isError);
+  const childPreviewLoading = awaitingChildScope || keywordsQ.isLoading || productTargetsQ.isLoading;
+  const childPreviewFailed = keywordsQ.isError || productTargetsQ.isError;
 
   return (
     <SubScreen title={c.name} showDateRange>
@@ -804,7 +855,7 @@ export default function CampaignDetail() {
                   adj={placementAdjustments[editor.key] ?? null}
                   row={undefined}
                   performanceState="error"
-                  primaryCurrency={primaryCurrency}
+                  primaryCurrency={campaignCurrency}
                   isLast={idx === PLACEMENT_EDITORS.length - 1}
                   onEdit={() => {
                     if (blockIfCannotWriteAmazon(writeGuard)) return;
@@ -829,7 +880,7 @@ export default function CampaignDetail() {
                   adj={placementAdjustments[editor.key] ?? null}
                   row={undefined}
                   performanceState="loading"
-                  primaryCurrency={primaryCurrency}
+                  primaryCurrency={campaignCurrency}
                   isLast={idx === PLACEMENT_EDITORS.length - 1}
                   onEdit={() => {
                     if (blockIfCannotWriteAmazon(writeGuard)) return;
@@ -851,7 +902,7 @@ export default function CampaignDetail() {
                     adj={placementAdjustments[editor.key] ?? null}
                     row={row}
                     performanceState={row ? "ready" : "empty"}
-                    primaryCurrency={primaryCurrency}
+                    primaryCurrency={campaignCurrency}
                     isLast={idx === PLACEMENT_EDITORS.length - 1 && extraPlacements.length === 0}
                     onEdit={() => {
                     if (blockIfCannotWriteAmazon(writeGuard)) return;
@@ -867,7 +918,7 @@ export default function CampaignDetail() {
                   adj={null}
                   row={row}
                   performanceState="ready"
-                  primaryCurrency={primaryCurrency}
+                  primaryCurrency={campaignCurrency}
                   isLast={idx === extraPlacements.length - 1}
                 />
               ))}
@@ -892,16 +943,21 @@ export default function CampaignDetail() {
           <SectionCard title="Daily performance">
             <CampaignDailyChart
               impressionsData={perf.impressions}
+              clicksData={perf.clicks}
               spendData={perf.spend}
               ordersData={perf.orders}
               acosData={perf.acos}
               width={chartWidth}
-              currency={primaryCurrency}
+              currency={campaignCurrency}
             />
             <View style={styles.legend}>
               <View style={styles.legendItem}>
                 <View style={[styles.dot, { backgroundColor: t.colors.chart_grid }]} />
                 <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>Impressions</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.dot, { backgroundColor: t.colors.tone_placement }]} />
+                <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>Clicks</Text>
               </View>
               <View style={styles.legendItem}>
                 <View style={[styles.dot, { backgroundColor: t.colors.tone_warning }]} />
@@ -954,6 +1010,9 @@ export default function CampaignDetail() {
             },
           }}
         >
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginBottom: spacing.sm }]}>
+            Performance metrics · {formatDateRangeLabel(dateRange)}
+          </Text>
           {adGroupsQ.isError && visibleAdGroups.length === 0 ? (
             <RetryState
               title="Couldn't load ad groups"
@@ -969,6 +1028,14 @@ export default function CampaignDetail() {
               const agSales = Number(ag.total_sales);
               const defaultBid = readTargetBid(ag as any);
               const bidChipValue = defaultBid ?? campaignFallbackDefaultBid ?? null;
+              const childPreview = campaignChildPreviewByAdGroup.get(String(ag.id));
+              const childCountLabel = childPreview
+                ? `${childPreview.keywordCount} keywords · ${childPreview.targetCount} product targets`
+                : childPreviewLoading
+                  ? "Loading targets"
+                  : childPreviewFailed
+                    ? "Targets unavailable"
+                    : "No targets";
               return (
                 <View
                   key={ag.id}
@@ -997,7 +1064,7 @@ export default function CampaignDetail() {
                   <TouchableOpacity
                     activeOpacity={0.72}
                     accessibilityRole="button"
-                    accessibilityLabel={`${ag.name || "Ad Group"}, ${statusLabel(ag.state)}, ACoS ${agSales > 0 ? formatPercent(agAcos) : "none"}, spend ${formatCurrency(Number(ag.total_spend), primaryCurrency)}, ${formatInt(Number(ag.total_orders))} orders`}
+                    accessibilityLabel={`${ag.name || "Ad Group"}, ${statusLabel(ag.state)}, ACoS ${agSales > 0 ? formatPercent(agAcos) : "none"}, spend ${formatCurrency(Number(ag.total_spend), campaignCurrency)}, ${formatInt(Number(ag.total_orders))} orders`}
                     onPress={() =>
                       router.push({
                         pathname: "/more/ad-group/[id]",
@@ -1005,6 +1072,7 @@ export default function CampaignDetail() {
                           id: ag.id,
                           name: ag.name || "Ad Group",
                           isAuto: String(!!(ag as any).is_auto),
+                          currency: campaignCurrency,
                           spend: String(ag.total_spend ?? 0),
                           orders: String(ag.total_orders ?? 0),
                           acos: String(ag.total_acos ?? 0),
@@ -1024,7 +1092,10 @@ export default function CampaignDetail() {
                         </Text>
                       </View>
                       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginLeft: 16, marginTop: 3 }]} numberOfLines={1}>
-                        {statusLabel(ag.state)} · {formatCurrency(Number(ag.total_spend), primaryCurrency)} spend · {formatInt(Number(ag.total_impressions))} impr · {formatInt(Number(ag.total_clicks))} clicks · {formatInt(Number(ag.total_orders))} orders
+                        {statusLabel(ag.state)} · {formatCurrency(Number(ag.total_spend), campaignCurrency)} spend · {formatInt(Number(ag.total_impressions))} impr · {formatInt(Number(ag.total_clicks))} clicks · {formatInt(Number(ag.total_orders))} orders
+                      </Text>
+                      <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginLeft: 16, marginTop: 2 }]} numberOfLines={1}>
+                        {childCountLabel}{childPreview?.labels.length ? ` · ${childPreview.labels.join(" · ")}` : ""}
                       </Text>
                     </View>
                     <View style={{ alignItems: "flex-end", marginLeft: spacing.sm }}>
@@ -1040,8 +1111,8 @@ export default function CampaignDetail() {
                       testID={`campaign-adgroup-bid-${ag.id}`}
                       label="Bid"
                       compact
-                      value={bidChipValue != null ? formatCurrency(bidChipValue, primaryCurrency) : "Set"}
-                      currency={primaryCurrency}
+                      value={bidChipValue != null ? formatCurrency(bidChipValue, campaignCurrency) : "Set"}
+                      currency={campaignCurrency}
                       cooldownRow={ag as any}
                       onPress={(opts) =>
                         openEntityBidEdit(
@@ -1075,12 +1146,30 @@ export default function CampaignDetail() {
         </SectionCard>
 
         {!isAuto && hasKeywords ? (
-          <SectionCard title="Keywords">
-            {visibleKeywords.map((kw, idx) => (
+          <SectionCard title={`Keywords · Top ${displayedKeywords.length} of ${visibleKeywords.length}`}>
+            {displayedKeywords.map((kw, idx) => (
               <View
                 key={kw.id}
-                style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: idx === visibleKeywords.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
+                style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: idx === displayedKeywords.length - 1 ? 0 : StyleSheet.hairlineWidth }]}
               >
+                <View onStartShouldSetResponder={() => true} onTouchEnd={(event) => event.stopPropagation()} style={{ marginRight: 8 }}>
+                  <EntityStateSwitch
+                    testID={`campaign-keyword-state-${kw.id}`}
+                    enabled={matchesEntityStateFilter(kw.status, "enabled")}
+                    noun="keyword"
+                    onChange={async (next) => {
+                      assertNotViewingAsOtherUser(viewAsOtherUser);
+                      const previous = applyOptimisticEntityState(queryClient, "keyword", kw.id, next);
+                      try {
+                        await updateKeywordManual(kw.id, { status: next ? "enabled" : "paused" });
+                        void invalidateEntityStateQueries(queryClient, "keyword");
+                      } catch (error) {
+                        revertOptimisticEntityState(queryClient, "keyword", kw.id, previous);
+                        throw error;
+                      }
+                    }}
+                  />
+                </View>
                 <TouchableOpacity
                   activeOpacity={0.75}
                   accessibilityRole="button"
@@ -1100,14 +1189,9 @@ export default function CampaignDetail() {
                         {formatMatchTypeLabel(kw.match_type)}
                       </Text>
                       {kw.match_type ? " · " : ""}
-                      {formatInt(kw.total_clicks)} clicks · {formatInt(kw.total_orders)} orders
+                      {statusLabel(kw.status)}
                     </Text>
-                  </View>
-                  <View style={{ alignItems: "flex-end", marginLeft: spacing.sm }}>
-                    <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>ACoS</Text>
-                    <Text style={[t.typography.callout, { color: toneColor(acosTone(Number(kw.total_acos)), t.colors), fontVariant: ["tabular-nums"] }]}>
-                      {kw.total_sales > 0 ? formatPercent(Number(kw.total_acos)) : "—"}
-                    </Text>
+                    <DenseMetricLine items={campaignTargetMetricItems(kw, campaignCurrency, t)} />
                   </View>
                   <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
                 </TouchableOpacity>
@@ -1118,9 +1202,9 @@ export default function CampaignDetail() {
                     compact
                     value={(() => {
                       const bid = readTargetBid(kw as any, resolveInheritedBid(kw.ad_group_id));
-                      return bid != null ? formatCurrency(bid, primaryCurrency) : "Set";
+                      return bid != null ? formatCurrency(bid, campaignCurrency) : "Set";
                     })()}
-                    currency={primaryCurrency}
+                    currency={campaignCurrency}
                     cooldownRow={kw as any}
                     onPress={(opts) =>
                       openEntityBidEdit(
@@ -1141,15 +1225,16 @@ export default function CampaignDetail() {
         ) : null}
 
         {!isAuto && hasProductTargets ? (
-          <SectionCard title="Product targets">
-            {visibleProductTargets.map((pt: any, idx) => (
+          <SectionCard title={`Product targets · Top ${displayedProductTargets.length} of ${visibleProductTargets.length}`}>
+            {displayedProductTargets.map((pt: any, idx) => (
               <ProductTargetRow
                 key={pt.id}
                 pt={pt}
-                isLast={idx === visibleProductTargets.length - 1}
-                primaryCurrency={primaryCurrency}
+                isLast={idx === displayedProductTargets.length - 1}
+                primaryCurrency={campaignCurrency}
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
+                viewAsOtherUser={viewAsOtherUser}
                 onOpenTarget={(targetId) => router.push(`/target/${targetId}` as any)}
                 onEditBid={(opts) => {
                   const bid = readTargetBid(pt, resolveInheritedBid(pt.ad_group_id));
@@ -1195,16 +1280,17 @@ export default function CampaignDetail() {
         ) : null}
 
         {isAuto && hasProductTargets ? (
-          <SectionCard title="Auto Targeting">
-            {visibleProductTargets.map((pt: any, idx) => (
+          <SectionCard title={`Auto Targeting (${visibleProductTargets.length})`}>
+            {displayedProductTargets.map((pt: any, idx) => (
               <ProductTargetRow
                 key={pt.id}
                 pt={pt}
                 variant="auto"
-                isLast={idx === visibleProductTargets.length - 1}
-                primaryCurrency={primaryCurrency}
+                isLast={idx === displayedProductTargets.length - 1}
+                primaryCurrency={campaignCurrency}
                 inheritedDefaultBid={resolveInheritedBid(pt.ad_group_id)}
                 t={t}
+                viewAsOtherUser={viewAsOtherUser}
                 onOpenTarget={(targetId) => router.push(`/target/${targetId}` as any)}
                 onEditBid={(opts) => {
                   const bid = readTargetBid(pt, resolveInheritedBid(pt.ad_group_id));
@@ -1258,7 +1344,7 @@ export default function CampaignDetail() {
                     >
                       <Text style={[t.typography.callout, { color: t.colors.text_primary }]} numberOfLines={2}>{st.search_term}</Text>
                       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 2 }]}>
-                        {isWinner ? "Converting" : "No orders"} · {formatCurrency(st.total_spend, primaryCurrency)} · {formatInt(st.total_orders)}
+                        {isWinner ? "Converting" : "No orders"} · {formatCurrency(st.total_spend, campaignCurrency)} · {formatInt(st.total_orders)}
                       </Text>
                     </TouchableOpacity>
                     <TouchableOpacity
@@ -1310,7 +1396,7 @@ export default function CampaignDetail() {
                 key={pa.id}
                 pa={pa}
                 isLast={idx === visibleProductAds.length - 1}
-                primaryCurrency={primaryCurrency}
+                primaryCurrency={campaignCurrency}
                 t={t}
                 onOpenBook={(asin, title, imageUrl) =>
                   router.push({
@@ -1338,7 +1424,7 @@ export default function CampaignDetail() {
         visible={budgetOpen}
         title={budgetNoun}
         value={displayBudget ?? 0}
-        currency={primaryCurrency}
+        currency={campaignCurrency}
         kind="money"
         onClose={() => setBudgetOpen(false)}
         onSave={async (next) => {
@@ -1366,7 +1452,7 @@ export default function CampaignDetail() {
         visible={entityBidEdit != null}
         title={entityBidEdit?.title ?? "Bid"}
         value={entityBidEdit?.value ?? 0.02}
-        currency={primaryCurrency}
+        currency={campaignCurrency}
         kind="money"
         onClose={() => setEntityBidEdit(null)}
         onSave={async (next) => {
@@ -1471,6 +1557,7 @@ function PlacementBlock({
     row ? `Spend ${formatCurrency(row.spend, primaryCurrency)}` : null,
     row ? `${formatInt(row.impressions)} impressions` : null,
     row ? `${formatInt(row.clicks)} clicks` : null,
+    row ? `${formatInt(row.orders)} orders` : null,
     row ? `ACoS ${row.sales > 0 ? formatPercent(row.acos) : "none"}` : null,
     onEdit ? "Edit placement" : null,
   ].filter(Boolean).join(". ");
@@ -1502,6 +1589,12 @@ function PlacementBlock({
             <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>Clicks</Text>
             <Text style={[t.typography.callout, { color: t.colors.text_primary, fontVariant: ["tabular-nums"] }]}>
               {formatInt(row.clicks)}
+            </Text>
+          </View>
+          <View style={styles.placementFact}>
+            <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>Orders</Text>
+            <Text style={[t.typography.callout, { color: t.colors.text_primary, fontVariant: ["tabular-nums"] }]}>
+              {formatInt(row.orders)}
             </Text>
           </View>
           <View style={styles.placementFact}>
@@ -1547,12 +1640,30 @@ function PlacementBlock({
   return <View style={wrapStyle}>{body}</View>;
 }
 
+function campaignTargetMetricItems(item: any, currency: string, t: any) {
+  const spend = Number(item.total_spend) || 0;
+  const sales = Number(item.total_sales) || 0;
+  const acos = Number(item.total_acos) || safeDivide(spend, sales) * 100;
+  return [
+    { label: "Spend", value: formatCurrency(spend, currency) },
+    { label: "Impr", value: formatInt(Number(item.total_impressions) || 0) },
+    { label: "Clicks", value: formatInt(Number(item.total_clicks) || 0) },
+    { label: "Orders", value: formatInt(Number(item.total_orders) || 0) },
+    {
+      label: "ACoS",
+      value: sales > 0 ? formatPercent(acos) : "—",
+      color: sales > 0 ? toneColor(acosTone(acos), t.colors) : t.colors.text_secondary,
+    },
+  ];
+}
+
 function ProductTargetRow({
   pt,
   isLast,
   primaryCurrency,
   inheritedDefaultBid,
   t,
+  viewAsOtherUser,
   onOpenTarget,
   onEditBid,
   variant = "product",
@@ -1562,22 +1673,38 @@ function ProductTargetRow({
   primaryCurrency: string;
   inheritedDefaultBid?: number;
   t: any;
+  viewAsOtherUser: boolean;
   onOpenTarget: (targetId: string) => void;
   onEditBid: (opts?: { forceCooldown?: boolean }) => void;
   variant?: "auto" | "product";
 }) {
+  const queryClient = useQueryClient();
   const target = describeProductTarget(pt.expression, pt.expression_type, pt.resolved_expression);
   const fallbackCover = fallbackAsinCoverUrl(target.asin);
   const title = variant === "auto" ? target.label : productTargetHeading(pt);
-  const spend = Number(pt.total_spend ?? 0);
-  const sales = Number(pt.total_sales ?? 0);
-  const orders = Number(pt.total_orders ?? 0);
-  const acos = safeDivide(spend, sales) * 100;
   const bid = readTargetBid(pt, inheritedDefaultBid);
   const stateText = statusLabel(pt.state);
 
   return (
     <View style={[styles.row, { borderBottomColor: t.colors.separator, borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth }]}>
+      <View onStartShouldSetResponder={() => true} onTouchEnd={(event) => event.stopPropagation()} style={{ marginRight: 8 }}>
+        <EntityStateSwitch
+          testID={`campaign-target-state-${pt.id}`}
+          enabled={matchesEntityStateFilter(pt.state, "enabled")}
+          noun="target"
+          onChange={async (next) => {
+            assertNotViewingAsOtherUser(viewAsOtherUser);
+            const previous = applyOptimisticEntityState(queryClient, "product_target", pt.id, next);
+            try {
+              await updateProductTargetManual(pt.id, { state: next ? "enabled" : "paused" });
+              void invalidateEntityStateQueries(queryClient, "product_target");
+            } catch (error) {
+              revertOptimisticEntityState(queryClient, "product_target", pt.id, previous);
+              throw error;
+            }
+          }}
+        />
+      </View>
       <TouchableOpacity
         activeOpacity={0.82}
         accessibilityRole="button"
@@ -1609,10 +1736,11 @@ function ProductTargetRow({
               </Text>
             )}
             {variant === "auto" ? null : " · "}
-            {[stateText, target.asin, formatCurrency(spend, primaryCurrency), formatInt(orders), sales > 0 ? formatPercent(acos) : null]
+            {[stateText, target.asin]
               .filter(Boolean)
               .join(" · ")}
           </Text>
+          <DenseMetricLine items={campaignTargetMetricItems(pt, primaryCurrency, t)} />
         </View>
         <SFSymbol name="chevron.right" size={15} color={t.colors.text_tertiary} />
       </TouchableOpacity>

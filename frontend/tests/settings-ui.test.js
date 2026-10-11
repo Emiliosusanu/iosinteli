@@ -10,6 +10,7 @@ import {
   appearancePreferenceLabel,
   appearancePreferenceSubtitle,
   DAILY_DIGEST_FOOTER,
+  DAILY_DIGEST_LABEL,
   DATA_SECTION_TITLE,
   GUEST_SETTINGS_NOTE,
   KDP_PROFIT_LABEL,
@@ -67,14 +68,15 @@ test("Appearance opens Light/Dark/System picker and persists preference", () => 
   assert.match(appearancePage, /appearance-option-\$\{option\}/);
   assert.match(appearancePage, /THEME_PREFERENCE_OPTIONS/);
   assert.match(appearancePage, /setPreference/);
+  assert.doesNotMatch(appearancePage, /appearancePreferenceSubtitle/);
   assert.match(theme, /inteliads\.appearance\.v1/);
   assert.match(theme, /Appearance\.setColorScheme/);
   assert.match(rootLayout, /more\/appearance/);
 });
 
 test("test notification is local and does not claim server push", () => {
-  assert.equal(TEST_NOTIFICATION_LABEL, "Send a test on this iPhone");
-  assert.match(TEST_NOTIFICATION_BODY, /local test/);
+  assert.equal(TEST_NOTIFICATION_LABEL, "Send test");
+  assert.match(TEST_NOTIFICATION_BODY, /Local test/);
   assert.doesNotMatch(TEST_NOTIFICATION_BODY, /Notifications are working/);
   assert.equal(TEST_NOTIFICATION_HINT, "");
   assert.match(notifications, /requestServerTestPush/);
@@ -94,7 +96,7 @@ test("notification copy stays short without inventing schedule walls", () => {
       backgroundRegistered: true,
       anyEnabled: true,
     }),
-    "Alerts on",
+    "",
   );
   assert.doesNotMatch(
     notificationFooter({
@@ -103,7 +105,7 @@ test("notification copy stays short without inventing schedule walls", () => {
       backgroundRegistered: true,
       anyEnabled: true,
     }),
-    /throughout the day at 8am|10am, noon, 2pm|15-min|Keychain/,
+    /throughout the day at 8am|10am, noon, 2pm|15-min|Keychain|Alerts on/,
   );
   assert.equal(
     notificationFooter({
@@ -124,7 +126,8 @@ test("notification copy stays short without inventing schedule walls", () => {
     "Sign in for alerts",
   );
   assert.equal(GUEST_SETTINGS_NOTE, "Sign in for alerts");
-  assert.equal(DAILY_DIGEST_FOOTER, "Daytime digests");
+  assert.equal(DAILY_DIGEST_FOOTER, "");
+  assert.equal(DAILY_DIGEST_LABEL, "Daily summary");
   assert.equal(notificationSwitchAccessibilityLabel("New orders", true), "New orders, on");
   assert.equal(spendThresholdLabel(25), "Overspend vs daily budgets");
   assert.doesNotMatch(spendThresholdLabel(25), /optional daily budget|typed on this screen/);
@@ -137,7 +140,8 @@ test("notification copy stays short without inventing schedule walls", () => {
   assert.match(notificationsPage, /notif-include-kdp-net/);
   assert.match(notificationsPage, /notif-kdp-data-stale/);
   assert.equal(KDP_STALE_LABEL, "KDP data stalled");
-  assert.match(KDP_STALE_FOOTER, /Chrome extension or iPhone helper/);
+  assert.match(KDP_STALE_FOOTER, /over an hour/);
+  assert.doesNotMatch(KDP_STALE_FOOTER, /Chrome extension or iPhone helper/);
   assert.doesNotMatch(notificationsPage, /44%/);
 });
 
@@ -162,7 +166,7 @@ test("guest cannot look like a remote settings save, and view-as stays self-scop
   assert.match(notificationsPage, /alertsLocked/);
   assert.match(screen, /VIEWING_CUSTOMER_SETTINGS_NOTE/);
   assert.match(notificationsPage, /VIEWING_CUSTOMER_SETTINGS_NOTE/);
-  assert.match(VIEWING_CUSTOMER_SETTINGS_NOTE, /signed-in account/);
+  assert.match(VIEWING_CUSTOMER_SETTINGS_NOTE, /yours/);
   assert.match(VIEWING_CUSTOMER_SETTINGS_NOTE, /not the customer/);
   assert.doesNotMatch(screen, /saveUserSetting|Settings saved|Syncing settings/);
 });

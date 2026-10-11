@@ -4,6 +4,7 @@ import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { storage } from "@/src/utils/storage";
 import {
+  QA_ACK_KEY,
   QA_COMMAND_KEY,
   dateRangeForQaCommand,
   parseQaCommand,
@@ -71,6 +72,7 @@ export function QaBootstrap() {
         targetsPerf: cmd.targetsPerf,
         targetsSort: cmd.targetsSort,
         targetsAdvanced: cmd.targetsAdvanced,
+        targetsOpenFilter: cmd.targetsOpenFilter,
         booksSort: cmd.booksSort,
       };
       stashPendingQaFilters(filterSeed);
@@ -112,6 +114,13 @@ export function QaBootstrap() {
         } else {
           router.replace(cmd.route as any);
         }
+      }
+
+      // The physical-device runner reads this exact id back from AsyncStorage.
+      // This prevents a screenshot from passing when a push or launch silently
+      // failed and the app remained on the previous screen.
+      if (cmd.id) {
+        await storage.setItem(QA_ACK_KEY, cmd.id);
       }
 
       console.log(

@@ -5,6 +5,16 @@ const { FileStore } = require('metro-cache');
 
 const config = getDefaultConfig(__dirname);
 
+// Keep the local native module anchored to this checkout. npm/yarn represent
+// file: dependencies as relative symlinks, and an isolated git worktree may
+// intentionally share the dependency cache with another checkout. Resolving
+// this package explicitly prevents Release archives from following that
+// shared symlink outside the source tree and then dropping the module.
+config.resolver.extraNodeModules = {
+  ...config.resolver.extraNodeModules,
+  "inteliads-native-sync": path.resolve(__dirname, "modules/inteliads-native-sync"),
+};
+
 // Use a stable on-disk store (shared across web/android)
 const root = process.env.METRO_CACHE_ROOT || path.join(__dirname, '.metro-cache');
 config.cacheStores = [

@@ -8,6 +8,8 @@ import {
   KDP_SECTION_FOOTER,
   NEST_DISABLED_VIEW_MESSAGE,
   PROFILE_LIST_ALL_LABEL,
+  PROFILE_LIST_ADS_ONLY_LABEL,
+  PROFILE_LIST_KDP_ADS_LABEL,
   PROFILE_LIST_READY_LABEL,
   adsAccountFamilyName,
   adsAccountGroupHeading,
@@ -107,7 +109,35 @@ test("ready default uses campaigns_enabled_count, not total campaign_count alone
   assert.match(topBar, /profiles-filter-ready/);
   assert.match(topBar, /listMode/);
   assert.equal(PROFILE_LIST_READY_LABEL, "Ready");
+  assert.equal(PROFILE_LIST_KDP_ADS_LABEL, "KDP + Ads");
+  assert.equal(PROFILE_LIST_ADS_ONLY_LABEL, "Ads only");
   assert.equal(PROFILE_LIST_ALL_LABEL, "All profiles");
+});
+
+test("KDP + Ads and Ads-only filters use bridge-enriched KDP counts", () => {
+  const profiles = [
+    { id: "linked", profile_id: "linked", kdp_account_count: 2 },
+    { id: "ads", profile_id: "ads", kdp_account_count: 0, campaigns_enabled_count: 2 },
+    { id: "inactive", profile_id: "inactive", kdp_account_count: 0, campaigns_enabled_count: 0 },
+    { id: "unknown", profile_id: "unknown", campaigns_enabled_count: 1 },
+  ];
+  assert.deepEqual(
+    filterProfilesBySheetMode(profiles, "kdp_ads").map((p) => p.id),
+    ["linked"],
+  );
+  assert.deepEqual(
+    filterProfilesBySheetMode(profiles, "ads_only").map((p) => p.id),
+    ["ads", "unknown"],
+  );
+  assert.match(topBar, /profiles-filter-kdp-ads/);
+  assert.match(topBar, /profiles-filter-ads-only/);
+  assert.match(topBar, /profile-kdp-group-/);
+  assert.match(topBar, /view-kdp-books-/);
+  assert.match(topBar, /rename-kdp-/);
+  assert.match(topBar, /fetchKdpAccountsForUser/);
+  assert.match(topBar, /pathname: "\/more\/kdp-manager"/);
+  assert.match(topBar, /showKdpAccountGroups \? \(/);
+  assert.match(topBar, /PROFILE_LIST_KDP_ADS_LABEL/);
 });
 
 test("select-all includes every Nest-enabled marketplace and skips Nest-off profiles", () => {
@@ -223,6 +253,11 @@ test("CAD joins a USD view and the reporting chip stays USD", () => {
   }
   assert.equal(displayCurrencyOfSelection(profiles, ["us", "ca"]), "USD");
   assert.deepEqual(currenciesInSelection(profiles, ["us", "ca"]), ["USD", "CAD"]);
+
+  const nonUsdMixed = [
+    { ...profiles[1], id: "gb", profile_id: "gb-ads", country_code: "GB", currency_code: "GBP" },
+  ];
+  assert.equal(displayCurrencyOfSelection([...profiles.slice(1), ...nonUsdMixed], ["ca", "gb"]), "USD");
   assert.deepEqual(
     moneyProfileIdsForSelection(profiles, ["us", "ca"]).sort(),
     ["ca", "ca-ads", "us", "us-ads"].sort(),
@@ -402,6 +437,9 @@ test("row speech includes name, enabled, and view without raw ids", () => {
   assert.match(DISABLE_CONFIRM_MESSAGE, /Does not disconnect Amazon/);
   assert.equal(countryFlagEmoji("US"), "🇺🇸");
   assert.equal(countryFlagEmoji("CA"), "🇨🇦");
+  assert.equal(countryFlagEmoji("UK"), "🇬🇧");
+  assert.equal(countryFlagEmoji("gb"), "🇬🇧");
+  assert.equal(countryFlagEmoji("unknown"), "🌐");
   assert.deepEqual(
     multiCountryFlagIcons(
       [
@@ -427,19 +465,20 @@ test("row speech includes name, enabled, and view without raw ids", () => {
     ["US", "CA", "DE"],
   );
   assert.deepEqual(sortMarketCountryCodes(["de", "US", "ca", "US"]), ["US", "CA", "DE"]);
+  assert.deepEqual(sortMarketCountryCodes(["UK", "gb", "US"]), ["US", "GB"]);
 });
 
 test("formatMarketPillLabel builds Overview market pill copy", () => {
   assert.equal(marketPillCountryLabel("US"), "US");
-  assert.equal(marketPillCountryLabel("CA"), "Canada");
+  assert.equal(marketPillCountryLabel("CA"), "CA");
   assert.equal(marketPillCountryLabel("UK"), "UK");
   assert.equal(marketPillCountryLabel("GB"), "UK");
-  assert.equal(marketPillCountryLabel("DE"), "Germany");
-  assert.equal(formatMarketPillLabel(["US", "CA"], "USD"), "US + Canada • USD");
-  assert.equal(formatMarketPillLabel(["CA", "US"], "USD"), "US + Canada • USD");
+  assert.equal(marketPillCountryLabel("DE"), "DE");
+  assert.equal(formatMarketPillLabel(["US", "CA"], "USD"), "US + CA • USD");
+  assert.equal(formatMarketPillLabel(["CA", "US"], "USD"), "US + CA • USD");
   assert.equal(formatMarketPillLabel(["GB"], "GBP"), "UK • GBP");
   assert.equal(formatMarketPillLabel(["UK", "US"], "GBP"), "US + UK • GBP");
-  assert.equal(formatMarketPillLabel(["US", "CA", "DE"], "USD"), "US + Canada + Germany • USD");
+  assert.equal(formatMarketPillLabel(["US", "CA", "DE"], "USD"), "US + CA + DE • USD");
   assert.equal(formatMarketPillLabel([], "USD"), "USD");
   assert.equal(formatMarketPillLabel(null, "EUR"), "EUR");
   assert.equal(formatMarketPillLabel(["US"], ""), "US");

@@ -147,7 +147,7 @@ test("funnel CTR/CVR match screenshot math (149k / 39 / 1)", () => {
 
 test("campaign detail Auto Targeting uses editable ProductTargetRow with cooldown", () => {
   const campaign = readFileSync(new URL("../app/campaign/[id].tsx", import.meta.url), "utf8");
-  assert.match(campaign, /SectionCard title="Auto Targeting"/);
+  assert.match(campaign, /Auto Targeting/);
   assert.match(campaign, /ProductTargetRow/);
   assert.match(campaign, /variant="auto"/);
   assert.match(campaign, /cooldownRow=\{pt\}/);

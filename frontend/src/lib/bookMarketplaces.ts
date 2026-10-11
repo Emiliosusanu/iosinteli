@@ -1,3 +1,5 @@
+import { countryFlagEmoji, normalizeFlagCountryCode } from "./accountsUi.ts";
+
 /**
  * Same logical book across Amazon marketplaces (US + CA, …).
  * Flags are shown only when that book is actually sponsored in 2+ countries.
@@ -127,11 +129,7 @@ export function productAdsForVisibleCampaigns(
 }
 
 export function normalizeMarketplaceCountry(value: string | null | undefined): string | null {
-  const code = String(value ?? "")
-    .trim()
-    .toUpperCase();
-  if (!/^[A-Z]{2}$/.test(code)) return null;
-  return code;
+  return normalizeFlagCountryCode(value);
 }
 
 export function sortMarketplaceCountries(codes: Iterable<string>): string[] {
@@ -150,12 +148,6 @@ export function sortMarketplaceCountries(codes: Iterable<string>): string[] {
 export function multiMarketplaceCountries(codes: Iterable<string>): string[] {
   const sorted = sortMarketplaceCountries(codes);
   return sorted.length >= 2 ? sorted : [];
-}
-
-function countryFlagEmoji(countryCode: string): string {
-  const cc = countryCode === "UK" ? "GB" : countryCode;
-  if (!/^[A-Z]{2}$/.test(cc)) return "🌐";
-  return String.fromCodePoint(...[...cc].map((ch) => 127397 + ch.charCodeAt(0)));
 }
 
 export function marketplaceFlagEmojis(codes: Iterable<string>): string[] {

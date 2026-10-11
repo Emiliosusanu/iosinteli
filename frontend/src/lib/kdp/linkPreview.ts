@@ -14,14 +14,20 @@ import {
   summarizeLinkPreview,
 } from "./linkPreviewCompare.ts";
 import { loadHelperAccountId } from "./persist.ts";
+import { authoritativeKdpCatalog } from "./catalogAuthority.ts";
+import { isQuarantined } from "./shelfHeal.ts";
+import {
+  loadKdpAsinQuarantineEntries,
+  resolveQuarantineUserId,
+} from "./shelfHealStore.ts";
 
 export type { KdpAdsLinkPreview, LinkPreviewBook, LinkPreviewProfile };
 export { summarizeLinkPreview };
 
 const BOOK_CAP = 24;
 
-async function loadKdpBooks(accountId: string): Promise<LinkPreviewBook[]> {
-  const byAsin = new Map<string, LinkPreviewBook>();
+export async function fetchKdpAccountBooks(accountId: string): Promise<LinkPreviewBook[]> {
+  const titleByAsin = new Map<string, LinkPreviewBook>();
   const pageSize = 500;
   let from = 0;
   for (;;) {
@@ -30,7 +36,8 @@ async function loadKdpBooks(accountId: string): Promise<LinkPreviewBook[]> {
       .select("asin, title, cover_url, amazon_image_url")
       .eq("account_id", accountId)
       .range(from, from + pageSize - 1);
-    if (error || !data?.length) break;
+    if (error) throw new Error(`kdp_titles: ${error.message}`);
+    if (!data?.length) break;
     for (const row of data as Array<{
       asin?: string;
       title?: string | null;
@@ -40,8 +47,8 @@ async function loadKdpBooks(accountId: string): Promise<LinkPreviewBook[]> {
       const asin = normalizeAsin(row.asin);
       if (!asin) continue;
       const imageUrl = pickUsableCoverUrl(row.cover_url, row.amazon_image_url);
-      const prev = byAsin.get(asin);
-      byAsin.set(asin, {
+      const prev = titleByAsin.get(asin);
+      titleByAsin.set(asin, {
         asin,
         title: String(row.title || prev?.title || "").trim() || null,
         imageUrl: pickUsableCoverUrl(prev?.imageUrl, imageUrl),
@@ -50,9 +57,70 @@ async function loadKdpBooks(accountId: string): Promise<LinkPreviewBook[]> {
     if (data.length < pageSize) break;
     from += pageSize;
   }
-  return [...byAsin.values()].sort((a, b) =>
-    (a.title || a.asin).localeCompare(b.title || b.asin),
+
+  // kdp_titles is enrichment, not the catalog authority. Format rows define
+  // the current shelf once available; otherwise legacy accounts fall back to
+  // their title rows.
+  const formatRows: Array<{ asin: string; book_id: string }> = [];
+  from = 0;
+  for (;;) {
+    const { data, error } = await supabase
+      .from("kdp_book_formats")
+      .select("asin, book_id")
+      .eq("account_id", accountId)
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`kdp_book_formats: ${error.message}`);
+    if (!data?.length) break;
+    for (const row of data as Array<{ asin?: string; book_id?: string }>) {
+      const asin = normalizeAsin(row.asin);
+      const bookId = String(row.book_id || "").trim();
+      if (asin && bookId) formatRows.push({ asin, book_id: bookId });
+    }
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+
+  const bookById = new Map<string, { title: string | null; imageUrl: string | null }>();
+  const bookIds = [...new Set(formatRows.map((row) => row.book_id))];
+  for (let i = 0; i < bookIds.length; i += 100) {
+    const { data, error } = await supabase
+      .from("kdp_books")
+      .select("id, display_title, cover_url")
+      .eq("account_id", accountId)
+      .in("id", bookIds.slice(i, i + 100));
+    if (error) throw new Error(`kdp_books: ${error.message}`);
+    for (const row of (data ?? []) as Array<{
+      id?: string;
+      display_title?: string | null;
+      cover_url?: string | null;
+    }>) {
+      const id = String(row.id || "").trim();
+      if (!id) continue;
+      bookById.set(id, {
+        title: String(row.display_title || "").trim() || null,
+        imageUrl: pickUsableCoverUrl(row.cover_url),
+      });
+    }
+  }
+  const formatByAsin = new Map<string, LinkPreviewBook>();
+  for (const format of formatRows) {
+    const previous = formatByAsin.get(format.asin);
+    const book = bookById.get(format.book_id);
+    formatByAsin.set(format.asin, {
+      asin: format.asin,
+      title: previous?.title || book?.title || null,
+      imageUrl: pickUsableCoverUrl(previous?.imageUrl, book?.imageUrl),
+    });
+  }
+
+  const catalog = authoritativeKdpCatalog(
+    [...titleByAsin.values()],
+    [...formatByAsin.values()],
   );
+  const userId = await resolveQuarantineUserId();
+  if (!userId) return catalog;
+  const quarantine = await loadKdpAsinQuarantineEntries(userId);
+  return catalog.filter((book) => !isQuarantined(accountId, book.asin, quarantine));
 }
 
 async function loadAdsBooks(profileIds: string[]): Promise<Map<string, LinkPreviewBook[]>> {
@@ -117,7 +185,7 @@ export async function fetchKdpAdsLinkPreview(opts: {
   const allProfiles = await fetchAmazonProfiles(opts.userId).catch(() => []);
   const adsIds = amazonAdsProfileIdsForSelection(allProfiles, opts.selectedProfileIds);
 
-  const kdpBooks = helperAccountId ? await loadKdpBooks(helperAccountId) : [];
+  const kdpBooks = helperAccountId ? await fetchKdpAccountBooks(helperAccountId) : [];
   const adsByProfile = await loadAdsBooks(adsIds);
 
   const adsProfiles: LinkPreviewProfile[] = adsIds.map((profileId) => {

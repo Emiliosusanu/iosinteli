@@ -79,3 +79,27 @@ if (
 if (patched) {
   console.log("[postinstall] Applied RN#55533 Hermes iOS 26 launch patches.");
 }
+
+// This script is also invoked by the Xcode scheme immediately before a build.
+// Fail closed when React Native changes its source layout or when an install has
+// restored the unsafe implementation. A successful archive must never depend on
+// somebody remembering to run the package-manager postinstall first.
+const hermesSource = fs.existsSync(hermesInstance)
+  ? fs.readFileSync(hermesInstance, "utf8")
+  : "";
+const podspecSource = fs.existsSync(podspec)
+  ? fs.readFileSync(podspec, "utf8")
+  : "";
+const unsafeHermes =
+  hermesSource.includes("runtime_->registerForProfiling();") ||
+  hermesSource.includes(".withEnableSampleProfiling(true)");
+const unsafePodspec = podspecSource.includes(
+  'if echo $GCC_PREPROCESSOR_DEFINITIONS | grep -q "DEBUG=1"; then',
+);
+
+if (!hermesSource || !podspecSource || unsafeHermes || unsafePodspec) {
+  console.error(
+    "[postinstall] Hermes iOS 26 launch guard is missing; refusing to build.",
+  );
+  process.exit(1);
+}

@@ -2,13 +2,24 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { applySessionToHeaders } from "../src/lib/kdp/sessionContract.ts";
+import {
+  applySessionToHeaders,
+  mergeCookieHeaders,
+} from "../src/lib/kdp/sessionContract.ts";
 
 const sessionSrc = readFileSync(new URL("../src/lib/kdp/session.ts", import.meta.url), "utf8");
 const runtime = readFileSync(new URL("../src/lib/kdp/runtime.ts", import.meta.url), "utf8");
 const notifications = readFileSync(new URL("../src/lib/notifications.ts", import.meta.url), "utf8");
 const importer = readFileSync(new URL("../src/lib/kdp/importer.ts", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src/contexts/AppContext.tsx", import.meta.url), "utf8");
+const nativeSwift = readFileSync(
+  new URL("../modules/inteliads-native-sync/ios/InteliAdsNativeSyncModule.swift", import.meta.url),
+  "utf8",
+);
+const nativeJs = readFileSync(
+  new URL("../modules/inteliads-native-sync/src/index.ts", import.meta.url),
+  "utf8",
+);
 
 test("applySessionToHeaders fills Cookie and User-Agent when missing", () => {
   const out = applySessionToHeaders(
@@ -39,6 +50,16 @@ test("applySessionToHeaders does not overwrite existing Cookie or User-Agent", (
   assert.equal(out["User-Agent"], "page-ua");
 });
 
+test("cookie refresh preserves sibling-host cookies and refreshes observed values", () => {
+  assert.equal(
+    mergeCookieHeaders(
+      "reports-session=keep; shared=old; empty=",
+      "pricing-session=add; shared=new",
+    ),
+    "reports-session=keep; shared=new; empty=; pricing-session=add",
+  );
+});
+
 test("Keychain session uses AfterFirstUnlock and wires into capture/replay", () => {
   assert.match(sessionSrc, /AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY/);
   assert.match(sessionSrc, /SecureStore/);
@@ -53,4 +74,27 @@ test("Keychain session uses AfterFirstUnlock and wires into capture/replay", () 
   assert.match(notifications, /registerNativeMetronome/);
   assert.match(importer, /ensureBackgroundRefreshRegistered/);
   assert.match(app, /ensureBackgroundRefreshRegistered/);
+});
+
+test("iOS persists real WKWebView HttpOnly cookies and clears rejected sessions", () => {
+  assert.match(nativeSwift, /WKWebsiteDataStore\.default\(\)\.httpCookieStore\.getAllCookies/);
+  assert.match(nativeSwift, /getCookieHeaderAsync/);
+  assert.match(nativeJs, /getNativeCookieHeader/);
+  assert.match(nativeJs, /clearNativeAmazonKdpCookies/);
+  assert.match(nativeSwift, /clearAmazonKdpCookiesAsync/);
+  assert.match(nativeSwift, /httpCookieStore/);
+  assert.match(sessionSrc, /refreshKdpWebSessionFromNativeCookies/);
+  assert.match(runtime, /refreshKdpWebSessionFromNativeCookies/);
+  assert.match(runtime, /invalidateSavedKdpSession/);
+  assert.doesNotMatch(runtime, /savedSession: loggedIn \? true/);
+});
+
+test("pricing auth is isolated from reports auth and navigation does not erase Keychain", () => {
+  assert.match(runtime, /authScope\?: "reports" \| "pricing"/);
+  assert.match(runtime, /invalidateSessionOnAuthFailure = req\.authScope !== "pricing"/);
+  const navStart = runtime.indexOf('if (data.kind === "NAV"');
+  const navEnd = runtime.indexOf('if (data.kind === "SESSION_META"');
+  const navBlock = runtime.slice(navStart, navEnd);
+  assert.doesNotMatch(navBlock, /clearKdpWebSession/);
+  assert.match(navBlock, /savedSession: status\.savedSession/);
 });
