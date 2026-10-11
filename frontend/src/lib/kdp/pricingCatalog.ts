@@ -4,7 +4,7 @@ export type ShelfRow = ReturnType<typeof extractBookshelfPrintRowsFromHtml>[numb
 export type PricingCatalog = {
   version: 1; page: number; complete: boolean; rows: ShelfRow[];
   lastPageKeys: string[]; scanKeys?: string[]; checkedAtMs: number; stalled: boolean;
-  discoverySkips?: number;
+  discoverySkips?: number; totalTitles?: number; discoveryKeys?: string[];
 };
 type Storage = { getItem(key: string, fallback: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<boolean> };
@@ -24,7 +24,7 @@ export function canResumeKnownLivePricing(catalog: PricingCatalog,
     && Number(row.observedAtMs) >= now - 24 * 60 * 60_000).map(row => row.kdpBookId));
   return pending.some(candidate => live.has(candidate.kdpBookId));
 }
-export function acceptCatalogPage(prior: PricingCatalog, page: number, rows: ShelfRow[], now = Date.now(), evidence = { keys: rows.map(rowKey), terminal: rows.length === 0 }): PricingCatalog {
+export function acceptCatalogPage(prior: PricingCatalog, page: number, rows: ShelfRow[], now = Date.now(), evidence: { keys: string[]; terminal: boolean; totalTitles?: number } = { keys: rows.map(rowKey), terminal: rows.length === 0 }): PricingCatalog {
   if (page !== prior.page) throw new Error('KDP Bookshelf cursor mismatch');
   const keys = evidence.keys;
   // Numbered pages that repeat the prior identities may mean Amazon ignored
@@ -36,8 +36,12 @@ export function acceptCatalogPage(prior: PricingCatalog, page: number, rows: She
   const scanSet = new Set([...(prior.scanKeys || []), ...rows.map(rowKey)]);
   const scanKeys = [...scanSet];
   if (!keys.length && !evidence.terminal) throw new Error('KDP Bookshelf page identities unverified; cursor retained');
+  const discoveryKeys = [...new Set([...(prior.discoveryKeys || []), ...keys.filter(key => key.startsWith('title:'))])];
+  const coverageMismatch = evidence.totalTitles != null && ((prior.totalTitles != null && prior.totalTitles !== evidence.totalTitles)
+    || (evidence.terminal && discoveryKeys.length !== evidence.totalTitles));
+  if (coverageMismatch) return { ...prior, stalled: true, complete: false, checkedAtMs: now };
   const complete = evidence.terminal;
-  return { version: 1, page: repeated || complete ? page : page + 1,
+  return { version: 1, ...(evidence.totalTitles != null ? { totalTitles: evidence.totalTitles, discoveryKeys } : {}), page: repeated || complete ? page : page + 1,
     complete, rows: [...merged.values()].filter(row => !complete || scanSet.has(rowKey(row))),
     lastPageKeys: keys, scanKeys, checkedAtMs: now, stalled: repeated, discoverySkips: 0 };
 }

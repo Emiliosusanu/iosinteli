@@ -18,3 +18,40 @@ export function bookshelfPageEvidence(html, printRows = []) {
   return { keys: [...keys], authenticated: shell && signedIn && fullDocument && !login,
     terminal: shell && signedIn && fullDocument && !login && !unparsedCards && keys.size === 0 };
 }
+
+/** Read-only Tabela refresh protocol observed in Amazon's Bookshelf UI.
+ * query page= is ignored; the UI posts PAGE_CHANGED and reports exact counts. */
+export function bookshelfRefreshRequest(page, timeoutMs) {
+  if (!Number.isInteger(page) || page < 1) throw new Error('Bookshelf cursor invalid');
+  return {
+    url: 'https://kdp.amazon.com/bookshelf/refresh/ref=xx_xx_cont_xx',
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', Accept: 'text/html' },
+    body: JSON.stringify({ action: 'PAGE_CHANGED', pageNumber: page, recordsPerPage: 50,
+      tableId: 'refreshedbookshelftable', filters: [], clientState: { viewVal: 'ALL' } }),
+    timeoutMs,
+  };
+}
+export function bookshelfRefreshEvidence(html, page, printRows = []) {
+  const text = String(html || '');
+  // Retain compatibility with a full authenticated Bookshelf document; it
+  // cannot establish numbered pagination unless Amazon supplies the counts.
+  if (!/\bid\s*=\s*["']mt-response-status["']/i.test(text)) return bookshelfPageEvidence(text, printRows);
+  const field = id => {
+    const match = text.match(new RegExp(`<div\\b[^>]*\\bid=["']${id}["'][^>]*>([^<]*)<\\/div>`, 'i'));
+    return match ? match[1].trim() : null;
+  };
+  const integer = id => { const value = field(id); return value != null && /^\d+$/.test(value) ? Number(value) : NaN; };
+  const currentPage = integer('currentPage'), size = integer('recordsPerPage'), totalTitles = integer('recordCount');
+  if (field('mt-response-status') !== 'SUCCESS' || field('refreshMode') !== 'TABLE'
+    || field('tableName') !== 'refreshedbookshelftable' || currentPage !== page
+    || !Number.isSafeInteger(size) || size < 1 || size > 50 || !Number.isSafeInteger(totalTitles)
+    || !/<div\b[^>]*\bid=["']itemRecords["']/i.test(text)
+    || !/<div\b[^>]*\bid=["']refreshMode["'][^>]*>\s*TABLE\s*<\/div>/i.test(text))
+    throw new Error('Bookshelf refresh incomplete; cursor retained');
+  const evidence = bookshelfPageEvidence(text, printRows);
+  const titles = evidence.keys.filter(key => key.startsWith('title:'));
+  const expected = Math.min(size, Math.max(0, totalTitles - (page - 1) * size));
+  if (titles.length !== expected) throw new Error('Bookshelf refresh row coverage incomplete; cursor retained');
+  return { ...evidence, authenticated: true, totalTitles,
+    terminal: page * size >= totalTitles };
+}

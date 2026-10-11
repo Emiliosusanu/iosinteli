@@ -1,4 +1,4 @@
-import { bookshelfPageEvidence } from './vendor/kdp-bookshelf-discovery.js';
+import { bookshelfPageEvidence, bookshelfRefreshRequest, bookshelfRefreshEvidence } from './vendor/kdp-bookshelf-discovery.js';
 /**
  * iOS helper paperback pricing capture — Chrome parity for break-even ACoS.
  *
@@ -331,20 +331,17 @@ async function fetchBookshelfHtml(locale: string, deadlineAtMs: number | undefin
   // the next scan is incomplete. One page per slice bounds discovery cost.
   if (catalog.complete || catalog.stalled) catalog = { ...emptyPricingCatalog(), rows: catalog.rows };
   const page = catalog.page;
-  const base = bookshelfUrlForLocale(locale);
   const result = await kdpPageFetch({
-    url: page === 1 ? `${base}?view=ALL` : `${base}?view=ALL&page=${page}`,
-    method: "GET", headers: { Accept: "text/html,application/xhtml+xml" }, body: null,
-    authScope: "pricing", timeoutMs: pricingRequestTimeout(deadlineAtMs),
+    ...bookshelfRefreshRequest(page, pricingRequestTimeout(deadlineAtMs)), authScope: "pricing",
   });
   const html = String(result.text || "");
-  if (Number(result.status) !== 200 || !(bookshelfHtmlLooksSeeded(html) || bookshelfPageEvidence(html).authenticated))
+  if (Number(result.status) !== 200 || !/bookshelf|mt-response-status/i.test(html))
     throw new Error("KDP Bookshelf page incomplete; discovery cursor retained");
   const rows = extractBookshelfPrintRowsFromHtml(html);
   // Login/error/empty transport HTML must never seal the catalog.
-  if (!rows.length && !/bookshelf|Your titles|Create.*title/i.test(html))
+  if (!rows.length && !/bookshelf|Your titles|Create.*title|mt-response-status/i.test(html))
     throw new Error("KDP Bookshelf page identity missing; retry pending");
-  const next = acceptCatalogPage(catalog, page, rows, Date.now(), bookshelfPageEvidence(html, rows));
+  const next = acceptCatalogPage(catalog, page, rows, Date.now(), bookshelfRefreshEvidence(html, page, rows));
   await pricingCatalogs.save(accountId, next);
   await appendKdpActivity(`KDP catalog · page ${page} · ${next.rows.length} identities · ${next.complete ? 'complete' : next.stalled ? 'pagination unverified' : 'scan pending'}`, "info");
   return html;
@@ -746,7 +743,7 @@ async function syncPricingSlice(
   todo = admission.pending;
   const checkpoint = { needsDiscovery: !catalog.complete || retainedUnknown.length > 0, pending: [...todo, ...retainedUnknown], completed: [...completed] };
   await pricingCheckpoints.save(accountId, checkpoint);
-  const oldestPendingMs = checkpoint.pending.length ? Math.max(0, Date.now() - Math.min(...checkpoint.pending.map(row => row.pendingSinceMs!))) : 0;
+  const oldestPendingMs = checkpoint.pending.length ? Math.max(0, Date.now() - Math.min(...checkpoint.pending.map(row => Number.isFinite(row.pendingSinceMs) ? row.pendingSinceMs! : Date.now()))) : 0;
   await appendKdpActivity(`KDP pricing queue · ${liveSetups.size} live · ${checkpoint.pending.length} pending · ${completed.size} confirmed · oldest ${Math.floor(oldestPendingMs / 60_000)}m · catalog ${catalog.complete ? 'complete' : 'pending'}`, "info");
   const skippedFresh = Math.max(0, candidates.length - todo.length);
   todo = admission.selected;

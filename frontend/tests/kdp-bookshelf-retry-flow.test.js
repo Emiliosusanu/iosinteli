@@ -11,7 +11,7 @@ import { withKdpTaskRequest } from '../src/lib/kdp/backgroundBudget.ts';
 import * as catalog from '../src/lib/kdp/pricingCatalog.ts';
 import * as checkpoints from '../src/lib/kdp/pricingCheckpoint.ts';
 const account = 'a'; const asin = '1807973794'; const setup = 'MT02FVSE645';
-const shelf = `${'x'.repeat(500)}<div id="dual-print-price-asin-${setup}">ASIN: ${asin}</div><div id="dual-print-price-list-price-${setup}">16.99 USD</div><div id="dual-print-status-live-status-${setup}">Live</div>`;
+const shelf = `<div id="mt-response-status">SUCCESS</div><div id="recordsPerPage">50</div><div id="recordCount">1</div><div id="currentPage">1</div><div id="tableName">refreshedbookshelftable</div><div id="itemRecords"><div id="dual-itemset-itemset-metadata-title-${setup}"></div>${'x'.repeat(500)}<div id="dual-print-price-asin-${setup}">ASIN: ${asin}</div><div id="dual-print-price-list-price-${setup}">16.99 USD</div><div id="dual-print-status-live-status-${setup}">Live</div></div><div id="refreshMode">TABLE</div>`;
 function harness({ formatReadFails = false, ebookAlias = false } = {}) {
   const title = { account_id: account, asin, kdp_setup_book_id: setup, kdp_list_price: 15.99, printing_cost: 3.064, royalty_rate: .6, pricing_marketplace: 'US', pricing_currency: 'USD', pricing_captured_at: new Date().toISOString() };
   const dirty = new Set(); const writes = []; const logs = []; const auth = []; let locked = true; let setupRequests = 0;
@@ -63,7 +63,7 @@ test('locked gate applies fast price despite fresh detail; next wake retries and
   assert.ok(h.requests() > requests, 'dirty setup must retry even though old detail timestamp is fresh');
   assert.equal(h.writes.length, 1, 'unchanged Bookshelf price must not be rewritten');
   h.unlock(); const final = await h.sync();
-  assert.equal(final.synced, 1); assert.equal(final.pending, 1);
+  assert.equal(final.synced, 1); assert.equal(final.pending, 0);
   assert.equal((await h.sync()).pending, 0); assert.equal(h.dirty.size, 0);
   const detailed = h.writes.at(-1);
   assert.deepEqual(Array.from(detailed.marketplaceRows, r => r.pricing_currency).sort(), ['CAD', 'USD']);

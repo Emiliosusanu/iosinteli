@@ -1,4 +1,4 @@
-import { bookshelfPageEvidence } from './vendor/kdp-bookshelf-discovery.js';
+import { bookshelfPageEvidence, bookshelfRefreshEvidence } from './vendor/kdp-bookshelf-discovery.js';
 /**
  * Hands-free pricing bootstrap flags (per KDP account).
  * After one helper login, background ticks keep pricing until the shelf is done.
@@ -86,6 +86,10 @@ export function bookshelfHtmlLooksSeeded(html: string): boolean {
   const s = String(html || "");
   if (s.length < 400) return false;
   if (/ap\/signin|authportal|sign[\s_-]?in/i.test(s.slice(0, 2000))) return false;
+  if (/\bid=["']mt-response-status["']/i.test(s)) {
+    const page = Number(s.match(/<div\b[^>]*\bid=["']currentPage["'][^>]*>\s*(\d+)\s*<\/div>/i)?.[1]);
+    try { return bookshelfRefreshEvidence(s, page).authenticated; } catch { return false; }
+  }
   return bookshelfPageEvidence(s).authenticated
     || /print-setup|dual-print-price-asin|title-setup\/paperback/i.test(s);
 }
