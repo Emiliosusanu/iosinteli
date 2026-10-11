@@ -20,6 +20,9 @@ export type PricingCandidate = {
   asin: string | null;
   kdpBookId: string;
   title: string | null;
+  /** First admission to the current pending queue, retained through retries. */
+  pendingSinceMs?: number;
+  lastAttemptMs?: number;
 };
 
 function normalizeSetupId(value: unknown): string {
@@ -33,6 +36,7 @@ export function collectPricingCandidatesForIos(opts: {
   formatRows: AnyRow[];
   titlesJson: unknown;
   bookshelfHtml: string;
+  bookshelfRows?: ReturnType<typeof extractBookshelfPrintRowsFromHtml>;
   storedSetupByAsin: Map<string, string>;
 }): { candidates: PricingCandidate[]; pairMaps: ReturnType<typeof buildPrintSetupPairMaps> } {
   const seen = new Set<string>();
@@ -40,7 +44,7 @@ export function collectPricingCandidatesForIos(opts: {
   const pairRows: Array<{ kdpBookId: string; printAsin: string | null; title: string | null }> =
     [];
 
-  const bookshelfRows = extractBookshelfPrintRowsFromHtml(opts.bookshelfHtml || "");
+  const bookshelfRows = opts.bookshelfRows ?? extractBookshelfPrintRowsFromHtml(opts.bookshelfHtml || "");
   const knownFormats = new Map<string, Set<string>>();
   for (const row of opts.formatRows || []) {
     const asin = String(row.asin || '').trim().toUpperCase();
@@ -88,29 +92,26 @@ export function collectPricingCandidatesForIos(opts: {
     out.push({ asin: a || null, kdpBookId: id, title });
   };
 
+  const booksByPrintAsin = new Map<string, AnyRow>();
+  for (const meta of Object.values(opts.booksObj || {})) {
+    const row = meta as AnyRow;
+    const asin = String((row?.asins as AnyRow | undefined)?.print || '').trim().toUpperCase();
+    if (asin && !booksByPrintAsin.has(asin)) booksByPrintAsin.set(asin, row);
+  }
   for (const fr of opts.formatRows || []) {
     if (String(fr?.format || "").toLowerCase() !== "paperback") continue;
     const asin = String(fr?.asin || "")
       .trim()
       .toUpperCase();
     if (!looksLikeAmazonAsin(asin)) continue;
-    const fromBooks =
-      opts.booksObj &&
-      Object.values(opts.booksObj).find((meta) => {
-        const as = (meta as AnyRow)?.asins as AnyRow | undefined;
-        return (
-          String(as?.print || "")
-            .trim()
-            .toUpperCase() === asin
-        );
-      });
+    const fromBooks = booksByPrintAsin.get(asin);
     const setupFromBook = (fromBooks as AnyRow)?.printSetupIds as AnyRow | undefined;
     // The live Bookshelf href is authoritative. KDP can replace its internal
     // setup ID after an edition is unpublished/recreated while reports and our
     // database still contain the old ID. Using the historical value first
     // produces a permanent 404 and can starve every live title behind it.
     const setupId =
-      extractSetupIdNearAsin(opts.bookshelfHtml, asin) ||
+      authoritativeSetupByAsin.get(asin) || extractSetupIdNearAsin(opts.bookshelfHtml, asin) ||
       setupFromBook?.paperback ||
       opts.storedSetupByAsin.get(asin);
     if (setupId) add(asin, String(setupId), null);
@@ -128,7 +129,7 @@ export function collectPricingCandidatesForIos(opts: {
         ? (row.printSetupIds as AnyRow)
         : {};
     const kdpBookId =
-      extractSetupIdNearAsin(opts.bookshelfHtml, asin) ||
+      authoritativeSetupByAsin.get(asin) || extractSetupIdNearAsin(opts.bookshelfHtml, asin) ||
       setupIds.paperback ||
       opts.storedSetupByAsin.get(asin) ||
       null;

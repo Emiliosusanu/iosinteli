@@ -142,8 +142,18 @@ public final class InteliAdsBackgroundRefreshManager {
   /// Queued for JS before EXTaskService runs — refresh=today+yesterday, processing=2am backfill drain.
   private static let pendingWakeKindKey = "inteliads_native_pending_wake_kind"
 
+  private static let pendingWakeDeadlineKey = "inteliads_native_pending_wake_deadline_ms"
+
+  public static func pendingWakeDeadline() -> Double? {
+    let value = UserDefaults.standard.double(forKey: pendingWakeDeadlineKey)
+    guard value > 0, Date().timeIntervalSince1970 * 1000 - value < 60_000 else { return nil }
+    return value
+  }
+
   public static func setPendingWakeKind(_ kind: String) {
     UserDefaults.standard.set(kind, forKey: pendingWakeKindKey)
+    UserDefaults.standard.set((Date().timeIntervalSince1970 + (kind == "processing" ? 120 : 22)) * 1000,
+                              forKey: pendingWakeDeadlineKey)
   }
 
   /// JS consumes once per wake so Expo-only deliveries fall through to smart mode.
@@ -160,6 +170,7 @@ public final class InteliAdsBackgroundRefreshManager {
     task.expirationHandler = {
       guard gate.markExpired() else { return }
       task.setTaskCompleted(success: false)
+      self.defaults.set(Date().timeIntervalSince1970 * 1000, forKey: Self.pendingWakeDeadlineKey)
       self.recordRun(success: false)
       self.defaults.set("iOS expired the background slice", forKey: Self.lastErrorKey)
       InteliAdsWidgetSnapshotStore.updateSync(
@@ -187,6 +198,7 @@ public final class InteliAdsBackgroundRefreshManager {
     Self.setPendingWakeKind("recent")
     runExpoBackgroundTasks { [weak self] ok in
       guard let self, gate.markCompleted() else { return }
+      self.defaults.removeObject(forKey: Self.pendingWakeDeadlineKey)
       self.recordRun(success: ok)
       // The JS importer owns capture status (including pending pricing/login).
       // A successful TaskManager wake can contain no data or deferred work.
@@ -211,6 +223,7 @@ public final class InteliAdsBackgroundRefreshManager {
     task.expirationHandler = {
       guard gate.markExpired() else { return }
       task.setTaskCompleted(success: false)
+      self.defaults.set(Date().timeIntervalSince1970 * 1000, forKey: Self.pendingWakeDeadlineKey)
       self.recordRun(success: false)
       self.defaults.set("iOS expired the background slice", forKey: Self.lastErrorKey)
       InteliAdsWidgetSnapshotStore.updateSync(
@@ -238,6 +251,7 @@ public final class InteliAdsBackgroundRefreshManager {
     Self.setPendingWakeKind("processing")
     runExpoBackgroundTasks { [weak self] ok in
       guard let self, gate.markCompleted() else { return }
+      self.defaults.removeObject(forKey: Self.pendingWakeDeadlineKey)
       self.recordRun(success: ok)
       // The JS importer owns capture status (including pending pricing/login).
       // A successful TaskManager wake can contain no data or deferred work.

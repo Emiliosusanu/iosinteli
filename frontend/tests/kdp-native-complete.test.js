@@ -4,8 +4,9 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { allKdpMarketplaceTargets } from '../src/lib/kdp/marketplace.ts';
-import { hasVerifiedNativeCoverage, kdpFactSnapshotsMatch } from '../src/lib/kdp/marketplaceCoverage.ts';
+import { hasVerifiedNativeCoverage, kdpFactSnapshotsMatch, hasTransactionalNativeCoverage } from '../src/lib/kdp/marketplaceCoverage.ts';
 import { mapKdpMarketplacesSettled } from '../src/lib/kdp/vendor/kdp-report-scheduler.js';
+import { withKdpTaskRequest } from '../src/lib/kdp/backgroundBudget.ts';
 
 const importer = readFileSync(new URL('../src/lib/kdp/importer.ts', import.meta.url), 'utf8');
 const writer = readFileSync(new URL('../src/lib/kdp/upsert.ts', import.meta.url), 'utf8');
@@ -41,7 +42,7 @@ async function runDay(failedMarket = null, writes = []) {
     supabase:{from:()=>({select:()=>({eq:()=>({eq:()=>({maybeSingle:async()=>({data:null,error:null})})})})})},
     evaluateRoyaltyOverwriteSafety:()=>({safe:true}),
     appendKdpActivity:async()=>{},writeKdpDay:async value=>writes.push(value),
-    mapKdpMarketplacesSettled,
+    mapKdpMarketplacesSettled, withKdpTaskRequest, taskRequestTimeout: () => undefined,
   });
   await exports.syncOneDay(accountId,date,{},targets);
   return {reads,writes};
@@ -63,7 +64,7 @@ test('actual importer never replaces a day when any native store fails', async (
   assert.equal(writes.length,0);
 });
 
-function coverageWriter({wrongRevision=false, missingFact=false, markerError=false, changedDay=false, review=false, empty=false, wrongAck=false} = {}) {
+function coverageWriter({wrongRevision=false, missingFact=false, markerError=false, changedDay=false, review=false, empty=false, wrongAck=false, transaction=false, badTransaction=false} = {}) {
   const exports={}, calls=[], markerWrites=[];
   let body, marker, dayReads=0;
   const updated='2026-10-09T20:45:00.000Z';
@@ -83,12 +84,13 @@ function coverageWriter({wrongRevision=false, missingFact=false, markerError=fal
   const modules={
     '../supabase.ts':{supabase},
     'expo-constants':{default:{expoConfig:{version:'1.0.1',ios:{buildNumber:'384'}}}},
-    './marketplaceCoverage.ts':{hasVerifiedNativeCoverage,kdpFactSnapshotsMatch},
+    './marketplaceCoverage.ts':{hasVerifiedNativeCoverage,kdpFactSnapshotsMatch,hasTransactionalNativeCoverage},
+    './backgroundBudget.ts':{withKdpTaskRequest},
     '../rulesApi.ts':{nestApiJson:async(url,request)=>{
       body=JSON.parse(request.body);calls.push({url,body});
       return review?{ok:false,staged:true,quarantined:true,candidateId:'44444444-4444-4444-8444-444444444444',
         accountId,date,revisionId:body.revisionId}
-        :{ok:true,accountId:wrongAck?'wrong':accountId,date,revisionId:body.revisionId,factRows:empty?0:1,submittedBookDailyRows:0};
+        :{ok:true,accountId:wrongAck?'wrong':accountId,date,revisionId:body.revisionId,factRows:empty?0:1,submittedBookDailyRows:0, ...(transaction ? {coverageVerified:true,coverageVersion:1,coverageMarketplaces:targets.map(t=>t.key),verifiedFactRows:badTransaction?2:empty?0:1,dailyUpdatedAt:updated}: {})};
     }},
   };
   vm.runInNewContext(compile(writer),{exports,require:path=>modules[path],Math});
@@ -126,4 +128,10 @@ test('older partial coverage and changed snapshots cannot seal backfill',()=>{
   assert.equal(hasVerifiedNativeCoverage(updated,{daily_updated_at:updated,marketplaces:targets.map(t=>t.key)}),true);
   assert.equal(hasVerifiedNativeCoverage('newer',{daily_updated_at:updated,marketplaces:targets.map(t=>t.key)}),false);
   assert.equal(kdpFactSnapshotsMatch([],[]),true);
+});
+
+test('transaction-verified receipt avoids full mobile readback while an invalid receipt stays pending', async () => {
+  const h=coverageWriter({transaction:true});await h.write();
+  assert.equal(h.markerWrites.length,0);
+  await assert.rejects(coverageWriter({transaction:true,badTransaction:true}).write(), /receipt mismatch/);
 });

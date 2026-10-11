@@ -39,7 +39,10 @@ export function resumePricingCandidates(
   prior: PricingCandidate[], eligible: PricingCandidate[], due: PricingCandidate[],
 ): PricingCandidate[] {
   const allowed = new Map(eligible.map(row => [pricingCandidateKey(row), row]));
-  const ordered = [...prior.map(row => allowed.get(pricingCandidateKey(row))).filter(Boolean), ...due];
+  const ordered = [...prior.map(row => {
+    const current = allowed.get(pricingCandidateKey(row));
+    return current && row.pendingSinceMs ? { ...current, pendingSinceMs: row.pendingSinceMs, lastAttemptMs: row.lastAttemptMs || 0 } : current;
+  }).filter(Boolean), ...due];
   const unique = new Map<string, PricingCandidate>();
   for (const row of ordered) if (row && !unique.has(pricingCandidateKey(row))) unique.set(pricingCandidateKey(row), row);
   return [...unique.values()];
@@ -69,4 +72,24 @@ export function createPricingCheckpointStore(storage: CheckpointStorage) {
       }
     },
   };
+}
+
+/** Preserve a fair share for the oldest untouched candidates. Dirty arrivals
+ * can preempt half a slice, but cannot keep a thousand-book tail pending forever. */
+export function admitPricingCandidates(pending: PricingCandidate[], maxBooks: number,
+  dirtyIds: Set<string>, priorKeys: Set<string>, now = Date.now()): { selected: PricingCandidate[]; pending: PricingCandidate[] } {
+  const limit = Math.min(40, Math.max(1, Math.trunc(maxBooks)));
+  const ordered = [...pending].sort((a,b) => (a.lastAttemptMs || 0) - (b.lastAttemptMs || 0)
+    || (a.pendingSinceMs || now) - (b.pendingSinceMs || now));
+  const urgent = ordered.filter(row => dirtyIds.has(String(row.kdpBookId).toUpperCase()) || !priorKeys.has(pricingCandidateKey(row)));
+  const selected = new Map<string, PricingCandidate>();
+  for (const row of urgent.slice(0, Math.floor(limit / 2))) selected.set(pricingCandidateKey(row), row);
+  for (const row of ordered) {
+    if (selected.size >= limit) break;
+    selected.set(pricingCandidateKey(row), row);
+  }
+  const updated = pending.map(row => selected.has(pricingCandidateKey(row)) ? {...row,lastAttemptMs:now} : row);
+  const positions = new Map([...selected.keys()].map((key,index)=>[key,index]));
+  return { selected: updated.filter(row=>selected.has(pricingCandidateKey(row))).sort((a,b)=>
+    positions.get(pricingCandidateKey(a))! - positions.get(pricingCandidateKey(b))!), pending:updated };
 }

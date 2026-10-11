@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { withKdpTaskRequest } from '../src/lib/kdp/backgroundBudget.ts';
+import * as catalog from '../src/lib/kdp/pricingCatalog.ts';
 import * as policy from '../src/lib/kdp/pricingCheckpoint.ts';
 import * as capture from '../src/lib/kdp/vendor/kdpPricingCapture.js';
+import * as discovery from '../src/lib/kdp/vendor/kdp-bookshelf-discovery.js';
 import { collectPricingCandidatesForIos } from '../src/lib/kdp/pricingCandidates.ts';
 
 const source = readFileSync(new URL('../src/lib/kdp/pricingSync.ts', import.meta.url), 'utf8');
@@ -15,29 +18,31 @@ function storageHarness() {
   return { values, getItem: async (key, fallback) => values.get(key) ?? fallback,
     setItem: async (key, value) => { values.set(key, value); return true; } };
 }
-function harness(storage, { failWrite = null, interruptAfter = null, gateAfter = null, staleFirst = false } = {}) {
+function harness(storage, { failWrite = null, interruptAfter = null, gateAfter = null, staleFirst = false, marketCount = 2, largeFormats = false, inactiveFirst = false, unknownAll = false, unknownAfter = Infinity } = {}) {
   const writes = [], probes = [], auth = [], fresh = storage.fresh ??= new Set();
   let lastOptions;
   const dirty = new Set();
   const store = policy.createPricingCheckpointStore(storage);
   const q = () => {
-    let table, selected = '', onlyFresh = false;
+    let table, selected = '', onlyFresh = false, offset = 0, size = 1000, ids = null;
     const query = {
       from(t) { table = t; return this; }, select(s) { selected = s; return this; },
-      eq() { return this; }, in() { return this; }, not() { return this; },
-      order() { return this; }, range() { return this; }, gte() { onlyFresh = true; return this; },
+      eq() { return this; }, in(_field, values) { ids = values; return this; }, not() { return this; },
+      abortSignal() { return this; }, order() { return this; }, range(from, to) { offset = from; size = to - from + 1; return this; }, gte() { onlyFresh = true; return this; },
       then(resolve) {
-        const data = table === 'kdp_book_formats' ? candidates.map(c => ({ asin: c.asin, format: 'paperback' }))
+        const data = table === 'kdp_book_formats' ? [...candidates.map(c => ({ asin: c.asin, format: 'paperback' })), ...(largeFormats ? candidates.map((_,i) => ({ asin: `B1TEST${String(i).padStart(4, '0')}`, format: 'ebook' })) : [])]
           : onlyFresh ? [...fresh].map(asin => ({ asin, pricing_captured_at: 'fresh' }))
           : selected === 'asin,pricing_captured_at' ? candidates.map(c => ({ asin: c.asin, pricing_captured_at: 'old' }))
           : candidates.map(c => ({ asin: c.asin, kdp_setup_book_id: c.kdpBookId }));
-        return Promise.resolve({ data, error: null }).then(resolve);
+        return Promise.resolve({ data: data.filter(row => !ids || ids.includes(row.asin)).slice(offset, offset + size), error: null }).then(resolve);
       },
     }; return query;
   };
   const modules = {
     '../supabase.ts': { supabase: { from: t => q().from(t) } },
     '@/src/utils/storage': { storage }, './pricingCheckpoint.ts': policy,
+    './backgroundBudget.ts': { withKdpTaskRequest },
+    './pricingCatalog.ts': { ...catalog, createPricingCatalogStore: () => ({ load: async () => ({ ...catalog.emptyPricingCatalog(), complete: true, rows: candidates.map((c,i) => ({ kdpBookId: c.kdpBookId, printAsin: c.asin, printStatus: unknownAll || i >= unknownAfter ? 'unknown' : inactiveFirst && i===0 ? 'unpublished' : 'live' })) }), save: async () => {} }) },
     './activity.ts': { appendKdpActivity: async () => {} },
     './bookshelfPrimaryPricing.ts': { applyBookshelfPrimaryPriceChanges: async () => {} },
     './pricingCandidates.ts': { collectPricingCandidatesForIos },
@@ -49,6 +54,7 @@ function harness(storage, { failWrite = null, interruptAfter = null, gateAfter =
     './helperUi.ts': { isKdpHelperScreenFocused: () => false },
     './vendor/kdpVendor.generated.js': { looksLikeHtmlErrorPage: () => false },
     './vendor/kdpPricingCapture.js': capture,
+    './vendor/kdp-bookshelf-discovery.js': discovery,
     './upsert.ts': { writeKdpPricing: async payload => {
       // Model a title write acknowledged before a marketplace write failure.
       fresh.add(payload.titleRows[0].asin);
@@ -69,9 +75,12 @@ function harness(storage, { failWrite = null, interruptAfter = null, gateAfter =
     if (staleFirst && id === candidates[0].kdpBookId) return { ok: false, status: 404, text: 'ItemSetId not found', json: null,
       attempts: [{ status: 404, url: 'https://kdp.amazon.com/v2/get-setup-page' }] };
     const c = candidates.find(row => row.kdpBookId === id);
-    const json = { book: { asin: c.asin }, pricing: { US: { priceVatExclusive: 15.99, currencyCode: 'USD' }, GB: { priceVatExclusive: 12.99, currencyCode: 'GBP' } },
-      pricingSpec: { current: { US: { printingCost: 2.5, programs: { RETAIL: { royaltyRates: [{ threshold: 0, royaltyRate: 0.6 }] } } },
-        GB: { printingCost: 2, programs: { RETAIL: { royaltyRates: [{ threshold: 0, royaltyRate: 0.6 }] } } } } } };
+    const currencies = { US:'USD', GB:'GBP', DE:'EUR', FR:'EUR', IT:'EUR', ES:'EUR', NL:'EUR', PL:'PLN', SE:'SEK', BE:'EUR', IE:'EUR', CA:'CAD', AU:'AUD', JP:'JPY' };
+    const markets = Object.entries(currencies).slice(0, marketCount);
+    const json = { book: { asin: c.asin },
+      pricing: Object.fromEntries(markets.map(([key,currencyCode]) => [key, { priceVatExclusive: key==='JP' ? 1599 : 15.99, currencyCode }])),
+      pricingSpec: { current: Object.fromEntries(markets.map(([key]) => [key, { printingCost: key==='JP' ? 250 : 2.5,
+        programs: { RETAIL: { royaltyRates: [{ threshold: 0, royaltyRate: 0.6 }] } } }])) } };
     return { ok: true, status: 200, text: JSON.stringify(json), json, marketplaceKey: 'US', attempts: [], pricing: capture.parseKdpGetSetupPage(json, 'US') };
   };
   vm.runInContext('fetchSetupPage = fetchSetup; ensureKdpBookshelfContext = async () => ""; sleep = async () => {};', context);
@@ -92,11 +101,13 @@ test('a short slice persists each book and restart resumes remaining exact ASINs
   const restarted = harness(storage);
   const next = await restarted.run();
   assert.equal(next.synced, 3); assert.equal(next.pending, 1);
-  assert.deepEqual(restarted.probes, candidates.slice(1, 4).map(c => c.kdpBookId));
+  assert.ok(!restarted.probes.includes(candidates[0].kdpBookId));
+  assert.equal(new Set(restarted.probes).size,3);
   const final = harness(storage);
   const last = await final.run();
   assert.equal(last.synced, 1); assert.equal(last.pending, 0);
-  assert.deepEqual(final.probes, [candidates[4].kdpBookId]);
+  assert.equal(final.probes.length,1);
+  assert.deepEqual(new Set([...first.probes, ...restarted.probes, ...final.probes]), new Set(candidates.map(c=>c.kdpBookId)));
 });
 
 test('failed marketplace acknowledgement keeps that book pending despite fresh primary title', async () => {
@@ -109,6 +120,15 @@ test('failed marketplace acknowledgement keeps that book pending despite fresh p
   const priorCalls = h.probes.length;
   await assert.rejects(h.run(), /marketplace write unavailable/);
   assert.ok(h.probes.slice(priorCalls).includes(candidates[1].kdpBookId));
+});
+
+test('historical format identities cannot admit an unpublished or unverified live edition', async () => {
+  const h=harness(storageHarness(),{inactiveFirst:true});
+  await h.run(); assert.ok(h.probes.length>0);
+  assert.ok(!h.probes.includes(candidates[0].kdpBookId));
+  const unknown=harness(storageHarness(),{unknownAll:true});
+  const result=await unknown.run(); assert.equal(result.synced,0);
+  assert.ok(result.pending>0); assert.equal(unknown.probes.length,0); assert.equal(unknown.writes.length,0);
 });
 
 test('an exhausted wake persists discovery intent without making an Amazon request or claiming completion', async () => {
@@ -164,8 +184,88 @@ test('a changed price can re-enter an unfinished sweep even when that book was a
   const next = harness(storage);
   next.dirty.add(candidates[0].kdpBookId);
   await next.run();
-  assert.ok((await next.store.load('account-a')).pending.some(c => c.asin === candidates[0].asin));
+  assert.equal(next.probes[0], candidates[0].kdpBookId, 'changed live book preempts old retry tail');
   await next.run();
   assert.ok(next.probes.includes(candidates[0].kdpBookId));
   assert.equal(next.dirty.size, 0);
+});
+
+
+for (const bookCount of [700, 1000]) test(`${bookCount} books ×14 native markets drain through restarts without starving aged confirmations or truncating format identities`, async () => {
+  const original = candidates.splice(0);
+  candidates.push(...Array.from({length:bookCount}, (_,i) => ({ asin:`B0CAT${String(i).padStart(5,'0')}`, kdpBookId:`SETUP${String(i).padStart(5,'0')}`, title:null })));
+  try {
+    const storage = storageHarness(), allWrites = [], allProbes = [];
+    const start = performance.now();
+    for (let slice=0;slice<bookCount/20;slice++) {
+      const h = harness(storage, { marketCount:14, largeFormats:true });
+      const result = await h.run({ maxBooks:20 });
+      allWrites.push(...h.writes); allProbes.push(...h.probes);
+      storage.fresh.clear(); // time can exceed 15m during a large sweep
+      if (slice <bookCount/20-1) assert.ok(result.pending>0);
+      else assert.equal(result.pending,0);
+    }
+    assert.equal(new Set(allProbes).size,bookCount); assert.equal(allProbes.length,bookCount);
+    const rows = allWrites.flatMap(w => w.marketplaceRows);
+    assert.equal(rows.length,bookCount*14);
+    assert.equal(new Set(rows.map(r=>r.asin+':'+r.marketplace)).size,bookCount*14);
+    for(const r of rows) {
+      assert.ok(r.pricing_currency);assert.ok(r.printing_cost>0);
+      assert.ok(Math.abs(r.target_break_even_acos - 100*r.net_royalty_per_sale/r.kdp_list_price)<.02);
+    }
+    console.log(`${bookCount}-book simulated ACK throughput: ${Math.round(performance.now()-start)}ms; ${bookCount/20} slices, ${bookCount*14} rows; excludes network/iOS scheduling`);
+  } finally { candidates.splice(0,candidates.length,...original); }
+});
+
+
+test('persistent dirty arrivals and failing head cannot starve the thousand-book tail', () => {
+  const rows = Array.from({length:1000}, (_,i) => ({ asin:`B0FAIR${String(i).padStart(4,'0')}`,kdpBookId:`FAIR${i}`,pendingSinceMs:1 }));
+  let pending=rows, time=10;
+  const priorKeys=new Set(rows.map(policy.pricingCandidateKey)), completed=new Set();
+  for(let slice=0;slice<150 && completed.size<999;slice++) {
+    const admission=policy.admitPricingCandidates(pending,20,new Set(['FAIR0']),priorKeys,++time);
+    for(const row of admission.selected) if(row.kdpBookId!=='FAIR0') completed.add(policy.pricingCandidateKey(row));
+    pending=admission.pending.filter(row=>row.kdpBookId==='FAIR0' || !completed.has(policy.pricingCandidateKey(row)));
+  }
+  assert.equal(completed.size,999); assert.equal(pending.length,1);
+  assert.ok(pending[0].lastAttemptMs>0);
+});
+
+
+test('repeated force refresh resumes unfinished sweep and does not recapture the acknowledged head', async () => {
+  const storage=storageHarness();
+  const first=harness(storage,{interruptAfter:1});
+  await first.run({forceRefresh:true});
+  storage.fresh.clear();
+  const next=harness(storage);
+  await next.run({forceRefresh:true});
+  assert.ok(!next.probes.includes(candidates[0].kdpBookId));
+  const last=harness(storage);
+  await last.run({forceRefresh:true});
+  assert.equal(new Set([...first.probes,...next.probes,...last.probes]).size,5);
+  assert.equal(first.probes.length+next.probes.length+last.probes.length,5);
+});
+
+test('temporarily unknown live status preserves pending checkpoint until fresh discovery resumes',async()=>{
+  const storage=storageHarness();
+  await harness(storage,{interruptAfter:1}).run();
+  const before=await policy.createPricingCheckpointStore(storage).load('account-a');
+  await harness(storage,{unknownAll:true}).run();
+  const unknown=await policy.createPricingCheckpointStore(storage).load('account-a');
+  assert.deepEqual(unknown.pending,before.pending);
+  assert.equal(unknown.needsDiscovery,true);
+  const next=harness(storage);await next.run();
+  assert.ok(!next.probes.includes(candidates[0].kdpBookId));
+});
+
+test('a partial live-status refresh retains unresolved tail while confirmed live work continues',async()=>{
+  const storage=storageHarness();
+  await harness(storage,{interruptAfter:1}).run();
+  const next=harness(storage,{unknownAfter:2});await next.run();
+  assert.deepEqual(next.probes,[candidates[1].kdpBookId]);
+  const checkpoint=await policy.createPricingCheckpointStore(storage).load('account-a');
+  assert.equal(checkpoint.pending.length,3);
+  assert.equal(checkpoint.needsDiscovery,true);
+  const fresh=harness(storage);await fresh.run();
+  assert.deepEqual(new Set(fresh.probes),new Set(candidates.slice(2).map(row=>row.kdpBookId)));
 });

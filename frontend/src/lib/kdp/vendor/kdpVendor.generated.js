@@ -46,6 +46,9 @@ function buildAsinMaps(booksObj) {
 }
 
 function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJson, adsJson, adsEntityId }) {
+  const isExplicitNumericMetric = value =>
+    (typeof value === 'number' || typeof value === 'string')
+    && String(value).trim() !== '' && Number.isFinite(Number(value));
   for (const [label, json] of [['orders', ordersJson], ['kenp', kenpJson]]) {
     if (!json) continue;
     ensureKdpReportRootOrThrow(json, label);
@@ -66,11 +69,34 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
         ? Object.hasOwn(values, 'TotalKENP')
         : ['TotalOrders', 'DigitalOrders', 'DigitalOrdersPlacedOrders', 'PaperbackOrders', 'HardcoverOrders', 'TandemOrders', 'AudiobookOrders', 'AudibleOrders'].some(key => Object.hasOwn(values, key));
       if (!recognized) throw new Error(`${label} payload missing book-level metrics; existing data preserved`);
+      const keys = label === 'kenp' ? ['TotalKENP'] : ['TotalOrders', 'DigitalOrders',
+        'DigitalOrdersPlacedOrders', 'PaperbackOrders', 'HardcoverOrders', 'TandemOrders', 'AudiobookOrders', 'AudibleOrders'];
+      if (keys.some(key => Object.hasOwn(values, key) && !isExplicitNumericMetric(values[key])))
+        throw new Error(`${label} payload missing explicit numeric metrics; existing data preserved`);
     }
   }
   const booksObj = applyCatalogIdentity(extractBooksObj(titlesJson)).booksObj;
   const { asinToGroup, asinToMeta } = buildAsinMaps(booksObj);
 
+  // A present explicit numeric zero is data; a missing/null/empty metric is
+  // not. Preserve this distinction before normalization can turn it into 0.
+  if (royaltiesJson) {
+    ensureKdpReportRootOrThrow(royaltiesJson, 'royalties');
+    ensureKdpNestedHistogramHasDayOrThrow(royaltiesJson, ymd, 'royalties');
+    const root = findKdpReportRoot(royaltiesJson);
+    const nested = root?.nestedHistogram?.histogramList;
+    const rows = Array.isArray(nested) ? histogramListRowsForDay(nested, String(ymd)) : root?.histogram?.data;
+    const metricKeys = ['TotalRoyalties', 'TotalMarketplaceRoyalties', 'PaperbackRoyalties',
+      'MarketplacePaperbackRoyalties', 'HardcoverRoyalties', 'MarketplaceHardcoverRoyalties',
+      'DigitalRoyalties', 'MarketplaceDigitalRoyalties', 'PagesReadRoyalties', 'MarketplacePagesReadRoyalties',
+      'AudiobookRoyalties', 'AudibleRoyalties', 'MarketplaceAudiobookRoyalties', 'MarketplaceAudibleRoyalties'];
+    for (const row of (Array.isArray(rows) ? rows : [])) {
+      const values = row?.values || {};
+      const present = metricKeys.filter(key => Object.hasOwn(values, key));
+      if (!present.length || present.some(key => !isExplicitNumericMetric(values[key])))
+        throw new Error('royalties payload missing explicit numeric metrics; existing data preserved');
+    }
+  }
   const rr = findKdpReportRoot(royaltiesJson) || royaltiesJson;
   const or = findKdpReportRoot(ordersJson) || ordersJson;
   const kr = findKdpReportRoot(kenpJson) || kenpJson;

@@ -18,3 +18,19 @@ export function hasVerifiedNativeCoverage(dailyUpdatedAt: unknown, marker: Row |
   const covered = new Set(marker.marketplaces.map((value) => String(value).toUpperCase()));
   return allKdpMarketplaceTargets().every((target) => covered.has(target.key));
 }
+
+/** A versioned server receipt is emitted only after SQL compared the complete
+ * stored native facts and wrote their coverage marker in that transaction. */
+export function hasTransactionalNativeCoverage(receipt: Row | null | undefined, expected: { accountId: string; date: string; revisionId: string; factCount: number; bookCount: number; marketplaces?: string[] }) {
+  const scope = ['AU','BE','BR','CA','DE','ES','FR','GB','IE','IN','IT','JP','MX','NL','PL','SE','US'];
+  return receipt?.ok === true && receipt.coverageVerified === true && receipt.coverageVersion === 1
+    && receipt.accountId === expected.accountId && receipt.date === expected.date
+    && receipt.revisionId === expected.revisionId
+    && Number(receipt.factRows) === expected.factCount && Number(receipt.verifiedFactRows) === expected.factCount
+    && Number(receipt.submittedBookDailyRows) === expected.bookCount
+    && typeof receipt.dailyUpdatedAt === 'string' && Number.isFinite(Date.parse(receipt.dailyUpdatedAt))
+    && Array.isArray(receipt.coverageMarketplaces)
+    && JSON.stringify([...receipt.coverageMarketplaces].sort()) === JSON.stringify(scope)
+    && Array.isArray(expected.marketplaces)
+    && JSON.stringify([...expected.marketplaces].sort()) === JSON.stringify(scope);
+}

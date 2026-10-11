@@ -1,3 +1,4 @@
+import { bookshelfPageEvidence } from './vendor/kdp-bookshelf-discovery.js';
 /**
  * iOS helper paperback pricing capture — Chrome parity for break-even ACoS.
  *
@@ -9,7 +10,7 @@ import { supabase } from "../supabase.ts";
 import { storage } from "@/src/utils/storage";
 import {
   createPricingCheckpointStore, pricingCandidateKey, pricingRequestTimeout,
-  PricingSliceExpiredError, resumePricingCandidates,
+  PricingSliceExpiredError, resumePricingCandidates, admitPricingCandidates,
 } from "./pricingCheckpoint.ts";
 import { appendKdpActivity } from "./activity.ts";
 import { applyBookshelfPrimaryPriceChanges } from "./bookshelfPrimaryPricing.ts";
@@ -56,6 +57,10 @@ import {
   resolvePricingMarketplaceKey,
   shouldClearPricingGateForTabUrl,
 } from "./vendor/kdpPricingCapture.js";
+
+import { withKdpTaskRequest } from "./backgroundBudget.ts";
+import { acceptCatalogPage, canResumeKnownLivePricing, createPricingCatalogStore, emptyPricingCatalog, readAllPricingPages, pricingIdentityChunks } from "./pricingCatalog.ts";
+const pricingCatalogs = createPricingCatalogStore(storage);
 
 const pricingCheckpoints = createPricingCheckpointStore(storage);
 
@@ -157,7 +162,7 @@ async function ensureKdpBookshelfContext(
 
   if (isOnKdpBookshelfHost(getKdpHelperStatus().currentUrl)) {
     try {
-      const html = await fetchBookshelfHtml(locale, opts.deadlineAtMs);
+      const html = await fetchBookshelfHtml(locale, opts.deadlineAtMs, accountId);
       if (bookshelfHtmlLooksSeeded(html)) {
         await patchPricingBootstrap(accountId, {
           bookshelfSeededAt: nowIso(),
@@ -173,7 +178,7 @@ async function ensureKdpBookshelfContext(
 
   let html = "";
   try {
-    html = await fetchBookshelfHtml(locale, opts.deadlineAtMs);
+    html = await fetchBookshelfHtml(locale, opts.deadlineAtMs, accountId);
   } catch (error) {
     if (error instanceof PricingSliceExpiredError) throw error;
     html = "";
@@ -198,7 +203,7 @@ async function ensureKdpBookshelfContext(
       if (isOnKdpBookshelfHost(getKdpHelperStatus().currentUrl)) break;
     }
     try {
-      html = await fetchBookshelfHtml(locale, opts.deadlineAtMs);
+      html = await fetchBookshelfHtml(locale, opts.deadlineAtMs, accountId);
     } catch (error) {
       if (error instanceof PricingSliceExpiredError) throw error;
       /* keep prior */
@@ -227,6 +232,7 @@ async function ensureKdpBookshelfContext(
 async function countPendingPricing(
   accountId: string,
   paperbackAsins: readonly string[],
+  deadlineAtMs?: number,
 ): Promise<number> {
   const asins = [
     ...new Set(
@@ -239,12 +245,19 @@ async function countPendingPricing(
     const dirty = await loadDirtyPricingSetupIds(accountId).catch(() => []);
     return dirty.length;
   }
-  const { data, error } = await supabase
-    .from("kdp_titles")
-    .select("asin,pricing_captured_at")
-    .eq("account_id", accountId)
-    .in("asin", asins);
-  if (error) return asins.length;
+  const data: AnyRow[] = [];
+  for (const chunk of pricingIdentityChunks(asins)) {
+    data.push(...await readAllPricingPages<AnyRow>(async (offset, size) => {
+      const { data, error } = await withKdpTaskRequest(deadlineAtMs, async signal => {
+      const query = supabase.from("kdp_titles")
+        .select("asin,pricing_captured_at").eq("account_id", accountId)
+        .in("asin", chunk).order("asin").range(offset, offset + size - 1);
+      return await (signal ? query.abortSignal(signal) : query);
+    });
+      if (error) throw new Error(`KDP pending pricing unavailable: ${error.message}`);
+      return data || [];
+    }));
+  }
   const priced = new Set(
     (data || [])
       .filter((row) => (row as AnyRow).pricing_captured_at)
@@ -259,14 +272,18 @@ async function countPendingPricing(
   return missing + dirty.length;
 }
 
-async function loadStoredPricingRows(accountId: string): Promise<AnyRow[]> {
-  const { data, error } = await supabase
-    .from("kdp_titles")
-    .select("account_id,asin,kdp_setup_book_id,kdp_list_price,printing_cost,net_royalty_per_sale,royalty_rate,target_break_even_acos,pricing_marketplace,pricing_currency,pricing_captured_at")
-    .eq("account_id", accountId)
-    .not("kdp_setup_book_id", "is", null);
-  if (error) throw new Error(`kdp_titles setup ids: ${error.message}`);
-  return (data || []) as AnyRow[];
+async function loadStoredPricingRows(accountId: string, deadlineAtMs?: number): Promise<AnyRow[]> {
+  return readAllPricingPages<AnyRow>(async (offset, size) => {
+    const { data, error } = await withKdpTaskRequest(deadlineAtMs, async signal => {
+      const query = supabase.from("kdp_titles")
+      .select("account_id,asin,kdp_setup_book_id,kdp_list_price,printing_cost,net_royalty_per_sale,royalty_rate,target_break_even_acos,pricing_marketplace,pricing_currency,pricing_captured_at")
+      .eq("account_id", accountId).not("kdp_setup_book_id", "is", null)
+      .order("asin").range(offset, offset + size - 1);
+      return await (signal ? query.abortSignal(signal) : query);
+    });
+    if (error) throw new Error(`kdp_titles setup ids: ${error.message}`);
+    return data || [];
+  });
 }
 
 function setupMapFromStoredPricing(rows: AnyRow[]): Map<string, string> {
@@ -283,15 +300,19 @@ function setupMapFromStoredPricing(rows: AnyRow[]): Map<string, string> {
   return map;
 }
 
-async function loadFreshPricingAsins(accountId: string): Promise<Set<string>> {
+async function loadFreshPricingAsins(accountId: string, deadlineAtMs?: number): Promise<Set<string>> {
   const since = new Date(Date.now() - PRICING_FRESH_MS).toISOString();
-  const { data, error } = await supabase
-    .from("kdp_titles")
-    .select("asin,pricing_captured_at")
-    .eq("account_id", accountId)
-    .not("pricing_captured_at", "is", null)
-    .gte("pricing_captured_at", since);
-  if (error) throw new Error(`kdp_titles fresh pricing: ${error.message}`);
+  const data = await readAllPricingPages<AnyRow>(async (offset, size) => {
+    const { data, error } = await withKdpTaskRequest(deadlineAtMs, async signal => {
+      const query = supabase.from("kdp_titles")
+      .select("asin,pricing_captured_at").eq("account_id", accountId)
+      .not("pricing_captured_at", "is", null).gte("pricing_captured_at", since)
+      .order("asin").range(offset, offset + size - 1);
+      return await (signal ? query.abortSignal(signal) : query);
+    });
+    if (error) throw new Error(`kdp_titles fresh pricing: ${error.message}`);
+    return data || [];
+  });
   const set = new Set<string>();
   for (const row of data || []) {
     const asin = String((row as AnyRow).asin || "")
@@ -302,60 +323,29 @@ async function loadFreshPricingAsins(accountId: string): Promise<Set<string>> {
   return set;
 }
 
-async function fetchBookshelfHtml(locale: string, deadlineAtMs?: number): Promise<string> {
+async function fetchBookshelfHtml(locale: string, deadlineAtMs: number | undefined, accountId: string): Promise<string> {
+  let catalog = await pricingCatalogs.load(accountId);
+  // Refresh completed/blocked scans, retaining prior observed identities while
+  // the next scan is incomplete. One page per slice bounds discovery cost.
+  if (catalog.complete || catalog.stalled) catalog = { ...emptyPricingCatalog(), rows: catalog.rows };
+  const page = catalog.page;
   const base = bookshelfUrlForLocale(locale);
-  const htmlPages: string[] = [];
-  const seenRows = new Set<string>();
-  let previous = "";
-
-  // KDP's Bookshelf view selector uses `ALL`; native replay cannot click the
-  // selector, so request the equivalent view first.  If Amazon ignores that
-  // hint, walk numbered pages until a page contributes no new setup IDs.
-  const urls = [
-    `${base}?view=ALL`,
-    base,
-    ...Array.from({ length: 20 }, (_, index) => `${base}?page=${index + 2}`),
-  ];
-  for (const url of urls) {
-    const timeoutMs = pricingRequestTimeout(deadlineAtMs);
-    let html = "";
-    try {
-      const result = await kdpPageFetch({
-        url,
-        method: "GET",
-        headers: {
-          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        },
-        body: null,
-        authScope: "pricing",
-        timeoutMs,
-      });
-      html = String(result.text || "");
-    } catch {
-      if (!htmlPages.length) throw new Error("KDP Bookshelf fetch failed");
-      break;
-    }
-    if (!html) break;
-    const pageMatch = /[?&]page=(\d+)/i.exec(url);
-    const pageNumber = pageMatch ? Number(pageMatch[1]) : 0;
-    // The `view=ALL` hint and the unqualified Bookshelf URL can legitimately
-    // return the same document.  Keep walking after that duplicate; only a
-    // repeated numbered page proves that Amazon ignored pagination.
-    if (html === previous && pageNumber >= 2) break;
-    previous = html;
-    const rows = extractBookshelfPrintRowsFromHtml(html);
-    const newRows = rows.filter((row) => {
-      const key = `${String(row.kdpBookId || "").toUpperCase()}:${String(row.printAsin || "").toUpperCase()}`;
-      if (seenRows.has(key)) return false;
-      seenRows.add(key);
-      return true;
-    });
-    htmlPages.push(html);
-    // A server that ignores `page=` repeats the same setup rows.  Stop there
-    // rather than issuing a long request storm on every 15-minute wake.
-    if (pageNumber >= 2 && newRows.length === 0) break;
-  }
-  return htmlPages.join("\n<!-- inteliads-bookshelf-page -->\n");
+  const result = await kdpPageFetch({
+    url: page === 1 ? `${base}?view=ALL` : `${base}?view=ALL&page=${page}`,
+    method: "GET", headers: { Accept: "text/html,application/xhtml+xml" }, body: null,
+    authScope: "pricing", timeoutMs: pricingRequestTimeout(deadlineAtMs),
+  });
+  const html = String(result.text || "");
+  if (Number(result.status) !== 200 || !(bookshelfHtmlLooksSeeded(html) || bookshelfPageEvidence(html).authenticated))
+    throw new Error("KDP Bookshelf page incomplete; discovery cursor retained");
+  const rows = extractBookshelfPrintRowsFromHtml(html);
+  // Login/error/empty transport HTML must never seal the catalog.
+  if (!rows.length && !/bookshelf|Your titles|Create.*title/i.test(html))
+    throw new Error("KDP Bookshelf page identity missing; retry pending");
+  const next = acceptCatalogPage(catalog, page, rows, Date.now(), bookshelfPageEvidence(html, rows));
+  await pricingCatalogs.save(accountId, next);
+  await appendKdpActivity(`KDP catalog · page ${page} · ${next.rows.length} identities · ${next.complete ? 'complete' : next.stalled ? 'pagination unverified' : 'scan pending'}`, "info");
+  return html;
 }
 
 type SetupFetchResult = {
@@ -598,9 +588,12 @@ async function syncPricingSlice(
   // format identity must still exclude its historical print-setup alias.
   const persistedFormats: AnyRow[] = [];
   for (let offset = 0; ; offset += 1000) {
-    const { data, error } = await supabase.from('kdp_book_formats')
+    const { data, error } = await withKdpTaskRequest(opts.deadlineAtMs, async signal => {
+      const query = supabase.from('kdp_book_formats')
       .select('asin,format').eq('account_id', accountId).order('id')
       .range(offset, offset + 999);
+      return await (signal ? query.abortSignal(signal) : query);
+    });
     if (error) throw new Error('KDP pricing format identity unavailable; existing prices preserved');
     persistedFormats.push(...(data || []));
     if ((data || []).length < 1000) break;
@@ -629,20 +622,29 @@ async function syncPricingSlice(
     Boolean(opts.allowAuthNavigate) && isKdpHelperScreenFocused();
 
   // Local Keychain + optional hidden-host bookshelf seed — cookies never leave the phone.
-  const bookshelfHtml = await ensureKdpBookshelfContext(accountId, locale, {
+  const priorCatalog = await pricingCatalogs.load(accountId);
+  const resumeKnown = opts.deadlineAtMs != null && opts.deadlineAtMs - Date.now() <= 30_000
+    && canResumeKnownLivePricing(priorCatalog, priorCheckpoint.pending);
+  if (resumeKnown && !priorCatalog.complete) await pricingCatalogs.save(accountId, {
+    ...priorCatalog, discoverySkips: Number(priorCatalog.discoverySkips || 0) + 1,
+  });
+  const bookshelfHtml = resumeKnown ? "" : await ensureKdpBookshelfContext(accountId, locale, {
     allowAuthNavigate,
     deadlineAtMs: opts.deadlineAtMs,
   });
-  for (const row of extractBookshelfPrintRowsFromHtml(bookshelfHtml || '')) {
+  if (resumeKnown) await appendKdpActivity(`KDP catalog · resume ${priorCheckpoint.pending.length} live retries before discovery · cursor ${priorCatalog.page}`, "info");
+  const catalog = await pricingCatalogs.load(accountId);
+  const bookshelfRows = catalog.rows.length ? catalog.rows : extractBookshelfPrintRowsFromHtml(bookshelfHtml || '');
+  for (const row of bookshelfRows) {
     const digitalAsin = String(row.digitalAsin || '').trim().toUpperCase();
     if (digitalAsin) observedDigitalAsins.add(digitalAsin);
   }
 
-  const storedRows = await loadStoredPricingRows(accountId);
+  const storedRows = await loadStoredPricingRows(accountId, opts.deadlineAtMs);
   await applyBookshelfPrimaryPriceChanges({
     accountId, bookshelfHtml, storedRows,
     markDirty: markPricingSetupDirty,
-    writePricing: writeKdpPricing,
+    writePricing: input => writeKdpPricing({ ...input, deadlineAtMs: opts.deadlineAtMs }),
     log: (message) => appendKdpActivity(message, "info"),
   });
   const storedSetupByAsin = setupMapFromStoredPricing(storedRows);
@@ -657,15 +659,21 @@ async function syncPricingSlice(
     formatRows,
     titlesJson: opts.titlesJson ?? null,
     bookshelfHtml,
+    bookshelfRows,
     storedSetupByAsin,
   });
-  let candidates = [...discovered];
-  const inactiveSetupIds = new Set(extractBookshelfPrintRowsFromHtml(bookshelfHtml || '')
+  // Historical reports are not live-price eligibility. A partial current
+  // scan admits only explicitly Live rows already observed; retain the rest.
+  const liveSetups = new Set(bookshelfRows.filter(row => row.printStatus === 'live'
+    && (!('observedAtMs' in row) || Number(row.observedAtMs) >= Date.now() - 24 * 60 * 60 * 1000))
+    .map(row => normalizeSetupId(row.kdpBookId)));
+  let candidates = discovered.filter(row => liveSetups.has(normalizeSetupId(row.kdpBookId)));
+  const inactiveSetupIds = new Set(bookshelfRows
     .filter(row => ['draft', 'in_review', 'unpublished', 'action_required'].includes(String(row.printStatus || '').toLowerCase()))
     .map(row => normalizeSetupId(row.kdpBookId)));
 
   for (const entry of dirtyEntries) {
-    if (inactiveSetupIds.has(entry.setupId)) continue;
+    if (inactiveSetupIds.has(entry.setupId) || !liveSetups.has(entry.setupId)) continue;
     if (candidates.some((c) => normalizeSetupId(c.kdpBookId) === entry.setupId)) continue;
     let asin: string | null = null;
     for (const [a, sid] of storedSetupByAsin.entries()) {
@@ -678,12 +686,13 @@ async function syncPricingSlice(
     candidates.push({ asin, kdpBookId: entry.setupId, title: null });
   }
 
-  const pendingBefore = await countPendingPricing(accountId, paperbackAsins).catch(
+  const pendingBefore = await countPendingPricing(accountId, paperbackAsins, opts.deadlineAtMs).catch(
     () => candidates.length,
   );
 
   if (!candidates.length) {
-    await pricingCheckpoints.save(accountId, { needsDiscovery: true, pending: [] });
+    await pricingCheckpoints.save(accountId, { ...priorCheckpoint, needsDiscovery: true,
+      pending: priorCheckpoint.pending.filter(row => !inactiveSetupIds.has(normalizeSetupId(row.kdpBookId))) });
     const msg = "KDP pricing: no setup IDs yet — background will retry";
     void appendKdpActivity(msg, "info");
     return {
@@ -691,14 +700,22 @@ async function syncPricingSlice(
       synced: 0,
       skipped: 0,
       candidates: 0,
-      pending: Math.max(pendingBefore, paperbackAsins.length),
+      pending: Math.max(1, pendingBefore, paperbackAsins.length),
       message: msg,
     };
   }
 
-  const freshAsins = opts.forceRefresh
+  const retainedUnknown = priorCheckpoint.pending.filter(row => {
+    const setupId = normalizeSetupId(row.kdpBookId);
+    if (liveSetups.has(setupId) || inactiveSetupIds.has(setupId)) return false;
+    if (row.asin && isKnownNonPrint(row.asin)) return false;
+    return !discovered.some(current => current.asin === row.asin && normalizeSetupId(current.kdpBookId) !== setupId);
+  });
+  const continuingSweep = priorCheckpoint.pending.length > 0 || priorCheckpoint.needsDiscovery;
+  const forceNewSweep = Boolean(opts.forceRefresh) && !continuingSweep;
+  const freshAsins = forceNewSweep
     ? new Set<string>()
-    : await loadFreshPricingAsins(accountId).catch(() => new Set<string>());
+    : await loadFreshPricingAsins(accountId, opts.deadlineAtMs).catch(() => new Set<string>());
 
   let todo = candidates.filter((c) => {
     const setupId = normalizeSetupId(c.kdpBookId);
@@ -706,34 +723,34 @@ async function syncPricingSlice(
     const asin = String(c.asin || "")
       .trim()
       .toUpperCase();
-    if (!opts.forceRefresh && asin && freshAsins.has(asin)) return false;
+    if (!forceNewSweep && asin && freshAsins.has(asin)) return false;
     return true;
   });
 
-  if (dirtySet.size > 0 && !opts.forceRefresh && !opts.onboarding) {
-    const dirtyTodo = todo.filter((c) => dirtySet.has(normalizeSetupId(c.kdpBookId)));
-    if (dirtyTodo.length) todo = dirtyTodo;
-  }
-
   const maxBooks =
     Number.isFinite(Number(opts.maxBooks)) && Number(opts.maxBooks) > 0
-      ? Math.max(1, Math.trunc(Number(opts.maxBooks)))
+      ? Math.min(40, Math.max(1, Math.trunc(Number(opts.maxBooks))))
       : opts.onboarding
         ? ONBOARDING_MAX_BOOKS
-        : dirtySet.size > 0 && !opts.forceRefresh
-          ? Math.max(dirtySet.size, DEFAULT_MAX_BOOKS)
-          : DEFAULT_MAX_BOOKS;
-  const completed = new Set(priorCheckpoint.pending.length ? priorCheckpoint.completed || [] : []);
-  todo = todo.filter(c => !completed.has(pricingCandidateKey(c)) || dirtySet.has(normalizeSetupId(c.kdpBookId)) || opts.forceRefresh);
+        : DEFAULT_MAX_BOOKS;
+  const completed = new Set(continuingSweep ? priorCheckpoint.completed || [] : []);
+  todo = todo.filter(c => !completed.has(pricingCandidateKey(c)) || dirtySet.has(normalizeSetupId(c.kdpBookId)) || forceNewSweep);
   todo = resumePricingCandidates(priorCheckpoint.pending, candidates, todo);
-  const checkpoint = { needsDiscovery: false, pending: [...todo], completed: [...completed] };
+  // Dirty/new live editions preempt old retries, while stable ordering and
+  // failure rotation preserve progress through the remaining catalog.
+  const priorKeys = new Set([...priorCheckpoint.pending.map(pricingCandidateKey), ...completed]);
+  todo = todo.map(row => ({ ...row, pendingSinceMs: row.pendingSinceMs || Date.now() }));
+  const admission = admitPricingCandidates(todo, maxBooks, dirtySet, priorKeys);
+  todo = admission.pending;
+  const checkpoint = { needsDiscovery: !catalog.complete || retainedUnknown.length > 0, pending: [...todo, ...retainedUnknown], completed: [...completed] };
   await pricingCheckpoints.save(accountId, checkpoint);
+  const oldestPendingMs = checkpoint.pending.length ? Math.max(0, Date.now() - Math.min(...checkpoint.pending.map(row => row.pendingSinceMs!))) : 0;
+  await appendKdpActivity(`KDP pricing queue · ${liveSetups.size} live · ${checkpoint.pending.length} pending · ${completed.size} confirmed · oldest ${Math.floor(oldestPendingMs / 60_000)}m · catalog ${catalog.complete ? 'complete' : 'pending'}`, "info");
   const skippedFresh = Math.max(0, candidates.length - todo.length);
-  const selectedCount = Math.min(todo.length, maxBooks);
-  todo = todo.slice(0, selectedCount);
+  todo = admission.selected;
 
   if (!todo.length) {
-    const pending = await countPendingPricing(accountId, paperbackAsins).catch(
+    const pending = await countPendingPricing(accountId, paperbackAsins, opts.deadlineAtMs).catch(
       () => pendingBefore,
     );
     // Shelf already priced (Chrome or prior helper) — drop sticky print-setup banner.
@@ -751,7 +768,7 @@ async function syncPricingSlice(
       synced: 0,
       skipped: skippedFresh,
       candidates: candidates.length,
-      pending,
+      pending: Math.max(pending, catalog.complete ? 0 : 1),
       message: msg,
     };
   }
@@ -775,7 +792,7 @@ async function syncPricingSlice(
     // HTML / non-JSON / 403 — same as Chrome sign-in gate. A stored old price
     // is not proof that the pending refresh succeeded: do not clear auth merely
     // because every paperback has a non-null pricing_captured_at.
-    const pendingAfterAuth = await countPendingPricing(accountId, paperbackAsins).catch(
+    const pendingAfterAuth = await countPendingPricing(accountId, paperbackAsins, opts.deadlineAtMs).catch(
       () => pendingBefore,
     );
     const refreshPending = Math.max(pendingAfterAuth, todo.length);
@@ -785,6 +802,8 @@ async function syncPricingSlice(
       url: probe.url,
       preferredMarketplace: probe.marketplaceKey || "US",
     });
+    checkpoint.pending = [...checkpoint.pending.filter(row => normalizeSetupId(row.kdpBookId) !== normalizeSetupId(probeId)), todo[0]!];
+    await pricingCheckpoints.save(accountId, checkpoint);
     setKdpHelperPricingAuth({ required: true, bookId: probeId });
     await patchPricingBootstrap(accountId, { authBlockedAt: nowIso() });
     if (allowAuthNavigate) {
@@ -940,7 +959,7 @@ async function syncPricingSlice(
     });
     // Commit each exact ASIN with all of its captured marketplaces. A later
     // expiry cannot discard books already acknowledged by both writes.
-    await writeKdpPricing({ accountId, titleRows: [titleRow], marketplaceRows });
+    await writeKdpPricing({ accountId, titleRows: [titleRow], marketplaceRows, deadlineAtMs: opts.deadlineAtMs });
     checkpoint.pending = checkpoint.pending.filter(row => pricingCandidateKey(row) !== pricingCandidateKey(c));
     completed.add(pricingCandidateKey(c));
     checkpoint.completed = [...completed];
@@ -955,8 +974,8 @@ async function syncPricingSlice(
     if (i + 1 < todo.length) await sleep(FETCH_GAP_MS);
   }
 
-  const pending = Math.max(checkpoint.pending.length,
-    await countPendingPricing(accountId, paperbackAsins).catch(() => Math.max(0, pendingBefore - synced)),
+  const pending = Math.max(catalog.complete ? 0 : 1, checkpoint.pending.length,
+    await countPendingPricing(accountId, paperbackAsins, opts.deadlineAtMs).catch(() => Math.max(0, pendingBefore - synced)),
   );
 
   if (pending === 0) {

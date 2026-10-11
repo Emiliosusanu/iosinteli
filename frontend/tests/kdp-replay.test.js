@@ -8,6 +8,23 @@ import { buildKdpFromJsons, pickTemplateTypeByUrl } from "../src/lib/kdp/vendor/
 
 const vendor = readFileSync(new URL("../src/lib/kdp/vendor/kdpVendor.generated.js", import.meta.url), "utf8");
 
+test("explicit royalty zero is retained but absent, null, empty and nonnumeric source metrics are incomplete", () => {
+  const day = "2026-10-08";
+  const histogram = values => ({ nestedHistogram: {histogramList: [{title:day,data:[{bin:"B0TEST1234", values}]}]} });
+  const input = {ymd:day, titlesJson:{reportsMetadata:{books:{B0TEST1234:{asins:{digital:"B0TEST1234"}}}}},
+    royaltiesJson:histogram({TotalRoyalties:0,DigitalRoyalties:0}),
+    ordersJson:histogram({TotalOrders:0,DigitalOrders:0}), kenpJson:histogram({TotalKENP:0})};
+  const result=buildKdpFromJsons(input);
+  assert.equal(result.rowDaily.royalties,0); assert.equal(result.rowDaily.orders,0);
+  for(const values of [{FutureRoyalties:0},{TotalRoyalties:null},{TotalRoyalties:''},{TotalRoyalties:'oops'},{TotalRoyalties:false},{TotalRoyalties:[]}]) {
+    assert.throws(()=>buildKdpFromJsons({...input,royaltiesJson:histogram(values)}),/missing explicit numeric metrics/);
+  }
+  for(const value of [null, '', false, [], 'oops']) {
+    assert.throws(()=>buildKdpFromJsons({...input,ordersJson:histogram({TotalOrders:value})}),/missing explicit numeric metrics/);
+    assert.throws(()=>buildKdpFromJsons({...input,kenpJson:histogram({TotalKENP:value})}),/missing explicit numeric metrics/);
+  }
+});
+
 test("captured KDP title tooltips retain book orders and KENP", () => {
   const day = "2026-10-08";
   const histogram = (values, bin = "B0TEST1234") => ({ nestedHistogram: {

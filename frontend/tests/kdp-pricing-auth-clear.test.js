@@ -130,7 +130,7 @@ test("KDP helper presents pricing gate separately from report session", () => {
 test("iOS pricing gate rechecks every metronome wake and sweeps the live shelf", () => {
   assert.match(sync, /const PRICING_FRESH_MS = 15 \* 60 \* 1000/);
   assert.match(sync, /\?view=ALL/);
-  assert.match(sync, /\?page=\$\{index \+ 2\}/);
+  assert.match(sync, /page=\$\{page\}/);
   const bridge = readFileSync(new URL("../src/lib/kdp/bridge.ts", import.meta.url), "utf8");
   assert.match(bridge, /selectAllBookshelfRows/);
   assert.match(bridge, /value = 'ALL'/);

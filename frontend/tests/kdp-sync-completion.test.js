@@ -21,7 +21,7 @@ async function finish({ pricingError = false, pending = 0, authRequired = false,
     accountId: 'account-a', titlesJson: {}, pricingBooksObj: {}, pricingFormatRows: [],
     state: { onboardingDone: true }, wakeMode: 'recent', deliveredWakeMode: 'recent', totalDays: 2,
     AppState: { currentState: 'background' }, tickStartedAtMs: Date.now(),
-    SHORT_PRICING_MAX_BOOKS: 3, SHORT_WAKE_WORK_MS: 22000,
+    SHORT_PRICING_MAX_BOOKS: 3, deadlineAtMs: Date.now()+22000,
     leftover: false, reportsMessage: 'Imported 2 days', lastSoftError: reportError,
     isKdpHelperScreenFocused: () => false,
     syncKdpPaperbackPricing: async () => {

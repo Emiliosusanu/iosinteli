@@ -64,7 +64,7 @@ test("helper destination is explicit and Ads filters cannot silently switch KDP 
   assert.match(helper, /Ads profile and marketplace filters never change it/);
   assert.match(importer, /if \(owned\?\.id\) return cached/);
   assert.doesNotMatch(importer, /accountLinkedToProfiles\(cached, profileIds\)/);
-  assert.match(accounts, /if \(linked\.length > 1\)/);
+  assert.match(accounts, /if \(ids\.length > 1\)/);
   assert.match(accounts, /Choose the KDP import account/);
   assert.match(persist, /export async function selectHelperAccountId/);
   assert.match(persist, /removeItem\(STATE_KEY\)/);

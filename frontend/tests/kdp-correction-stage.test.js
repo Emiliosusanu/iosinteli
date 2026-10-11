@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { withKdpTaskRequest } from '../src/lib/kdp/backgroundBudget.ts';
 
 const source = readFileSync(new URL('../src/lib/kdp/upsert.ts', import.meta.url), 'utf8');
 function harness(patch = {}) {
@@ -11,6 +12,7 @@ function harness(patch = {}) {
     '../supabase.ts': { supabase: {} },
     'expo-constants': { default: {} },
     './marketplaceCoverage.ts': {},
+    './backgroundBudget.ts': {withKdpTaskRequest},
     '../rulesApi.ts': { nestApiJson: async (url, request) => {
       const body = JSON.parse(request.body); calls.push({ url, body });
       return { ok: false, quarantined: true, staged: true, candidateId: '44444444-4444-4444-8444-444444444444',
@@ -43,6 +45,6 @@ test('incomplete native source reports stop before staging a correction', () => 
   const start = importer.indexOf('async function syncOneDay');
   const end = importer.indexOf('async function resolveAccountId', start);
   const flow = importer.slice(start, end);
-  assert.ok(flow.indexOf('await fetchDayPayloads(ymd, target.currency, target)') < flow.indexOf('reviewOnly: true'));
+  assert.ok(flow.indexOf('await fetchDayPayloads(ymd, target.currency, target, deadlineAtMs)') < flow.indexOf('reviewOnly: true'));
   assert.ok(flow.indexOf('reviewOnly: true') < flow.indexOf('throw new Error(`Protected'));
 });

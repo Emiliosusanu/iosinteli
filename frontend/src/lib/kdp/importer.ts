@@ -9,7 +9,8 @@
  * from cloud coverage holes.
  */
 import { AppState } from "react-native";
-import { SHORT_PRICING_MAX_BOOKS, SHORT_WAKE_WORK_MS } from "./pricingCheckpoint.ts";
+import { SHORT_PRICING_MAX_BOOKS } from "./pricingCheckpoint.ts";
+import { canStartReportDay, taskDeadline, taskRequestTimeout, KdpTaskBudgetExpired, withKdpTaskRequest, withKdpPreparationBudget } from "./backgroundBudget.ts";
 import { supabase } from "../supabase.ts";
 import { resolveHelperAccountId } from "./accounts.ts";
 import { orderDaysForWake, reopenOnboardingIfIncomplete } from "./coverage.ts";
@@ -141,7 +142,7 @@ function isRateLimited(error: unknown): boolean {
   return /\b429\b|too many requests|rate.?limit/i.test(message);
 }
 
-async function ensureTemplates(): Promise<void> {
+async function ensureTemplates(deadlineAtMs?: number): Promise<void> {
   const persisted = await loadHelperTemplates();
   hydrateKdpTemplates(persisted);
   if (kdpTemplatesReady()) return;
@@ -152,6 +153,11 @@ async function ensureTemplates(): Promise<void> {
     hydrateKdpTemplates(persisted);
     if (kdpTemplatesReady()) return;
   }
+
+  // A locked-screen delivery cannot bootstrap an interactive Reports page.
+  // Preserve work for the next foreground bootstrap rather than spend its
+  // entire native allowance waiting for a WebView that cannot be attached.
+  if (deadlineAtMs != null) throw new Error("KDP captured report templates unavailable; foreground bootstrap required");
 
   await waitUntil(() => getKdpHelperStatus().ready, WEBVIEW_ATTACH_WAIT_MS);
   const st = getKdpHelperStatus();
@@ -181,6 +187,7 @@ async function fetchJsonForType(
   ymd: string,
   preferredCurrency: string | null = null,
   marketplace: KdpMarketplaceTarget | null = null,
+  deadlineAtMs?: number,
 ) {
   const templates = getKdpHelperStatus().templates;
   // Captured title rows carry ASIN activity; marketplace overview rows do not.
@@ -196,11 +203,12 @@ async function fetchJsonForType(
   }
   const req = rebuildTemplateForDay(template, type, ymd, { preferredCurrency, marketplace });
   const attempt = async () => {
-    const result = await kdpPageFetch(req);
+    const result = await kdpPageFetch({ ...req, timeoutMs: taskRequestTimeout(deadlineAtMs) });
     if (Number(result.status) === 405) {
       const alt = req.method.toUpperCase() === "GET" ? "POST" : "GET";
       const retry = await kdpPageFetch({
         ...req,
+        timeoutMs: taskRequestTimeout(deadlineAtMs),
         method: alt,
         body: alt === "GET" ? null : req.body,
       });
@@ -215,6 +223,7 @@ async function fetchJsonForType(
     return await attempt();
   } catch (error) {
     if (!isRateLimited(error)) throw error;
+    if (deadlineAtMs != null && deadlineAtMs - Date.now() <= RATE_LIMIT_BACKOFF_MS + 5_000) throw new KdpTaskBudgetExpired();
     await sleep(RATE_LIMIT_BACKOFF_MS);
     try {
       return await attempt();
@@ -228,11 +237,12 @@ async function fetchDayPayloads(
   ymd: string,
   currency: "EUR" | "USD" | string,
   marketplace: KdpMarketplaceTarget | null,
+  deadlineAtMs?: number,
 ): Promise<{ royaltiesJson: unknown; ordersJson: unknown; kenpJson: unknown }> {
   const results = await Promise.allSettled([
-    fetchJsonForType("royalties", ymd, currency, marketplace),
-    fetchJsonForType("orders", ymd, currency, marketplace),
-    fetchJsonForType("kenp", ymd, currency, marketplace),
+    fetchJsonForType("royalties", ymd, currency, marketplace, deadlineAtMs),
+    fetchJsonForType("orders", ymd, currency, marketplace, deadlineAtMs),
+    fetchJsonForType("kenp", ymd, currency, marketplace, deadlineAtMs),
   ]);
   // Wait for all siblings before a failed day is retried by another wake.
   const failed = results.find((result) => result.status === "rejected");
@@ -251,10 +261,11 @@ async function syncOneDay(
   ymd: string,
   titlesJson: unknown,
   marketplaceTargets: KdpMarketplaceTarget[],
+  deadlineAtMs?: number,
 ): Promise<void> {
   // The authoritative All rollup is always USD. Native storefront requests
   // below populate kdp_daily_facts without changing the account/day total.
-  const { royaltiesJson, ordersJson, kenpJson } = await fetchDayPayloads(ymd, "USD", null);
+  const { royaltiesJson, ordersJson, kenpJson } = await fetchDayPayloads(ymd, "USD", null, deadlineAtMs);
   const built = buildKdpFromJsons({
     ymd,
     titlesJson,
@@ -266,12 +277,11 @@ async function syncOneDay(
   });
   built.rowEntry.income_currency = "USD";
 
-  const { data: previous, error: previousError } = await supabase
-    .from("kdp_daily_data")
-    .select("royalties,orders,kenp")
-    .eq("account_id", accountId)
-    .eq("date", ymd)
-    .maybeSingle();
+  const { data: previous, error: previousError } = await withKdpTaskRequest(deadlineAtMs, async signal => {
+    const query = supabase.from("kdp_daily_data").select("royalties,orders,kenp")
+      .eq("account_id", accountId).eq("date", ymd);
+    return await (signal ? query.abortSignal(signal) : query).maybeSingle();
+  });
   if (previousError) {
     throw new Error(`Could not load accepted KDP baseline for ${ymd}; refusing overwrite`);
   }
@@ -307,7 +317,7 @@ async function syncOneDay(
     const started = Date.now();
     const native = await mapKdpMarketplacesSettled(marketplaceTargets,
       async (target) => {
-        const payloads = await fetchDayPayloads(ymd, target.currency, target);
+        const payloads = await fetchDayPayloads(ymd, target.currency, target, deadlineAtMs);
         const result = buildKdpFromJsons({
           ymd,
           titlesJson,
@@ -343,6 +353,7 @@ async function syncOneDay(
     try {
       await writeKdpDay({ accountId, rowDaily: built.rowDaily, rowEntry: built.rowEntry,
         rowsBookDaily: built.rowsBookDaily, factRows, reviewOnly: true,
+        deadlineAtMs,
         marketplaces: marketplaceTargets.map((target) => target.key) });
       void appendKdpActivity(`Protected ${ymd}: correction saved for administrator verification`, "error");
     } catch {
@@ -351,8 +362,10 @@ async function syncOneDay(
     throw new Error(`Protected ${ymd}: existing verified royalties and activity preserved`);
   }
 
+  taskRequestTimeout(deadlineAtMs, Date.now(), 0);
   await writeKdpDay({
     accountId,
+    deadlineAtMs,
     rowDaily: built.rowDaily,
     rowEntry: built.rowEntry,
     rowsBookDaily: built.rowsBookDaily,
@@ -361,17 +374,16 @@ async function syncOneDay(
   });
 }
 
-async function resolveAccountId(userId: string, profileIds: string[]): Promise<string> {
+async function resolveAccountId(userId: string, profileIds: string[], deadlineAtMs?: number): Promise<string> {
   const cached = await loadHelperAccountId();
   if (cached) {
-    const { data: owned } = await supabase
-      .from("kdp_accounts")
-      .select("id")
-      .eq("id", cached)
-      .eq("user_id", userId)
-      .maybeSingle();
+    const { data: owned } = await withKdpTaskRequest(deadlineAtMs, async signal => {
+      const query = supabase.from("kdp_accounts").select("id").eq("id", cached).eq("user_id", userId);
+      return await (signal ? query.abortSignal(signal) : query).maybeSingle();
+    });
     if (owned?.id) return cached;
   }
+  if (deadlineAtMs != null) throw new Error("KDP import account unavailable; foreground setup required");
   const resolved = await resolveHelperAccountId({ userId, profileIds });
   await saveHelperAccountId(resolved.accountId);
   if (resolved.name) {
@@ -386,7 +398,7 @@ export const runKdpIosHelperTick = createSingleFlight(runKdpIosHelperTickOnce);
 
 async function runKdpIosHelperTickOnce(
   reason: string,
-  opts: { force?: boolean; profileIds?: string[]; wakeMode?: KdpWakeMode } = {},
+  opts: { force?: boolean; profileIds?: string[]; wakeMode?: KdpWakeMode; deadlineAtMs?: number } = {},
 ): Promise<{ ok: boolean; skipped?: boolean; reason: string; days?: number; wakeMode?: KdpWakeMode }> {
   const tickStartedAtMs = Date.now();
   // Background / resume ticks must not navigate the sign-in WebView.
@@ -395,42 +407,32 @@ async function runKdpIosHelperTickOnce(
     return { ok: true, skipped: true, reason: "helper_ui_focused" };
   }
 
-  if (!isIosHelperEnabled(await getKdpRoyaltySource())) {
-    void appendKdpActivity("15 min sync skipped · iPhone helper off (Chrome-only source)", "info");
-    return { ok: true, skipped: true, reason: "source_off" };
-  }
-
-  const userId = await currentUserId();
-  if (!userId) {
-    void appendKdpActivity("15 min sync skipped · sign in required", "error");
-    return { ok: false, skipped: true, reason: "signed_out" };
-  }
-
-  // KDP upserts use Supabase RLS. Nest Keychain JWT alone is not enough —
-  // without a live Supabase session, writes fail and lastSteady never advances.
-  try {
-    const live = await supabase.auth.getSession();
-    if (!live.data.session) {
-      await supabase.auth.refreshSession().catch(() => null);
-    }
-    const again = await supabase.auth.getSession();
-    if (!again.data.session) {
-      void appendKdpActivity(
-        "15 min sync blocked · Amazon session missing for KDP writes. Open the app and sign in again.",
-        "error",
-      );
-      return { ok: false, skipped: true, reason: "supabase_session_missing" };
-    }
-  } catch {
-    void appendKdpActivity(
-      "15 min sync blocked · Amazon session missing for KDP writes. Open the app and sign in again.",
-      "error",
-    );
-    return { ok: false, skipped: true, reason: "supabase_session_missing" };
-  }
-
   let wakeMode = opts.wakeMode ?? resolveWakeMode(reason, { force: opts.force });
   const deliveredWakeMode = wakeMode;
+  const deadlineAtMs = opts.deadlineAtMs ?? (AppState.currentState !== "active"
+    ? taskDeadline(wakeMode, tickStartedAtMs) : undefined);
+  let userId: string | null;
+  try {
+    if (!isIosHelperEnabled(await withKdpPreparationBudget(deadlineAtMs, getKdpRoyaltySource))) {
+      return { ok: true, skipped: true, reason: "source_off" };
+    }
+    userId = await withKdpPreparationBudget(deadlineAtMs, currentUserId);
+    if (!userId) return { ok: false, skipped: true, reason: "signed_out" };
+    let live = await withKdpPreparationBudget(deadlineAtMs, () => supabase.auth.getSession());
+    // Background may reuse a saved session; account setup/authentication stays
+    // in the foreground. SDK auth completion cannot launch detached KDP writes.
+    if (!live.data.session && deadlineAtMs == null) {
+      await supabase.auth.refreshSession().catch(() => null);
+      live = await supabase.auth.getSession();
+    }
+    if (!live.data.session) {
+      void appendKdpActivity("InteliAds session unavailable for KDP writes; open the app to restore it", "error");
+      return { ok: false, skipped: true, reason: "supabase_session_missing" };
+    }
+  } catch (error) {
+    if (error instanceof KdpTaskBudgetExpired) return { ok: true, skipped: true, reason: "budget_deferred", wakeMode };
+    return { ok: false, skipped: true, reason: "supabase_session_missing" };
+  }
 
   try {
     setKdpHelperRunning(true, reason === "enable" ? "Starting iPhone helper…" : "Syncing KDP…");
@@ -446,14 +448,16 @@ async function runKdpIosHelperTickOnce(
       "info",
     );
 
+    taskRequestTimeout(deadlineAtMs);
     const session = await loadKdpWebSession();
     const canBackgroundReplay = Boolean(session?.cookies?.trim());
     if (!canBackgroundReplay) {
+      if (deadlineAtMs != null) throw new Error("KDP saved Amazon session unavailable; foreground authentication required");
       await waitUntil(() => getKdpHelperStatus().ready, LOGIN_WAIT_MS);
     }
-    await ensureTemplates();
+    await ensureTemplates(deadlineAtMs);
 
-    const accountId = await resolveAccountId(userId, opts.profileIds ?? []);
+    const accountId = await resolveAccountId(userId, opts.profileIds ?? [], deadlineAtMs);
     // Restore a prior print-pricing step-up independently from Reports auth.
     // This keeps the price gate visible after process death without labelling
     // the valid royalties session as signed out.
@@ -472,9 +476,9 @@ async function runKdpIosHelperTickOnce(
 
     const titlesYmd = new Date().toISOString().slice(0, 10);
     const titlesJson =
-      (await fetchJsonForType("titles", titlesYmd, preferredCurrency).catch(() => null)) ||
-      (await fetchJsonForType("titles_latest", titlesYmd, preferredCurrency).catch(() => null)) ||
-      (await fetchJsonForType("royalties_titles", titlesYmd, preferredCurrency).catch(() => null));
+      (await fetchJsonForType("titles", titlesYmd, preferredCurrency, null, deadlineAtMs).catch(() => null)) ||
+      (await fetchJsonForType("titles_latest", titlesYmd, preferredCurrency, null, deadlineAtMs).catch(() => null)) ||
+      (await fetchJsonForType("royalties_titles", titlesYmd, preferredCurrency, null, deadlineAtMs).catch(() => null));
     let pricingBooksObj: Record<string, unknown> | null = null;
     let pricingFormatRows: Record<string, unknown>[] = [];
     if (titlesJson) {
@@ -483,11 +487,12 @@ async function runKdpIosHelperTickOnce(
       pricingFormatRows = shelf.formatRows as Record<string, unknown>[];
       await writeKdpCatalog({
         accountId,
+        deadlineAtMs,
         bookRows: shelf.bookRows,
         formatRows: shelf.formatRows,
         titleRows: shelf.titleRows,
       });
-      await runShelfHeal({
+      if (deadlineAtMs == null) await runShelfHeal({
         userId,
         liveHelperAccountId: accountId,
         liveHelperCatalogAsins: shelf.formatRows.map((row) => String(row.asin || "")),
@@ -503,7 +508,7 @@ async function runKdpIosHelperTickOnce(
 
     // Always reconcile last-90 coverage. A phone that sealed onboarding after
     // 45 Chrome days must reopen and finish the leftover.
-    const history = await cloudHistorySealsOnboarding(accountId, today);
+    const history = await cloudHistorySealsOnboarding(accountId, today, deadlineAtMs);
     const wasOnboarded = state.onboardingDone;
     state = reopenOnboardingIfIncomplete(state, history);
     if (history.sealed && !wasOnboarded) {
@@ -529,7 +534,7 @@ async function runKdpIosHelperTickOnce(
     let steadyPlanned = false;
     let steadyOk = false;
 
-    while (continueSoon && guard < 16 && remaining > 0) {
+    while (continueSoon && guard < 16 && remaining > 0 && canStartReportDay(deadlineAtMs)) {
       guard += 1;
       const plan = planSync(new Date(), state, {
         timeZone: tz,
@@ -549,16 +554,17 @@ async function runKdpIosHelperTickOnce(
 
       const batch = orderDaysForWake(plannedDays, today, yesterday).slice(0, remaining);
       for (const ymd of batch) {
+        if (!canStartReportDay(deadlineAtMs)) break;
         remaining -= 1;
         setKdpHelperRunning(true, `sync ${ymd}`);
         try {
-          await syncOneDay(accountId, ymd, titlesJson, marketplaceTargets);
+          await syncOneDay(accountId, ymd, titlesJson, marketplaceTargets, deadlineAtMs);
           deferred = acknowledgeDeferredDays(deferred, [ymd]);
           totalDays += 1;
           if (ymd === today || ymd === yesterday) steadyOk = true;
         } catch (dayError) {
           lastSoftError = dayError instanceof Error ? dayError.message : String(dayError);
-          if (isRateLimited(dayError)) await sleep(RATE_LIMIT_BACKOFF_MS);
+          if (isRateLimited(dayError) && (deadlineAtMs == null || deadlineAtMs - Date.now() > RATE_LIMIT_BACKOFF_MS + 4_000)) await sleep(RATE_LIMIT_BACKOFF_MS);
         }
       }
       await saveHelperDeferredDays(deferred);
@@ -567,7 +573,7 @@ async function runKdpIosHelperTickOnce(
     // Recover last-90 holes on every wake — never abandon leftover days.
     try {
       const floor90 = addDaysYmd(today, -(ONBOARDING_DAYS - 1));
-      const holes90 = await cloudMissingDays(accountId, floor90, yesterday);
+      const holes90 = await cloudMissingDays(accountId, floor90, yesterday, deadlineAtMs);
       if (holes90.length) {
         deferred = journalDeferredDays(deferred, holes90);
         await saveHelperDeferredDays(deferred);
@@ -578,15 +584,16 @@ async function runKdpIosHelperTickOnce(
 
     const queued = orderDaysForWake(deferred, today, yesterday).slice(0, Math.max(0, remaining));
     for (const ymd of queued) {
+      if (!canStartReportDay(deadlineAtMs)) break;
       setKdpHelperRunning(true, `deferred: ${ymd}`);
       try {
-        await syncOneDay(accountId, ymd, titlesJson, marketplaceTargets);
+        await syncOneDay(accountId, ymd, titlesJson, marketplaceTargets, deadlineAtMs);
         deferred = acknowledgeDeferredDays(deferred, [ymd]);
         totalDays += 1;
         if (ymd === today || ymd === yesterday) steadyOk = true;
       } catch (dayError) {
         lastSoftError = dayError instanceof Error ? dayError.message : String(dayError);
-        if (isRateLimited(dayError)) await sleep(RATE_LIMIT_BACKOFF_MS);
+        if (isRateLimited(dayError) && (deadlineAtMs == null || deadlineAtMs - Date.now() > RATE_LIMIT_BACKOFF_MS + 4_000)) await sleep(RATE_LIMIT_BACKOFF_MS);
       }
     }
     await saveHelperDeferredDays(deferred);
@@ -644,7 +651,7 @@ async function runKdpIosHelperTickOnce(
         booksObj: pricingBooksObj,
         formatRows: pricingFormatRows,
         maxBooks: shortBackgroundWake ? SHORT_PRICING_MAX_BOOKS : undefined,
-        deadlineAtMs: shortBackgroundWake ? tickStartedAtMs + SHORT_WAKE_WORK_MS : undefined,
+        deadlineAtMs,
         onboarding: !state.onboardingDone || wakeMode === "processing",
         // Only an open helper is allowed to show Amazon's one-time pricing
         // step-up. Background wakes remain read-only and never navigate.
@@ -699,6 +706,11 @@ async function runKdpIosHelperTickOnce(
     };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
+    if (e instanceof KdpTaskBudgetExpired) {
+      setKdpHelperRunning(false, "Background budget deferred; checkpoint retained");
+      await publishKdpSyncSnapshot({ status: "Retrying", detail: "Background budget deferred", isActive: false });
+      return { ok: true, reason: "budget_deferred", wakeMode };
+    }
     setKdpHelperError(message);
     setKdpHelperRunning(false, message);
     void appendKdpActivity(message, "error");
