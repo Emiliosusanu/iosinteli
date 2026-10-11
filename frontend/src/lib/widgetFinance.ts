@@ -59,4 +59,3 @@ export function buildVerifiedFinancialWidgetPayload(input: {
     reload: true,
   };
 }
-

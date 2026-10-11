@@ -181,7 +181,7 @@ test('positive ebook KENP survives a zero sibling format; ambiguous identity pre
     assert.equal(result.facts.find(r=>r.asin===digital&&r.format==='ku').kenp,518);
   }
   assert.equal(run([[digital,0],[print,0]]).rowDaily.kenp,0);
-  assert.throws(()=>run([['B0UNKNOWN1',518]]),/identity missing from catalog/);
+  assert.equal(run([['B0UNKNOWN1',518]]).rowDaily.kenp,518);
   assert.throws(()=>run([[digital,518],[digital,518]]),/repeated positive book identity/);
   assert.throws(()=>run([[digital,518],[print,518]]),/repeated positive book identity/);
 });

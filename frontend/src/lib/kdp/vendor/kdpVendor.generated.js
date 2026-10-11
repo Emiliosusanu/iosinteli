@@ -278,8 +278,15 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
       }
       const vals = r?.values || {};
       const pages = Math.max(0, parseInt(vals.TotalKENP || 0, 10));
+      if (!row && pages > 0 && /^[A-Z0-9]{10}$/.test(u)) {
+        // The authenticated book-level KENP report itself identifies this
+        // ebook. Metadata can lag a new title or omit an archived title.
+        // Reuse a report's explicit digital identity before making a bare
+        // ASIN metric row; never guess a paperback sibling or drop its pages.
+        row = [...map.values()].find(existing => existing.digitalAsin === u) || ensure(u);
+      }
       if (!row) {
-        if (pages > 0) throw new Error('KENP positive book identity missing from catalog; existing data preserved');
+        if (pages > 0) throw new Error('KENP positive row missing valid book identity; existing data preserved');
         continue;
       }
       // Zero-valued sibling format rows must not erase the ebook's pages.
