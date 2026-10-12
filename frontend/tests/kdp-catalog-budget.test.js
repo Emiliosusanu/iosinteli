@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createClient } from '@supabase/supabase-js';
 import { acceptCatalogPage, canResumeKnownLivePricing, emptyPricingCatalog, createPricingCatalogStore, readAllPricingPages, pricingIdentityChunks } from '../src/lib/kdp/pricingCatalog.ts';
 import { taskDeadline, taskRequestTimeout, canStartReportDay, KdpTaskBudgetExpired, withKdpTaskRequest, withKdpPreparationBudget } from '../src/lib/kdp/backgroundBudget.ts';
 
@@ -12,6 +13,52 @@ test('expired cloud budget starts no request and active expiry aborts the actual
     signal.addEventListener('abort', () => { settled=true; reject(new Error('Aborted request')); }, {once:true});
   })), KdpTaskBudgetExpired);
   assert.equal(started, true); assert.equal(settled, true);
+});
+
+test('actual PostgREST resolved abort is a budget deferral and never acknowledges the next catalog chunk', async () => {
+  let requests=0, completedChunks=0, returnedError;
+  const client=createClient('https://example.invalid','test-key',{
+    auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},
+    global:{fetch:async (_url,{signal})=>{
+      requests++;
+      return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>{
+        const error=new Error('Aborted');error.name='AbortError';reject(error);
+      },{once:true}));
+    }},
+  });
+  await assert.rejects(async()=>{
+    for(let chunk=0;chunk<2;chunk++) {
+      await withKdpTaskRequest(Date.now()+2100,async signal=>{
+        const result=await client.from('kdp_book_formats').upsert([{id:'format-test'}]).abortSignal(signal);
+        returnedError=result.error;
+        return result;
+      });
+      completedChunks++;
+    }
+  },KdpTaskBudgetExpired);
+  assert.match(returnedError.message,/AbortError: Aborted/);
+  assert.equal(requests,1);assert.equal(completedChunks,0);
+});
+
+test('a transport resolving a late successful ACK after cancellation leaves its checkpoint pending', async () => {
+  let acknowledged=false;
+  await assert.rejects(async()=>{
+    await withKdpTaskRequest(Date.now()+2100,signal=>new Promise(resolve=>{
+      signal.addEventListener('abort',()=>resolve({ok:true}),{once:true});
+    }));
+    acknowledged=true;
+  },KdpTaskBudgetExpired);
+  assert.equal(acknowledged,false);
+});
+
+test('normal receipts and unrelated server, auth and cancellation failures retain their original meaning', async () => {
+  const receipt={ok:true};
+  assert.equal(await withKdpTaskRequest(Date.now()+3000,async()=>receipt),receipt);
+  const auth={error:{code:'42501',message:'permission denied'}};
+  assert.equal(await withKdpTaskRequest(Date.now()+3000,async()=>auth),auth);
+  const abort=new Error('cancelled elsewhere');abort.name='AbortError';
+  await assert.rejects(withKdpTaskRequest(Date.now()+3000,async()=>{throw abort;}),error=>error===abort);
+  assert.equal(await withKdpTaskRequest(undefined,async()=>receipt),receipt);
 });
 
 for (const bookCount of [700, 1000]) test(`${bookCount} Bookshelf identities resume beyond page21 after process death and only seal on an authenticated terminal page`, async () => {
