@@ -27,7 +27,14 @@ export async function withKdpTaskRequest<T>(deadlineAtMs: number | undefined,
   const timeout = taskRequestTimeout(deadlineAtMs, Date.now(), 1_000)!;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
-  try { return await operation(controller.signal); }
+  try {
+    const result = await operation(controller.signal);
+    // PostgREST resolves aborted fetches as { error } by default. A settled
+    // response after our abort cannot acknowledge a checkpoint, even if a
+    // transport ignored cancellation and returned an otherwise valid ACK.
+    if (controller.signal.aborted) throw new KdpTaskBudgetExpired();
+    return result;
+  }
   catch (error) {
     if (controller.signal.aborted) throw new KdpTaskBudgetExpired();
     throw error;
