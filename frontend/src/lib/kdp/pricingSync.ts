@@ -749,8 +749,14 @@ async function syncPricingSlice(
   todo = admission.selected;
 
   if (!todo.length) {
-    const pending = await countPendingPricing(accountId, paperbackAsins, opts.deadlineAtMs).catch(
-      () => pendingBefore,
+    // Fresh prices do not resolve an edition whose current Live status is
+    // still unknown. Keep the durable discovery tail visible to the caller.
+    const pending = Math.max(
+      checkpoint.pending.length,
+      checkpoint.needsDiscovery ? 1 : 0,
+      await countPendingPricing(accountId, paperbackAsins, opts.deadlineAtMs).catch(
+        () => pendingBefore,
+      ),
     );
     // Shelf already priced (Chrome or prior helper) — drop sticky print-setup banner.
     if (pending === 0) {

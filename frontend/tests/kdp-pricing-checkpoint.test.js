@@ -272,6 +272,28 @@ test('a partial live-status refresh retains unresolved tail while confirmed live
   assert.deepEqual(new Set(fresh.probes),new Set(candidates.slice(2).map(row=>row.kdpBookId)));
 });
 
+test('fresh live prices cannot hide a retained unknown-status edition or clear its auth banner', async () => {
+  const storage = storageHarness();
+  await policy.createPricingCheckpointStore(storage).save('account-a', {
+    needsDiscovery: true,
+    pending: [candidates[4]],
+    completed: candidates.slice(0, 4).map(policy.pricingCandidateKey),
+  });
+  storage.fresh = new Set(candidates.map(row => row.asin));
+  const next = harness(storage, { unknownAfter: 4 });
+  const result = await next.run();
+  assert.equal(result.synced, 0);
+  assert.equal(result.pending, 1);
+  assert.equal(next.probes.length, 0);
+  assert.equal(next.writes.length, 0);
+  assert.equal(next.auth.length, 0);
+  const checkpoint = await next.store.load('account-a');
+  assert.deepEqual(checkpoint.pending, [candidates[4]]);
+  assert.equal(checkpoint.needsDiscovery, true);
+  const recovered = await harness(storage).run();
+  assert.equal(recovered.pending, 0);
+});
+
 test('700 verified books skip the second gate; one detected change refreshes only its fourteen markets', async () => {
   const original = [...candidates];
   try {
