@@ -8,6 +8,7 @@ import {
   indexBookRetailSnapshots,
   indexProfileBookRetailSnapshots,
   primaryBookRetailEdition,
+  highestBookRetailReviewSnapshot,
 } from "../src/lib/bookRetailMetadata.ts";
 
 const book = {
@@ -28,6 +29,30 @@ test("retail metadata stays on the exact format ASIN", () => {
     ["Kindle", "B0ABCDEFGH", 30],
   ]);
   assert.equal(editions[0].snapshot.stockStatus, "Currently unavailable");
+});
+
+test('Books chooses the largest marketplace review count without changing the stock market or edition', () => {
+  const snapshots = indexProfileBookRetailSnapshots([
+    { asin: 'B0ABCDEFGH', marketplaceCode: 'CA', amazonReviewCount: 68, amazonRating: 4.2, amazonStockStatus: 'IN_STOCK' },
+    { asin: 'B0ABCDEFGH', marketplaceCode: 'US', amazonReviewCount: 210, amazonRating: 4.5, amazonStockStatus: 'OUT_OF_STOCK' },
+    { asin: '1803014466', marketplaceCode: 'US', amazonReviewCount: 999, amazonRating: 4.9, amazonStockStatus: 'UNKNOWN' },
+  ], ['B0ABCDEFGH', '1803014466'], 'CA');
+  const primary = primaryBookRetailEdition(book, snapshots);
+  const reviews = highestBookRetailReviewSnapshot(primary.snapshot);
+  assert.equal(primary.snapshot.asin, 'B0ABCDEFGH');
+  assert.equal(primary.snapshot.marketplaceCode, 'CA');
+  assert.equal(primary.snapshot.stockStatus, 'IN_STOCK');
+  assert.equal(reviews.marketplaceCode, 'US');
+  assert.equal(reviews.reviewCount, 210);
+  assert.equal(reviews.rating, 4.5);
+});
+test('highest marketplace reviews preserve null and explicit zero, and ignore sibling-ASIN snapshots', () => {
+  const snapshot = { asin: 'B0ABCDEFGH', rating: null, reviewCount: null, stockStatus: null, checkedAt: null };
+  assert.equal(highestBookRetailReviewSnapshot(snapshot).reviewCount, null);
+  assert.equal(highestBookRetailReviewSnapshot({ ...snapshot, marketplaceSnapshots: [
+    { ...snapshot, reviewCount: 0, marketplaceCode: 'US' },
+    { ...snapshot, asin: '1803014466', reviewCount: 999 },
+  ] }).reviewCount, 0);
 });
 
 test("latest timestamp wins for duplicate owned records; missing is not zero", () => {

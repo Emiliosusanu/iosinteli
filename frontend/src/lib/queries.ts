@@ -6070,14 +6070,8 @@ export async function fetchTopBooksRange(
 
       const allAsins = uniqueStrings(Array.from(groups.values()).flatMap((group) => Array.from(group.asins)));
       const kdpCoverageRows = await kdpCoveragePromise;
-      const kdpCoverage = kdpCoverageRows
-        ? aggregateKdpDailyRows(kdpCoverageRows, kdpAccountIds.length, {
-            start,
-            end,
-            source: "kdp_daily_data",
-          })
-        : null;
-      const rangeKdpState = kdpCoverage?.coverage === "complete" ? "ready" : "partial";
+      const { createBookKdpCoverage } = await import("./bookKdpCoverage");
+      const bookKdpCoverage = createBookKdpCoverage(kdpCoverageRows, [...kdpRows, ...catalogRows], kdpAccountIds, { start, end });
       /** Logical book keys with ≥1 product_ad that has a campaign_id. */
       const booksWithCampaigns = new Set<string>();
 
@@ -6117,7 +6111,7 @@ export async function fetchTopBooksRange(
 
       const finalizeBook = (row: ReturnType<typeof assembleLogicalBookRows>[number], adsState: "ready" | "pending"): TopBookRow => {
         const hasBookKdp = bookKdpComparable && (kdpGroupKeys.has(row.book_key) || row.royalties > 0);
-        const kdpState = hasBookKdp ? rangeKdpState : "missing";
+        const kdpState = hasBookKdp ? bookKdpCoverage(row) : "missing";
         const royalties = hasBookKdp ? row.royalties : null;
         const hasFormatActivity = (royalties != null && royalties !== 0) || toNumber(row.kdp_orders) > 0;
         const hasCampaign = booksWithCampaigns.has(row.book_key);
