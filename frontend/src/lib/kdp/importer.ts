@@ -9,8 +9,10 @@
  * from cloud coverage holes.
  */
 import { AppState } from "react-native";
+import { getNativeWakeDeadline } from "inteliads-native-sync";
+import { resolveKdpDeliveryDeadline } from "./deliveryDeadline.ts";
 import { SHORT_PRICING_MAX_BOOKS } from "./pricingCheckpoint.ts";
-import { canStartReportDay, taskDeadline, taskRequestTimeout, KdpTaskBudgetExpired, withKdpTaskRequest, withKdpPreparationBudget } from "./backgroundBudget.ts";
+import { canStartReportDay, taskRequestTimeout, KdpTaskBudgetExpired, withKdpTaskRequest, withKdpPreparationBudget } from "./backgroundBudget.ts";
 import { supabase } from "../supabase.ts";
 import { resolveHelperAccountId } from "./accounts.ts";
 import { orderDaysForWake, reopenOnboardingIfIncomplete } from "./coverage.ts";
@@ -409,10 +411,14 @@ async function runKdpIosHelperTickOnce(
 
   let wakeMode = opts.wakeMode ?? resolveWakeMode(reason, { force: opts.force });
   const deliveredWakeMode = wakeMode;
-  const deadlineAtMs = opts.deadlineAtMs ?? (AppState.currentState !== "active"
-    ? taskDeadline(wakeMode, tickStartedAtMs) : undefined);
+  let deadlineAtMs: number | undefined;
   let userId: string | null;
   try {
+    deadlineAtMs = await resolveKdpDeliveryDeadline({
+      mode: wakeMode, enteredAtMs: tickStartedAtMs, appState: AppState.currentState,
+      readAppState: () => AppState.currentState,
+      requestedDeadlineAtMs: opts.deadlineAtMs, readNativeDeadline: getNativeWakeDeadline,
+    });
     if (!isIosHelperEnabled(await withKdpPreparationBudget(deadlineAtMs, getKdpRoyaltySource))) {
       return { ok: true, skipped: true, reason: "source_off" };
     }
