@@ -170,7 +170,7 @@ export function primaryBookRetailEdition(
     return tone === "good" ? 2 : tone === "neutral" ? 1 : 0;
   };
   const formatRank = (format: string) => format === "Paperback" ? 2 : format === "Hardcover" ? 1 : 0;
-  return [...editions].sort((a, b) =>
+  const primary = [...editions].sort((a, b) =>
     stockRank(b.snapshot.stockStatus) - stockRank(a.snapshot.stockStatus) ||
     year(b.snapshot.title) - year(a.snapshot.title) ||
     Number(b.snapshot.asin === asinKey(book.asin)) - Number(a.snapshot.asin === asinKey(book.asin)) ||
@@ -180,6 +180,22 @@ export function primaryBookRetailEdition(
   ).find(({ snapshot }) =>
     snapshot.rating != null || snapshot.reviewCount != null || snapshot.stockStatus != null || snapshot.coverUrl != null,
   ) ?? editions[0] ?? null;
+  if (!primary) return null;
+  return { ...primary, snapshot: { ...primary.snapshot, marketplaceSnapshots: editions
+    .filter(({ snapshot }) => snapshot.asin === primary.snapshot.asin && snapshot.marketplaceCode !== primary.snapshot.marketplaceCode)
+    .map(({ snapshot }) => snapshot) } };
+}
+
+/** Highest review count among current marketplace observations of this exact
+ * edition. Keep its rating and market together; never sum reviews or copy
+ * them from a sibling edition. Missing counts remain missing, not zero.
+ */
+export function highestBookRetailReviewSnapshot(snapshot: BookRetailSnapshot): BookRetailSnapshot {
+  return [snapshot, ...(snapshot.marketplaceSnapshots ?? [])]
+    .filter(row => row.asin === snapshot.asin)
+    .sort((a, b) => (b.reviewCount ?? -1) - (a.reviewCount ?? -1)
+      || Number(b === snapshot) - Number(a === snapshot)
+      || checkedTime(b.checkedAt) - checkedTime(a.checkedAt))[0] ?? snapshot;
 }
 
 export function bookRetailStockTone(value: string | null): "good" | "danger" | "neutral" {

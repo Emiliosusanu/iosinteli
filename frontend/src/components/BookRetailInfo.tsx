@@ -1,7 +1,7 @@
 import React from "react";
 import { Text, View } from "react-native";
 import { SFSymbol } from "./ios/Native";
-import { bookRetailStockLabel, bookRetailStockTone, type BookRetailSnapshot } from "../lib/bookRetailMetadata";
+import { bookRetailStockLabel, bookRetailStockTone, highestBookRetailReviewSnapshot, type BookRetailSnapshot } from "../lib/bookRetailMetadata";
 import { useTheme } from "../lib/theme";
 
 export function BookRetailInfo({
@@ -14,10 +14,11 @@ export function BookRetailInfo({
   compact?: boolean;
 }) {
   const t = useTheme();
-  const reviewLabel = snapshot.rating != null
-    ? `${snapshot.rating.toFixed(1)}${snapshot.reviewCount != null ? ` (${snapshot.reviewCount.toLocaleString()} reviews)` : ""}`
-    : snapshot.reviewCount != null
-      ? `${snapshot.reviewCount.toLocaleString()} reviews`
+  const reviews = compact ? highestBookRetailReviewSnapshot(snapshot) : snapshot;
+  const reviewLabel = reviews.rating != null
+    ? `${reviews.rating.toFixed(1)}${reviews.reviewCount != null ? ` (${reviews.reviewCount.toLocaleString()} reviews)` : ""}`
+    : reviews.reviewCount != null
+      ? `${reviews.reviewCount.toLocaleString()} reviews`
       : null;
   const stockTone = bookRetailStockTone(snapshot.stockStatus);
   const stockLabel = snapshot.stockStatus ? bookRetailStockLabel(snapshot.stockStatus) : null;
@@ -46,7 +47,7 @@ export function BookRetailInfo({
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
             <SFSymbol name="star.fill" size={12} color="#F5A623" />
             <Text style={[t.typography.caption1, { color: t.colors.text_primary }]}>
-              {reviewLabel}{snapshot.marketplaceCode ? ` · ${snapshot.marketplaceCode}` : ""}{checkedDate ? ` · ${checkedDate}` : ""}
+              {reviewLabel}{reviews.marketplaceCode ? ` · ${reviews.marketplaceCode}` : ""}
             </Text>
           </View>
         ) : (
@@ -54,7 +55,7 @@ export function BookRetailInfo({
         )}
         {stockLabel ? (
           <Text style={[t.typography.caption1, { color: stockColor }]}>
-            Stock snapshot: {stockLabel}{snapshot.marketplaceCode ? ` · ${snapshot.marketplaceCode}` : ""}{checkedDate ? ` · ${checkedDate}` : ""}
+            {stockLabel}{snapshot.marketplaceCode ? ` · ${snapshot.marketplaceCode}` : ""}{checkedDate ? ` · ${checkedDate}` : ""}
           </Text>
         ) : (
           <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>Stock unknown</Text>
