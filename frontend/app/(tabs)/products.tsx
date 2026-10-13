@@ -19,6 +19,7 @@ import { BooksReadError, fetchBookRetailMetadata, fetchKdpRoyaltiesRange, fetchT
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
+import { bookRetailWindow, mergeScopedRetailCache } from "@/src/lib/bookRetailWindow";
 import { bookRetailAsins, bookRetailStockLabel, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import {
@@ -245,22 +246,7 @@ export default function ProductsScreen() {
   });
 
   const books = useMemo(() => booksData ?? [], [booksData]);
-  const retailAsins = useMemo(() => bookRetailAsins(books), [books]);
-  const retailQ = useQuery({
-    queryKey: ["book-retail-metadata", user?.id ?? "anonymous", adminFilterUserId ?? "self", retailProfileIds, retailAsins],
-    queryFn: () => fetchBookRetailMetadata({
-      books,
-      adsProfileIds: retailProfileIds,
-      marketplaceCodes: Object.fromEntries(profiles.flatMap((profile) => {
-        const code = String(profile.country_code ?? "").trim().toUpperCase();
-        return code ? [[profile.id, code], [profile.profile_id, code]] : [];
-      })),
-      preferredMarketplaceCode: profiles.find((profile) => selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id))?.country_code,
-    }),
-    enabled: Boolean(user?.id) && !adminFilterUserId && retailProfileIds.length > 0 && retailAsins.length > 0,
-    staleTime: 5 * 60_000,
-    retry: false,
-  });
+
   const overviewBooksWarm = queryClient.getQueryData(overviewBooksKey) as TopBookRow[] | undefined;
   const showBlockingSpinner =
     booksListAwaitingRows({ isPending, isError, isFetching, data: booksData }) && !overviewBooksWarm;
@@ -336,6 +322,36 @@ export default function ProductsScreen() {
       }
     });
   }, [books, search, sort]);
+
+  const [visibleRetailKeys, setVisibleRetailKeys] = useState<string[]>([]);
+  const onRetailViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ item: TopBookRow }> }) => {
+    const keys = viewableItems.map(({ item }) => bookRowKey(item, 0)).sort();
+    setVisibleRetailKeys(previous => JSON.stringify(previous) === JSON.stringify(keys) ? previous : keys);
+  }).current;
+  const retailBooks = useMemo(() => bookRetailWindow(filtered, visibleRetailKeys), [filtered, visibleRetailKeys]);
+  const retailScope = JSON.stringify([user?.id, adminFilterUserId, [...retailProfileIds].sort()]);
+  const [retailCache, setRetailCache] = useState<{ scope: string; data: Record<string, BookRetailSnapshot> }>({ scope: '', data: {} });
+  const retailAsins = useMemo(() => bookRetailAsins(retailBooks), [retailBooks]);
+  const retailQ = useQuery({
+    queryKey: ["book-retail-metadata", user?.id ?? "anonymous", adminFilterUserId ?? "self", retailProfileIds, retailAsins],
+    queryFn: () => fetchBookRetailMetadata({
+      books: retailBooks,
+      adsProfileIds: retailProfileIds,
+      marketplaceCodes: Object.fromEntries(profiles.flatMap((profile) => {
+        const code = String(profile.country_code ?? "").trim().toUpperCase();
+        return code ? [[profile.id, code], [profile.profile_id, code]] : [];
+      })),
+      preferredMarketplaceCode: profiles.find((profile) => selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id))?.country_code,
+    }),
+    enabled: Boolean(user?.id) && !adminFilterUserId && retailProfileIds.length > 0 && retailAsins.length > 0,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  useEffect(() => {
+    if (!retailQ.data) return;
+    setRetailCache(previous => mergeScopedRetailCache(previous, retailScope, retailQ.data));
+  }, [retailScope, retailQ.data]);
+  const retailData = retailCache.scope === retailScope ? retailCache.data : {};
 
   const applySort = useCallback(
     (next: Sort) => {
@@ -484,6 +500,7 @@ export default function ProductsScreen() {
           maxToRenderPerBatch={20}
           windowSize={7}
           removeClippedSubviews={Platform.OS !== "ios"}
+          onViewableItemsChanged={onRetailViewableItemsChanged}
           onScroll={onBooksScroll}
           scrollEventThrottle={scrollEventThrottle}
           refreshControl={
@@ -505,7 +522,7 @@ export default function ProductsScreen() {
           renderItem={({ item, index }) => (
             <ProductCard
               item={item}
-              retailEdition={retailQ.isSuccess ? primaryBookRetailEdition(item, retailQ.data) : null}
+              retailEdition={primaryBookRetailEdition(item, retailData)}
               currency={primaryCurrency}
               color={bookColorMap.get(bookColorKeyFor(item)) ?? fallbackBookColor(bookColorKeyFor(item), index)}
               marketplaceIndex={marketplaceIndex}
