@@ -5493,11 +5493,12 @@ export async function fetchBookRetailMetadata(opts: {
   const rows: Array<AmazonProfileBookPreview> = [];
   // Keep profile requests bounded so the Books screen is not blocked by a burst
   // of large profile-book responses. React Query renders the books independently.
-  for (const group of chunkArray(profileIds, 3)) {
-    const results = await Promise.all(group.map((id) =>
-      fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId }),
+  const requests = profileIds.flatMap(id => chunkArray(asins, 20).map(batch => ({ id, batch })));
+  for (const group of chunkArray(requests, 3)) {
+    const results = await Promise.all(group.map(({ id, batch }) =>
+      fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId, asins: batch }),
     ));
-    group.forEach((id, index) => {
+    group.forEach(({ id }, index) => {
       const marketplaceCode = String(opts.marketplaceCodes?.[id] ?? "").trim().toUpperCase() || null;
       for (const row of results[index]) rows.push({ ...row, marketplaceCode });
     });
@@ -6070,14 +6071,8 @@ export async function fetchTopBooksRange(
 
       const allAsins = uniqueStrings(Array.from(groups.values()).flatMap((group) => Array.from(group.asins)));
       const kdpCoverageRows = await kdpCoveragePromise;
-      const kdpCoverage = kdpCoverageRows
-        ? aggregateKdpDailyRows(kdpCoverageRows, kdpAccountIds.length, {
-            start,
-            end,
-            source: "kdp_daily_data",
-          })
-        : null;
-      const rangeKdpState = kdpCoverage?.coverage === "complete" ? "ready" : "partial";
+      const { createBookKdpCoverage } = await import("./bookKdpCoverage");
+      const bookKdpCoverage = createBookKdpCoverage(kdpCoverageRows, [...kdpRows, ...catalogRows], kdpAccountIds, { start, end });
       /** Logical book keys with ≥1 product_ad that has a campaign_id. */
       const booksWithCampaigns = new Set<string>();
 
@@ -6117,7 +6112,7 @@ export async function fetchTopBooksRange(
 
       const finalizeBook = (row: ReturnType<typeof assembleLogicalBookRows>[number], adsState: "ready" | "pending"): TopBookRow => {
         const hasBookKdp = bookKdpComparable && (kdpGroupKeys.has(row.book_key) || row.royalties > 0);
-        const kdpState = hasBookKdp ? rangeKdpState : "missing";
+        const kdpState = hasBookKdp ? bookKdpCoverage(row) : "missing";
         const royalties = hasBookKdp ? row.royalties : null;
         const hasFormatActivity = (royalties != null && royalties !== 0) || toNumber(row.kdp_orders) > 0;
         const hasCampaign = booksWithCampaigns.has(row.book_key);
@@ -6345,10 +6340,15 @@ export async function fetchTopBooksRange(
           return (b.net ?? Number.NEGATIVE_INFINITY) - (a.net ?? Number.NEGATIVE_INFINITY);
         });
       if (activityDays <= 0) {
+        const catalogPeriodRows = (nestBooksCatalogSeed.length
+          ? mergeTopBookCatalogRows(assembled, nestBooksCatalogSeed)
+          : assembled).map(row => row.kdp_state === "missing" || row.royalties == null
+            ? row
+            : { ...row, kdp_state: bookKdpCoverage(row) });
+        // The Nest catalog overlay can carry portfolio-wide partial status.
+        // Restore the account-specific coverage after merging its metadata.
         return finalizeCatalogBooksList(
-          nestBooksCatalogSeed.length
-            ? mergeTopBookCatalogRows(assembled, nestBooksCatalogSeed)
-            : assembled,
+          catalogPeriodRows,
           profileIds,
           kdpAccountIds,
           limit,
