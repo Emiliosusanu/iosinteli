@@ -593,10 +593,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     if (!isIosHelperEnabled(kdpRoyaltySource)) return;
     const id = setInterval(() => {
+      // Suspended intervals may be released with a native wake. Let the
+      // TaskManager consumer own its kind, deadline and single-flight slot.
+      if (AppState.currentState !== "active") return;
       void import("../lib/kdp/importer").then(async (m) => {
-        const { resolveLockedPhoneKdpWakeMode } = await import("../lib/kdp/backgroundWake");
-        const wakeMode = await resolveLockedPhoneKdpWakeMode("background");
-        await m.runKdpIosHelperTick("interval", { profileIds: selectedProfileIds, wakeMode });
+        if (AppState.currentState !== "active") return;
+        await m.runKdpIosHelperTick("interval", { profileIds: selectedProfileIds });
       });
     }, 15 * 60_000);
     return () => clearInterval(id);
