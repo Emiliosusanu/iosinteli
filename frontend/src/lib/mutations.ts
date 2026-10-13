@@ -1313,13 +1313,22 @@ export type AmazonProfileBookPreview = {
 /** Nest GET /amazon/profiles/:id/books — real sponsored/KDP covers only. */
 export async function fetchAmazonProfileBooks(
   profileId: string,
-  opts?: { filterUserId?: string | null },
+  opts?: { filterUserId?: string | null; asins?: string[] },
 ): Promise<AmazonProfileBookPreview[]> {
   const adsId = String(profileId || "").trim();
   if (!adsId) return [];
-  const q = opts?.filterUserId
-    ? `?filterUserId=${encodeURIComponent(opts.filterUserId)}`
-    : "";
+  const params = new URLSearchParams();
+  if (opts?.filterUserId) params.set("filterUserId", opts.filterUserId);
+  if (opts?.asins != null) {
+    const asins = [...new Set(opts.asins.map(asin => asin.trim().toUpperCase()))];
+    if (!asins.length) return [];
+    if (asins.length > 80 || asins.some(asin => !/^[A-Z0-9]{10}$/.test(asin))) {
+      throw new Error("Invalid scoped book metadata request");
+    }
+    params.set("asins", asins.join(","));
+  }
+  const query = params.toString();
+  const q = query ? `?${query}` : "";
   const data = await nestApiJson<{
     books?: {
       asin?: string;
