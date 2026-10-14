@@ -3,14 +3,15 @@ import {
   emptyRoyaltySetupMemory,
   normalizeRoyaltySetupMemory,
   ROYALTY_SETUP_DISMISS_MS,
+  royaltySetupMemoryKey,
   type RoyaltySetupMemory,
 } from "./kdpRoyaltySetup.ts";
 
-const MEMORY_KEY = "inteliads.kdpRoyaltySetup.v1";
-
-export async function loadRoyaltySetupMemory(): Promise<RoyaltySetupMemory> {
+export async function loadRoyaltySetupMemory(userId: string | null | undefined): Promise<RoyaltySetupMemory> {
+  const key = royaltySetupMemoryKey(userId);
+  if (!key) return emptyRoyaltySetupMemory();
   try {
-    const raw = await storage.getItem<string>(MEMORY_KEY, "");
+    const raw = await storage.getItem<string>(key, "");
     if (!raw || typeof raw !== "string") return emptyRoyaltySetupMemory();
     return normalizeRoyaltySetupMemory(JSON.parse(raw));
   } catch {
@@ -18,25 +19,27 @@ export async function loadRoyaltySetupMemory(): Promise<RoyaltySetupMemory> {
   }
 }
 
-async function writeMemory(next: RoyaltySetupMemory): Promise<void> {
+async function writeMemory(userId: string | null | undefined, next: RoyaltySetupMemory): Promise<void> {
+  const key = royaltySetupMemoryKey(userId);
+  if (!key) return;
   try {
-    await storage.setItem(MEMORY_KEY, JSON.stringify(next));
+    await storage.setItem(key, JSON.stringify(next));
   } catch {
     /* best-effort */
   }
 }
 
-export async function rememberRoyaltySetupAsked(kind: string): Promise<RoyaltySetupMemory> {
-  const current = await loadRoyaltySetupMemory();
+export async function rememberRoyaltySetupAsked(kind: string, userId: string | null | undefined): Promise<RoyaltySetupMemory> {
+  const current = await loadRoyaltySetupMemory(userId);
   if (!kind || current.askedKinds.includes(kind)) return current;
   const next = { ...current, askedKinds: [...current.askedKinds, kind] };
-  await writeMemory(next);
+  await writeMemory(userId, next);
   return next;
 }
 
-export async function dismissRoyaltySetup(nowMs: number): Promise<RoyaltySetupMemory> {
-  const current = await loadRoyaltySetupMemory();
+export async function dismissRoyaltySetup(nowMs: number, userId: string | null | undefined): Promise<RoyaltySetupMemory> {
+  const current = await loadRoyaltySetupMemory(userId);
   const next = { ...current, dismissedUntilMs: nowMs + ROYALTY_SETUP_DISMISS_MS };
-  await writeMemory(next);
+  await writeMemory(userId, next);
   return next;
 }

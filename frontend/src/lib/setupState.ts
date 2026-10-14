@@ -175,18 +175,18 @@ export function deriveSetupSnapshot(facts: SetupFacts): SetupSnapshot {
           href: "/more/kdp-source",
           cta: "KDP source",
         })
-      : facts.kdpImporterActive || facts.kdpAccountLinked
+      : facts.kdpImporterActive
         ? step("kdp_source", "done", false, {
             title: "KDP import",
-            body: facts.kdpImporterActive
-              ? "Royalties are arriving from Chrome or the iPhone helper."
-              : "A KDP account is linked. Import still has to run.",
+            body: "Recent KDP data has arrived from Chrome or the iPhone helper.",
             href: "/more/kdp-source",
             cta: "KDP source",
           })
         : step("kdp_source", "optional", false, {
-            title: "Import KDP royalties",
-            body: "Needed for net profit. Chrome on a computer, or the iPhone helper. Skip if you only need Ads.",
+            title: facts.kdpAccountLinked ? "Finish KDP import" : "Import KDP royalties",
+            body: facts.kdpAccountLinked
+              ? "Your KDP account is linked, but no recent import has arrived. Use Chrome on a computer or the iPhone helper."
+              : "Needed for net profit. Chrome on a computer, or the iPhone helper. Skip if you only need Ads.",
             href: "/more/kdp-source",
             cta: "Set up import",
           });

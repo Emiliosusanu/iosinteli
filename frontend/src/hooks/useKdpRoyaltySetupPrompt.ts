@@ -5,10 +5,10 @@ import { useAuth } from "@/src/contexts/AuthContext";
 import { presentRoyaltySetupAsk, useRoyaltySetupNavigation } from "@/src/components/KdpRoyaltySetupCard";
 import { fetchKdpAccounts } from "@/src/lib/mutations";
 import { getKdpHelperStatus, subscribeKdpHelperStatus } from "@/src/lib/kdp/runtime";
-import { loadHelperSyncState } from "@/src/lib/kdp/persist";
 import { isIosHelperEnabled } from "@/src/lib/kdp/source";
 import {
   planKdpRoyaltySetup,
+  kdpImporterEvidence,
   royaltyCollectionShortcut,
   type RoyaltySetupActionId,
   type RoyaltySetupAsk,
@@ -40,7 +40,9 @@ export function useKdpRoyaltySetupPrompt(opts: {
   const nav = useRoyaltySetupNavigation();
   const [memory, setMemory] = useState(emptyRoyaltySetupMemory);
   const [memoryReady, setMemoryReady] = useState(false);
-  const [helperRun, setHelperRun] = useState({ lastHelperRunAtMs: 0, lastHelperRunYmd: null as string | null });
+  const [memoryUserId, setMemoryUserId] = useState<string | null>(null);
+  const ownerRef = useRef(user?.id);
+  ownerRef.current = user?.id;
   const [helperLive, setHelperLive] = useState(() => getKdpHelperStatus());
   const askedRef = useRef<string | null>(null);
 
@@ -58,13 +60,12 @@ export function useKdpRoyaltySetupPrompt(opts: {
   useEffect(() => {
     if (!opts.enabled) return;
     let cancelled = false;
-    void Promise.all([loadRoyaltySetupMemory(), loadHelperSyncState()]).then(([nextMemory, state]) => {
+    setMemoryReady(false);
+    askedRef.current = null;
+    void loadRoyaltySetupMemory(user?.id).then((nextMemory) => {
       if (cancelled) return;
       setMemory(nextMemory);
-      setHelperRun({
-        lastHelperRunAtMs: Number(state.lastRunAtMs) || 0,
-        lastHelperRunYmd: state.lastRunYmd,
-      });
+      setMemoryUserId(user?.id ?? null);
       setMemoryReady(true);
     });
     return () => {
@@ -88,7 +89,7 @@ export function useKdpRoyaltySetupPrompt(opts: {
   }, [profiles, selectedProfileIds]);
 
   const plan: RoyaltySetupPlan = useMemo(() => {
-    if (!opts.enabled || !memoryReady) return { kind: "none" };
+    if (!opts.enabled || !memoryReady || memoryUserId !== user?.id) return { kind: "none" };
     return planKdpRoyaltySetup({
       guest: guestMode || !user?.id,
       viewingCustomer,
@@ -97,9 +98,8 @@ export function useKdpRoyaltySetupPrompt(opts: {
       royaltyScopeReason: opts.royaltyScopeReason,
       source: kdpRoyaltySource,
       helperLoggedIn: helperLive.loggedIn,
+      helperSavedSession: helperLive.savedSession,
       helperRunning: helperLive.running,
-      lastHelperRunAtMs: helperRun.lastHelperRunAtMs,
-      lastHelperRunYmd: helperRun.lastHelperRunYmd,
       accounts: accountsQ.data ?? [],
       viewProfileIds,
       latestImportedYmd: opts.latestImportedYmd,
@@ -113,12 +113,12 @@ export function useKdpRoyaltySetupPrompt(opts: {
     accountsQ.isPending,
     guestMode,
     helperLive.loggedIn,
+    helperLive.savedSession,
     helperLive.running,
-    helperRun.lastHelperRunAtMs,
-    helperRun.lastHelperRunYmd,
     kdpRoyaltySource,
     memory.dismissedUntilMs,
     memoryReady,
+    memoryUserId,
     opts.enabled,
     opts.latestImportedYmd,
     opts.royaltyScopeReason,
@@ -130,8 +130,12 @@ export function useKdpRoyaltySetupPrompt(opts: {
 
   const onAction = useCallback(
     (id: RoyaltySetupActionId) => {
+      if (ownerRef.current !== user?.id) return;
       if (id === "later") {
-        void dismissRoyaltySetup(Date.now()).then(setMemory);
+        const owner = user?.id;
+        void dismissRoyaltySetup(Date.now(), owner).then((next) => {
+          if (ownerRef.current === owner) setMemory(next);
+        });
         return;
       }
       if (id === "chrome") {
@@ -145,7 +149,7 @@ export function useKdpRoyaltySetupPrompt(opts: {
       setKdpRoyaltySource("extension_ios");
       nav.openHelper();
     },
-    [nav, setKdpRoyaltySource],
+    [nav, setKdpRoyaltySource, user?.id],
   );
 
   useEffect(() => {
@@ -154,8 +158,11 @@ export function useKdpRoyaltySetupPrompt(opts: {
     if (askedRef.current === plan.kind) return;
     askedRef.current = plan.kind;
     presentRoyaltySetupAsk(plan, { onAction });
-    void rememberRoyaltySetupAsked(plan.kind).then(setMemory);
-  }, [memory.askedKinds, onAction, plan]);
+    const owner = user?.id;
+    void rememberRoyaltySetupAsked(plan.kind, owner).then((next) => {
+      if (ownerRef.current === owner) setMemory(next);
+    });
+  }, [memory.askedKinds, onAction, plan, user?.id]);
 
   const shortcut = useMemo(
     () => royaltyCollectionShortcut({ helperOn: isIosHelperEnabled(kdpRoyaltySource), askKind: plan.kind }),
@@ -181,14 +188,13 @@ export function useKdpRoyaltySetupPrompt(opts: {
       : accountsQ.isPending || accountsQ.isError
         ? "unknown"
         : false;
-  const kdpImporterActive: KnownFlag =
-    opts.latestImportedYmd != null ||
-    helperRun.lastHelperRunAtMs > 0 ||
-    helperLive.running
-      ? true
-      : memoryReady
-        ? false
-        : "unknown";
+  const kdpImporterActive: KnownFlag = kdpImporterEvidence({
+    accounts: accountsQ.data,
+    accountsUnavailable: accountsQ.data === undefined,
+    latestImportedYmd: opts.latestImportedYmd,
+    yesterdayYmd: opts.yesterdayYmd,
+    nowMs: Date.now(),
+  });
   return {
     plan,
     ask,
