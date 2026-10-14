@@ -34,7 +34,7 @@ test("importer keeps All in USD, derives native marketplace targets, and appends
   assert.match(importer, /Replay currency USD/);
 });
 
-test("overview rows surface 15 min sync, nightly seal, and currency", () => {
+test("overview rows surface accepted runs, nightly seal, and currency", () => {
   const nowMs = Date.parse("2026-09-03T10:00:00.000Z");
   const state = {
     ...createInitialSyncState(),
@@ -51,8 +51,16 @@ test("overview rows surface 15 min sync, nightly seal, and currency", () => {
   });
   assert.equal(rows.find((r) => r.id === "currency")?.title, "Replay currency USD");
   assert.match(rows.find((r) => r.id === "steady")?.detail || "", /Completed/);
+  assert.match(rows.find((r) => r.id === "steady")?.detail || "", /scheduled by iOS/);
   assert.match(rows.find((r) => r.id === "nightly")?.title || "", /Night backfill completed/);
   assert.match(rows.find((r) => r.id === "nightly")?.detail || "", /30 days/);
+});
+
+test("an unrun helper does not promise native background wakes every fifteen minutes", () => {
+  const rows = buildKdpHelperOverview({ state: createInitialSyncState(), deferredDays: [], currency: null });
+  assert.match(rows.find((r) => r.id === "steady")?.detail || "", /timing varies/);
+  assert.doesNotMatch(rows.find((r) => r.id === "steady")?.title || "", /15 min/);
+  assert.match(rows.find((r) => r.id === "nightly")?.detail || "", /when iOS allows/);
 });
 
 test("Ads EUR profile wins over previously saved USD", () => {
