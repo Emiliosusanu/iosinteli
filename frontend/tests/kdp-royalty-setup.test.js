@@ -5,11 +5,13 @@ import { readFileSync } from "node:fs";
 import {
   classifyExtensionLifecycle,
   classifyHelperLifecycle,
+  kdpImporterEvidence,
   kdpAccountLinkedToProfiles,
   latestAccountSyncMs,
   normalizeRoyaltySetupMemory,
   planKdpRoyaltySetup,
   royaltyCollectionShortcut,
+  royaltySetupMemoryKey,
 } from "../src/lib/kdpRoyaltySetup.ts";
 import { KDP_CHROME_HELPER_URL } from "../src/lib/accountContract.ts";
 
@@ -51,7 +53,7 @@ test("new users with no importer get onboard copy, not a stale-Chrome warning", 
 test("existing account that never synced asks to activate Chrome or iPhone helper", () => {
   const plan = planKdpRoyaltySetup(
     base({
-      accounts: [{ id: "k1", last_synced_at: null, linked_amazon_profile_ids: ["us"] }],
+      accounts: [{ id: "k1", royalties_last_synced_at: null, linked_amazon_profile_ids: ["us"] }],
     }),
   );
   assert.equal(plan.kind, "never_activated");
@@ -64,7 +66,7 @@ test("existing account that never synced asks to activate Chrome or iPhone helpe
 test("Chrome active and linked does not prompt, even with no rows in the selected period", () => {
   const plan = planKdpRoyaltySetup(
     base({
-      accounts: [{ id: "k1", last_synced_at: "2026-09-05T16:00:00.000Z", linked_amazon_profile_ids: ["us"] }],
+      accounts: [{ id: "k1", royalties_last_synced_at: "2026-09-05T16:00:00.000Z", linked_amazon_profile_ids: ["us"] }],
       latestImportedYmd: null,
     }),
   );
@@ -87,7 +89,7 @@ test("fresh imported day counts as Chrome active", () => {
 test("stale Chrome offers helper or reopen Chrome", () => {
   const plan = planKdpRoyaltySetup(
     base({
-      accounts: [{ id: "k1", last_synced_at: "2026-09-01T12:00:00.000Z", linked_amazon_profile_ids: ["us"] }],
+      accounts: [{ id: "k1", royalties_last_synced_at: "2026-09-01T12:00:00.000Z", linked_amazon_profile_ids: ["us"] }],
     }),
   );
   assert.equal(plan.kind, "extension_stale");
@@ -104,10 +106,10 @@ test("helper selected but never signed in asks to open the helper", () => {
   assert.equal(plan.secondary.id, "later");
 });
 
-test("helper currently running or recently run does not nag", () => {
+test("helper currently running or verified cloud import does not nag", () => {
   assert.equal(planKdpRoyaltySetup(base({ source: "extension_ios", helperRunning: true })).kind, "none");
   assert.equal(
-    planKdpRoyaltySetup(base({ source: "extension_ios", lastHelperRunYmd: yesterday, lastHelperRunAtMs: now - 1000 })).kind,
+    planKdpRoyaltySetup(base({ source: "extension_ios", latestImportedYmd: yesterday })).kind,
     "none",
   );
 });
@@ -115,7 +117,7 @@ test("helper currently running or recently run does not nag", () => {
 test("active Chrome not linked to the current view goes to Accounts", () => {
   const plan = planKdpRoyaltySetup(
     base({
-      accounts: [{ id: "k1", last_synced_at: "2026-09-05T16:00:00.000Z", linked_amazon_profile_ids: ["ca"] }],
+      accounts: [{ id: "k1", royalties_last_synced_at: "2026-09-05T16:00:00.000Z", linked_amazon_profile_ids: ["ca"] }],
       viewProfileIds: ["us"],
     }),
   );
@@ -124,17 +126,55 @@ test("active Chrome not linked to the current view goes to Accounts", () => {
   assert.equal(plan.primary.id, "accounts");
 });
 
-test("guests, customer view, loading, errors, and mixed-non-US stay quiet", () => {
+test("guests, customer view, loading, errors, and dismissal stay quiet", () => {
   assert.equal(planKdpRoyaltySetup(base({ guest: true })).kind, "none");
   assert.equal(planKdpRoyaltySetup(base({ viewingCustomer: true })).kind, "none");
   assert.equal(planKdpRoyaltySetup(base({ loading: true })).kind, "none");
   assert.equal(planKdpRoyaltySetup(base({ accountsError: true })).kind, "none");
-  assert.equal(planKdpRoyaltySetup(base({ royaltyScopeReason: "mixed_non_us" })).kind, "none");
   assert.equal(planKdpRoyaltySetup(base({ dismissedUntilMs: now + 1000 })).kind, "none");
 });
 
+test("signed-in helper without a saved import offers to finish the import", () => {
+  const plan = planKdpRoyaltySetup(base({ source: "extension_ios", helperLoggedIn: true }));
+  assert.equal(plan.kind, "helper_needs_import");
+  assert.equal(plan.primary.id, "helper");
+});
+
+test("attempt timestamps never hide a failed first import or prove Amazon sign-in", () => {
+  const plan = planKdpRoyaltySetup(base({
+    source: "extension_ios", lastHelperRunAtMs: now - 1000, lastHelperRunYmd: yesterday,
+  }));
+  assert.equal(plan.kind, "helper_needs_signin");
+});
+
+test("saved Amazon session offers a check without claiming accepted data", () => {
+  const plan = planKdpRoyaltySetup(base({ source: "extension_ios", helperSavedSession: true }));
+  assert.equal(plan.kind, "helper_needs_import");
+  assert.doesNotMatch(plan.body, /already signed in/i);
+});
+
+test("setup import evidence comes from accepted account data, including zero-sale days", () => {
+  const evidence = { accountsUnavailable: false, accounts: [], latestImportedYmd: null, yesterdayYmd: yesterday, nowMs: now };
+  assert.equal(kdpImporterEvidence(evidence), false);
+  assert.equal(kdpImporterEvidence({ ...evidence, latestImportedYmd: "2026-08-25" }), false);
+  assert.equal(kdpImporterEvidence({ ...evidence, accounts: [{ royalties_last_synced_at: "2026-09-05T16:00:00Z" }] }), true);
+  assert.equal(kdpImporterEvidence({ ...evidence, latestImportedYmd: yesterday }), true);
+  assert.equal(kdpImporterEvidence({ ...evidence, accountsUnavailable: true, latestImportedYmd: yesterday }), "unknown");
+});
+
+test("multi-currency views still offer an importer when no data has arrived", () => {
+  assert.equal(planKdpRoyaltySetup(base({ royaltyScopeReason: "mixed_non_us" })).kind, "onboard_new");
+  assert.equal(planKdpRoyaltySetup(base({ royaltyScopeReason: "mixed_non_us", latestImportedYmd: yesterday })).kind, "none");
+});
+
+test("stale helper imports do not get described as Chrome failures", () => {
+  const plan = planKdpRoyaltySetup(base({ accounts: [{ royalties_last_synced_at: "2026-08-25T06:56:36Z" }] }));
+  assert.equal(plan.kind, "extension_stale");
+  assert.doesNotMatch(plan.title, /Chrome/);
+});
+
 test("link and sync helpers stay honest", () => {
-  assert.equal(latestAccountSyncMs([{ last_synced_at: "2026-09-01" }, { last_synced_at: "2026-09-03T00:00:00Z" }]) != null, true);
+  assert.equal(latestAccountSyncMs([{ royalties_last_synced_at: "2026-09-01" }, { royalties_last_synced_at: "2026-09-03T00:00:00Z" }]) != null, true);
   assert.equal(kdpAccountLinkedToProfiles([{ linked_amazon_profile_ids: ["us"] }], ["us"]), true);
   assert.equal(kdpAccountLinkedToProfiles([{ linked_amazon_profile_ids: ["ca"] }], ["us"]), false);
   assert.equal(
@@ -188,4 +228,18 @@ test("Overview, welcome, and Accounts use the setup plan", () => {
   assert.match(card, /openSource/);
   assert.match(widgets, /onImportRoyalties/);
   assert.match(widgets, /Chrome or the iPhone helper/);
+});
+
+
+test("catalog-only updates and legacy servers do not certify an import", () => {
+  const evidence = { accountsUnavailable: false, accounts: [{ last_synced_at: "2026-09-05T16:00:00Z", royalties_last_synced_at: null }], latestImportedYmd: null, yesterdayYmd: yesterday, nowMs: now };
+  assert.equal(kdpImporterEvidence(evidence), false);
+  assert.equal(planKdpRoyaltySetup(base(evidence)).kind, "never_activated");
+  assert.equal(kdpImporterEvidence({ ...evidence, accounts: [{ last_synced_at: "2026-09-05T16:00:00Z" }] }), "unknown");
+});
+
+test("one owner's dismissals cannot hide another owner's onboarding", () => {
+  assert.equal(royaltySetupMemoryKey(null), null);
+  assert.notEqual(royaltySetupMemoryKey("owner-a"), royaltySetupMemoryKey("owner-b"));
+  assert.notEqual(royaltySetupMemoryKey("owner:a"), royaltySetupMemoryKey("owner%3Aa"));
 });
