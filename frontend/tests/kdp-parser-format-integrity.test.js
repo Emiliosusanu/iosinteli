@@ -37,3 +37,26 @@ test('normal minor-unit estimate rounding retains explicit format values',()=>{
  assert.equal(r.facts.find(f=>f.format==='hardcover').royalties,0);
  assert.equal(r.facts.find(f=>f.format==='audiobook').royalties,0);
 });
+
+test('a positive total cannot inflate an explicit paperback quantity',()=>{
+ assert.throws(()=>capture(base,{TotalOrders:5,DigitalOrders:0,PaperbackOrders:3,HardcoverOrders:0,AudiobookOrders:0}),e=>e.code==='KDP_CAPTURE_INCOMPLETE');
+});
+test('a positive total cannot overwrite explicit zero format quantities',()=>{
+ assert.throws(()=>capture(base,{TotalOrders:2,DigitalOrders:0,PaperbackOrders:0,HardcoverOrders:0,AudiobookOrders:0}),e=>e.code==='KDP_CAPTURE_INCOMPLETE');
+});
+test('a legacy total can fill one missing identified format metric',()=>{
+ const r=capture(base,{TotalOrders:5,DigitalOrders:0,HardcoverOrders:0,AudiobookOrders:0});
+ assert.equal(r.facts.find(f=>f.format==='paperback').units,5);
+});
+test('a legacy total cannot guess between two missing identified formats',()=>{
+ assert.throws(()=>capture(base,{TotalOrders:5,DigitalOrders:0,HardcoverOrders:0}),e=>e.code==='KDP_CAPTURE_INCOMPLETE');
+});
+test('matching explicit format quantities remain accepted without reallocating paperback orders',()=>{
+ const r=capture(base,{TotalOrders:5,DigitalOrders:2,PaperbackOrders:3,HardcoverOrders:0,AudiobookOrders:0});
+ assert.equal(r.rowDaily.orders,5);assert.equal(r.facts.find(f=>f.format==='paperback').units,3);
+ assert.equal(r.facts.find(f=>f.format==='ebook').units,2);
+});
+test('a zero tandem metric does not hide a missing paperback metric',()=>{
+ const r=capture(base,{TotalOrders:5,DigitalOrders:0,HardcoverOrders:0,AudiobookOrders:0,TandemOrders:0});
+ assert.equal(r.facts.find(f=>f.format==='paperback').units,5);
+});
