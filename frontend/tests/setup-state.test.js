@@ -89,6 +89,17 @@ test("newer setup memory is last-write-wins by updatedAt", () => {
   assert.equal(snapped.steps.find((step) => step.id === "kdp_source")?.status, "done");
 });
 
+test("linking KDP without an accepted import does not complete its setup step", () => {
+  const snapshot = deriveSetupSnapshot({
+    signedIn: true, guest: false, discoveredAdsProfiles: 1, activatedAdsProfiles: 1,
+    kdpAccountLinked: true, kdpImporterActive: false, adsSyncSucceeded: true,
+    planKnown: true, hasPlan: true,
+  });
+  const kdp = snapshot.steps.find((step) => step.id === "kdp_source");
+  assert.equal(kdp.status, "optional");
+  assert.match(kdp.title, /Finish/);
+});
+
 test("setup events are named facts", () => {
   const event = buildSetupEvent(SETUP_EVENTS.signupCompleted, { needs_confirmation: true });
   assert.equal(event.name, "signup_completed");

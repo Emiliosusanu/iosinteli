@@ -13,7 +13,7 @@ export const EXTENSION_FRESH_MS = 36 * 60 * 60 * 1000;
 export const ROYALTY_SETUP_DISMISS_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type ExtensionLifecycle = "never" | "stale" | "active";
-export type HelperLifecycle = "off" | "needs_signin" | "active";
+export type HelperLifecycle = "off" | "needs_signin" | "needs_import" | "running";
 
 export type RoyaltySetupActionId = "helper" | "chrome" | "accounts" | "later";
 
@@ -23,6 +23,7 @@ export type RoyaltySetupKind =
   | "never_activated"
   | "extension_stale"
   | "helper_needs_signin"
+  | "helper_needs_import"
   | "unlinked";
 
 export type RoyaltySetupAsk = {
@@ -43,7 +44,9 @@ export function royaltyCollectionShortcut(input: {
   askKind: RoyaltySetupKind;
 }): { label: string; dest: RoyaltyCollectionDest } {
   if (input.askKind === "unlinked") return { label: "Link", dest: "ask" };
-  if (input.askKind === "helper_needs_signin") return { label: "Helper", dest: "ask" };
+  if (input.askKind === "helper_needs_signin" || input.askKind === "helper_needs_import") {
+    return { label: "Helper", dest: "ask" };
+  }
   if (input.askKind !== "none") return { label: "Import", dest: "ask" };
   if (input.helperOn) return { label: "Helper", dest: "helper" };
   return { label: "Import", dest: "source" };
@@ -56,6 +59,10 @@ export type RoyaltySetupMemory = {
 
 export function emptyRoyaltySetupMemory(): RoyaltySetupMemory {
   return { dismissedUntilMs: 0, askedKinds: [] };
+}
+
+export function royaltySetupMemoryKey(userId: string | null | undefined): string | null {
+  return userId ? `inteliads.kdpRoyaltySetup.v2:${encodeURIComponent(userId)}` : null;
 }
 
 export function normalizeRoyaltySetupMemory(raw: unknown): RoyaltySetupMemory {
@@ -75,6 +82,8 @@ export function normalizeRoyaltySetupMemory(raw: unknown): RoyaltySetupMemory {
 export type RoyaltySetupAccount = {
   id?: string;
   last_synced_at?: string | null;
+  /** Accepted financial delivery; last_synced_at can be catalog-only. */
+  royalties_last_synced_at?: string | null;
   linked_amazon_profile_ids?: string[] | null;
 };
 
@@ -86,9 +95,11 @@ export type RoyaltySetupInput = {
   royaltyScopeReason?: string | null;
   source: KdpRoyaltySource;
   helperLoggedIn: boolean;
+  helperSavedSession?: boolean;
   helperRunning: boolean;
-  lastHelperRunAtMs: number;
-  lastHelperRunYmd: string | null;
+  /** Legacy attempt stamps. They are not evidence of an accepted import. */
+  lastHelperRunAtMs?: number;
+  lastHelperRunYmd?: string | null;
   accounts: readonly RoyaltySetupAccount[];
   viewProfileIds: readonly string[];
   latestImportedYmd: string | null;
@@ -106,7 +117,7 @@ export function parseSyncMs(raw: string | null | undefined): number | null {
 export function latestAccountSyncMs(accounts: readonly RoyaltySetupAccount[]): number | null {
   let latest: number | null = null;
   for (const account of accounts) {
-    const ms = parseSyncMs(account.last_synced_at);
+    const ms = parseSyncMs(account.royalties_last_synced_at);
     if (ms == null) continue;
     if (latest == null || ms > latest) latest = ms;
   }
@@ -141,19 +152,34 @@ export function classifyExtensionLifecycle(input: {
 export function classifyHelperLifecycle(input: {
   source: KdpRoyaltySource;
   helperLoggedIn: boolean;
+  helperSavedSession?: boolean;
   helperRunning: boolean;
-  lastHelperRunAtMs: number;
-  lastHelperRunYmd: string | null;
-  yesterdayYmd: string;
-  nowMs: number;
+  lastHelperRunAtMs?: number;
+  lastHelperRunYmd?: string | null;
+  yesterdayYmd?: string;
+  nowMs?: number;
 }): HelperLifecycle {
   if (!isIosHelperEnabled(input.source)) return "off";
-  const runYmd = String(input.lastHelperRunYmd || "").slice(0, 10);
-  const runFresh =
-    (runYmd && runYmd >= input.yesterdayYmd) ||
-    (input.lastHelperRunAtMs > 0 && input.nowMs - input.lastHelperRunAtMs <= EXTENSION_FRESH_MS);
-  if (input.helperRunning || input.helperLoggedIn || runFresh) return "active";
+  if (input.helperRunning) return "running";
+  // A saved session can be checked/restored by the helper, but does not prove
+  // Amazon is signed in or that a day was accepted by the server.
+  if (input.helperLoggedIn || input.helperSavedSession) return "needs_import";
   return "needs_signin";
+}
+
+/** First-import setup proof, separate from a running job or a saved login. */
+export function kdpImporterEvidence(input: {
+  accounts?: readonly RoyaltySetupAccount[];
+  accountsUnavailable: boolean;
+  latestImportedYmd: string | null;
+  yesterdayYmd: string;
+  nowMs: number;
+}): boolean | "unknown" {
+  if (input.accountsUnavailable) return "unknown";
+  if (!input.latestImportedYmd && input.accounts?.some((account) => account.royalties_last_synced_at === undefined)) {
+    return "unknown";
+  }
+  return classifyExtensionLifecycle({ ...input, accounts: input.accounts ?? [] }) === "active";
 }
 
 const HELPER_PRIMARY = { id: "helper" as const, label: "iPhone helper" };
@@ -163,13 +189,11 @@ const LATER = { id: "later" as const, label: "Later" };
 export function planKdpRoyaltySetup(input: RoyaltySetupInput): RoyaltySetupPlan {
   if (input.guest || input.viewingCustomer) return { kind: "none" };
   if (input.loading || input.accountsError) return { kind: "none" };
-  if (input.royaltyScopeReason === "mixed_non_us") return { kind: "none" };
   if (input.dismissedUntilMs > 0 && input.nowMs < input.dismissedUntilMs) return { kind: "none" };
 
   const extension = classifyExtensionLifecycle(input);
   const helper = classifyHelperLifecycle(input);
 
-  if (helper === "active") return { kind: "none" };
   if (extension === "active") {
     if (input.accounts.length > 0 && !kdpAccountLinkedToProfiles(input.accounts, input.viewProfileIds)) {
       return {
@@ -181,6 +205,17 @@ export function planKdpRoyaltySetup(input: RoyaltySetupInput): RoyaltySetupPlan 
       };
     }
     return { kind: "none" };
+  }
+
+  if (helper === "running") return { kind: "none" };
+  if (helper === "needs_import") {
+    return {
+      kind: "helper_needs_import",
+      title: "Finish KDP import on this iPhone",
+      body: "No recent import has been saved. Open the helper to check the Amazon session and finish importing royalties.",
+      primary: { id: "helper", label: "Open helper" },
+      secondary: LATER,
+    };
   }
 
   if (helper === "needs_signin") {
@@ -196,14 +231,14 @@ export function planKdpRoyaltySetup(input: RoyaltySetupInput): RoyaltySetupPlan 
   if (extension === "stale") {
     return {
       kind: "extension_stale",
-      title: "Chrome hasn't imported lately",
-      body: "The Chrome extension used to import royalties, but nothing new has arrived. Open Chrome on a computer, or turn on the iPhone helper.",
+      title: "Royalties haven't updated lately",
+      body: "Nothing new has arrived from KDP. Open Chrome on a computer, or turn on the iPhone helper.",
       primary: HELPER_PRIMARY,
       secondary: CHROME_SECONDARY,
     };
   }
 
-  if (input.accounts.length === 0 && input.lastHelperRunAtMs === 0) {
+  if (input.accounts.length === 0) {
     return {
       kind: "onboard_new",
       title: "Import KDP royalties",

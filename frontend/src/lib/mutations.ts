@@ -101,6 +101,7 @@ export interface KdpAccountSummary {
   linked_amazon_profile_ids: string[];
   book_count?: number;
   last_synced_at?: string | null;
+  royalties_last_synced_at?: string | null;
 }
 
 export interface DeleteKdpBookResult {
