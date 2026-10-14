@@ -271,8 +271,8 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
       const hasTan = Object.prototype.hasOwnProperty.call(vals, 'TandemOrders');
       const hasAb = Object.prototype.hasOwnProperty.call(vals, 'AudiobookOrders') || Object.prototype.hasOwnProperty.call(vals, 'AudibleOrders') || Object.prototype.hasOwnProperty.call(vals, 'MarketplaceAudiobookOrders') || Object.prototype.hasOwnProperty.call(vals, 'MarketplaceAudibleOrders');
 
-      retainFormatUnits(row, 'ebookUnits', ebook);
       if (hasDig || hasPb || hasHc || hasTan || hasAb) {
+        let ebookUnits = ebook;
         let pbUnits = paperback + tandem;
         let hcUnits = hardcover;
         let abUnits = audiobook;
@@ -284,13 +284,31 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
           throw Object.assign(new Error('orders signed total disagrees with format metrics; existing data preserved'), { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
         }
         if (total > known) {
-          if (row.audiobookAsin) abUnits += (total - known);
-          else pbUnits += (total - known);
+          // A summary cannot inflate a format that already has an explicit
+          // quantity (including zero). Legacy totals can fill only exactly
+          // one missing format identified by this capture's catalog.
+          const missing = [
+            { format: 'ebook', asin: row.digitalAsin, present: hasDig },
+            { format: 'paperback', asin: row.printAsin, present: hasPb },
+            { format: 'hardcover', asin: row.hardcoverAsin, present: hasHc },
+            { format: 'audiobook', asin: row.audiobookAsin, present: hasAb },
+          ].filter(item => item.asin && !item.present);
+          if (missing.length !== 1) {
+            throw Object.assign(new Error('orders total has unexplained format quantities; existing data preserved'),
+              { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
+          }
+          const remainder = total - known;
+          if (missing[0].format === 'ebook') ebookUnits += remainder;
+          else if (missing[0].format === 'paperback') pbUnits += remainder;
+          else if (missing[0].format === 'hardcover') hcUnits += remainder;
+          else abUnits += remainder;
         }
+        retainFormatUnits(row, 'ebookUnits', ebookUnits);
         retainFormatUnits(row, 'paperbackUnits', pbUnits);
         retainFormatUnits(row, 'hardcoverUnits', hcUnits);
         retainFormatUnits(row, 'audiobookUnits', abUnits);
       } else {
+        retainFormatUnits(row, 'ebookUnits', ebook);
         const rem = total - ebook;
         const binAsin = /^[A-Z0-9]{10}$/.test(bin.toUpperCase()) ? bin.toUpperCase() : null;
         const binIsAudiobook = Boolean(binAsin && row.audiobookAsin && String(row.audiobookAsin) === String(binAsin));
