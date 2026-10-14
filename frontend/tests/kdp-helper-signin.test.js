@@ -37,7 +37,8 @@ test("helper screen pauses the hidden host and skips background ticks", () => {
   assert.match(helper, /attachKdpWebView\("ui"/);
   assert.match(helper, /!status\.loggedIn/);
   assert.match(helper, /status\.savedSession/);
-  assert.match(helper, /Saved session · background ready/);
+  assert.match(helper, /kdpSessionPresentation\(status\)/);
+  assert.doesNotMatch(helper, /Saved session · background ready/);
   assert.match(helper, /hydrateKdpRuntimeFromPersistence/);
   assert.match(helper, /automaticRetryCount/);
   assert.match(helper, /result\.ok/);
