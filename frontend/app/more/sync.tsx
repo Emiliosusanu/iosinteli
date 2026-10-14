@@ -518,8 +518,8 @@ export default function SyncScreen() {
                     </Text>
                   ))}
                   <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 10, lineHeight: 15 }]}>
-                    Local helper only — 15 min today/yesterday, night backfill after 02:00 for 30 days. Errors stay
-                    here until the next successful tick.
+                    Imports today/yesterday and resumes the 30-day backfill when it runs. iOS schedules background
+                    updates; intervals are not guaranteed. Errors remain until a successful retry.
                   </Text>
                 </>
               )}

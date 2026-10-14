@@ -717,7 +717,7 @@ export default function OverviewScreen() {
     ? String(royaltiesQ.data.daily[royaltiesQ.data.daily.length - 1]?.date ?? "").slice(0, 10) || null
     : null;
   const royaltySetup = useKdpRoyaltySetupPrompt({
-    enabled: !guestMode && !viewingAsAdmin,
+    enabled: homeVisible && !guestMode && !viewingAsAdmin,
     royaltyScopeReason: royaltyScope.reason,
     latestImportedYmd,
     yesterdayYmd: yesterdayStr,
@@ -2157,6 +2157,9 @@ export default function OverviewScreen() {
                   : { label: "Connect account", onPress: () => router.push("/more/accounts") }
             }
           />
+          {!guestMode && !isAdminViewer && royaltySetup.ask ? (
+            <KdpRoyaltySetupCard plan={royaltySetup.ask} onAction={royaltySetup.onAction} />
+          ) : null}
         </View>
       </AppScreen>
     );

@@ -52,11 +52,11 @@ export function buildKdpHelperOverview(args: {
   const steadyStale = steadyAge != null && steadyAge >= SYNC_EVERY_MS * 2;
   rows.push({
     id: "steady",
-    title: steadyAt > 0 ? "15 min sync" : "15 min sync — not run yet",
+    title: steadyAt > 0 ? "Recent-days sync" : "Recent-days sync — not run yet",
     detail:
       steadyAt > 0
-        ? `${steadyFresh ? "Completed" : steadyStale ? "Overdue" : "Last run"} · ${formatAgo(steadyAt, nowMs)}`
-        : "Helper pulls today + yesterday about every 15 minutes",
+        ? `${steadyFresh ? "Completed" : "Last completed"} · ${formatAgo(steadyAt, nowMs)}. Background timing is scheduled by iOS.`
+        : "Imports today + yesterday when the helper runs. iOS schedules background updates; timing varies.",
     tone: steadyAt > 0 ? (steadyFresh ? "ok" : steadyStale ? "warn" : "neutral") : "warn",
   });
 
@@ -82,7 +82,7 @@ export function buildKdpHelperOverview(args: {
     rows.push({
       id: "nightly",
       title: "Night backfill",
-      detail: `Runs after 02:00 · last ${NIGHTLY_BACKFILL_DAYS} days`,
+      detail: `Eligible after 02:00 · last ${NIGHTLY_BACKFILL_DAYS} days · resumes when iOS allows`,
       tone: "neutral",
     });
   }
