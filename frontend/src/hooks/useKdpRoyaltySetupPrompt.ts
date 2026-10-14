@@ -21,6 +21,7 @@ import {
   rememberRoyaltySetupAsked,
 } from "@/src/lib/kdpRoyaltySetupStore";
 import type { KnownFlag } from "@/src/lib/setupState";
+import { royaltySetupPromptGate } from "@/src/lib/royaltySetupPromptGate";
 
 export function useKdpRoyaltySetupPrompt(opts: {
   enabled: boolean;
@@ -155,9 +156,13 @@ export function useKdpRoyaltySetupPrompt(opts: {
   useEffect(() => {
     if (plan.kind === "none") return;
     if (memory.askedKinds.includes(plan.kind)) return;
-    if (askedRef.current === plan.kind) return;
+    // At most one automatic ask per foreground visit. Choosing the helper
+    // must navigate there, rather than queue its next setup-state alert.
+    if (askedRef.current !== null) return;
+    const release = royaltySetupPromptGate.acquire(user?.id, plan.kind);
+    if (!release) return;
     askedRef.current = plan.kind;
-    presentRoyaltySetupAsk(plan, { onAction });
+    presentRoyaltySetupAsk(plan, { onAction: (id) => { release(); onAction(id); } });
     const owner = user?.id;
     void rememberRoyaltySetupAsked(plan.kind, owner).then((next) => {
       if (ownerRef.current === owner) setMemory(next);
@@ -171,7 +176,8 @@ export function useKdpRoyaltySetupPrompt(opts: {
 
   const openCollection = useCallback(() => {
     if (shortcut.dest === "ask" && plan.kind !== "none") {
-      presentRoyaltySetupAsk(plan, { onAction });
+      const release = royaltySetupPromptGate.acquire(user?.id, plan.kind, false);
+      if (release) presentRoyaltySetupAsk(plan, { onAction: (id) => { release(); onAction(id); } });
       return;
     }
     if (shortcut.dest === "helper") {
@@ -179,7 +185,7 @@ export function useKdpRoyaltySetupPrompt(opts: {
       return;
     }
     nav.openSource();
-  }, [nav, onAction, plan, shortcut.dest]);
+  }, [nav, onAction, plan, shortcut.dest, user?.id]);
 
   const ask = plan.kind === "none" ? null : (plan as RoyaltySetupAsk);
   const kdpAccountLinked: KnownFlag =

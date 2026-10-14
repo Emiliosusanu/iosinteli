@@ -13,7 +13,7 @@ import { AppScreen } from "@/src/components/ScreenAmbient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { markPerf } from "@/src/lib/perf";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
-import { useRouter } from "expo-router";
+import { useRouter, usePathname } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { BooksReadError, fetchBookRetailMetadata, fetchKdpRoyaltiesRange, fetchTopBooksRange, type TopBookRow } from "@/src/lib/queries";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
@@ -265,8 +265,10 @@ export default function ProductsScreen() {
   const latestImportedYmd = periodRoyalties?.daily?.length
     ? String(periodRoyalties.daily[periodRoyalties.daily.length - 1]?.date ?? "").slice(0, 10) || null
     : null;
+  const booksPathname = usePathname();
+  const booksVisible = booksPathname === "/products" || booksPathname === "/(tabs)/products";
   const royaltySetup = useKdpRoyaltySetupPrompt({
-    enabled: selectedProfileIds.length > 0 && !guestMode && !adminFilterUserId,
+    enabled: booksVisible && selectedProfileIds.length > 0 && !guestMode && !adminFilterUserId,
     royaltyScopeReason: royaltyScope.reason,
     latestImportedYmd,
     yesterdayYmd,

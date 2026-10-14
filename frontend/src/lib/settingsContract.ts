@@ -134,7 +134,7 @@ export const KDP_INGEST_SECTION_TITLE = "KDP status";
 export const KDP_INGEST_EMPTY = "No KDP account linked to the selected profiles.";
 export const KDP_INGEST_UNAVAILABLE = "Couldn't load KDP status.";
 export const KDP_HELPER_FOOTER_ENABLED =
-  "Signs in once. Syncs recent royalties about every 15 minutes.";
+  "Imports recent royalties with your KDP session. iOS schedules background updates; timing varies.";
 export const KDP_HELPER_FOOTER_DISABLED = "Choose iPhone helper under Royalty source first. Chrome is optional.";
 export const KDP_HELPER_SETUP_ROW = "Set up iPhone helper";
 
