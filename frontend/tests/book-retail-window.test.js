@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bookRetailWindow, mergeScopedRetailCache } from '../src/lib/bookRetailWindow.ts';
+import { bookRetailWindow, canReadBookRetailMetadata, mergeScopedRetailCache } from '../src/lib/bookRetailWindow.ts';
 
 test('a thousand-book shelf starts with twelve metadata lookups and follows the viewport', () => {
   const books = Array.from({ length: 1000 }, (_, i) => ({ book_key: `book-${i}`, asin: `B${String(i).padStart(9, '0')}` }));
@@ -15,4 +15,14 @@ test('scrolling keeps already-read listing metadata, but changing user/profile s
   assert.equal(merged.data.first.reviewCount, 30);
   assert.equal(merged.data.second.reviewCount, null);
   assert.deepEqual(Object.keys(mergeScopedRetailCache(merged, 'user-b:CA', { second: { asin: 'B000000002', reviewCount: 1 } }).data), ['second']);
+});
+
+test('customer and authorized admin previews can load reviews; invalid scope cannot', () => {
+  const scope = { userId: 'admin', filterUserId: 'customer', isAdminViewer: true, profileIds: ['owned-profile'], asins: ['B000000001'] };
+  assert.equal(canReadBookRetailMetadata(scope), true);
+  assert.equal(canReadBookRetailMetadata({ ...scope, filterUserId: null, isAdminViewer: false }), true);
+  assert.equal(canReadBookRetailMetadata({ ...scope, isAdminViewer: false }), false);
+  assert.equal(canReadBookRetailMetadata({ ...scope, userId: null }), false);
+  assert.equal(canReadBookRetailMetadata({ ...scope, profileIds: [] }), false);
+  assert.equal(canReadBookRetailMetadata({ ...scope, asins: [] }), false);
 });
