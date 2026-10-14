@@ -9,6 +9,8 @@ import {
   SettingsSection,
 } from "@/src/components/settings/SettingsPrimitives";
 import { useApp } from "@/src/contexts/AppContext";
+import { useAuth } from "@/src/contexts/AuthContext";
+import { kdpSessionPresentation } from "@/src/lib/kdp/sessionPresentation";
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "@/src/lib/theme";
 import { setKdpHelperScreenFocused } from "@/src/lib/kdp/helperUi";
@@ -32,13 +34,15 @@ import {
 export default function KdpHelperScreen() {
   const t = useTheme();
   const { kdpRoyaltySource, selectedProfileIds } = useApp();
+  const { user } = useAuth();
   const ref = useRef<WebView>(null);
   const [status, setStatus] = useState(getKdpHelperStatus());
   const [helperAccountId, setHelperAccountId] = useState<string | null>(null);
   const enabled = isIosHelperEnabled(kdpRoyaltySource);
   const accountsQ = useQuery({
-    queryKey: ["kdp-helper-accounts"],
+    queryKey: ["kdp-helper-accounts", user?.id ?? "guest"],
     queryFn: fetchKdpAccounts,
+    enabled: !!user?.id,
     staleTime: 30_000,
   });
 
@@ -162,13 +166,8 @@ export default function KdpHelperScreen() {
     automaticRetryNonce,
   ]);
 
-  const statusLabel = status.loggedIn
-    ? "Signed in"
-    : !status.sessionChecked
-      ? "Checking saved session…"
-      : status.savedSession
-        ? "Saved session · background ready"
-        : "Sign in required";
+  const sessionPresentation = kdpSessionPresentation(status);
+  const statusLabel = sessionPresentation.label;
   const captureValue = captured.length ? captured.join(", ") : "Not yet";
 
   return (
@@ -205,8 +204,8 @@ export default function KdpHelperScreen() {
           <SettingsRow
             label="KDP session"
             value={statusLabel}
-            symbol={status.loggedIn || status.savedSession ? "checkmark.circle.fill" : "person.crop.circle"}
-            symbolColor={status.loggedIn || status.savedSession ? t.colors.tone_good : t.colors.tone_inactive}
+            symbol={sessionPresentation.verified ? "checkmark.circle.fill" : "person.crop.circle"}
+            symbolColor={sessionPresentation.verified ? t.colors.tone_good : t.colors.tone_inactive}
           />
           <SettingsRow
             label="Report capture"
