@@ -300,12 +300,17 @@ async function syncOneDay(
       const asin = String(fact.asin || "").trim().toUpperCase();
       const format = String(fact.format || "").trim().toLowerCase();
       if (!asin || !format) continue;
+      const units = Number(fact.units);
+      if (!Number.isSafeInteger(units)) {
+        throw Object.assign(new Error('KDP native units missing or non-integer; existing data preserved'),
+          { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
+      }
       factRows.push({
         asin,
         format,
         marketplace,
         currency,
-        units: Math.max(0, Math.trunc(Number(fact.units || 0))),
+        units,
         royalties: Number(fact.royalties || 0),
         kenp: Math.max(0, Math.trunc(Number(fact.kenp || 0))),
         is_estimated: isEstimated,
@@ -349,7 +354,15 @@ async function syncOneDay(
     );
   }
 
-  if (!overwriteSafety.safe) {
+  const expectedTargets = allKdpMarketplaceTargets();
+  const completeNativeCapture = marketplaceTargets.length === expectedTargets.length
+    && new Set(marketplaceTargets.map(target => target.key)).size === expectedTargets.length
+    && expectedTargets.every(expected => marketplaceTargets.some(target =>
+      target.key === expected.key && target.currency === expected.currency));
+  // All 17 authenticated reports have succeeded and their facts are retained.
+  // The server validates their internal quantities and atomically decides the
+  // correction. A legacy heuristic must not veto a verified zero or refund.
+  if (!overwriteSafety.safe && !completeNativeCapture) {
     // All requested source reports have succeeded. Keep the complete capture
     // as a review candidate; this endpoint cannot replace accepted data.
     try {

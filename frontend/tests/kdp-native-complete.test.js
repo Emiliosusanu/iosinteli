@@ -26,7 +26,7 @@ test('native report scope includes all 17 stores independently of Ads selection'
   assert.doesNotMatch(importer, /marketplaceTargetsFromProfiles|fetchAmazonProfiles/);
 });
 
-async function runDay(failedMarket = null, writes = []) {
+async function runDay(failedMarket = null, writes = [], options = {}) {
   const exports = {}, reads = [];
   const start = importer.indexOf('async function syncOneDay(');
   const end = importer.indexOf('async function resolveAccountId(', start);
@@ -37,14 +37,15 @@ async function runDay(failedMarket = null, writes = []) {
       if (target?.key === failedMarket) throw new Error('native response unavailable');
       return {royaltiesJson:{market:target?.key || 'ALL'},ordersJson:{},kenpJson:{}};
     },
-    buildKdpFromJsons: ({royaltiesJson}) => ({rowDaily:{date,royalties:17,orders:17,kenp:0},
-      rowEntry:{date,income:17},rowsBookDaily:[],facts:[{asin:'B0GS27WQBZ',format:'paperback',units:1,royalties:1,kenp:0}]}),
+    buildKdpFromJsons: ({royaltiesJson}) => ({rowDaily:{date,royalties:17*(options.royalties??1),orders:17*(options.units??1),kenp:0},
+      rowEntry:{date,income:17*(options.royalties??1)},rowsBookDaily:[],facts:[{asin:'B0GS27WQBZ',format:'paperback',units:options.units??1,royalties:options.royalties??1,kenp:0}]}),
     supabase:{from:()=>({select:()=>({eq:()=>({eq:()=>({maybeSingle:async()=>({data:null,error:null})})})})})},
-    evaluateRoyaltyOverwriteSafety:()=>({safe:true}),
+    evaluateRoyaltyOverwriteSafety:()=>({safe:options.safe??true}),
+    allKdpMarketplaceTargets,
     appendKdpActivity:async()=>{},writeKdpDay:async value=>writes.push(value),
     mapKdpMarketplacesSettled, withKdpTaskRequest, taskRequestTimeout: () => undefined,
   });
-  await exports.syncOneDay(accountId,date,{},targets);
+  await exports.syncOneDay(accountId,date,{},options.targets??targets);
   return {reads,writes};
 }
 test('actual importer writes one USD All day and 17 native market facts', async () => {
@@ -62,6 +63,22 @@ test('actual importer never replaces a day when any native store fails', async (
   const writes=[];
   await assert.rejects(runDay('BR',writes),/native response unavailable/);
   assert.equal(writes.length,0);
+});
+
+test('signed native units reach the actual atomic writer without clamping', async()=>{
+ const {writes}=await runDay(null,[],{units:-1,royalties:-1});
+ assert.equal(writes[0].rowDaily.orders,-17);
+ assert.equal(writes[0].factRows.reduce((n,f)=>n+f.units,0),-17);
+ assert.ok(writes[0].factRows.every(f=>f.units===-1));
+});
+test('complete native zero corrections are decided by the server rather than a legacy client heuristic', async()=>{
+ const {writes}=await runDay(null,[],{units:0,royalties:0,safe:false});
+ assert.equal(writes.length,1);assert.notEqual(writes[0].reviewOnly,true);
+ assert.equal(writes[0].marketplaces.length,17);
+});
+test('a partial marketplace selection cannot bypass the legacy overwrite protection', async()=>{
+ const writes=[];await assert.rejects(runDay(null,writes,{units:0,royalties:0,safe:false,targets:targets.slice(0,1)}),/existing verified royalties/);
+ assert.equal(writes.length,1);assert.equal(writes[0].reviewOnly,true);
 });
 
 function coverageWriter({wrongRevision=false, missingFact=false, markerError=false, changedDay=false, review=false, empty=false, wrongAck=false, transaction=false, badTransaction=false} = {}) {
