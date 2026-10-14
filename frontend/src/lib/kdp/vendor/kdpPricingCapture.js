@@ -1537,7 +1537,8 @@ export function extractBookshelfPrintRowsFromHtml(html) {
   }
 
   for (const link of extractPrintSetupLinksFromHtml(text)) {
-    if (link.format === 'paperback') add(link.kdpBookId, null);
+    // A setup-only link must not shadow an identified row from this same page.
+    if (link.format === 'paperback' && !out.some(row => row.kdpBookId === link.kdpBookId)) add(link.kdpBookId, null);
   }
 
   return out;

@@ -18,3 +18,13 @@ export function mergeScopedRetailCache(
 ) {
   return { scope, data: { ...(previous.scope === scope ? previous.data : {}), ...incoming } };
 }
+
+/** A customer preview uses that customer's profile ownership on the server,
+ * not the administrator's own listing metadata. */
+export function canReadBookRetailMetadata(opts: {
+  userId?: string | null; filterUserId?: string | null; isAdminViewer: boolean;
+  profileIds: readonly string[]; asins: readonly string[];
+}): boolean {
+  return Boolean(opts.userId) && (!opts.filterUserId || opts.isAdminViewer)
+    && opts.profileIds.length > 0 && opts.asins.length > 0;
+}

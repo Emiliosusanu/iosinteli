@@ -19,7 +19,7 @@ import { BooksReadError, fetchBookRetailMetadata, fetchKdpRoyaltiesRange, fetchT
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
-import { bookRetailWindow, mergeScopedRetailCache } from "@/src/lib/bookRetailWindow";
+import { bookRetailWindow, canReadBookRetailMetadata, mergeScopedRetailCache } from "@/src/lib/bookRetailWindow";
 import { bookRetailAsins, bookRetailStockLabel, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import {
@@ -334,10 +334,13 @@ export default function ProductsScreen() {
   const retailScope = JSON.stringify([user?.id, adminFilterUserId, [...retailProfileIds].sort()]);
   const [retailCache, setRetailCache] = useState<{ scope: string; data: Record<string, BookRetailSnapshot> }>({ scope: '', data: {} });
   const retailAsins = useMemo(() => bookRetailAsins(retailBooks), [retailBooks]);
+  const retailEnabled = canReadBookRetailMetadata({ userId: user?.id, filterUserId: adminFilterUserId,
+    isAdminViewer, profileIds: retailProfileIds, asins: retailAsins });
   const retailQ = useQuery({
     queryKey: ["book-retail-metadata", user?.id ?? "anonymous", adminFilterUserId ?? "self", retailProfileIds, retailAsins],
     queryFn: () => fetchBookRetailMetadata({
       books: retailBooks,
+      filterUserId: adminFilterUserId,
       adsProfileIds: retailProfileIds,
       marketplaceCodes: Object.fromEntries(profiles.flatMap((profile) => {
         const code = String(profile.country_code ?? "").trim().toUpperCase();
@@ -345,7 +348,7 @@ export default function ProductsScreen() {
       })),
       preferredMarketplaceCode: profiles.find((profile) => selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id))?.country_code,
     }),
-    enabled: Boolean(user?.id) && !adminFilterUserId && retailProfileIds.length > 0 && retailAsins.length > 0,
+    enabled: retailEnabled,
     staleTime: 5 * 60_000,
     retry: false,
   });
@@ -384,7 +387,7 @@ export default function ProductsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([refetch(), ...(!adminFilterUserId && user?.id ? [retailQ.refetch()] : [])]);
+    await Promise.all([refetch(), ...(retailEnabled ? [retailQ.refetch()] : [])]);
     setRefreshing(false);
   };
 

@@ -1,3 +1,4 @@
+import { canReadBookRetailMetadata } from '@/src/lib/bookRetailWindow';
 import React, { useEffect, useMemo, useState } from "react";
 import {
   FlatList,
@@ -146,7 +147,7 @@ export default function ProductCampaignsScreen() {
   const { user } = useAuth();
   const t = useTheme();
   const router = useRouter();
-  const { profiles, selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
+  const { profiles, selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const params = useLocalSearchParams<{ asin: string; title?: string; imageUrl?: string }>();
   const asin = paramValue(params.asin).toUpperCase();
@@ -237,10 +238,13 @@ export default function ProductCampaignsScreen() {
   const book = useMemo(() => matchBook(booksQ.data ?? [], asin), [booksQ.data, asin]);
   const retailBooks = useMemo(() => book ? [book] : [{ book_key: asin, asin }], [book, asin]);
   const retailAsins = useMemo(() => bookRetailAsins(retailBooks), [retailBooks]);
+  const retailEnabled = canReadBookRetailMetadata({ userId: user?.id, filterUserId: adminFilterUserId,
+    isAdminViewer, profileIds: retailProfileIds, asins: retailAsins });
   const retailQ = useQuery({
     queryKey: ["book-retail-metadata-detail", user?.id ?? "anonymous", adminFilterUserId ?? "self", retailProfileIds, retailAsins],
     queryFn: () => fetchBookRetailMetadata({
       books: retailBooks,
+      filterUserId: adminFilterUserId,
       adsProfileIds: retailProfileIds,
       marketplaceCodes: Object.fromEntries(profiles.flatMap((profile) => {
         const code = String(profile.country_code ?? "").trim().toUpperCase();
@@ -248,7 +252,7 @@ export default function ProductCampaignsScreen() {
       })),
       preferredMarketplaceCode: profiles.find((profile) => selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id))?.country_code,
     }),
-    enabled: Boolean(user?.id) && !adminFilterUserId && retailProfileIds.length > 0 && retailAsins.length > 0,
+    enabled: retailEnabled,
     staleTime: 5 * 60_000,
     retry: false,
   });
@@ -322,7 +326,7 @@ export default function ProductCampaignsScreen() {
       campaignsQ.refetch(),
       booksQ.refetch(),
       identityQ.refetch(),
-      ...(!adminFilterUserId && user?.id ? [retailQ.refetch()] : []),
+      ...(retailEnabled ? [retailQ.refetch()] : []),
     ]);
     setRefreshing(false);
   };

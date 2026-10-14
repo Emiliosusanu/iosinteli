@@ -25,3 +25,14 @@ test('iOS response identity ignores category IDs that also pass ISBN validation'
   assert.equal(extractAsinFromSetupPageJson({ book: { selectedBrowseNodes: [{ id: categoryId }], metadata: { printAsin: 'B0HB5MB9L9' } } }), 'B0HB5MB9L9');
   assert.equal(extractAsinFromSetupPageJson({ book: { metadata: { notAnAsin: categoryId } } }), null);
 });
+
+test('iOS retains the current Live paperback when its Edit pricing link also appears', () => {
+  const html = '<div id="zme-indie-bookshelf-dual-print-price-asin-MT02FVSE645">ASIN: 1807973794</div>'
+    + '<div id="zme-indie-bookshelf-dual-print-status-live-status-popover-MT02FVSE645-label">Live</div>'
+    + '<a href="/en_US/title-setup/paperback/MT02FVSE645/pricing">Edit pricing</a>';
+  const rows = extractBookshelfPrintRowsFromHtml(html);
+  assert.equal(rows.filter(row => row.kdpBookId === 'MT02FVSE645').length, 1);
+  assert.equal(rows[0].printStatus, 'live');
+  const unknown = extractBookshelfPrintRowsFromHtml('<a href="/en_US/title-setup/paperback/OTHERSETUP123/pricing">Edit pricing</a>');
+  assert.equal(unknown[0].printStatus, null);
+});
