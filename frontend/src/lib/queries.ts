@@ -5,7 +5,7 @@ import { BookRetailObservationCache } from "./bookRetailCache.ts";
 import { supabase } from "./supabase";
 import { readBookRetailRequests, prioritizeBookRetailRequests } from "./bookRetailRequests";
 import { fetchAdminOverviewActiveAdGroups, fetchAdminOverviewActiveKeywords } from "./overviewAdminWidgets";
-import { parseNestError, rulesApiFetch, hasNestToken, nestApiJson } from "./rulesApi";
+import { parseNestError, rulesApiFetch, hasNestToken, hasMobileApiSession, nestApiJson } from "./rulesApi";
 import { fetchAmazonProfileBooks, fetchNestAmazonProfiles, type AmazonProfileBookPreview } from "./mutations";
 import {
   fetchAggregatedCampaigns,
@@ -5996,6 +5996,7 @@ export async function fetchTopBooksRange(
   const kdpScope = opts.kdpScope ?? "linked_profiles";
   const kdpOnlySession = kdpScope === "user_accounts";
   if (!profileIds.length && !kdpOnlySession) return [];
+  const canReadBooksApi = await hasMobileApiSession();
 
   // Only start the expensive Create-candidate shelf if the web/Nest books read
   // cannot answer this request. Running both paths for the same six-profile
@@ -6011,7 +6012,7 @@ export async function fetchTopBooksRange(
       allowLegacyProfileLinks: opts.allowLegacyProfileLinks,
     });
   } catch (error) {
-    if (await hasNestToken()) {
+    if (canReadBooksApi) {
       const nestRows = await fetchNestTopBooks({
         filterUserId,
         startDate: start,
@@ -6025,7 +6026,7 @@ export async function fetchTopBooksRange(
     throw new BooksReadError("kdp_account_links", booksErrorCode(error));
   }
 
-  if (await hasNestToken()) {
+  if (canReadBooksApi) {
     try {
       const nestRows = await fetchNestTopBooks({
         filterUserId,
@@ -6057,7 +6058,9 @@ export async function fetchTopBooksRange(
     } catch (error) {
       // A catalog error after a valid server financial read must not start a
       // second, unbounded reconstruction of those same financial rows.
-      if (filterUserId || nestBooksCatalogSeed.length) throw error;
+      const status = Number((error as { status?: number; statusCode?: number })?.status
+        ?? (error as { statusCode?: number })?.statusCode ?? 0);
+      if (filterUserId || activityDays <= 0 || nestBooksCatalogSeed.length || status === 401 || status === 403) throw error;
       logBooksStage("nest_top_books", error);
     }
   }
