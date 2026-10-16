@@ -27,7 +27,7 @@ function harness() {
   const context = { exports: {}, require: name => { assert.ok(dependencies[name], name); return dependencies[name]; } };
   vm.runInNewContext(compiled, context);
   const render = () => { cursor = 0; return context.exports.useBookRetailMetadata([{ asin: 'B0ABCDEFGH', book_key: 'B0ABCDEFGH' }], ['ads-us'], 'retail'); };
-  return { render, app, query, start: async signal => queryOptions.queryFn({ signal }), options: () => fetchOptions };
+  return { render, app, query, start: async signal => queryOptions.queryFn({ signal }), options: () => fetchOptions, queryOptions: () => queryOptions };
 }
 const row = { asin: 'B0ABCDEFGH', rating: 4.1, reviewCount: 100, stockStatus: 'IN_STOCK', checkedAt: null, marketplaceCode: 'US' };
 test('actual hook renders progress before final query data arrives, then retains both marketplaces', async () => {
@@ -65,4 +65,11 @@ test('fresh US progress is visible immediately while an old query response is st
   h.query.isFetching = false;
   h.query.data = { snapshots: { B0ABCDEFGH: { ...row, reviewCount: 102 } } };
   assert.equal(h.render().snapshots.B0ABCDEFGH.reviewCount, 102);
+});
+test('only server-pending cache reads poll and background polling stays disabled', () => {
+  const h = harness(); h.render(); const opts = h.queryOptions();
+  assert.equal(opts.refetchInterval({ state: { data: { pendingRequests: 1 } } }), 2000);
+  assert.equal(opts.refetchInterval({ state: { data: { pendingRequests: 0 } } }), false);
+  assert.equal(opts.refetchInterval({ state: {} }), false);
+  assert.equal(opts.refetchIntervalInBackground, false);
 });

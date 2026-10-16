@@ -42,7 +42,18 @@ test('real retail query retains working marketplace data and forwards exact admi
   assert.equal(result.snapshots.B0ABCDEFGH.reviewCount, 210);
   assert.equal(result.snapshots.B0ABCDEFGH.stockStatus, 'IN_STOCK');
   assert.equal(result.snapshots.B0ABCDEFGH.marketplaceCode, 'US');
-  assert.ok(calls.every(call => call.filterUserId === 'customer-one' && call.asins.join(',') === 'B0ABCDEFGH'));
+  assert.ok(calls.every(call => call.filterUserId === 'customer-one' && call.asins.join(',') === 'B0ABCDEFGH' && call.cachedOnly === true));
+});
+
+test('server pending and completed-unknown rows survive indexing without inventing review or stock data', () => {
+  const rows = indexProfileBookRetailSnapshots([
+    { asin: 'B0ABCDEFGH', marketplaceCode: 'US', amazonRetailPending: true },
+    { asin: 'B0ABCDEFGI', marketplaceCode: 'US', amazonRetailPending: false },
+  ], ['B0ABCDEFGH', 'B0ABCDEFGI'], 'US');
+  assert.equal(rows.B0ABCDEFGH.retailPending, true);
+  assert.equal(rows.B0ABCDEFGI.retailPending, false);
+  assert.equal(rows.B0ABCDEFGH.reviewCount, null);
+  assert.equal(rows.B0ABCDEFGI.stockStatus, null);
 });
 
 test('real retail query streams fast markets before a stalled one and reuses overlapping ASIN reads', async () => {

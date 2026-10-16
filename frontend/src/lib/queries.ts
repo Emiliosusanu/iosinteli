@@ -5536,10 +5536,10 @@ export async function fetchBookRetailMetadata(opts: {
   signal?: AbortSignal;
   forceRefresh?: boolean;
   onProgress?: (snapshots: Record<string, BookRetailSnapshot>) => void;
-}): Promise<{ snapshots: Record<string, BookRetailSnapshot>; failedRequests: number }> {
+}): Promise<{ snapshots: Record<string, BookRetailSnapshot>; failedRequests: number; pendingRequests: number }> {
   const asins = [...new Set(opts.books.flatMap(book => bookRetailAsins([book])))];
   const profileIds = [...new Set(opts.adsProfileIds.map((id) => String(id).trim()).filter(Boolean))];
-  if (!asins.length || !profileIds.length) return { snapshots: {}, failedRequests: 0 };
+  if (!asins.length || !profileIds.length) return { snapshots: {}, failedRequests: 0, pendingRequests: 0 };
   const quarantineEntries = await loadShelfHealQuarantineEntries();
   const { isQuarantined } = await import("./kdp/shelfHeal.ts");
   const allRows: ProfileBookRetailRow[] = [];
@@ -5564,12 +5564,12 @@ export async function fetchBookRetailMetadata(opts: {
   // slice; one large profile cannot delay all other marketplace observations.
   prioritizeBookRetailRequests(requests, asins, opts.priorityMarketplaceCodes, opts.preferredMarketplaceCode ?? '');
   const { failedRequests } = await readBookRetailRequests(requests, async ({ id, batch, scope, marketplaceCode }, { signal }) => {
-    const result = await fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId, asins: batch, signal });
+    const result = await fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId, asins: batch, signal, cachedOnly: true });
     if (signal.aborted) throw signal.reason ?? Object.assign(new Error('Listing read cancelled'), { name: 'AbortError' });
     if (scope) retailObservationCache.write(scope, batch, result);
     return result.map(row => ({ ...row, marketplaceCode }));
   }, { signal: opts.signal, onRows: publish });
-  return { snapshots: snapshots(), failedRequests };
+  return { snapshots: snapshots(), failedRequests, pendingRequests: allRows.filter(row => row.amazonRetailPending).length };
 }
 
 /** Book keys (group_key / asin / sku) with KDP or Ads signal in the activity window. */

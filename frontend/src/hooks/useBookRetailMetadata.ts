@@ -34,6 +34,10 @@ export function useBookRetailMetadata(books: readonly RetailBookIdentity[], prof
       },
     }),
     enabled, staleTime: 5 * 60_000, retry: false,
+    // These are fast server-cache reads, not Amazon requests from the phone.
+    // Pending rows bypass the local observation TTL until the server finishes.
+    refetchInterval: state => (state.state.data?.pendingRequests ?? 0) > 0 ? 2000 : false,
+    refetchIntervalInBackground: false,
   });
   const status = Number((query.error as { status?: number; statusCode?: number } | null)?.status
     ?? (query.error as { statusCode?: number } | null)?.statusCode ?? 0);

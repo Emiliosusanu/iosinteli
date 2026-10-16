@@ -54,3 +54,21 @@ test('pending observations render loading rather than a false unavailable or zer
   assert.doesNotMatch(textOf(tree), /unavailable|0 reviews/);
   assert.match(tree.props.accessibilityLabel, /Reviews loading/);
 });
+test('a completed unknown listing does not inherit loading from other marketplace requests', () => {
+  const tree = context.exports.BookRetailInfo({ edition: 'Kindle', snapshot: { ...snapshot, rating: null, reviewCount: null,
+    stockStatus: null, retailPending: false, marketplaceSnapshots: [] }, compact: true, loading: true });
+  assert.match(textOf(tree), /Reviews unavailable/);
+  assert.match(textOf(tree), /Stock unknown/);
+  assert.doesNotMatch(textOf(tree), /Loading/);
+});
+test('only the selected US listing controls its loading status', () => {
+  const us = { ...snapshot.marketplaceSnapshots[0], rating: null, reviewCount: null, stockStatus: null, retailPending: true };
+  const primary = metadata.primaryBookRetailEdition({ asin: us.asin, book_key: us.asin }, {
+    [us.asin]: { ...snapshot, retailPending: false, marketplaceSnapshots: [us] },
+  }, ['US']);
+  assert.equal(primary.snapshot.marketplaceCode, 'US');
+  const tree = context.exports.BookRetailInfo({ edition: 'Kindle', snapshot: primary.snapshot, compact: true, activeMarketplaceCodes: ['US'], loading: false });
+  assert.match(textOf(tree), /Loading reviews…/);
+  assert.match(textOf(tree), /Loading stock…/);
+  assert.doesNotMatch(textOf(tree), /400 reviews/);
+});

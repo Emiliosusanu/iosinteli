@@ -1,4 +1,4 @@
-type RetailRow = { asin: string; amazonRating?: number | null; amazonReviewCount?: number | null; amazonStockStatus?: string | null };
+type RetailRow = { asin: string; amazonRating?: number | null; amazonReviewCount?: number | null; amazonStockStatus?: string | null; amazonRetailPending?: boolean };
 
 /** In-memory exact-ASIN observations. Scope includes authenticated viewer,
  * customer and profile; unknown reads expire sooner and are never zeroes. */
@@ -11,7 +11,7 @@ export class BookRetailObservationCache<T extends RetailRow> {
     for (const asin of asins) {
       const key = JSON.stringify([scope, asin]);
       const entry = this.entries.get(key);
-      if (!entry || now - entry.at >= entry.ttl) {
+      if (!entry || entry.rows.some(row => row.amazonRetailPending) || now - entry.at >= entry.ttl) {
         this.entries.delete(key); missing.push(asin);
       } else rows.push(...entry.rows);
     }

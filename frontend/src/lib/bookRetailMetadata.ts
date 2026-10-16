@@ -14,6 +14,8 @@ export type BookRetailSnapshot = {
   marketplaceCode?: string;
   coverCacheKey?: string;
   marketplaceSnapshots?: BookRetailSnapshot[];
+  /** Exact listing server refresh state, never the whole viewport's spinner. */
+  retailPending?: boolean;
 };
 
 export type BookRetailSourceRow = {
@@ -38,6 +40,7 @@ export type ProfileBookRetailRow = {
   coverUrl?: string | null;
   amazonMetaUpdatedAt?: string | null;
   marketplaceCode?: string | null;
+  amazonRetailPending?: boolean;
 };
 
 export type RetailBookIdentity = {
@@ -102,7 +105,7 @@ export function indexProfileBookRetailSnapshots(
     // The web endpoint's timestamp can be a catalog fetch date rather than a
     // review/stock observation. Use it for image cache invalidation, not as a
     // user-facing "checked" date.
-    const snapshot = indexBookRetailSnapshots([{
+    let snapshot = indexBookRetailSnapshots([{
       asin,
       amazon_rating: row.amazonRating,
       amazon_review_count: row.amazonReviewCount,
@@ -112,7 +115,12 @@ export function indexProfileBookRetailSnapshots(
       cover_url: row.coverUrl,
       marketplace_code: market,
     }])[asin];
+    if (!snapshot && typeof row.amazonRetailPending === 'boolean') snapshot = {
+      asin, rating: null, reviewCount: null, stockStatus: null, checkedAt: null,
+      ...(market ? { marketplaceCode: market } : {}),
+    };
     if (!snapshot) continue;
+    if (typeof row.amazonRetailPending === 'boolean') snapshot.retailPending = row.amazonRetailPending;
     const version = checkedTime(row.amazonMetaUpdatedAt ?? null);
     if (snapshot.coverUrl && Number.isFinite(version)) {
       snapshot.coverCacheKey = `${asin}:${market}:${version}:${snapshot.coverUrl}`;
@@ -174,7 +182,9 @@ export function primaryBookRetailEdition(
     return tone === "good" ? 2 : tone === "neutral" ? 1 : 0;
   };
   const formatRank = (format: string) => format === "Paperback" ? 2 : format === "Hardcover" ? 1 : 0;
-  const primary = [...editions].sort((a, b) =>
+  const activeEditions = editions.filter(row => active.has(normalizeFlagCountryCode(row.snapshot.marketplaceCode)));
+  const candidates = activeEditions.length ? activeEditions : editions;
+  const primary = [...candidates].sort((a, b) =>
     Number(active.has(normalizeFlagCountryCode(b.snapshot.marketplaceCode))) -
       Number(active.has(normalizeFlagCountryCode(a.snapshot.marketplaceCode))) ||
     stockRank(b.snapshot.stockStatus) - stockRank(a.snapshot.stockStatus) ||
@@ -185,7 +195,7 @@ export function primaryBookRetailEdition(
     a.snapshot.asin.localeCompare(b.snapshot.asin),
   ).find(({ snapshot }) =>
     snapshot.rating != null || snapshot.reviewCount != null || snapshot.stockStatus != null || snapshot.coverUrl != null,
-  ) ?? editions[0] ?? null;
+  ) ?? candidates[0] ?? null;
   if (!primary) return null;
   const snapshot = active.size && !active.has(normalizeFlagCountryCode(primary.snapshot.marketplaceCode))
     ? { ...primary.snapshot, rating: null, reviewCount: null, stockStatus: null, checkedAt: null,
