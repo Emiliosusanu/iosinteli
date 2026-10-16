@@ -24,3 +24,24 @@ test('actual Books query publishes the authenticated web rows before slower cata
     limit: 0, activityDays: 0, onCoreRows: rows => { published = rows; } }), e => e === failure);
   assert.equal(published, core);
 });
+
+
+test('a successful web financial read unions the campaign shelf without replaying local KDP/Ads pages', async () => {
+  const core = [{ asin: 'B0ABCDEFGH', royalties: 19, spend: 4, net: 15, ads_state: 'ready' }];
+  const campaignOnly = {asin:'B0ABCDEFGI',royalties:null,spend:0,has_campaign:true};
+  let published = false, unions = 0;
+  const context = { exports: {},
+    fetchKdpAccountIdsForRoyaltyQuery: async () => ['owned-kdp'],
+    hasNestToken: async () => true,
+    fetchNestTopBooks: async () => core,
+    nestShelfCatalogRows: async () => {assert.equal(published,true);return [campaignOnly];},
+    finalizeCatalogBooksList: async (rows, profiles, accounts, limit, shelf) => {
+      unions++; assert.equal(rows,core); assert.equal(profiles[0],'owned-us'); assert.equal(accounts[0],'owned-kdp');assert.equal(limit,0);
+      return [...rows,...shelf];
+    },
+    fetchRequiredPages: () => {throw new Error('must not replay local financial pages');},
+  };
+  vm.runInNewContext(compiled, context);
+  const result=await context.exports.fetchTopBooksRange({profileIds:['owned-us'],start:'2026-10-01',end:'2026-10-16',limit:0,activityDays:0,onCoreRows:()=>{published=true;}});
+  assert.equal(unions,1);assert.equal(result.length,2);assert.equal(result[0].net,15);assert.equal(result[1].has_campaign,true);
+});
