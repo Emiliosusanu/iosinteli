@@ -1783,23 +1783,37 @@ async function attachKdpAccountCountsFromBridge(
     amazon_profile_id?: string | null;
     is_paused?: boolean | null;
   }> = [];
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    for (const chunk of chunkArray(profileIds, BOOKS_IN_CHUNK)) {
-      links.push(
-        ...(await fetchAllPages((from, to) =>
-          supabase
-            .from("kdp_account_amazon_profiles")
-            .select("kdp_account_id, amazon_profile_id, is_paused")
-            .in("amazon_profile_id", chunk)
-            .order("kdp_account_id", { ascending: true })
-            .order("amazon_profile_id", { ascending: true })
-            .range(from, to),
-        )),
-      );
-    }
+    await Promise.race([(async () => {
+      for (const chunk of chunkArray(profileIds, BOOKS_IN_CHUNK)) {
+        links.push(
+          ...(await fetchAllPages((from, to) =>
+            supabase
+              .from("kdp_account_amazon_profiles")
+              .select("kdp_account_id, amazon_profile_id, is_paused")
+              .in("amazon_profile_id", chunk)
+              .order("kdp_account_id", { ascending: true })
+              .order("amazon_profile_id", { ascending: true })
+              .range(from, to)
+              .abortSignal(controller.signal),
+            POSTGREST_PAGE_SIZE,
+            { signal: controller.signal },
+          )),
+        );
+      }
+    })(), new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error("Optional profile KDP counts timed out"));
+      }, 3000);
+    })]);
   } catch {
     // Keep Nest values if bridge read fails (Auth/RLS); do not blank the list.
     return profiles;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 
   const counts = kdpAccountCountsByAmazonProfileId(links);
