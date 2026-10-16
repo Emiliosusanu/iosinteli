@@ -37,13 +37,15 @@ export function BookRetailInfo({
     ? snapshot.checkedAt.slice(0, 10)
     : null;
   const dateSuffix = checkedDate ? `, checked ${checkedDate}` : "";
+  const reviewsAt = reviews.reviewsCheckedAt ?? reviews.checkedAt;
+  const reviewsDate = reviewsAt && Number.isFinite(Date.parse(reviewsAt)) ? reviewsAt.slice(0, 10) : null;
 
   return (
     <View
       testID={`book-retail-${snapshot.asin}`}
       style={{ gap: 4, paddingVertical: compact ? 5 : 9 }}
       accessibilityRole="text"
-      accessibilityLabel={`${edition} ${snapshot.asin}. ${reviewLabel ? `Amazon rating and reviews snapshot ${reviewLabel}${reviews.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}${reviews.checkedAt ? `, checked ${reviews.checkedAt.slice(0, 10)}` : ""}.` : reviewsLoading ? "Reviews loading." : "Reviews unavailable."} ${stockLabel ? `Last reported stock ${stockLabel}${snapshot.marketplaceCode ? ` in ${snapshot.marketplaceCode}` : ""}${dateSuffix}.` : stockLoading ? "Stock status loading." : "Stock status unavailable."}`}
+      accessibilityLabel={`${edition} ${snapshot.asin}. ${reviewLabel ? `Amazon rating and reviews snapshot ${reviewLabel}${reviews.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}${reviewsDate ? `, checked ${reviewsDate}` : ""}.` : reviewsLoading ? "Reviews loading." : "Reviews unavailable."} ${stockLabel ? `Last reported stock ${stockLabel}${snapshot.marketplaceCode ? ` in ${snapshot.marketplaceCode}` : ""}${dateSuffix}.` : stockLoading ? "Stock status loading." : "Stock status unavailable."}`}
     >
       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, fontWeight: "700" }]}>
         {edition} · {snapshot.asin}
@@ -53,7 +55,7 @@ export function BookRetailInfo({
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
             <SFSymbol name="star.fill" size={12} color="#F5A623" />
             <Text style={[t.typography.caption1, { color: t.colors.text_primary }]}>
-              {reviewLabel}{reviews.marketplaceCode ? ` · ${reviews.marketplaceCode}` : ""}
+              {reviewLabel}{reviews.marketplaceCode ? ` · ${reviews.marketplaceCode}` : ""}{reviewsDate ? ` · ${reviewsDate}` : ""}
             </Text>
           </View>
         ) : (

@@ -1309,6 +1309,8 @@ export type AmazonProfileBookPreview = {
   amazonMetaUpdatedAt?: string | null;
   accountId?: string | null;
   amazonRetailPending?: boolean;
+  amazonStockCheckedAt?: string | null;
+  amazonReviewsCheckedAt?: string | null;
   marketplaceCode?: string | null;
 };
 
@@ -1344,6 +1346,8 @@ export async function fetchAmazonProfileBooks(
       amazonMetaUpdatedAt?: string | null;
       accountId?: string | null;
       amazonRetailPending?: boolean;
+      amazonStockCheckedAt?: string | null;
+      amazonReviewsCheckedAt?: string | null;
     }[];
   }>(`/amazon/profiles/${encodeURIComponent(adsId)}/books${q}`, { method: "GET", signal: opts?.signal }, "Couldn't load profile books.");
   const books: AmazonProfileBookPreview[] = [];
@@ -1362,6 +1366,8 @@ export async function fetchAmazonProfileBooks(
       amazonMetaUpdatedAt: book.amazonMetaUpdatedAt ?? null,
       accountId: book.accountId ?? null,
       ...(typeof book.amazonRetailPending === 'boolean' ? { amazonRetailPending: book.amazonRetailPending } : {}),
+      amazonStockCheckedAt: book.amazonStockCheckedAt ?? null,
+      amazonReviewsCheckedAt: book.amazonReviewsCheckedAt ?? null,
     });
   }
   return books;
