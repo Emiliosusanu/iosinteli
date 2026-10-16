@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { BookRetailObservationCache } from '../src/lib/bookRetailCache.ts';
-import { readBookRetailRequests } from '../src/lib/bookRetailRequests.ts';
+import { readBookRetailRequests, prioritizeBookRetailRequests } from '../src/lib/bookRetailRequests.ts';
 import { bookRetailAsins, indexProfileBookRetailSnapshots } from '../src/lib/bookRetailMetadata.ts';
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -22,7 +22,7 @@ test('real retail query retains working marketplace data and forwards exact admi
       assert.equal(name, './kdp/shelfHeal.ts');
       return { isQuarantined: () => false };
     },
-    bookRetailAsins, readBookRetailRequests, indexProfileBookRetailSnapshots, retailObservationCache: new BookRetailObservationCache(),
+    bookRetailAsins, readBookRetailRequests, prioritizeBookRetailRequests, indexProfileBookRetailSnapshots, retailObservationCache: new BookRetailObservationCache(),
     chunkArray: (xs, n) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, (i + 1) * n)),
     fetchAmazonProfileBooks: async (profile, opts) => {
       calls.push({ profile, ...opts });
@@ -52,7 +52,7 @@ test('real retail query streams fast markets before a stalled one and reuses ove
   const cache = new BookRetailObservationCache();
   const context = { exports: {},
     require: () => ({ isQuarantined: () => false }),
-    bookRetailAsins, readBookRetailRequests, indexProfileBookRetailSnapshots, retailObservationCache: cache,
+    bookRetailAsins, readBookRetailRequests, prioritizeBookRetailRequests, indexProfileBookRetailSnapshots, retailObservationCache: cache,
     chunkArray: (xs, n) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, (i + 1) * n)),
     fetchAmazonProfileBooks: async (profile, opts) => {
       calls.push({ profile, ...opts });
@@ -81,7 +81,7 @@ test('real retail query streams fast markets before a stalled one and reuses ove
 test('large catalogs keep review reads small enough for the server deadline and visit every exact ASIN', async () => {
   const calls = [];
   const context = { exports: {}, require: () => ({ isQuarantined: () => false }),
-    bookRetailAsins, readBookRetailRequests, indexProfileBookRetailSnapshots, retailObservationCache: new BookRetailObservationCache(),
+    bookRetailAsins, readBookRetailRequests, prioritizeBookRetailRequests, indexProfileBookRetailSnapshots, retailObservationCache: new BookRetailObservationCache(),
     chunkArray: (xs, n) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, (i + 1) * n)),
     fetchAmazonProfileBooks: async (profile, opts) => {
       calls.push({ profile, ...opts });
@@ -97,4 +97,29 @@ test('large catalogs keep review reads small enough for the server deadline and 
   assert.equal(Object.keys(result.snapshots).length, 12);
   assert.deepEqual(calls.slice(0, 2).map(call => call.profile), ['US', 'CA']);
   for (const profile of ['US', 'CA']) assert.deepEqual([...new Set(calls.filter(c => c.profile === profile).flatMap(c => c.asins))].sort(), books.slice(300, 312).map(b => b.asin).sort());
+});
+
+test('actual retail API query starts US active-market requests first and preserves displayed book order', async () => {
+  const calls = [], progress = [];
+  const context = { exports: {}, require: () => ({ isQuarantined: () => false }),
+    bookRetailAsins, readBookRetailRequests, prioritizeBookRetailRequests, indexProfileBookRetailSnapshots,
+    retailObservationCache: new BookRetailObservationCache(),
+    chunkArray: (xs, n) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, (i + 1) * n)),
+    fetchAmazonProfileBooks: async (profile, opts) => { calls.push({ profile, asins: opts.asins });
+      return opts.asins.map(asin => ({ asin, amazonReviewCount: profile === 'US' ? 42 : 100, amazonStockStatus: 'IN_STOCK' })); },
+    loadShelfHealQuarantineEntries: async () => [],
+  };
+  vm.runInNewContext(compiled, context);
+  const books = ['B0ZZZZZZZZ', 'B0YYYYYYYY', 'B0XXXXXXXX', 'B0AAAAAAAA', 'B0BBBBBBBB', 'B0CCCCCCCC', 'B0DDDDDDDD']
+    .map(asin => ({ asin, book_key: asin }));
+  const result = await context.exports.fetchBookRetailMetadata({ books, userId: 'viewer', adsProfileIds: ['CA', 'GB', 'DE', 'US'],
+    marketplaceCodes: { CA: 'CA', GB: 'GB', DE: 'DE', US: 'US' }, preferredMarketplaceCode: 'CA', priorityMarketplaceCodes: ['US'],
+    onProgress: rows => progress.push(rows),
+  });
+  assert.equal(calls[0].profile, 'US');
+  assert.equal(calls[0].asins[0], 'B0ZZZZZZZZ');
+  assert.equal(Object.keys(result.snapshots).length, books.length);
+  assert.equal(progress[0].B0ZZZZZZZZ.marketplaceCode, 'US');
+  assert.equal(progress[0].B0ZZZZZZZZ.reviewCount, 42);
+  assert.ok(calls.some(c => c.profile === 'CA'));
 });

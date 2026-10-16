@@ -1,5 +1,20 @@
 const REQUEST_TIMEOUT_MS = 15_000;
 
+/** Prioritize the first displayed editions and their active/selected markets.
+ * Other owned markets still run; never let profile-id order choose latency. */
+export function prioritizeBookRetailRequests<T extends { batch: string[]; marketplaceCode: string | null }>(
+  requests: T[], asins: readonly string[], activeMarkets: readonly string[] = [], preferredMarket = '',
+): T[] {
+  const country = (value: string) => value.trim().toUpperCase().replace(/^UK$/, 'GB');
+  const active = new Set(activeMarkets.map(country));
+  const preferred = country(preferredMarket);
+  const rank = new Map(asins.map((asin, index) => [asin, index]));
+  const marketRank = (market: string | null) => active.has(country(market ?? '')) ? 0
+    : preferred && country(market ?? '') === preferred ? 1 : 2;
+  return requests.sort((a, b) => (rank.get(a.batch[0]) ?? 0) - (rank.get(b.batch[0]) ?? 0)
+    || marketRank(a.marketplaceCode) - marketRank(b.marketplaceCode));
+}
+
 function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? Object.assign(new Error('Listing read cancelled'), { name: 'AbortError' });
 }

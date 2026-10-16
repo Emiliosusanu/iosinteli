@@ -55,3 +55,14 @@ test('explicit retry bypasses per-ASIN cache and access denial hides metadata', 
   h.query.error = { status: 403 };
   assert.equal(Object.keys(h.render().snapshots).length, 0);
 });
+
+test('fresh US progress is visible immediately while an old query response is still cached', async () => {
+  const h = harness(); h.query.isFetching = true;
+  h.query.data = { snapshots: { B0ABCDEFGH: { ...row, reviewCount: 20 } } };
+  h.render(); await h.start(new AbortController().signal);
+  h.options().onProgress({ B0ABCDEFGH: { ...row, reviewCount: 101 } });
+  assert.equal(h.render().snapshots.B0ABCDEFGH.reviewCount, 101);
+  h.query.isFetching = false;
+  h.query.data = { snapshots: { B0ABCDEFGH: { ...row, reviewCount: 102 } } };
+  assert.equal(h.render().snapshots.B0ABCDEFGH.reviewCount, 102);
+});

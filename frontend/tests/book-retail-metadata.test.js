@@ -147,3 +147,23 @@ test("same ASIN keeps marketplace review snapshots separate", () => {
   assert.deepEqual(editions.map(({ snapshot }) => [snapshot.marketplaceCode, snapshot.reviewCount]), [["CA", 13], ["US", 49]]);
   assert.match(snapshots.B0HFKCDPVG.coverCacheKey ?? "", /CA/);
 });
+
+test('a US-only sponsored book never displays Canadian stock in place of the US observation', () => {
+  const snapshots = indexProfileBookRetailSnapshots([
+    { asin: 'B0ABCDEFGH', marketplaceCode: 'CA', amazonReviewCount: 500, amazonRating: 4.9, amazonStockStatus: 'IN_STOCK' },
+    { asin: 'B0ABCDEFGH', marketplaceCode: 'US', amazonReviewCount: 50, amazonRating: 4.1, amazonStockStatus: 'OUT_OF_STOCK' },
+  ], ['B0ABCDEFGH'], 'CA');
+  const selected = primaryBookRetailEdition({ asin: 'B0ABCDEFGH', book_key: 'B0ABCDEFGH' }, snapshots, ['US']);
+  assert.equal(selected.snapshot.marketplaceCode, 'US');
+  assert.equal(selected.snapshot.stockStatus, 'OUT_OF_STOCK');
+  assert.equal(highestBookRetailReviewSnapshot(selected.snapshot, ['US']).reviewCount, 50);
+});
+test('missing active-market metadata stays unknown instead of borrowing foreign stock and reviews', () => {
+  const snapshots = indexProfileBookRetailSnapshots([
+    { asin: 'B0ABCDEFGH', marketplaceCode: 'CA', amazonReviewCount: 500, amazonStockStatus: 'IN_STOCK' },
+  ], ['B0ABCDEFGH'], 'CA');
+  const selected = primaryBookRetailEdition({ asin: 'B0ABCDEFGH', book_key: 'B0ABCDEFGH' }, snapshots, ['US']);
+  assert.equal(selected.snapshot.marketplaceCode, 'US');
+  assert.equal(selected.snapshot.stockStatus, null);
+  assert.equal(highestBookRetailReviewSnapshot(selected.snapshot, ['US']).reviewCount, null);
+});

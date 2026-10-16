@@ -1,3 +1,4 @@
+import { activeOverviewRows } from "@/src/lib/overviewWidgetEligibility";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -41,8 +42,8 @@ import {
   fetchHourlyMetrics,
   fetchPlacementMixRange,
   fetchSearchTerms,
-  fetchKeywords,
-  fetchAdGroups,
+  fetchOverviewActiveKeywords,
+  fetchOverviewActiveAdGroups,
   fetchKeywordDailyAggregate,
   fetchSearchTermDailyAggregate,
   type TopBookRow,
@@ -809,7 +810,7 @@ export default function OverviewScreen() {
   });
 
   const topCampaignsQ = useQuery({
-    queryKey: ["top-campaigns-range-v2", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
+    queryKey: ["top-campaigns-range-v2", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, adminFilterUserId ?? "self", "active-v3"],
     queryFn: () =>
       withQueryTimeout(
         fetchTopCampaignsRange({
@@ -818,10 +819,12 @@ export default function OverviewScreen() {
           end: dateRange.end,
           // Need a wide pool so ACoS → clicks → impressions → sync can fill 7 rows.
           limit: 80,
+          state: "enabled",
+          filterUserId: adminFilterUserId,
         }),
         TARGETING_QUERY_TIMEOUT_MS,
       ),
-    enabled: sellerSecondary,
+    enabled: sellerSecondary || adminSecondary,
     ...OVERVIEW_QUERY_CACHE,
     refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
     refetchIntervalInBackground: false,
@@ -1001,24 +1004,23 @@ export default function OverviewScreen() {
   });
 
   const bleedersQ = useQuery({
-    queryKey: ["bleeding-keywords", adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
-    queryFn: () => withQueryTimeout(fetchKeywords(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80, filterUserId: adminFilterUserId })),
-    enabled: sellerSecondary,
+    queryKey: ["bleeding-keywords", adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, "active-v2"],
+    queryFn: () => withQueryTimeout(fetchOverviewActiveKeywords(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80, filterUserId: adminFilterUserId })),
+    enabled: sellerSecondary || adminSecondary,
     ...OVERVIEW_QUERY_CACHE,
   });
 
   const adGroupsQ = useQuery({
-    queryKey: ["overview-ad-groups", adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
+    queryKey: ["overview-ad-groups", adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, "active-v2"],
     queryFn: () =>
       withQueryTimeout(
-        fetchAdGroups(adsWidgetProfileIds, undefined, {
+        fetchOverviewActiveAdGroups(adsWidgetProfileIds, {
           start: dateRange.start,
           end: dateRange.end,
           limit: 80,
-          enrichCounts: false,
         }),
       ),
-    enabled: sellerSecondary,
+    enabled: sellerSecondary || adminSecondary,
     ...OVERVIEW_QUERY_CACHE,
   });
 
@@ -1128,7 +1130,7 @@ export default function OverviewScreen() {
   // Keep paintable ads rows while royalties are still catching up — never blank both forever.
   const topCampaigns = periodLoading && !viewingAsAdmin
     ? []
-    : adminCampaignsQ.data ?? topCampaignsQ.data ?? [];
+    : activeOverviewRows(topCampaignsQ.data ?? [], "campaign");
   const topBooksRaw = periodLoading && !viewingAsAdmin
     ? []
     : adminTopBooks ?? topBooksQ.data ?? [];
@@ -1138,15 +1140,15 @@ export default function OverviewScreen() {
     if (activeBookKeysQ.isError || !activeBookKeysQ.data) return topBooksRaw;
     return filterTopBooksByRecentActivity(topBooksRaw, activeBookKeysQ.data);
   }, [topBooksRaw, viewingAsAdmin, activeBookKeysQ.isPending, activeBookKeysQ.isError, activeBookKeysQ.data]);
-  const bleeders = periodLoading && !viewingAsAdmin ? [] : adminBleeders ?? bleedersQ.data ?? [];
+  const bleeders = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(bleedersQ.data ?? [], "keyword");
   const loading = periodLoading;
   const campaignsPhase = metricsWaiting && !viewingAsAdmin
     ? "loading"
     : homeWidgetStatus({
-    isPending: viewingAsAdmin ? adminCampaignsQ.isPending : topCampaignsQ.isPending,
-    isError: viewingAsAdmin ? adminCampaignsQ.isError : topCampaignsQ.isError,
-    data: viewingAsAdmin ? adminCampaignsQ.data : topCampaignsQ.data,
-    error: viewingAsAdmin ? adminCampaignsQ.error : topCampaignsQ.error,
+    isPending: topCampaignsQ.isPending,
+    isError: topCampaignsQ.isError,
+    data: topCampaignsQ.data,
+    error: topCampaignsQ.error,
     isEmpty: topCampaigns.length === 0,
   });
   const booksPhase = (metricsWaiting || royaltiesWaiting) && !viewingAsAdmin
@@ -1480,7 +1482,7 @@ export default function OverviewScreen() {
   const monthlyBudgetForecastReady = budgetHistoryQ.isSuccess;
   const placementMix = periodLoading && !viewingAsAdmin ? [] : placementMixQ.data ?? [];
   const searchTerms = periodLoading && !viewingAsAdmin ? [] : searchTermsPulseQ.data ?? [];
-  const adGroups = periodLoading && !viewingAsAdmin ? [] : adGroupsQ.data ?? [];
+  const adGroups = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(adGroupsQ.data ?? [], "adGroup");
 
   const [blurBooks, setBlurBooks] = useState(false);
 
@@ -2502,7 +2504,7 @@ export default function OverviewScreen() {
                     <SwipeEmpty message="Loading campaigns…" t={t} />
                   ) : campaignsWidgetPhase === "timeout" || campaignsWidgetPhase === "offline" || campaignsWidgetPhase === "error" ? (
                     <TouchableOpacity
-                      onPress={() => void (viewingAsAdmin ? adminCampaignsQ.refetch() : topCampaignsQ.refetch())}
+                      onPress={() => void topCampaignsQ.refetch()}
                       accessibilityRole="button"
                     >
                       <SwipeEmpty message="Couldn't load campaigns. Tap to retry." t={t} />

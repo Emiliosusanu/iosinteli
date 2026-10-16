@@ -20,7 +20,9 @@ test("ad groups list is scoped, capped, and cannot spin pull-to-refresh forever"
   assert.match(screen, /sortedProfileIds\(selectedProfileIds\)/);
   assert.match(screen, /top \$\{AD_GROUPS_LIST_LIMIT\} by spend/);
   assert.match(home, /limit: 80/);
-  assert.match(home, /enrichCounts: false/);
+  assert.match(home, /fetchOverviewActiveAdGroups/);
+  const widgetQuery = queries.slice(queries.indexOf("export async function fetchOverviewActiveAdGroups"), queries.indexOf("// ---------- Keywords ----------"));
+  assert.doesNotMatch(widgetQuery, /enrichCounts|product_targets/);
 });
 
 test("ad group detail and add-target screens load one scoped group", () => {

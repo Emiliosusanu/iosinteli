@@ -11,6 +11,8 @@ const AD_QUERY_PREFIXES = [
   "campaigns-list-range-v2",
   "top-campaigns-range",
   "top-campaigns-range-v2",
+  "bleeding-keywords",
+  "overview-ad-groups",
   "campaign-detail",
   "campaign-placements",
   "campaign-metrics",
