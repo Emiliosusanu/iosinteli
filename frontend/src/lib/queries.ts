@@ -6048,9 +6048,16 @@ export async function fetchTopBooksRange(
       if (nestRows.length && activityDays <= 0) {
         nestBooksCatalogSeed = nestRows;
         opts.onCoreRows?.(nestRows);
+        // The server already calculated this exact financial scope. Union the
+        // Create/active-campaign shelf, but do not replay every KDP day and Ads
+        // metric page on the phone just to reconstruct the same money.
+        const shelf = await nestShelfCatalogRows();
+        return finalizeCatalogBooksList(nestRows, profileIds, kdpAccountIds, limit, shelf);
       }
     } catch (error) {
-      if (filterUserId) throw error;
+      // A catalog error after a valid server financial read must not start a
+      // second, unbounded reconstruction of those same financial rows.
+      if (filterUserId || nestBooksCatalogSeed.length) throw error;
       logBooksStage("nest_top_books", error);
     }
   }
