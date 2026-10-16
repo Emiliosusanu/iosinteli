@@ -55,6 +55,12 @@ test('server pending and completed-unknown rows survive indexing without inventi
   assert.equal(rows.B0ABCDEFGH.reviewCount, null);
   assert.equal(rows.B0ABCDEFGI.stockStatus, null);
 });
+test('only explicit stock/review observation dates are displayed, never the catalog refresh date', () => {
+  const rows = indexProfileBookRetailSnapshots([{ asin: 'B0ABCDEFGH', marketplaceCode: 'US', amazonReviewCount: 210, amazonStockStatus: 'IN_STOCK',
+    amazonMetaUpdatedAt: '2026-10-16T11:00:00Z', amazonStockCheckedAt: '2026-10-11T08:00:00Z', amazonReviewsCheckedAt: '2026-10-10T10:00:00Z' }], ['B0ABCDEFGH'], 'US');
+  assert.equal(rows.B0ABCDEFGH.checkedAt, '2026-10-11T08:00:00Z');
+  assert.equal(rows.B0ABCDEFGH.reviewsCheckedAt, '2026-10-10T10:00:00Z');
+});
 
 test('real retail query streams fast markets before a stalled one and reuses overlapping ASIN reads', async () => {
   const calls = [], progress = [];

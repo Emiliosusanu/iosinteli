@@ -16,6 +16,7 @@ export type BookRetailSnapshot = {
   marketplaceSnapshots?: BookRetailSnapshot[];
   /** Exact listing server refresh state, never the whole viewport's spinner. */
   retailPending?: boolean;
+  reviewsCheckedAt?: string | null;
 };
 
 export type BookRetailSourceRow = {
@@ -41,6 +42,8 @@ export type ProfileBookRetailRow = {
   amazonMetaUpdatedAt?: string | null;
   marketplaceCode?: string | null;
   amazonRetailPending?: boolean;
+  amazonStockCheckedAt?: string | null;
+  amazonReviewsCheckedAt?: string | null;
 };
 
 export type RetailBookIdentity = {
@@ -121,6 +124,10 @@ export function indexProfileBookRetailSnapshots(
     };
     if (!snapshot) continue;
     if (typeof row.amazonRetailPending === 'boolean') snapshot.retailPending = row.amazonRetailPending;
+    // Only explicit observation timestamps are suitable for last-checked UI;
+    // amazonMetaUpdatedAt remains a catalog/image timestamp.
+    if (row.amazonStockCheckedAt && Number.isFinite(Date.parse(row.amazonStockCheckedAt))) snapshot.checkedAt = row.amazonStockCheckedAt;
+    if (row.amazonReviewsCheckedAt && Number.isFinite(Date.parse(row.amazonReviewsCheckedAt))) snapshot.reviewsCheckedAt = row.amazonReviewsCheckedAt;
     const version = checkedTime(row.amazonMetaUpdatedAt ?? null);
     if (snapshot.coverUrl && Number.isFinite(version)) {
       snapshot.coverCacheKey = `${asin}:${market}:${version}:${snapshot.coverUrl}`;
@@ -220,7 +227,7 @@ export function highestBookRetailReviewSnapshot(
       && (!active.size || active.has(normalizeFlagCountryCode(row.marketplaceCode))));
   return eligible.sort((a, b) => (b.reviewCount ?? -1) - (a.reviewCount ?? -1)
     || Number(b === snapshot) - Number(a === snapshot)
-    || checkedTime(b.checkedAt) - checkedTime(a.checkedAt))[0] ?? {
+    || checkedTime(b.reviewsCheckedAt ?? b.checkedAt) - checkedTime(a.reviewsCheckedAt ?? a.checkedAt))[0] ?? {
       asin: snapshot.asin, rating: null, reviewCount: null, stockStatus: null, checkedAt: null,
       marketplaceCode: active.size === 1 ? [...active][0] ?? undefined : undefined,
     };

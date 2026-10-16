@@ -72,3 +72,10 @@ test('only the selected US listing controls its loading status', () => {
   assert.match(textOf(tree), /Loading stock…/);
   assert.doesNotMatch(textOf(tree), /400 reviews/);
 });
+test('review and stock observations display their actual separate dates', () => {
+  const tree = context.exports.BookRetailInfo({ edition: 'Kindle', snapshot: { ...snapshot.marketplaceSnapshots[0],
+    checkedAt: '2026-10-11T08:00:00Z', reviewsCheckedAt: '2026-10-10T10:00:00Z' }, compact: true, activeMarketplaceCodes: ['US'] });
+  assert.match(textOf(tree), /100 reviews\) · US · 2026-10-10/);
+  assert.match(textOf(tree), /In stock · US · 2026-10-11/);
+  assert.match(tree.props.accessibilityLabel, /reviews\) in US, checked 2026-10-10/);
+});
