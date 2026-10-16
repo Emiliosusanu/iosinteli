@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
+  FlatList,
   Text,
   StyleSheet,
   TouchableOpacity,
@@ -8,19 +9,18 @@ import {
   Animated,
   Platform,
 } from "react-native";
-import ReanimatedAnimated from "react-native-reanimated";
 import { AppScreen } from "@/src/components/ScreenAmbient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { markPerf } from "@/src/lib/perf";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { useRouter, usePathname } from "expo-router";
 import * as Haptics from "expo-haptics";
-import { BooksReadError, fetchBookRetailMetadata, fetchKdpRoyaltiesRange, fetchTopBooksRange, type TopBookRow } from "@/src/lib/queries";
+import { BooksReadError, fetchKdpRoyaltiesRange, fetchTopBooksRange, type TopBookRow } from "@/src/lib/queries";
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
-import { bookRetailWindow, canReadBookRetailMetadata, mergeScopedRetailCache } from "@/src/lib/bookRetailWindow";
-import { bookRetailAsins, bookRetailStockLabel, highestBookRetailReviewSnapshot, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { bookRetailWindow } from "@/src/lib/bookRetailWindow";
+import { bookRetailStockLabel, highestBookRetailReviewSnapshot, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import {
   formatBreakEvenAcos,
@@ -32,7 +32,7 @@ import { useTheme, acosTone, toneColor, useReduceMotion, dashboard } from "@/src
 import { formatCurrency, formatPercent, formatInt, parseDateOnly, toDateString } from "@/src/lib/format";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useKdpRoyaltySetupPrompt } from "@/src/hooks/useKdpRoyaltySetupPrompt";
-import { useScrollChromeCollapse } from "@/src/hooks/useScrollChromeCollapse";
+import { useBookRetailMetadata } from "@/src/hooks/useBookRetailMetadata";
 import { NET_ROYALTIES_LABEL, netRoyaltiesVoiceOver, resolveBookNet, bookNetIsKnown } from "@/src/lib/netRoyalties";
 import { buildBookColorMap, bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { TopBar } from "@/src/components/TopBar";
@@ -138,16 +138,9 @@ function bookRowKey(item: TopBookRow, index: number) {
 
 export default function ProductsScreen() {
   const t = useTheme();
-  const reduceMotion = useReduceMotion();
   const router = useRouter();
   const { profiles, selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource } = useApp();
   const { guestMode, user } = useAuth();
-  const {
-    onScroll: onBooksScroll,
-    chromeAnimatedStyle,
-    onChromeLayout,
-    scrollEventThrottle,
-  } = useScrollChromeCollapse({ reduceMotion });
   const yesterdayYmd = useMemo(() => {
     const today = parseDateOnly(toDateString(new Date()));
     today.setDate(today.getDate() - 1);
@@ -215,6 +208,11 @@ export default function ProductsScreen() {
     kdpQueryScope,
   ] as const;
 
+  const booksScope = JSON.stringify([user?.id, booksKey]);
+  const currentBooksScope = useRef(booksScope);
+  currentBooksScope.current = booksScope;
+  const [booksPreview, setBooksPreview] = useState<{ scope: string; rows: TopBookRow[] }>({ scope: '', rows: [] });
+
   const { data: booksData, isPending, isError, isRefetching, isFetching, refetch, error } = useQuery({
     queryKey: booksKey,
     queryFn: ({ signal }) => {
@@ -230,6 +228,11 @@ export default function ProductsScreen() {
           limit: 0,
           filterUserId: adminFilterUserId,
           activityDays: 0,
+          onCoreRows: rows => {
+            if (signal.aborted || currentBooksScope.current !== booksScope) return;
+            setBooksPreview(previous => previous.scope === booksScope && previous.rows.length
+              ? previous : { scope: booksScope, rows });
+          },
         }).then((rows) => {
           markPerf("books.query.end");
           return rows;
@@ -247,11 +250,11 @@ export default function ProductsScreen() {
     meta: financialQueryMeta(),
   });
 
-  const books = useMemo(() => booksData ?? [], [booksData]);
+  const books = useMemo(() => booksData ?? (booksPreview.scope === booksScope ? booksPreview.rows : []), [booksData, booksPreview, booksScope]);
 
   const overviewBooksWarm = queryClient.getQueryData(overviewBooksKey) as TopBookRow[] | undefined;
   const showBlockingSpinner =
-    booksListAwaitingRows({ isPending, isError, isFetching, data: booksData }) && !overviewBooksWarm;
+    booksListAwaitingRows({ isPending, isError, isFetching, data: booksData }) && !overviewBooksWarm && books.length === 0;
 
   const { data: periodRoyalties } = useQuery({
     queryKey: [FINANCIAL_QUERY_ROOTS.kdpRoyalties, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope],
@@ -333,32 +336,7 @@ export default function ProductsScreen() {
     setVisibleRetailKeys(previous => JSON.stringify(previous) === JSON.stringify(keys) ? previous : keys);
   }).current;
   const retailBooks = useMemo(() => bookRetailWindow(filtered, visibleRetailKeys), [filtered, visibleRetailKeys]);
-  const retailScope = JSON.stringify([user?.id, adminFilterUserId, [...retailProfileIds].sort()]);
-  const [retailCache, setRetailCache] = useState<{ scope: string; data: Record<string, BookRetailSnapshot> }>({ scope: '', data: {} });
-  const retailAsins = useMemo(() => bookRetailAsins(retailBooks), [retailBooks]);
-  const retailEnabled = canReadBookRetailMetadata({ userId: user?.id, filterUserId: adminFilterUserId,
-    isAdminViewer, profileIds: retailProfileIds, asins: retailAsins });
-  const retailQ = useQuery({
-    queryKey: ["book-retail-metadata", user?.id ?? "anonymous", adminFilterUserId ?? "self", retailProfileIds, retailAsins],
-    queryFn: () => fetchBookRetailMetadata({
-      books: retailBooks,
-      filterUserId: adminFilterUserId,
-      adsProfileIds: retailProfileIds,
-      marketplaceCodes: Object.fromEntries(profiles.flatMap((profile) => {
-        const code = String(profile.country_code ?? "").trim().toUpperCase();
-        return code ? [[profile.id, code], [profile.profile_id, code]] : [];
-      })),
-      preferredMarketplaceCode: profiles.find((profile) => selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id))?.country_code,
-    }),
-    enabled: retailEnabled,
-    staleTime: 5 * 60_000,
-    retry: false,
-  });
-  useEffect(() => {
-    if (!retailQ.data) return;
-    setRetailCache(previous => mergeScopedRetailCache(previous, retailScope, retailQ.data.snapshots));
-  }, [retailScope, retailQ.data]);
-  const retailData = retailCache.scope === retailScope ? retailCache.data : {};
+  const { query: retailQ, snapshots: retailData, refresh: refreshRetail } = useBookRetailMetadata(retailBooks, retailProfileIds, "book-retail-metadata");
 
   const applySort = useCallback(
     (next: Sort) => {
@@ -389,8 +367,7 @@ export default function ProductsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([refetch(), ...(retailEnabled ? [retailQ.refetch()] : [])]);
-    setRefreshing(false);
+    try { await Promise.all([refetch(), refreshRetail()]); } finally { setRefreshing(false); }
   };
 
   const hasLinkedKdp = selectedProfiles.some((p) => (p.kdp_account_count ?? 0) > 0);
@@ -437,14 +414,8 @@ export default function ProductsScreen() {
     );
   }
 
-  return (
-    <AppScreen>
-      {/* Soft collapse: stays mounted so profile/search return on scroll-up. */}
-      <ReanimatedAnimated.View
-        testID="books-scroll-chrome"
-        onLayout={onChromeLayout}
-        style={[{ overflow: "hidden", zIndex: 2 }, chromeAnimatedStyle]}
-      >
+  const listHeader = (
+    <View testID="books-scroll-chrome" style={{ marginBottom: t.layout.pagePad }}>
         <TopBar />
         <FilterChrome>
           <IOSSearchBar
@@ -468,54 +439,51 @@ export default function ProductsScreen() {
             <Text style={[t.typography.footnote, { color: t.colors.text_secondary, fontWeight: "600" }]}>
               {filtered.length === 1 ? "1 book" : `${filtered.length} books`}
               {search.trim() ? " matching" : " with royalties, ads, or campaigns"}
-              {isFetching && books.length > 0 ? " · updating" : ""}
+              {isFetching && books.length > 0 ? (booksData ? " · updating" : " loaded · loading catalog") : ""}
             </Text>
           ) : showSearchCount ? (
             <Text style={[t.typography.footnote, { color: t.colors.text_secondary, fontWeight: "600" }]}>
               0 books matching
             </Text>
           ) : null}
+          {isError && books.length > 0 ? (
+            <TouchableOpacity onPress={() => void refetch()} accessibilityRole="button" accessibilityLabel="Retry loading the book catalog">
+              <Text style={[t.typography.footnote, { color: t.colors.tone_warning }]}>Catalog update unavailable · Retry</Text>
+            </TouchableOpacity>
+          ) : null}
           {retailQ.isError || (retailQ.data?.failedRequests ?? 0) > 0 ? (
-            <TouchableOpacity onPress={() => void retailQ.refetch()} accessibilityRole="button" accessibilityLabel="Listing details unavailable. Retry">
+            <TouchableOpacity onPress={() => void refreshRetail()} accessibilityRole="button" accessibilityLabel="Listing details unavailable. Retry">
               <Text style={[t.typography.footnote, { color: t.colors.tone_warning }]}>{retailQ.isError ? 'Listing details unavailable' : 'Some listing details unavailable'} · Retry</Text>
             </TouchableOpacity>
           ) : null}
         </FilterChrome>
-      </ReanimatedAnimated.View>
+    </View>
+  );
 
-      {showBlockingSpinner ? (
-        <ScreenSpinner />
-      ) : isError && books.length === 0 ? (
-        <RetryState
-          title="Couldn't load books"
-          subtitle={
-            isHomeQueryTimeout(error)
-              ? "This is taking longer than usual. Pull to retry."
-              : error instanceof BooksReadError
-                ? "Something went wrong loading your books. Pull to retry."
-                : "Check your connection and try again."
-          }
-          onRetry={() => void refetch()}
-          retrying={isRefetching}
-        />
-      ) : (
-        <ReanimatedAnimated.FlatList
+  return (
+    <AppScreen>
+      <FlatList
           data={filtered}
           keyExtractor={bookRowKey}
-          contentContainerStyle={{ padding: t.layout.pagePad, paddingBottom: t.layout.tabClearance }}
+          contentContainerStyle={{ paddingBottom: t.layout.tabClearance, flexGrow: 1 }}
+          ListHeaderComponent={listHeader}
           initialNumToRender={16}
           maxToRenderPerBatch={20}
           windowSize={7}
           removeClippedSubviews={Platform.OS !== "ios"}
           onViewableItemsChanged={onRetailViewableItemsChanged}
-          onScroll={onBooksScroll}
-          scrollEventThrottle={scrollEventThrottle}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.colors.tone_primary} />
           }
           ItemSeparatorComponent={ItemSeparator}
           ListEmptyComponent={
-            <EmptyState
+            showBlockingSpinner ? <ScreenSpinner /> : isError && books.length === 0 ? (
+              <RetryState title="Couldn't load books" subtitle={isHomeQueryTimeout(error)
+                ? "This is taking longer than usual. Pull to retry."
+                : error instanceof BooksReadError ? "Something went wrong loading your books. Pull to retry."
+                : "Check your connection and try again."}
+                onRetry={() => void refetch()} retrying={isRefetching} />
+            ) : <EmptyState
               productIcon="books"
               title={empty.title}
               subtitle={empty.subtitle}
@@ -527,17 +495,19 @@ export default function ProductsScreen() {
             />
           }
           renderItem={({ item, index }) => (
-            <ProductCard
-              item={item}
-              retailEdition={primaryBookRetailEdition(item, retailData)}
-              currency={primaryCurrency}
-              color={bookColorMap.get(bookColorKeyFor(item)) ?? fallbackBookColor(bookColorKeyFor(item), index)}
-              marketplaceIndex={marketplaceIndex}
-              onOpen={openBook}
-            />
+            <View style={{ paddingHorizontal: t.layout.pagePad }}>
+              <ProductCard
+                item={item}
+                retailEdition={primaryBookRetailEdition(item, retailData)}
+                retailLoading={retailQ.isFetching}
+                currency={primaryCurrency}
+                color={bookColorMap.get(bookColorKeyFor(item)) ?? fallbackBookColor(bookColorKeyFor(item), index)}
+                marketplaceIndex={marketplaceIndex}
+                onOpen={openBook}
+              />
+            </View>
           )}
         />
-      )}
     </AppScreen>
   );
 }
@@ -550,6 +520,7 @@ function ItemSeparator() {
 const ProductCard = React.memo(function ProductCard({
   item,
   retailEdition,
+  retailLoading,
   currency,
   color,
   marketplaceIndex,
@@ -557,6 +528,7 @@ const ProductCard = React.memo(function ProductCard({
 }: {
   item: TopBookRow;
   retailEdition: { format: string; snapshot: BookRetailSnapshot } | null;
+  retailLoading: boolean;
   currency: string;
   color: string;
   marketplaceIndex: SponsoredMarketplaceIndex;
@@ -711,7 +683,7 @@ const ProductCard = React.memo(function ProductCard({
           </View>
 
           {retailEdition ? (
-            <BookRetailInfo edition={retailEdition.format} snapshot={retailEdition.snapshot} activeMarketplaceCodes={activeReviewMarkets} compact />
+            <BookRetailInfo edition={retailEdition.format} snapshot={retailEdition.snapshot} activeMarketplaceCodes={activeReviewMarkets} loading={retailLoading} compact />
           ) : null}
 
           {adsReady && item.acos > 0 ? (

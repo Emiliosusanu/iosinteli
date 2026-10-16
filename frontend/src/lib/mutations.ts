@@ -1314,7 +1314,7 @@ export type AmazonProfileBookPreview = {
 /** Nest GET /amazon/profiles/:id/books — real sponsored/KDP covers only. */
 export async function fetchAmazonProfileBooks(
   profileId: string,
-  opts?: { filterUserId?: string | null; asins?: string[] },
+  opts?: { filterUserId?: string | null; asins?: string[]; signal?: AbortSignal },
 ): Promise<AmazonProfileBookPreview[]> {
   const adsId = String(profileId || "").trim();
   if (!adsId) return [];
@@ -1342,7 +1342,7 @@ export async function fetchAmazonProfileBooks(
       amazonMetaUpdatedAt?: string | null;
       accountId?: string | null;
     }[];
-  }>(`/amazon/profiles/${encodeURIComponent(adsId)}/books${q}`, { method: "GET" }, "Couldn't load profile books.");
+  }>(`/amazon/profiles/${encodeURIComponent(adsId)}/books${q}`, { method: "GET", signal: opts?.signal }, "Couldn't load profile books.");
   const books: AmazonProfileBookPreview[] = [];
   for (const book of data.books ?? []) {
     const asin = String(book.asin || "").trim();

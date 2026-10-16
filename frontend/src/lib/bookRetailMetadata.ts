@@ -30,6 +30,7 @@ export type BookRetailSourceRow = {
 
 export type ProfileBookRetailRow = {
   asin: string;
+  accountId?: string | null;
   amazonRating?: number | null;
   amazonReviewCount?: number | null;
   amazonStockStatus?: string | null;

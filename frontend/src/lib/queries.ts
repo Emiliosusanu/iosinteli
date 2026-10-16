@@ -1,3 +1,4 @@
+import { BookRetailObservationCache } from "./bookRetailCache.ts";
 // Supabase data access layer for inteliads
 // All queries are filtered by selected profile IDs and date range when applicable.
 
@@ -94,7 +95,7 @@ import {
 import {
   bookRetailAsins,
   indexProfileBookRetailSnapshots,
-  type BookRetailSnapshot,
+  type ProfileBookRetailRow, type BookRetailSnapshot,
   type RetailBookIdentity,
 } from "./bookRetailMetadata";
 
@@ -5480,31 +5481,54 @@ export interface TopBookRow {
   created_at?: string | null;
 }
 
-/** Same authenticated profile-books API used by the web /amazon book preview. */
+const retailObservationCache = new BookRetailObservationCache<AmazonProfileBookPreview>();
+
+/** Same authenticated profile-books API used by web, with progressive reads. */
 export async function fetchBookRetailMetadata(opts: {
   books: readonly RetailBookIdentity[];
   adsProfileIds: string[];
+  userId?: string;
   filterUserId?: string | null;
   marketplaceCodes?: Readonly<Record<string, string>>;
   preferredMarketplaceCode?: string | null;
+  signal?: AbortSignal;
+  forceRefresh?: boolean;
+  onProgress?: (snapshots: Record<string, BookRetailSnapshot>) => void;
 }): Promise<{ snapshots: Record<string, BookRetailSnapshot>; failedRequests: number }> {
   const asins = bookRetailAsins(opts.books);
   const profileIds = [...new Set(opts.adsProfileIds.map((id) => String(id).trim()).filter(Boolean))];
   if (!asins.length || !profileIds.length) return { snapshots: {}, failedRequests: 0 };
-  // Keep profile requests bounded so the Books screen is not blocked by a burst
-  // of large profile-book responses. React Query renders the books independently.
-  const requests = profileIds.flatMap(id => chunkArray(asins, 20).map(batch => ({ id, batch })));
-  const { rows, failedRequests } = await readBookRetailRequests(requests, async ({ id, batch }) => {
-    const result = await fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId, asins: batch });
-    const marketplaceCode = String(opts.marketplaceCodes?.[id] ?? "").trim().toUpperCase() || null;
-    return result.map(row => ({ ...row, marketplaceCode }));
-  });
   const quarantineEntries = await loadShelfHealQuarantineEntries();
   const { isQuarantined } = await import("./kdp/shelfHeal.ts");
-  const safeRows = rows.filter((row) =>
-    !row.accountId || !isQuarantined(row.accountId, row.asin, quarantineEntries),
-  );
-  return { snapshots: indexProfileBookRetailSnapshots(safeRows, asins, opts.preferredMarketplaceCode ?? ""), failedRequests };
+  const allRows: ProfileBookRetailRow[] = [];
+  const snapshots = () => indexProfileBookRetailSnapshots(allRows, asins, opts.preferredMarketplaceCode ?? "");
+  const publish = (rows: readonly ProfileBookRetailRow[]) => {
+    if (opts.signal?.aborted) return;
+    const safeRows = rows.filter(row => !row.accountId || !isQuarantined(row.accountId, row.asin, quarantineEntries));
+    allRows.push(...safeRows);
+    if (safeRows.length) opts.onProgress?.(indexProfileBookRetailSnapshots(safeRows, asins, opts.preferredMarketplaceCode ?? ""));
+  };
+  const requests: Array<{ id: string; batch: string[]; scope: string | null; marketplaceCode: string | null }> = [];
+  for (const id of profileIds) {
+    const marketplaceCode = String(opts.marketplaceCodes?.[id] ?? "").trim().toUpperCase() || null;
+    const scope = opts.userId ? JSON.stringify([opts.userId, opts.filterUserId ?? null, id, marketplaceCode]) : null;
+    const cached = scope && !opts.forceRefresh ? retailObservationCache.read(scope, asins) : { rows: [], missing: asins };
+    publish(cached.rows.map(row => ({ ...row, marketplaceCode })));
+    // Scoped server reviews have three workers and a nine-second deadline.
+    // Six cold ASINs get at most two worker waves instead of starving a 20-row tail.
+    for (const batch of chunkArray(cached.missing, 6)) requests.push({ id, batch, scope, marketplaceCode });
+  }
+  // Start the same viewport slice across markets before moving to the next
+  // slice; one large profile cannot delay all other marketplace observations.
+  const batchRank = new Map(asins.map((asin, index) => [asin, index]));
+  requests.sort((a, b) => (batchRank.get(a.batch[0]) ?? 0) - (batchRank.get(b.batch[0]) ?? 0));
+  const { failedRequests } = await readBookRetailRequests(requests, async ({ id, batch, scope, marketplaceCode }, { signal }) => {
+    const result = await fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId, asins: batch, signal });
+    if (signal.aborted) throw signal.reason ?? Object.assign(new Error('Listing read cancelled'), { name: 'AbortError' });
+    if (scope) retailObservationCache.write(scope, batch, result);
+    return result.map(row => ({ ...row, marketplaceCode }));
+  }, { signal: opts.signal, onRows: publish });
+  return { snapshots: snapshots(), failedRequests };
 }
 
 /** Book keys (group_key / asin / sku) with KDP or Ads signal in the activity window. */
@@ -5977,6 +6001,7 @@ export async function fetchTopBooksRange(
       }
       if (nestRows.length && activityDays <= 0) {
         nestBooksCatalogSeed = nestRows;
+        opts.onCoreRows?.(nestRows);
       }
     } catch (error) {
       if (filterUserId) throw error;
@@ -6164,7 +6189,7 @@ export async function fetchTopBooksRange(
         const core = assembleLogicalBookRows(groups)
           .filter((row) => row.royalties !== 0 || row.orders > 0)
           .sort((a, b) => (b.royalties ?? Number.NEGATIVE_INFINITY) - (a.royalties ?? Number.NEGATIVE_INFINITY))
-          .slice(0, limit)
+          .slice(0, limit > 0 ? limit : undefined)
           .map((row) => finalizeBook(row, "pending"));
         if (core.length) opts.onCoreRows(core);
       }
