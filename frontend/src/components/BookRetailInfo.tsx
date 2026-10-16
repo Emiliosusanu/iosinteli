@@ -8,13 +8,15 @@ export function BookRetailInfo({
   edition,
   snapshot,
   compact = false,
+  activeMarketplaceCodes = [],
 }: {
   edition: string;
   snapshot: BookRetailSnapshot;
   compact?: boolean;
+  activeMarketplaceCodes?: readonly string[];
 }) {
   const t = useTheme();
-  const reviews = compact ? highestBookRetailReviewSnapshot(snapshot) : snapshot;
+  const reviews = compact ? highestBookRetailReviewSnapshot(snapshot, activeMarketplaceCodes) : snapshot;
   const reviewLabel = reviews.rating != null
     ? `${reviews.rating.toFixed(1)}${reviews.reviewCount != null ? ` (${reviews.reviewCount.toLocaleString()} reviews)` : ""}`
     : reviews.reviewCount != null
@@ -37,7 +39,7 @@ export function BookRetailInfo({
       testID={`book-retail-${snapshot.asin}`}
       style={{ gap: 4, paddingVertical: compact ? 5 : 9 }}
       accessibilityRole="text"
-      accessibilityLabel={`${edition} ${snapshot.asin}. ${reviewLabel ? `Amazon rating and reviews snapshot ${reviewLabel}${dateSuffix}.` : "Reviews unavailable."} ${stockLabel ? `Last reported stock ${stockLabel}${dateSuffix}.` : "Stock status unavailable."}`}
+      accessibilityLabel={`${edition} ${snapshot.asin}. ${reviewLabel ? `Amazon rating and reviews snapshot ${reviewLabel}${reviews.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}${reviews.checkedAt ? `, checked ${reviews.checkedAt.slice(0, 10)}` : ""}.` : "Reviews unavailable."} ${stockLabel ? `Last reported stock ${stockLabel}${snapshot.marketplaceCode ? ` in ${snapshot.marketplaceCode}` : ""}${dateSuffix}.` : "Stock status unavailable."}`}
     >
       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, fontWeight: "700" }]}>
         {edition} · {snapshot.asin}

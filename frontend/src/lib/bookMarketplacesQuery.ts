@@ -167,9 +167,8 @@ export function sponsoredMarketplaceIndexQueryKey(
   userScope: string,
   profileIds: readonly string[],
 ) {
-  // v3 adds the ownership-checked Nest path used by admin/customer view and
-  // invalidates old persisted empty indexes.
-  return ["sponsored-marketplace-index-v3", userScope, sortedProfileIds(profileIds)] as const;
+  // v4 adds active-campaign review markets while preserving paused flag coverage.
+  return ["sponsored-marketplace-index-v4", userScope, sortedProfileIds(profileIds)] as const;
 }
 
 /** Seller-scope index of which books are sponsored in more than one marketplace. */

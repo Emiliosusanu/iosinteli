@@ -43,6 +43,7 @@ export type MarketplaceCampaignBookRef = {
 
 export type SponsoredMarketplaceIndex = {
   countriesByKey: Map<string, Set<string>>;
+  activeCountriesByKey: Map<string, Set<string>>;
   keysByCampaignId: Map<string, Set<string>>;
 };
 
@@ -109,7 +110,7 @@ const COUNTRY_NAMES: Record<string, string> = {
 };
 
 export function emptySponsoredMarketplaceIndex(): SponsoredMarketplaceIndex {
-  return { countriesByKey: new Map(), keysByCampaignId: new Map() };
+  return { countriesByKey: new Map(), activeCountriesByKey: new Map(), keysByCampaignId: new Map() };
 }
 
 export function productAdsForVisibleCampaigns(
@@ -277,20 +278,29 @@ function countryByProfileId(profiles: readonly MarketplaceProfileRef[]): Map<str
   return map;
 }
 
+function isActiveCampaign(campaign: MarketplaceCampaignRef): boolean {
+  const state = String(campaign.state ?? "").trim().toLowerCase();
+  return state === "enabled" || state === "active";
+}
+
 export function buildSponsoredMarketplaceIndex(input: {
   profiles: readonly MarketplaceProfileRef[];
   campaigns?: readonly MarketplaceCampaignRef[];
   productAds?: readonly MarketplaceProductAdRef[];
 }): SponsoredMarketplaceIndex {
   const countriesByKey = new Map<string, Set<string>>();
+  const activeCountriesByKey = new Map<string, Set<string>>();
   const keysByCampaignId = new Map<string, Set<string>>();
   const countryOf = countryByProfileId(input.profiles);
+  const activeCampaigns = new Map((input.campaigns ?? []).filter(isActiveCampaign)
+    .map(campaign => [String(campaign.id ?? "").trim(), campaign]));
 
   for (const campaign of input.campaigns ?? []) {
     const country = countryOf.get(String(campaign.amazon_profile_id ?? "").trim()) ?? null;
     if (!country) continue;
     for (const key of bookFamilyKeys({ asin: campaign.book_asin, book_key: campaign.book_key })) {
       addCountryForKey(countriesByKey, key, country);
+      if (isActiveCampaign(campaign)) addCountryForKey(activeCountriesByKey, key, country);
     }
   }
 
@@ -300,6 +310,10 @@ export function buildSponsoredMarketplaceIndex(input: {
     const keys = bookFamilyKeys({ asin: ad.asin, sku: ad.sku });
     for (const key of keys) addCountryForKey(countriesByKey, key, country);
     const campaignId = String(ad.campaign_id ?? "").trim();
+    const campaign = activeCampaigns.get(campaignId);
+    if (campaign && countryOf.get(String(campaign.amazon_profile_id ?? "").trim()) === country) {
+      for (const key of keys) addCountryForKey(activeCountriesByKey, key, country);
+    }
     if (campaignId && keys.length) {
       let campaignKeys = keysByCampaignId.get(campaignId);
       if (!campaignKeys) {
@@ -310,7 +324,7 @@ export function buildSponsoredMarketplaceIndex(input: {
     }
   }
 
-  return { countriesByKey, keysByCampaignId };
+  return { countriesByKey, activeCountriesByKey, keysByCampaignId };
 }
 
 /**
@@ -324,8 +338,11 @@ export function buildSponsoredMarketplaceIndexFromCampaignBooks(input: {
   books: readonly MarketplaceCampaignBookRef[];
 }): SponsoredMarketplaceIndex {
   const countriesByKey = new Map<string, Set<string>>();
+  const activeCountriesByKey = new Map<string, Set<string>>();
   const keysByCampaignId = new Map<string, Set<string>>();
   const countryOf = countryByProfileId(input.profiles);
+  const activeCampaignIds = new Set(input.campaigns.filter(isActiveCampaign)
+    .map(campaign => String(campaign.id ?? "").trim()));
   const profileByCampaignId = new Map(
     input.campaigns
       .map((campaign) => [
@@ -344,6 +361,7 @@ export function buildSponsoredMarketplaceIndexFromCampaignBooks(input: {
       const country = countryOf.get(profileByCampaignId.get(campaignId) ?? "") ?? null;
       if (!country) continue;
       addCountryForKey(countriesByKey, asin, country);
+      if (activeCampaignIds.has(campaignId)) addCountryForKey(activeCountriesByKey, asin, country);
       let campaignKeys = keysByCampaignId.get(campaignId);
       if (!campaignKeys) {
         campaignKeys = new Set();
@@ -353,13 +371,14 @@ export function buildSponsoredMarketplaceIndexFromCampaignBooks(input: {
     }
   }
 
-  return { countriesByKey, keysByCampaignId };
+  return { countriesByKey, activeCountriesByKey, keysByCampaignId };
 }
 
 export function mergeSponsoredMarketplaceIndexes(
   ...indexes: Array<SponsoredMarketplaceIndex | null | undefined>
 ): SponsoredMarketplaceIndex {
   const countriesByKey = new Map<string, Set<string>>();
+  const activeCountriesByKey = new Map<string, Set<string>>();
   const keysByCampaignId = new Map<string, Set<string>>();
   for (const index of indexes) {
     if (!index) continue;
@@ -371,6 +390,9 @@ export function mergeSponsoredMarketplaceIndexes(
       }
       for (const country of countries) set.add(country);
     }
+    for (const [key, countries] of index.activeCountriesByKey ?? []) {
+      for (const country of countries) addCountryForKey(activeCountriesByKey, key, country);
+    }
     for (const [campaignId, keys] of index.keysByCampaignId) {
       let set = keysByCampaignId.get(campaignId);
       if (!set) {
@@ -380,7 +402,7 @@ export function mergeSponsoredMarketplaceIndexes(
       for (const key of keys) set.add(key);
     }
   }
-  return { countriesByKey, keysByCampaignId };
+  return { countriesByKey, activeCountriesByKey, keysByCampaignId };
 }
 
 function countriesForKeys(index: SponsoredMarketplaceIndex, keys: string[]): string[] {
@@ -404,6 +426,18 @@ export function countriesForSponsoredBook(
     index,
     bookFamilyKeys({ asin: book.asin, sku: book.sku, book_key: book.book_key }),
   );
+}
+
+/** Review priority uses active campaigns only, including a single market. */
+export function countriesForActiveSponsoredBook(
+  index: SponsoredMarketplaceIndex | null | undefined,
+  book: SponsoredBookRef,
+): string[] {
+  const countries = new Set<string>();
+  for (const key of bookFamilyKeys({ asin: book.asin, sku: book.sku, book_key: book.book_key })) {
+    for (const country of index?.activeCountriesByKey?.get(key) ?? []) countries.add(country);
+  }
+  return sortMarketplaceCountries(countries);
 }
 
 export function countriesForSponsoredCampaign(

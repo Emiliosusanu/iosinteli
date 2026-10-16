@@ -163,9 +163,11 @@ export default function ProductCampaignsScreen() {
     () => sortedProfileIds(booksMoneyProfileIds(profiles, detailProfileIds)),
     [profiles, detailProfileIds],
   );
+  // Retail observations cover this customer's owned marketplaces independently
+  // of financial view chips. Exact visible ASINs and bounded requests still apply.
   const retailProfileIds = useMemo(
-    () => sortedProfileIds(amazonAdsProfileIdsForSelection(profiles, moneyProfileIds)),
-    [profiles, moneyProfileIds],
+    () => sortedProfileIds(amazonAdsProfileIdsForSelection(profiles, profiles.map(profile => profile.id))),
+    [profiles],
   );
   const royaltyScope = useMemo(
     () => booksRoyaltyScopeForSelection(profiles, moneyProfileIds),
