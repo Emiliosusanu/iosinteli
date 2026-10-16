@@ -4,6 +4,7 @@ import { BookRetailObservationCache } from "./bookRetailCache.ts";
 
 import { supabase } from "./supabase";
 import { readBookRetailRequests, prioritizeBookRetailRequests } from "./bookRetailRequests";
+import { fetchAdminOverviewActiveAdGroups, fetchAdminOverviewActiveKeywords } from "./overviewAdminWidgets";
 import { parseNestError, rulesApiFetch, hasNestToken, nestApiJson } from "./rulesApi";
 import { fetchAmazonProfileBooks, fetchNestAmazonProfiles, type AmazonProfileBookPreview } from "./mutations";
 import {
@@ -2227,6 +2228,8 @@ async function fetchOverviewActiveGroupScope(profileIds: string[]): Promise<AdGr
 export async function fetchOverviewActiveKeywords(
   profileIds: string[], opts: { start: string; end: string; limit?: number; filterUserId?: string | null },
 ): Promise<Array<Keyword & ParentEntityState>> {
+  if (!profileIds.length) return [];
+  if (opts.filterUserId) return fetchAdminOverviewActiveKeywords(profileIds, { ...opts, filterUserId: opts.filterUserId });
   const groups = await fetchOverviewActiveGroupScope(profileIds);
   const groupById = new Map(groups.map(group => [group.id, group]));
   const batches = await mapPoolLimited(chunkArray(groups.map(group => group.id), 60), 3, ids =>
@@ -2236,8 +2239,10 @@ export async function fetchOverviewActiveKeywords(
 }
 
 export async function fetchOverviewActiveAdGroups(
-  profileIds: string[], opts: { start: string; end: string; limit?: number },
+  profileIds: string[], opts: { start: string; end: string; limit?: number; filterUserId?: string | null },
 ): Promise<Array<AdGroupEnriched & ParentEntityState>> {
+  if (!profileIds.length) return [];
+  if (opts.filterUserId) return fetchAdminOverviewActiveAdGroups(profileIds, { ...opts, filterUserId: opts.filterUserId });
   const groups = (await fetchOverviewActiveGroupScope(profileIds))
     .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0)).slice(0, opts.limit ?? 80);
   const totals = await fetchMetricTotalsByEntity("ad_group_metrics", "ad_group_id", groups.map(row => row.id), opts.start, opts.end);
