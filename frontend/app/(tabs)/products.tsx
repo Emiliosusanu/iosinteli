@@ -20,7 +20,7 @@ import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
 import { bookRetailWindow, canReadBookRetailMetadata, mergeScopedRetailCache } from "@/src/lib/bookRetailWindow";
-import { bookRetailAsins, bookRetailStockLabel, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { bookRetailAsins, bookRetailStockLabel, highestBookRetailReviewSnapshot, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import {
   formatBreakEvenAcos,
@@ -50,7 +50,7 @@ import {
 } from "@/src/lib/kdpRoyaltyScope";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import { loadBooksFilterMemory, saveBooksFilterMemory } from "@/src/lib/filterMemory";
-import { countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
+import { countriesForActiveSponsoredBook, countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 import { bookDisplayTitle } from "@/src/lib/bookPresentation";
@@ -161,9 +161,11 @@ export default function ProductsScreen() {
     () => sortedProfileIds(booksMoneyProfileIds(profiles, selectedProfileIds)),
     [profiles, selectedProfileIds],
   );
+  // Retail observations cover this customer's owned marketplaces independently
+  // of financial view chips. Exact visible ASINs and bounded requests still apply.
   const retailProfileIds = useMemo(
-    () => sortedProfileIds(amazonAdsProfileIdsForSelection(profiles, moneyProfileIds)),
-    [profiles, moneyProfileIds],
+    () => sortedProfileIds(amazonAdsProfileIdsForSelection(profiles, profiles.map(profile => profile.id))),
+    [profiles],
   );
   const royaltyScope = useMemo(
     () => booksRoyaltyScopeForSelection(profiles, moneyProfileIds),
@@ -564,6 +566,8 @@ const ProductCard = React.memo(function ProductCard({
   const reduceMotion = useReduceMotion();
   const scale = useRef(new Animated.Value(1)).current;
 
+  const activeReviewMarkets = countriesForActiveSponsoredBook(marketplaceIndex, item);
+  const reviews = retailEdition ? highestBookRetailReviewSnapshot(retailEdition.snapshot, activeReviewMarkets) : null;
   const adsReady = bookAdsReady(item);
   const kdpAvailable = bookKdpAvailable(item);
   const kdpReady = bookKdpReady(item);
@@ -599,7 +603,7 @@ const ProductCard = React.memo(function ProductCard({
               marketplaceFlagsA11y(countriesForSponsoredBook(marketplaceIndex, item)),
             ),
             retailEdition
-              ? `${retailEdition.format} ${retailEdition.snapshot.asin}. Rating ${retailEdition.snapshot.rating?.toFixed(1) ?? "unavailable"}; reviews ${retailEdition.snapshot.reviewCount ?? "unavailable"}. Stock ${retailEdition.snapshot.stockStatus ? bookRetailStockLabel(retailEdition.snapshot.stockStatus) : "unknown"}${retailEdition.snapshot.checkedAt ? `, last checked ${retailEdition.snapshot.checkedAt.slice(0, 10)}` : ""}.`
+              ? `${retailEdition.format} ${retailEdition.snapshot.asin}. Rating ${reviews?.rating?.toFixed(1) ?? "unavailable"}; reviews ${reviews?.reviewCount ?? "unavailable"}${reviews?.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}. Stock ${retailEdition.snapshot.stockStatus ? bookRetailStockLabel(retailEdition.snapshot.stockStatus) : "unknown"}${retailEdition.snapshot.marketplaceCode ? ` in ${retailEdition.snapshot.marketplaceCode}` : ""}${retailEdition.snapshot.checkedAt ? `, last checked ${retailEdition.snapshot.checkedAt.slice(0, 10)}` : ""}.`
               : null,
           ].filter(Boolean).join(" ")}
           accessibilityHint="Opens book details"
@@ -707,7 +711,7 @@ const ProductCard = React.memo(function ProductCard({
           </View>
 
           {retailEdition ? (
-            <BookRetailInfo edition={retailEdition.format} snapshot={retailEdition.snapshot} compact />
+            <BookRetailInfo edition={retailEdition.format} snapshot={retailEdition.snapshot} activeMarketplaceCodes={activeReviewMarkets} compact />
           ) : null}
 
           {adsReady && item.acos > 0 ? (

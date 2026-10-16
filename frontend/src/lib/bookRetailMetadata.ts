@@ -1,3 +1,4 @@
+import { normalizeFlagCountryCode } from "./accountsUi.ts";
 import { formatsFromWorkKey } from "./bookCampaignFormats.ts";
 import { identityAsinsForBookRow } from "./booksListActivity.ts";
 
@@ -186,16 +187,24 @@ export function primaryBookRetailEdition(
     .map(({ snapshot }) => snapshot) } };
 }
 
-/** Highest review count among current marketplace observations of this exact
- * edition. Keep its rating and market together; never sum reviews or copy
- * them from a sibling edition. Missing counts remain missing, not zero.
+/** Reviews follow the book's active campaign markets; otherwise use all observed
+ * markets. Rating and count stay on the same exact edition and observation.
+ * Stock selection is independent. Missing active-market data is never borrowed.
  */
-export function highestBookRetailReviewSnapshot(snapshot: BookRetailSnapshot): BookRetailSnapshot {
-  return [snapshot, ...(snapshot.marketplaceSnapshots ?? [])]
-    .filter(row => row.asin === snapshot.asin)
-    .sort((a, b) => (b.reviewCount ?? -1) - (a.reviewCount ?? -1)
-      || Number(b === snapshot) - Number(a === snapshot)
-      || checkedTime(b.checkedAt) - checkedTime(a.checkedAt))[0] ?? snapshot;
+export function highestBookRetailReviewSnapshot(
+  snapshot: BookRetailSnapshot,
+  activeMarketplaceCodes: readonly string[] = [],
+): BookRetailSnapshot {
+  const active = new Set(activeMarketplaceCodes.map(normalizeFlagCountryCode).filter(Boolean));
+  const eligible = [snapshot, ...(snapshot.marketplaceSnapshots ?? [])]
+    .filter(row => row.asin === snapshot.asin
+      && (!active.size || active.has(normalizeFlagCountryCode(row.marketplaceCode))));
+  return eligible.sort((a, b) => (b.reviewCount ?? -1) - (a.reviewCount ?? -1)
+    || Number(b === snapshot) - Number(a === snapshot)
+    || checkedTime(b.checkedAt) - checkedTime(a.checkedAt))[0] ?? {
+      asin: snapshot.asin, rating: null, reviewCount: null, stockStatus: null, checkedAt: null,
+      marketplaceCode: active.size === 1 ? [...active][0] ?? undefined : undefined,
+    };
 }
 
 export function bookRetailStockTone(value: string | null): "good" | "danger" | "neutral" {
