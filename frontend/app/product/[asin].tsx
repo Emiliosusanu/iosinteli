@@ -257,11 +257,11 @@ export default function ProductCampaignsScreen() {
     retry: false,
   });
   const retailEditions = useMemo(
-    () => retailQ.isSuccess ? bookRetailEditions(retailBooks[0], retailQ.data) : [],
+    () => retailQ.data ? bookRetailEditions(retailBooks[0], retailQ.data.snapshots) : [],
     [retailBooks, retailQ.data, retailQ.isSuccess],
   );
   const primaryRetailEdition = useMemo(
-    () => retailQ.isSuccess ? primaryBookRetailEdition(retailBooks[0], retailQ.data) : null,
+    () => retailQ.data ? primaryBookRetailEdition(retailBooks[0], retailQ.data.snapshots) : null,
     [retailBooks, retailQ.data, retailQ.isSuccess],
   );
   useEffect(() => {
@@ -389,7 +389,7 @@ export default function ProductCampaignsScreen() {
             formatOptions={formatOptions}
             retailEditions={retailEditions}
             coverCacheKey={primaryRetailEdition?.snapshot.coverCacheKey}
-            retailLoadState={retailQ.isError ? "error" : retailQ.isPending ? "loading" : "ready"}
+            retailLoadState={retailQ.isError || (retailQ.data?.failedRequests ?? 0) > 0 ? "error" : retailQ.isPending ? "loading" : "ready"}
             onCreateCampaign={openCreateCampaign}
           />
         }
