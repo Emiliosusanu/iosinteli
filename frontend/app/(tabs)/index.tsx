@@ -1018,6 +1018,7 @@ export default function OverviewScreen() {
           start: dateRange.start,
           end: dateRange.end,
           limit: 80,
+          filterUserId: adminFilterUserId,
         }),
       ),
     enabled: sellerSecondary || adminSecondary,
