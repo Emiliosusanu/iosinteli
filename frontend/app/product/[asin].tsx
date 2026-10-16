@@ -147,7 +147,7 @@ export default function ProductCampaignsScreen() {
   const { user } = useAuth();
   const t = useTheme();
   const router = useRouter();
-  const { profiles, selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
+  const { profiles, profilesLoading, profilesFetching, profilesError, refetchProfiles, selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const params = useLocalSearchParams<{ asin: string; title?: string; imageUrl?: string }>();
   const asin = paramValue(params.asin).toUpperCase();
@@ -317,6 +317,13 @@ export default function ProductCampaignsScreen() {
     ]);
     setRefreshing(false);
   };
+
+  if (moneyProfileIds.length === 0 && (profilesLoading || profilesFetching)) {
+    return <SubScreen title="Book" showDateRange><ScreenSpinner /></SubScreen>;
+  }
+  if (moneyProfileIds.length === 0 && profilesError) {
+    return <SubScreen title="Book" showDateRange><RetryState title="Couldn't load profiles" subtitle="Retry to load your linked Amazon Ads profiles." onRetry={refetchProfiles} retrying={profilesFetching} /></SubScreen>;
+  }
 
   if (moneyProfileIds.length === 0) {
     return (
