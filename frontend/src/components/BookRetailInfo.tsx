@@ -1,16 +1,11 @@
 import React from "react";
 import { Text, View } from "react-native";
 import { SFSymbol } from "./ios/Native";
-import { bookRetailStockLabel, bookRetailStockTone, highestBookRetailReviewSnapshot, type BookRetailSnapshot } from "../lib/bookRetailMetadata";
+import { bookRetailStockLabel, bookRetailStockTone, primaryBookRetailEdition, type BookRetailSnapshot } from "../lib/bookRetailMetadata";
 import { useTheme } from "../lib/theme";
 
-export function BookRetailInfo({
-  edition,
-  snapshot,
-  compact = false,
-  loading = false,
-  activeMarketplaceCodes = [],
-}: {
+/** One compact, exact-market summary in both Books and its detail screen. */
+export function BookRetailInfo({ edition, snapshot, compact = false, loading = false, activeMarketplaceCodes = [] }: {
   edition: string;
   snapshot: BookRetailSnapshot;
   compact?: boolean;
@@ -18,57 +13,44 @@ export function BookRetailInfo({
   activeMarketplaceCodes?: readonly string[];
 }) {
   const t = useTheme();
-  const reviews = compact ? highestBookRetailReviewSnapshot(snapshot, activeMarketplaceCodes) : snapshot;
-  const reviewsLoading = reviews.retailPending ?? loading;
-  const stockLoading = snapshot.retailPending ?? loading;
-  const reviewLabel = reviews.rating != null
-    ? `${reviews.rating.toFixed(1)}${reviews.reviewCount != null ? ` (${reviews.reviewCount.toLocaleString()} reviews)` : ""}`
-    : reviews.reviewCount != null
-      ? `${reviews.reviewCount.toLocaleString()} reviews`
-      : null;
-  const stockTone = bookRetailStockTone(snapshot.stockStatus);
-  const stockLabel = snapshot.stockStatus ? bookRetailStockLabel(snapshot.stockStatus) : null;
-  const stockColor = stockTone === "good"
-    ? t.colors.tone_good
-    : stockTone === "danger"
-      ? t.colors.tone_danger
-      : t.colors.text_secondary;
-  const checkedDate = snapshot.checkedAt && Number.isFinite(Date.parse(snapshot.checkedAt))
-    ? snapshot.checkedAt.slice(0, 10)
-    : null;
-  const dateSuffix = checkedDate ? `, checked ${checkedDate}` : "";
-  const reviewsAt = reviews.reviewsCheckedAt ?? reviews.checkedAt;
-  const reviewsDate = reviewsAt && Number.isFinite(Date.parse(reviewsAt)) ? reviewsAt.slice(0, 10) : null;
-
+  const listing = primaryBookRetailEdition({ asin: snapshot.asin, book_key: snapshot.asin },
+    { [snapshot.asin]: snapshot }, activeMarketplaceCodes.length ? activeMarketplaceCodes : snapshot.marketplaceCode ? [snapshot.marketplaceCode] : [])?.snapshot ?? snapshot;
+  const pending = listing.retailPending ?? loading;
+  const market = listing.marketplaceCode;
+  const stockTone = bookRetailStockTone(listing.stockStatus);
+  const stockLabel = listing.stockStatus ? bookRetailStockLabel(listing.stockStatus) : null;
+  const color = stockTone === "good" ? t.colors.tone_good : stockTone === "danger" ? t.colors.tone_danger : t.colors.text_secondary;
+  const stockDate = listing.checkedAt && Number.isFinite(Date.parse(listing.checkedAt)) ? listing.checkedAt.slice(0, 10) : null;
+  const reviewsAt = listing.reviewsCheckedAt ?? listing.checkedAt;
+  const reviewDate = reviewsAt && Number.isFinite(Date.parse(reviewsAt)) ? reviewsAt.slice(0, 10) : null;
+  const reviewsLabel = listing.rating != null || listing.reviewCount != null
+    ? `${listing.rating != null ? `${listing.rating.toFixed(1)} stars, ` : ""}${listing.reviewCount != null ? `${listing.reviewCount.toLocaleString()} reviews` : "review count unavailable"}`
+    : pending ? "Reviews updating" : "Reviews unavailable";
   return (
-    <View
-      testID={`book-retail-${snapshot.asin}`}
-      style={{ gap: 4, paddingVertical: compact ? 5 : 9 }}
-      accessibilityRole="text"
-      accessibilityLabel={`${edition} ${snapshot.asin}. ${reviewLabel ? `Amazon rating and reviews snapshot ${reviewLabel}${reviews.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}${reviewsDate ? `, checked ${reviewsDate}` : ""}.` : reviewsLoading ? "Reviews loading." : "Reviews unavailable."} ${stockLabel ? `Last reported stock ${stockLabel}${snapshot.marketplaceCode ? ` in ${snapshot.marketplaceCode}` : ""}${dateSuffix}.` : stockLoading ? "Stock status loading." : "Stock status unavailable."}`}
-    >
-      <Text style={[t.typography.caption1, { color: t.colors.text_secondary, fontWeight: "700" }]}>
-        {edition} · {snapshot.asin}
-      </Text>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
-        {reviewLabel ? (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-            <SFSymbol name="star.fill" size={12} color="#F5A623" />
-            <Text style={[t.typography.caption1, { color: t.colors.text_primary }]}>
-              {reviewLabel}{reviews.marketplaceCode ? ` · ${reviews.marketplaceCode}` : ""}{reviewsDate ? ` · ${reviewsDate}` : ""}
-            </Text>
-          </View>
-        ) : (
-          <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{reviewsLoading ? "Loading reviews…" : "Reviews unavailable"}</Text>
-        )}
-        {stockLabel ? (
-          <Text style={[t.typography.caption1, { color: stockColor }]}>
-            {stockLabel}{snapshot.marketplaceCode ? ` · ${snapshot.marketplaceCode}` : ""}{checkedDate ? ` · ${checkedDate}` : ""}
+    <View testID={`book-retail-${snapshot.asin}`} style={{ gap: 5, paddingVertical: compact ? 4 : 8 }} accessibilityRole="text"
+      accessibilityLabel={`${edition} ${listing.asin}. ${reviewsLabel}${market ? ` in ${market}` : ""}${reviewDate ? `, checked ${reviewDate}` : ""}. ${stockLabel ? `Stock ${stockLabel}` : pending ? "Stock updating" : "Stock unavailable"}${market ? ` in ${market}` : ""}${stockDate ? `, checked ${stockDate}` : ""}.`}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 10, rowGap: 5 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }} accessible={false}>
+          {listing.rating != null ? (
+            <View style={{ flexDirection: "row", gap: 1 }}>
+              {Array.from({ length: 5 }, (_, index) => <SFSymbol key={index}
+                name={listing.rating! >= index + 0.75 ? "star.fill" : listing.rating! >= index + 0.25 ? "star.leadinghalf.filled" : "star"}
+                size={12} color="#F5A623" />)}
+            </View>
+          ) : listing.reviewCount != null ? <SFSymbol name="star" size={12} color="#F5A623" /> : null}
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary, fontVariant: ["tabular-nums"] }]}>
+            {listing.reviewCount != null ? listing.reviewCount.toLocaleString() : listing.rating != null ? listing.rating.toFixed(1) : "Reviews —"}
           </Text>
-        ) : (
-          <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{stockLoading ? "Loading stock…" : "Stock unknown"}</Text>
-        )}
+        </View>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 7, paddingHorizontal: 6, paddingVertical: 2,
+          backgroundColor: stockLabel && stockTone !== "neutral" ? `${color}12` : "transparent" }} accessible={false}>
+          {stockLabel ? <SFSymbol name={stockTone === "good" ? "checkmark.circle.fill" : stockTone === "danger" ? "exclamationmark.circle.fill" : "clock"} size={10} color={color} /> : null}
+          <Text style={[t.typography.caption2, { color }]}>{stockLabel ?? "Stock —"}</Text>
+        </View>
       </View>
+      {!compact ? <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>
+        {[market, `${edition} · ${listing.asin}`, reviewDate ? `Reviews ${reviewDate}` : null, stockDate ? `Stock ${stockDate}` : null].filter(Boolean).join(" · ")}
+      </Text> : null}
     </View>
   );
 }

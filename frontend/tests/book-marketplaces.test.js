@@ -182,3 +182,8 @@ test("campaign and book screens render marketplace flags", () => {
   assert.match(productsUi, /BookMarketplaceFlags|useSponsoredMarketplaceIndex/);
   assert.match(overviewRows, /BookMarketplaceFlags|marketplaceFlags|countriesForSponsoredBook/);
 });
+
+test('book flags may show one verified campaign market like web Books',()=>{
+ const index=buildSponsoredMarketplaceIndex({profiles:[{id:'us',profile_id:'us',country_code:'US'}],campaigns:[{id:'c1',amazon_profile_id:'us',state:'enabled',book_asin:'B0ABCDEFGH'}]});
+ assert.deepEqual(countriesForSponsoredBook(index,{asin:'B0ABCDEFGH'},true),['US']);
+});

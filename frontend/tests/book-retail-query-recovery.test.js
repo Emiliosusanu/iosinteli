@@ -140,3 +140,16 @@ test('actual retail API query starts US active-market requests first and preserv
   assert.equal(progress[0].B0ZZZZZZZZ.reviewCount, 42);
   assert.ok(calls.some(c => c.profile === 'CA'));
 });
+
+test('primary-market plan reads only each book main market, not all 17 marketplaces', async () => {
+ const calls=[];
+ const context={exports:{},require:()=>({isQuarantined:()=>false}),bookRetailAsins,readBookRetailRequests,prioritizeBookRetailRequests,indexProfileBookRetailSnapshots,
+ retailObservationCache:new BookRetailObservationCache(),chunkArray:(xs,n)=>Array.from({length:Math.ceil(xs.length/n)},(_,i)=>xs.slice(i*n,(i+1)*n)),
+ fetchAmazonProfileBooks:async(profile,opts)=>{calls.push({profile,asins:opts.asins});return opts.asins.map(asin=>({asin,amazonReviewCount:profile==='US'?51:900,amazonStockStatus:'IN_STOCK'}));},loadShelfHealQuarantineEntries:async()=>[]};
+ vm.runInNewContext(compiled,context);
+ const asins=['B0ABCDEFGH','1803014466'],markets=['US','CA','GB','DE','FR','IT','ES','NL','AU','IN','JP','MX','BR','PL','SE','BE','IE'];
+ const result=await context.exports.fetchBookRetailMetadata({books:asins.map(asin=>({asin,book_key:asin})),adsProfileIds:markets,marketplaceCodes:Object.fromEntries(markets.map(x=>[x,x])),
+ primaryMarketplaceByAsin:{[asins[0]]:'US',[asins[1]]:'GB'}});
+ assert.equal(calls.length,2);assert.equal(calls.find(c=>c.profile==='US').asins.join(','),asins[0]);assert.equal(calls.find(c=>c.profile==='GB').asins.join(','),asins[1]);
+ assert.equal(result.snapshots[asins[0]].marketplaceCode,'US');assert.equal(result.snapshots[asins[0]].reviewCount,51);
+});

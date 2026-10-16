@@ -20,7 +20,7 @@ import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
 import { bookRetailWindow } from "@/src/lib/bookRetailWindow";
-import { bookRetailStockLabel, highestBookRetailReviewSnapshot, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { bookRetailAsins, bookRetailStockLabel, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import {
   formatBreakEvenAcos,
@@ -50,7 +50,7 @@ import {
 } from "@/src/lib/kdpRoyaltyScope";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import { loadBooksFilterMemory, saveBooksFilterMemory } from "@/src/lib/filterMemory";
-import { countriesForActiveSponsoredBook, countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
+import { countriesForActiveSponsoredBook, primarySponsoredBookMarketplace, countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 import { bookDisplayTitle } from "@/src/lib/bookPresentation";
@@ -338,7 +338,11 @@ export default function ProductsScreen() {
   const retailBooks = useMemo(() => bookRetailWindow(filtered, visibleRetailKeys), [filtered, visibleRetailKeys]);
   const priorityRetailMarkets = useMemo(() => [...new Set(retailBooks.flatMap(book =>
     countriesForActiveSponsoredBook(marketplaceIndex, book)))].sort(), [retailBooks, marketplaceIndex]);
-  const { query: retailQ, snapshots: retailData, refresh: refreshRetail } = useBookRetailMetadata(retailBooks, retailProfileIds, "book-retail-metadata", priorityRetailMarkets);
+  const primaryMarketByAsin = useMemo(() => Object.fromEntries(retailBooks.flatMap(book => {
+    const market = primarySponsoredBookMarketplace(marketplaceIndex, book, profiles.flatMap(p => p.country_code ? [p.country_code] : []));
+    return market ? bookRetailAsins([book]).map(asin => [asin, market]) : [];
+  })), [retailBooks, marketplaceIndex, profiles]);
+  const { query: retailQ, snapshots: retailData, refresh: refreshRetail } = useBookRetailMetadata(retailBooks, retailProfileIds, "book-retail-metadata", priorityRetailMarkets, primaryMarketByAsin);
 
   const applySort = useCallback(
     (next: Sort) => {
@@ -500,7 +504,7 @@ export default function ProductsScreen() {
             <View style={{ paddingHorizontal: t.layout.pagePad }}>
               <ProductCard
                 item={item}
-                retailEdition={primaryBookRetailEdition(item, retailData, countriesForActiveSponsoredBook(marketplaceIndex, item))}
+                retailEdition={primaryBookRetailEdition(item, retailData, primaryMarketByAsin[item.asin] ? [primaryMarketByAsin[item.asin]] : countriesForActiveSponsoredBook(marketplaceIndex, item))}
                 retailLoading={retailQ.isFetching}
                 currency={primaryCurrency}
                 color={bookColorMap.get(bookColorKeyFor(item)) ?? fallbackBookColor(bookColorKeyFor(item), index)}
@@ -541,7 +545,7 @@ const ProductCard = React.memo(function ProductCard({
   const scale = useRef(new Animated.Value(1)).current;
 
   const activeReviewMarkets = countriesForActiveSponsoredBook(marketplaceIndex, item);
-  const reviews = retailEdition ? highestBookRetailReviewSnapshot(retailEdition.snapshot, activeReviewMarkets) : null;
+  const reviews = retailEdition?.snapshot;
   const adsReady = bookAdsReady(item);
   const kdpAvailable = bookKdpAvailable(item);
   const kdpReady = bookKdpReady(item);
@@ -625,6 +629,9 @@ const ProductCard = React.memo(function ProductCard({
                   style={t.typography.headline}
                 />
               </View>
+              {retailEdition ? (
+                <BookRetailInfo edition={retailEdition.format} snapshot={retailEdition.snapshot} activeMarketplaceCodes={activeReviewMarkets} loading={retailLoading} compact />
+              ) : null}
               <View
                 accessible={false}
                 importantForAccessibility="no"
@@ -684,9 +691,6 @@ const ProductCard = React.memo(function ProductCard({
             </View>
           </View>
 
-          {retailEdition ? (
-            <BookRetailInfo edition={retailEdition.format} snapshot={retailEdition.snapshot} activeMarketplaceCodes={activeReviewMarkets} loading={retailLoading} compact />
-          ) : null}
 
           {adsReady && item.acos > 0 ? (
             <View style={styles.breakEven} accessible={false} importantForAccessibility="no">

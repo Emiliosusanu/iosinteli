@@ -5533,6 +5533,7 @@ export async function fetchBookRetailMetadata(opts: {
   marketplaceCodes?: Readonly<Record<string, string>>;
   preferredMarketplaceCode?: string | null;
   priorityMarketplaceCodes?: readonly string[];
+  primaryMarketplaceByAsin?: Readonly<Record<string, string>>;
   signal?: AbortSignal;
   forceRefresh?: boolean;
   onProgress?: (snapshots: Record<string, BookRetailSnapshot>) => void;
@@ -5552,9 +5553,13 @@ export async function fetchBookRetailMetadata(opts: {
   };
   const requests: Array<{ id: string; batch: string[]; scope: string | null; marketplaceCode: string | null }> = [];
   for (const id of profileIds) {
-    const marketplaceCode = String(opts.marketplaceCodes?.[id] ?? "").trim().toUpperCase() || null;
+    const marketplaceCode = String(opts.marketplaceCodes?.[id] ?? "").trim().toUpperCase().replace(/^UK$/, "GB") || null;
+    // Do not walk every marketplace for a card that displays one market.
+    const requestedAsins = asins.filter(asin => !opts.primaryMarketplaceByAsin?.[asin]
+      || opts.primaryMarketplaceByAsin[asin] === marketplaceCode);
+    if (!requestedAsins.length) continue;
     const scope = opts.userId ? JSON.stringify([opts.userId, opts.filterUserId ?? null, id, marketplaceCode]) : null;
-    const cached = scope && !opts.forceRefresh ? retailObservationCache.read(scope, asins) : { rows: [], missing: asins };
+    const cached = scope && !opts.forceRefresh ? retailObservationCache.read(scope, requestedAsins) : { rows: [], missing: requestedAsins };
     publish(cached.rows.map(row => ({ ...row, marketplaceCode })));
     // Scoped server reviews have three workers and a nine-second deadline.
     // Six cold ASINs get at most two worker waves instead of starving a 20-row tail.

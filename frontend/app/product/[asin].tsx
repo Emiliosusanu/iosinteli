@@ -10,7 +10,7 @@ import {
 } from "react-native";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
-import { bookRetailEditions, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { bookRetailAsins, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -75,6 +75,7 @@ import {
 import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialReadVersion";
 import {
   countriesForSponsoredBook,
+  primarySponsoredBookMarketplace,
   marketplaceFlagsA11y,
   type SponsoredBookRef,
   type SponsoredMarketplaceIndex,
@@ -238,15 +239,17 @@ export default function ProductCampaignsScreen() {
 
   const book = useMemo(() => matchBook(booksQ.data ?? [], asin), [booksQ.data, asin]);
   const retailBooks = useMemo(() => book ? [book] : [{ book_key: asin, asin }], [book, asin]);
-  const { query: retailQ, snapshots: retailData, refresh: refreshRetail, enabled: retailEnabled } = useBookRetailMetadata(retailBooks, retailProfileIds, "book-retail-metadata-detail");
-  const retailEditions = useMemo(
-    () => Object.keys(retailData).length ? bookRetailEditions(retailBooks[0], retailData) : [],
-    [retailBooks, retailData],
-  );
+  const primaryRetailMarket = primarySponsoredBookMarketplace(marketplaceIndex, retailBooks[0], profiles.flatMap(p => p.country_code ? [p.country_code] : []));
+  const primaryMarketByAsin = useMemo(() => primaryRetailMarket
+    ? Object.fromEntries(bookRetailAsins(retailBooks).map(asin => [asin, primaryRetailMarket])) : {}, [retailBooks, primaryRetailMarket]);
+  const { query: retailQ, snapshots: retailData, refresh: refreshRetail, enabled: retailEnabled } = useBookRetailMetadata(
+    retailBooks, retailProfileIds, "book-retail-metadata-detail", primaryRetailMarket ? [primaryRetailMarket] : [], primaryMarketByAsin);
   const primaryRetailEdition = useMemo(
-    () => Object.keys(retailData).length ? primaryBookRetailEdition(retailBooks[0], retailData) : null,
-    [retailBooks, retailData],
+    () => primaryBookRetailEdition(retailBooks[0], retailData, primaryRetailMarket ? [primaryRetailMarket] : []),
+    [retailBooks, retailData, primaryRetailMarket],
   );
+  // Same single listing as the Books card, never one row per marketplace.
+  const retailEditions = primaryRetailEdition ? [primaryRetailEdition] : [];
   useEffect(() => {
     markPerf("book_detail.mount");
   }, []);
@@ -642,7 +645,7 @@ function BookHeader({
         {retailEditions.length > 0 || retailLoadState === "error" ? (
           <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: t.colors.separator, paddingTop: 8 }}>
             <Text style={[t.typography.caption1, { color: t.colors.text_secondary, fontWeight: "700" }]}>
-              Amazon listing snapshots
+              Amazon listing
             </Text>
             {retailLoadState === "error" ? (
               <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 5 }]}>
