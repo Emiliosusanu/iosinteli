@@ -9,7 +9,6 @@ import {
   emptySponsoredMarketplaceIndex,
   buildSponsoredMarketplaceIndex,
   buildSponsoredMarketplaceIndexFromCampaignBooks,
-  mergeSponsoredMarketplaceIndexes,
   productAdsForVisibleCampaigns,
   type MarketplaceCampaignRef,
   type MarketplaceProductAdRef,
@@ -47,9 +46,9 @@ async function fetchPages<T>(
     if (error) throw error;
     const pageRows = data ?? [];
     rows.push(...pageRows);
-    if (pageRows.length < PAGE_SIZE) break;
+    if (pageRows.length < PAGE_SIZE) return rows;
   }
-  return rows;
+  throw new Error("Campaign marketplace index incomplete; use server read");
 }
 
 async function fetchDirectSponsoredMarketplaceIndex(
@@ -139,28 +138,27 @@ export async function fetchSponsoredMarketplaceIndex(
   if (!profileIds.length) return emptySponsoredMarketplaceIndex();
 
   const today = new Date().toISOString().slice(0, 10);
-  const attempts: Array<Promise<SponsoredMarketplaceIndex>> = [];
-  // Direct Supabase reads preserve enabled + paused coverage for the signed-in
-  // seller. Admin customer-view is intentionally served by Nest because RLS
-  // belongs to the customer, not the viewing admin.
-  if (!opts?.filterUserId) attempts.push(fetchDirectSponsoredMarketplaceIndex(profiles));
-  attempts.push(
-    fetchServerSponsoredMarketplaceIndex(profiles, {
+  // A complete RLS campaign/ASIN index already has the exact flags and active
+  // states. Do not hold it behind an additional per-profile metrics traversal.
+  // Empty RLS reads still need the server path (e.g. Nest-only sessions).
+  let direct: SponsoredMarketplaceIndex | undefined;
+  let directError: unknown;
+  if (!opts?.filterUserId) {
+    try {
+      direct = await fetchDirectSponsoredMarketplaceIndex(profiles);
+      if (direct.countriesByKey.size) return direct;
+    } catch (error) { directError = error; }
+  }
+  try {
+    return await fetchServerSponsoredMarketplaceIndex(profiles, {
       start: opts?.start || today,
       end: opts?.end || today,
       filterUserId: opts?.filterUserId,
-    }),
-  );
-
-  const settled = await Promise.allSettled(attempts);
-  const indexes = settled
-    .filter((result): result is PromiseFulfilledResult<SponsoredMarketplaceIndex> => result.status === "fulfilled")
-    .map((result) => result.value);
-  if (!indexes.length) {
-    const failure = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    throw failure?.reason ?? new Error("Couldn't load sponsored marketplaces.");
+    });
+  } catch (error) {
+    if (direct) return direct;
+    throw directError ?? error;
   }
-  return mergeSponsoredMarketplaceIndexes(...indexes);
 }
 
 export function sponsoredMarketplaceIndexQueryKey(
