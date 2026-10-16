@@ -1,7 +1,7 @@
 // Nest dashboard reads — same filterUserId path as the web User dashboard.
 // Admin JWTs cannot see another user's rows in Supabase RLS.
 
-import { nestApiJson } from "./rulesApi";
+import { NestApiError, nestApiJson } from "./rulesApi";
 import type { Campaign, CampaignMetric, Keyword, MetricsTotals, ProductTarget, SearchTerm } from "./types";
 import type { BookCampaignRow, KdpRoyaltyRange, TopBookRow, TopCampaignRow } from "./queries";
 import type { MobileHomeSnapshot } from "./mobileHomeSnapshot";
@@ -87,6 +87,7 @@ export type KdpIncomeSpendNetPoint = {
 
 export type KdpBreakEvenBookRow = {
   asin: string;
+  formatAsins?: string[];
   title: string | null;
   coverUrl: string | null;
   adSpend: number;
@@ -381,6 +382,7 @@ export function bootstrapToTopBooks(boot: DashboardBootstrapResponse | undefined
     return {
       book_key: raw.asin,
       asin: raw.asin,
+      format_asins: raw.formatAsins,
       sku: null,
       title: raw.title,
       image_url: raw.coverUrl ?? raw.cover_url ?? null,
@@ -818,7 +820,7 @@ export async function fetchNestTopBooks(params: {
   profileIds: string[];
   limit?: number;
 }): Promise<TopBookRow[]> {
-  const data = await nestApiJson<{ data?: KdpBreakEvenBookRow[] }>(
+  const data = await nestApiJson<{ data?: KdpBreakEvenBookRow[]; unavailable?: boolean }>(
     `/dashboard/kdp-break-even-by-book${qs({
       startDate: params.startDate,
       endDate: params.endDate,
@@ -828,6 +830,7 @@ export async function fetchNestTopBooks(params: {
     { method: "GET" },
     "Couldn't load books.",
   );
+  if (data.unavailable) throw new NestApiError("Book financial data is temporarily unavailable.", 503);
   const rows = bootstrapToTopBooks({ topBooks: { data: data.data ?? [] } } as DashboardBootstrapResponse);
   return params.limit ? rows.slice(0, params.limit) : rows;
 }
