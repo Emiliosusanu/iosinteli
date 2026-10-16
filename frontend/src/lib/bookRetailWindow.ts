@@ -1,4 +1,4 @@
-import type { BookRetailSnapshot } from "./bookRetailMetadata.ts";
+import { mergeBookRetailObservation, type BookRetailSnapshot } from "./bookRetailMetadata.ts";
 
 type Book = { book_key: string; asin: string; sku?: string | null };
 const key = (row: Book) => row.book_key || row.asin || row.sku || "";
@@ -29,7 +29,8 @@ export function mergeScopedRetailCache(
     for (const row of [prior, ...(prior.marketplaceSnapshots ?? []), snapshot, ...(snapshot.marketplaceSnapshots ?? [])]) {
       if (row.asin !== asin) continue;
       const market = row.marketplaceCode ?? "";
-      markets.set(market, { ...row, marketplaceSnapshots: undefined });
+      const priorMarket = markets.get(market);
+      markets.set(market, priorMarket ? { ...mergeBookRetailObservation(priorMarket, row), retailPending: row.retailPending } : { ...row, marketplaceSnapshots: undefined });
     }
     const primary = markets.get(snapshot.marketplaceCode ?? "")!;
     data[asin] = { ...primary, marketplaceSnapshots: [...markets.values()].filter(row => row !== primary) };
