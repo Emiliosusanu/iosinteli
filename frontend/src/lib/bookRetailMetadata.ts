@@ -1,3 +1,4 @@
+import { sortMarketplaceCountries } from "./bookMarketplaces.ts";
 import { normalizeFlagCountryCode } from "./accountsUi.ts";
 import { formatsFromWorkKey } from "./bookCampaignFormats.ts";
 import { identityAsinsForBookRow } from "./booksListActivity.ts";
@@ -182,7 +183,8 @@ export function primaryBookRetailEdition(
   activeMarketplaceCodes: readonly string[] = [],
 ): { format: string; snapshot: BookRetailSnapshot } | null {
   const editions = bookRetailEditions(book, byAsin);
-  const active = new Set(activeMarketplaceCodes.map(normalizeFlagCountryCode).filter(Boolean));
+  const mainMarket = sortMarketplaceCountries(activeMarketplaceCodes)[0];
+  const active = new Set<string | null>(mainMarket ? [mainMarket] : []);
   const year = (value: string | undefined) => Math.max(0, ...(value?.match(/\b20\d{2}\b/g) ?? []).map(Number));
   const stockRank = (value: string | null) => {
     const tone = bookRetailStockTone(value);
@@ -235,7 +237,7 @@ export function highestBookRetailReviewSnapshot(
 
 export function bookRetailStockTone(value: string | null): "good" | "danger" | "neutral" {
   const status = String(value ?? "").trim().toLowerCase().replace(/[_-]+/g, " ");
-  if (/^(in stock|instock|available)$/.test(status)) return "good";
+  if (/^(in stock|in stock scarce|instock|available)$/.test(status)) return "good";
   if (/^(out of stock|outofstock|not in stock|currently unavailable|unavailable)$/.test(status)) return "danger";
   return "neutral";
 }
@@ -243,6 +245,10 @@ export function bookRetailStockTone(value: string | null): "good" | "danger" | "
 export function bookRetailStockLabel(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/[_-]+/g, " ");
   if (/^(in stock|instock)$/.test(normalized)) return "In stock";
+  if (normalized === "in stock scarce") return "Limited stock";
+  if (normalized === "preorder") return "Pre-order";
+  if (normalized === "leadtime") return "Ships later";
+  if (normalized === "available date") return "Available later";
   if (/^(out of stock|outofstock)$/.test(normalized)) return "Out of stock";
   if (normalized === "currently unavailable") return "Currently unavailable";
   return value.trim();

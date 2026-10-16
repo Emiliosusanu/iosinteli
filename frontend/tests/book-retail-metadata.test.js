@@ -167,3 +167,13 @@ test('missing active-market metadata stays unknown instead of borrowing foreign 
   assert.equal(selected.snapshot.stockStatus, null);
   assert.equal(highestBookRetailReviewSnapshot(selected.snapshot, ['US']).reviewCount, null);
 });
+
+test('primary market stays US with multiple active markets even if CA has more reviews or better stock', () => {
+ const asin='B0ABCDEFGH';
+ const indexed=indexProfileBookRetailSnapshots([
+  {asin,marketplaceCode:'CA',amazonReviewCount:999,amazonRating:4.9,amazonStockStatus:'IN_STOCK'},
+  {asin,marketplaceCode:'US',amazonReviewCount:51,amazonRating:4.2,amazonStockStatus:'OUT_OF_STOCK'},
+ ],[asin],'CA');
+ const selected=primaryBookRetailEdition({asin,book_key:asin},indexed,['CA','US']);
+ assert.equal(selected.snapshot.marketplaceCode,'US');assert.equal(selected.snapshot.reviewCount,51);assert.equal(selected.snapshot.stockStatus,'OUT_OF_STOCK');
+});

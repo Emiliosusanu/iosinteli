@@ -405,19 +405,20 @@ export function mergeSponsoredMarketplaceIndexes(
   return { countriesByKey, activeCountriesByKey, keysByCampaignId };
 }
 
-function countriesForKeys(index: SponsoredMarketplaceIndex, keys: string[]): string[] {
+function countriesForKeys(index: SponsoredMarketplaceIndex, keys: string[], includeSingle = false): string[] {
   const found = new Set<string>();
   for (const key of keys) {
     const set = index.countriesByKey.get(key);
     if (!set) continue;
     for (const country of set) found.add(country);
   }
-  return multiMarketplaceCountries(found);
+  return includeSingle ? sortMarketplaceCountries(found) : multiMarketplaceCountries(found);
 }
 
 export function countriesForSponsoredBook(
   index: SponsoredMarketplaceIndex | null | undefined,
   book: SponsoredBookRef,
+  includeSingle = false,
 ): string[] {
   if (!index) return [];
   // Multi-market flags must resolve only via exact ASIN / book_key / SKU
@@ -425,6 +426,7 @@ export function countriesForSponsoredBook(
   return countriesForKeys(
     index,
     bookFamilyKeys({ asin: book.asin, sku: book.sku, book_key: book.book_key }),
+    includeSingle,
   );
 }
 
@@ -449,4 +451,17 @@ export function countriesForSponsoredCampaign(
   const campaignId = String(campaign.id ?? "").trim();
   for (const key of index.keysByCampaignId.get(campaignId) ?? []) keys.add(key);
   return countriesForKeys(index, [...keys]);
+}
+
+/** One primary retail market, independent of review counts and stock outcomes.
+ * US leads when sponsored there; no campaign means the owned profile fallback.
+ */
+export function primarySponsoredBookMarketplace(
+  index: SponsoredMarketplaceIndex | null | undefined,
+  book: SponsoredBookRef,
+  availableMarketplaceCodes: readonly string[] = [],
+): string | undefined {
+  return countriesForActiveSponsoredBook(index, book)[0]
+    ?? countriesForSponsoredBook(index, book, true)[0]
+    ?? sortMarketplaceCountries(availableMarketplaceCodes)[0];
 }
