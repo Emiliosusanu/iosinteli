@@ -3,7 +3,7 @@ import { BookRetailObservationCache } from "./bookRetailCache.ts";
 // All queries are filtered by selected profile IDs and date range when applicable.
 
 import { supabase } from "./supabase";
-import { readBookRetailRequests } from "./bookRetailRequests";
+import { readBookRetailRequests, prioritizeBookRetailRequests } from "./bookRetailRequests";
 import { parseNestError, rulesApiFetch, hasNestToken, nestApiJson } from "./rulesApi";
 import { fetchAmazonProfileBooks, fetchNestAmazonProfiles, type AmazonProfileBookPreview } from "./mutations";
 import {
@@ -2208,6 +2208,42 @@ export async function fetchAdGroups(
       is_auto: isAuto,
     };
   });
+}
+
+/** Active parent scope is resolved BEFORE a widget's top-N cap. Paused
+ * campaigns cannot crowd active ad groups/keywords out of the result pool. */
+async function fetchOverviewActiveGroupScope(profileIds: string[]): Promise<AdGroup[]> {
+  if (!profileIds.length) return [];
+  const campaigns = await fetchAllPages<{ id: string; state: string | null }>((from, to) =>
+    supabase.from("campaigns").select("id,state").in("amazon_profile_id", profileIds)
+      .in("state", ["enabled", "active", "ENABLED", "ACTIVE"]).order("id", { ascending: true }).range(from, to));
+  const chunks = chunkArray(campaigns.map(row => row.id), 100);
+  const batches = await mapPoolLimited(chunks, 3, ids => fetchAllPages<AdGroup>((from, to) =>
+    supabase.from("ad_groups").select("*").in("amazon_profile_id", profileIds).in("campaign_id", ids)
+      .in("state", ["enabled", "active", "ENABLED", "ACTIVE"]).order("id", { ascending: true }).range(from, to)));
+  return batches.flat();
+}
+
+export async function fetchOverviewActiveKeywords(
+  profileIds: string[], opts: { start: string; end: string; limit?: number; filterUserId?: string | null },
+): Promise<Array<Keyword & ParentEntityState>> {
+  const groups = await fetchOverviewActiveGroupScope(profileIds);
+  const groupById = new Map(groups.map(group => [group.id, group]));
+  const batches = await mapPoolLimited(chunkArray(groups.map(group => group.id), 60), 3, ids =>
+    fetchKeywords(profileIds, { ...opts, adGroupIds: ids, status: "enabled", limit: opts.limit ?? 80 }));
+  return batches.flat().filter(row => groupById.get(row.ad_group_id ?? "")?.campaign_id === row.campaign_id)
+    .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0)).slice(0, opts.limit ?? 80);
+}
+
+export async function fetchOverviewActiveAdGroups(
+  profileIds: string[], opts: { start: string; end: string; limit?: number },
+): Promise<Array<AdGroupEnriched & ParentEntityState>> {
+  const groups = (await fetchOverviewActiveGroupScope(profileIds))
+    .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0)).slice(0, opts.limit ?? 80);
+  const totals = await fetchMetricTotalsByEntity("ad_group_metrics", "ad_group_id", groups.map(row => row.id), opts.start, opts.end);
+  return groups.map(group => ({ ...applyMetricTotals(group, totals.get(group.id) ?? emptyTotals()),
+    campaign_state: "enabled", keyword_count: 0, product_target_count: 0, auto_target_count: 0,
+    is_auto: String(group.targeting_type ?? "").toLowerCase() === "auto" }));
 }
 
 // ---------- Keywords ----------
@@ -5491,11 +5527,12 @@ export async function fetchBookRetailMetadata(opts: {
   filterUserId?: string | null;
   marketplaceCodes?: Readonly<Record<string, string>>;
   preferredMarketplaceCode?: string | null;
+  priorityMarketplaceCodes?: readonly string[];
   signal?: AbortSignal;
   forceRefresh?: boolean;
   onProgress?: (snapshots: Record<string, BookRetailSnapshot>) => void;
 }): Promise<{ snapshots: Record<string, BookRetailSnapshot>; failedRequests: number }> {
-  const asins = bookRetailAsins(opts.books);
+  const asins = [...new Set(opts.books.flatMap(book => bookRetailAsins([book])))];
   const profileIds = [...new Set(opts.adsProfileIds.map((id) => String(id).trim()).filter(Boolean))];
   if (!asins.length || !profileIds.length) return { snapshots: {}, failedRequests: 0 };
   const quarantineEntries = await loadShelfHealQuarantineEntries();
@@ -5520,8 +5557,7 @@ export async function fetchBookRetailMetadata(opts: {
   }
   // Start the same viewport slice across markets before moving to the next
   // slice; one large profile cannot delay all other marketplace observations.
-  const batchRank = new Map(asins.map((asin, index) => [asin, index]));
-  requests.sort((a, b) => (batchRank.get(a.batch[0]) ?? 0) - (batchRank.get(b.batch[0]) ?? 0));
+  prioritizeBookRetailRequests(requests, asins, opts.priorityMarketplaceCodes, opts.preferredMarketplaceCode ?? '');
   const { failedRequests } = await readBookRetailRequests(requests, async ({ id, batch, scope, marketplaceCode }, { signal }) => {
     const result = await fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId, asins: batch, signal });
     if (signal.aborted) throw signal.reason ?? Object.assign(new Error('Listing read cancelled'), { name: 'AbortError' });

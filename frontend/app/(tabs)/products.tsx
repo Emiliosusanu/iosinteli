@@ -336,7 +336,9 @@ export default function ProductsScreen() {
     setVisibleRetailKeys(previous => JSON.stringify(previous) === JSON.stringify(keys) ? previous : keys);
   }).current;
   const retailBooks = useMemo(() => bookRetailWindow(filtered, visibleRetailKeys), [filtered, visibleRetailKeys]);
-  const { query: retailQ, snapshots: retailData, refresh: refreshRetail } = useBookRetailMetadata(retailBooks, retailProfileIds, "book-retail-metadata");
+  const priorityRetailMarkets = useMemo(() => [...new Set(retailBooks.flatMap(book =>
+    countriesForActiveSponsoredBook(marketplaceIndex, book)))].sort(), [retailBooks, marketplaceIndex]);
+  const { query: retailQ, snapshots: retailData, refresh: refreshRetail } = useBookRetailMetadata(retailBooks, retailProfileIds, "book-retail-metadata", priorityRetailMarkets);
 
   const applySort = useCallback(
     (next: Sort) => {
@@ -498,7 +500,7 @@ export default function ProductsScreen() {
             <View style={{ paddingHorizontal: t.layout.pagePad }}>
               <ProductCard
                 item={item}
-                retailEdition={primaryBookRetailEdition(item, retailData)}
+                retailEdition={primaryBookRetailEdition(item, retailData, countriesForActiveSponsoredBook(marketplaceIndex, item))}
                 retailLoading={retailQ.isFetching}
                 currency={primaryCurrency}
                 color={bookColorMap.get(bookColorKeyFor(item)) ?? fallbackBookColor(bookColorKeyFor(item), index)}

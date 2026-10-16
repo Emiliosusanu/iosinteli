@@ -164,8 +164,10 @@ export function bookRetailEditions(
 export function primaryBookRetailEdition(
   book: RetailBookIdentity,
   byAsin: Readonly<Record<string, BookRetailSnapshot>>,
+  activeMarketplaceCodes: readonly string[] = [],
 ): { format: string; snapshot: BookRetailSnapshot } | null {
   const editions = bookRetailEditions(book, byAsin);
+  const active = new Set(activeMarketplaceCodes.map(normalizeFlagCountryCode).filter(Boolean));
   const year = (value: string | undefined) => Math.max(0, ...(value?.match(/\b20\d{2}\b/g) ?? []).map(Number));
   const stockRank = (value: string | null) => {
     const tone = bookRetailStockTone(value);
@@ -173,6 +175,8 @@ export function primaryBookRetailEdition(
   };
   const formatRank = (format: string) => format === "Paperback" ? 2 : format === "Hardcover" ? 1 : 0;
   const primary = [...editions].sort((a, b) =>
+    Number(active.has(normalizeFlagCountryCode(b.snapshot.marketplaceCode))) -
+      Number(active.has(normalizeFlagCountryCode(a.snapshot.marketplaceCode))) ||
     stockRank(b.snapshot.stockStatus) - stockRank(a.snapshot.stockStatus) ||
     year(b.snapshot.title) - year(a.snapshot.title) ||
     Number(b.snapshot.asin === asinKey(book.asin)) - Number(a.snapshot.asin === asinKey(book.asin)) ||
@@ -183,7 +187,11 @@ export function primaryBookRetailEdition(
     snapshot.rating != null || snapshot.reviewCount != null || snapshot.stockStatus != null || snapshot.coverUrl != null,
   ) ?? editions[0] ?? null;
   if (!primary) return null;
-  return { ...primary, snapshot: { ...primary.snapshot, marketplaceSnapshots: editions
+  const snapshot = active.size && !active.has(normalizeFlagCountryCode(primary.snapshot.marketplaceCode))
+    ? { ...primary.snapshot, rating: null, reviewCount: null, stockStatus: null, checkedAt: null,
+      marketplaceCode: active.size === 1 ? [...active][0] ?? undefined : undefined }
+    : primary.snapshot;
+  return { ...primary, snapshot: { ...snapshot, marketplaceSnapshots: editions
     .filter(({ snapshot }) => snapshot.asin === primary.snapshot.asin && snapshot.marketplaceCode !== primary.snapshot.marketplaceCode)
     .map(({ snapshot }) => snapshot) } };
 }
