@@ -354,7 +354,7 @@ export default function ProductsScreen() {
   });
   useEffect(() => {
     if (!retailQ.data) return;
-    setRetailCache(previous => mergeScopedRetailCache(previous, retailScope, retailQ.data));
+    setRetailCache(previous => mergeScopedRetailCache(previous, retailScope, retailQ.data.snapshots));
   }, [retailScope, retailQ.data]);
   const retailData = retailCache.scope === retailScope ? retailCache.data : {};
 
@@ -473,9 +473,9 @@ export default function ProductsScreen() {
               0 books matching
             </Text>
           ) : null}
-          {retailQ.isError ? (
+          {retailQ.isError || (retailQ.data?.failedRequests ?? 0) > 0 ? (
             <TouchableOpacity onPress={() => void retailQ.refetch()} accessibilityRole="button" accessibilityLabel="Listing details unavailable. Retry">
-              <Text style={[t.typography.footnote, { color: t.colors.tone_warning }]}>Listing details unavailable · Retry</Text>
+              <Text style={[t.typography.footnote, { color: t.colors.tone_warning }]}>{retailQ.isError ? 'Listing details unavailable' : 'Some listing details unavailable'} · Retry</Text>
             </TouchableOpacity>
           ) : null}
         </FilterChrome>

@@ -2,6 +2,7 @@
 // All queries are filtered by selected profile IDs and date range when applicable.
 
 import { supabase } from "./supabase";
+import { readBookRetailRequests } from "./bookRetailRequests";
 import { parseNestError, rulesApiFetch, hasNestToken, nestApiJson } from "./rulesApi";
 import { fetchAmazonProfileBooks, fetchNestAmazonProfiles, type AmazonProfileBookPreview } from "./mutations";
 import {
@@ -5486,29 +5487,24 @@ export async function fetchBookRetailMetadata(opts: {
   filterUserId?: string | null;
   marketplaceCodes?: Readonly<Record<string, string>>;
   preferredMarketplaceCode?: string | null;
-}): Promise<Record<string, BookRetailSnapshot>> {
+}): Promise<{ snapshots: Record<string, BookRetailSnapshot>; failedRequests: number }> {
   const asins = bookRetailAsins(opts.books);
   const profileIds = [...new Set(opts.adsProfileIds.map((id) => String(id).trim()).filter(Boolean))];
-  if (!asins.length || !profileIds.length) return {};
-  const rows: Array<AmazonProfileBookPreview> = [];
+  if (!asins.length || !profileIds.length) return { snapshots: {}, failedRequests: 0 };
   // Keep profile requests bounded so the Books screen is not blocked by a burst
   // of large profile-book responses. React Query renders the books independently.
   const requests = profileIds.flatMap(id => chunkArray(asins, 20).map(batch => ({ id, batch })));
-  for (const group of chunkArray(requests, 3)) {
-    const results = await Promise.all(group.map(({ id, batch }) =>
-      fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId, asins: batch }),
-    ));
-    group.forEach(({ id }, index) => {
-      const marketplaceCode = String(opts.marketplaceCodes?.[id] ?? "").trim().toUpperCase() || null;
-      for (const row of results[index]) rows.push({ ...row, marketplaceCode });
-    });
-  }
+  const { rows, failedRequests } = await readBookRetailRequests(requests, async ({ id, batch }) => {
+    const result = await fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId, asins: batch });
+    const marketplaceCode = String(opts.marketplaceCodes?.[id] ?? "").trim().toUpperCase() || null;
+    return result.map(row => ({ ...row, marketplaceCode }));
+  });
   const quarantineEntries = await loadShelfHealQuarantineEntries();
   const { isQuarantined } = await import("./kdp/shelfHeal.ts");
   const safeRows = rows.filter((row) =>
     !row.accountId || !isQuarantined(row.accountId, row.asin, quarantineEntries),
   );
-  return indexProfileBookRetailSnapshots(safeRows, asins, opts.preferredMarketplaceCode ?? "");
+  return { snapshots: indexProfileBookRetailSnapshots(safeRows, asins, opts.preferredMarketplaceCode ?? ""), failedRequests };
 }
 
 /** Book keys (group_key / asin / sku) with KDP or Ads signal in the activity window. */
