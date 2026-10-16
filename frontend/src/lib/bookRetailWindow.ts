@@ -8,15 +8,33 @@ const key = (row: Book) => row.book_key || row.asin || row.sku || "";
  */
 export function bookRetailWindow<T extends Book>(books: readonly T[], visibleKeys: readonly string[]): T[] {
   const visible = new Set(visibleKeys);
-  const inView = books.filter(row => visible.has(key(row)));
-  return (inView.length ? inView : books.slice(0, 12)).slice(0, 24);
+  const indexes = books.flatMap((row, index) => visible.has(key(row)) ? [index] : []);
+  if (!indexes.length) return books.slice(0, 12);
+  // Stable half-page boundaries avoid cancelling/restarting all reads whenever
+  // one card crosses the viewport. Prefetch the next few cards, never the shelf.
+  const start = Math.floor(indexes[0] / 6) * 6;
+  const end = Math.min(start + 24, Math.max(start + 12, indexes[indexes.length - 1] + 1));
+  return books.slice(start, end);
 }
 
 export function mergeScopedRetailCache(
   previous: { scope: string; data: Record<string, BookRetailSnapshot> },
   scope: string, incoming: Record<string, BookRetailSnapshot>,
 ) {
-  return { scope, data: { ...(previous.scope === scope ? previous.data : {}), ...incoming } };
+  const data = { ...(previous.scope === scope ? previous.data : {}) };
+  for (const [asin, snapshot] of Object.entries(incoming)) {
+    const prior = data[asin];
+    if (!prior) { data[asin] = snapshot; continue; }
+    const markets = new Map<string, BookRetailSnapshot>();
+    for (const row of [prior, ...(prior.marketplaceSnapshots ?? []), snapshot, ...(snapshot.marketplaceSnapshots ?? [])]) {
+      if (row.asin !== asin) continue;
+      const market = row.marketplaceCode ?? "";
+      markets.set(market, { ...row, marketplaceSnapshots: undefined });
+    }
+    const primary = markets.get(snapshot.marketplaceCode ?? "")!;
+    data[asin] = { ...primary, marketplaceSnapshots: [...markets.values()].filter(row => row !== primary) };
+  }
+  return { scope, data };
 }
 
 /** A customer preview uses that customer's profile ownership on the server,

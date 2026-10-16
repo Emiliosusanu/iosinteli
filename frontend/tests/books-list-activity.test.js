@@ -485,7 +485,8 @@ test("Books tab uses period-scoped list without 60-day gate", () => {
   assert.match(products, /activityDays: 0/);
   assert.match(products, /booksEmptyCopy/);
   assert.match(products, /sameScopeWarmPlaceholder|noPeriodPlaceholder|LIST_PERIOD_QUERY_CACHE/);
-  assert.doesNotMatch(products, /onCoreRows/);
+  assert.match(products, /currentBooksScope\.current !== booksScope/);
+  assert.match(products, /signal\.aborted/);
   assert.match(products, /FINANCIAL_QUERY_ROOTS\.products[\s\S]*?,\s*0\s*\]\s*as const/);
 });
 
@@ -517,11 +518,11 @@ test("empty books copy is not misleading when KDP was never imported", () => {
   assert.equal(linkedElsewhere.title, "No book data in range");
 });
 
-test("Books soft-collapses TopBar+filters on scroll (mounted, Reanimated)", () => {
+test("Books keeps TopBar and filters in the native list header", () => {
   assert.match(products, /FilterChrome/);
-  assert.match(products, /useScrollChromeCollapse/);
+  assert.match(products, /ListHeaderComponent=\{listHeader\}/);
   assert.match(products, /books-scroll-chrome/);
-  assert.match(products, /ReanimatedAnimated\.FlatList|Reanimated\.FlatList/);
+  assert.match(products, /<FlatList/);
   assert.doesNotMatch(products, /listCanScrollRef/);
   // No Campaigns-style mount/unmount pop.
   assert.doesNotMatch(products, /setTopChromeVisible\(false\)/);

@@ -46,3 +46,11 @@ test('expanded marketplace rows keep their own exact rating, count and stock', (
   const tree = context.exports.BookRetailInfo({ edition: 'Kindle', snapshot, activeMarketplaceCodes: ['US'] });
   assert.match(textOf(tree), /4\.9 \(400 reviews\) · CA/);
 });
+
+test('pending observations render loading rather than a false unavailable or zero status', () => {
+  const tree = context.exports.BookRetailInfo({ edition: 'Kindle', snapshot: { ...snapshot, rating: null, reviewCount: null, stockStatus: null, marketplaceSnapshots: [] }, compact: true, loading: true });
+  assert.match(textOf(tree), /Loading reviews…/);
+  assert.match(textOf(tree), /Loading stock…/);
+  assert.doesNotMatch(textOf(tree), /unavailable|0 reviews/);
+  assert.match(tree.props.accessibilityLabel, /Reviews loading/);
+});

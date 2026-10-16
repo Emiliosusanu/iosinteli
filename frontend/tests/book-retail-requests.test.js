@@ -51,3 +51,60 @@ test('a successful empty marketplace remains distinct from a request failure', a
   assert.deepEqual(await readBookRetailRequests(['US'], async () => []), { rows: [], failedRequests: 0 });
   assert.deepEqual(await readBookRetailRequests([], async () => { throw Error('must not request'); }), { rows: [], failedRequests: 0 });
 });
+
+test('fast observations render and free a request slot while another marketplace is pending', async () => {
+  let release;
+  const slow = new Promise(resolve => { release = resolve; });
+  const started = [], visible = [];
+  const pending = readBookRetailRequests(['slow', 'US', 'CA', 'GB'], async market => {
+    started.push(market);
+    if (market === 'slow') await slow;
+    return [{ market }];
+  }, { onRows: rows => visible.push(...rows) });
+  try {
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    assert.ok(visible.some(row => row.market === 'US'));
+    assert.ok(started.includes('GB'));
+    assert.ok(!visible.some(row => row.market === 'slow'));
+  } finally { release(); await pending; }
+});
+
+test('a stalled marketplace times out and aborts without blocking good observations', async () => {
+  let aborted = false;
+  const result = await readBookRetailRequests(['slow', 'US'], async (market, { signal }) => {
+    if (market === 'US') return [{ market }];
+    signal.addEventListener('abort', () => { aborted = true; });
+    return new Promise(() => {});
+  }, { timeoutMs: 10 });
+  assert.equal(aborted, true);
+  assert.equal(result.failedRequests, 1);
+  assert.deepEqual(result.rows, [{ market: 'US' }]);
+});
+
+test('leaving a viewport cancels queued work and suppresses late progress', async () => {
+  const controller = new AbortController();
+  const error = Object.assign(new Error('left viewport'), { name: 'AbortError' });
+  let release;
+  const slow = new Promise(resolve => { release = resolve; });
+  const started = [], visible = [];
+  const pending = readBookRetailRequests([0, 1, 2, 3, 4], async i => {
+    started.push(i); await slow; return [{ i }];
+  }, { signal: controller.signal, onRows: rows => visible.push(...rows) });
+  controller.abort(error);
+  release();
+  await assert.rejects(pending, e => e === error);
+  assert.equal(started.length, 3);
+  assert.equal(visible.length, 0);
+});
+
+test('an ownership rejection cancels other pending markets promptly and never starts queued reads', async () => {
+  const denied = Object.assign(new Error('forbidden'), { status: 403 });
+  const started = [], signals = [];
+  await assert.rejects(readBookRetailRequests(['slow', 'denied', 'queued', 'tail'], async (market, { signal }) => {
+    started.push(market); signals.push(signal);
+    if (market === 'denied') throw denied;
+    return new Promise(() => {});
+  }), e => e === denied);
+  assert.ok(signals.every(signal => signal.aborted));
+  assert.ok(!started.includes('tail'));
+});
