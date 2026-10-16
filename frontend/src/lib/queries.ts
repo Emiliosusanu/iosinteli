@@ -1159,14 +1159,14 @@ async function fetchLogicalBookAsins(
   return asins;
 }
 
-async function loadShelfHealQuarantineEntries(): Promise<
+async function loadShelfHealQuarantineEntries(scopedUserId?: string | null): Promise<
   import("./kdp/shelfHeal.ts").QuarantineEntry[]
 > {
   try {
     const { resolveQuarantineUserId, loadKdpAsinQuarantineEntries } = await import(
       "./kdp/shelfHealStore.ts"
     );
-    const userId = await resolveQuarantineUserId();
+    const userId = scopedUserId || await resolveQuarantineUserId();
     if (!userId) return [];
     return await loadKdpAsinQuarantineEntries(userId);
   } catch {
@@ -5541,7 +5541,9 @@ export async function fetchBookRetailMetadata(opts: {
   const asins = [...new Set(opts.books.flatMap(book => bookRetailAsins([book])))];
   const profileIds = [...new Set(opts.adsProfileIds.map((id) => String(id).trim()).filter(Boolean))];
   if (!asins.length || !profileIds.length) return { snapshots: {}, failedRequests: 0, pendingRequests: 0 };
-  const quarantineEntries = await loadShelfHealQuarantineEntries();
+  // This viewer/customer identity was already resolved by the hook. Do not
+  // reacquire the auth session before the bounded, user-scoped settings read.
+  const quarantineEntries = await loadShelfHealQuarantineEntries(opts.filterUserId || opts.userId);
   const { isQuarantined } = await import("./kdp/shelfHeal.ts");
   const allRows: ProfileBookRetailRow[] = [];
   const snapshots = () => indexProfileBookRetailSnapshots(allRows, asins, opts.preferredMarketplaceCode ?? "");
