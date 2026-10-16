@@ -19,6 +19,8 @@ export function BookRetailInfo({
 }) {
   const t = useTheme();
   const reviews = compact ? highestBookRetailReviewSnapshot(snapshot, activeMarketplaceCodes) : snapshot;
+  const reviewsLoading = reviews.retailPending ?? loading;
+  const stockLoading = snapshot.retailPending ?? loading;
   const reviewLabel = reviews.rating != null
     ? `${reviews.rating.toFixed(1)}${reviews.reviewCount != null ? ` (${reviews.reviewCount.toLocaleString()} reviews)` : ""}`
     : reviews.reviewCount != null
@@ -41,7 +43,7 @@ export function BookRetailInfo({
       testID={`book-retail-${snapshot.asin}`}
       style={{ gap: 4, paddingVertical: compact ? 5 : 9 }}
       accessibilityRole="text"
-      accessibilityLabel={`${edition} ${snapshot.asin}. ${reviewLabel ? `Amazon rating and reviews snapshot ${reviewLabel}${reviews.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}${reviews.checkedAt ? `, checked ${reviews.checkedAt.slice(0, 10)}` : ""}.` : loading ? "Reviews loading." : "Reviews unavailable."} ${stockLabel ? `Last reported stock ${stockLabel}${snapshot.marketplaceCode ? ` in ${snapshot.marketplaceCode}` : ""}${dateSuffix}.` : loading ? "Stock status loading." : "Stock status unavailable."}`}
+      accessibilityLabel={`${edition} ${snapshot.asin}. ${reviewLabel ? `Amazon rating and reviews snapshot ${reviewLabel}${reviews.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}${reviews.checkedAt ? `, checked ${reviews.checkedAt.slice(0, 10)}` : ""}.` : reviewsLoading ? "Reviews loading." : "Reviews unavailable."} ${stockLabel ? `Last reported stock ${stockLabel}${snapshot.marketplaceCode ? ` in ${snapshot.marketplaceCode}` : ""}${dateSuffix}.` : stockLoading ? "Stock status loading." : "Stock status unavailable."}`}
     >
       <Text style={[t.typography.caption1, { color: t.colors.text_secondary, fontWeight: "700" }]}>
         {edition} · {snapshot.asin}
@@ -55,14 +57,14 @@ export function BookRetailInfo({
             </Text>
           </View>
         ) : (
-          <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{loading ? "Loading reviews…" : "Reviews unavailable"}</Text>
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{reviewsLoading ? "Loading reviews…" : "Reviews unavailable"}</Text>
         )}
         {stockLabel ? (
           <Text style={[t.typography.caption1, { color: stockColor }]}>
             {stockLabel}{snapshot.marketplaceCode ? ` · ${snapshot.marketplaceCode}` : ""}{checkedDate ? ` · ${checkedDate}` : ""}
           </Text>
         ) : (
-          <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{loading ? "Loading stock…" : "Stock unknown"}</Text>
+          <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>{stockLoading ? "Loading stock…" : "Stock unknown"}</Text>
         )}
       </View>
     </View>

@@ -1308,18 +1308,20 @@ export type AmazonProfileBookPreview = {
   amazonStockStatus?: string | null;
   amazonMetaUpdatedAt?: string | null;
   accountId?: string | null;
+  amazonRetailPending?: boolean;
   marketplaceCode?: string | null;
 };
 
 /** Nest GET /amazon/profiles/:id/books — real sponsored/KDP covers only. */
 export async function fetchAmazonProfileBooks(
   profileId: string,
-  opts?: { filterUserId?: string | null; asins?: string[]; signal?: AbortSignal },
+  opts?: { filterUserId?: string | null; asins?: string[]; signal?: AbortSignal; cachedOnly?: boolean },
 ): Promise<AmazonProfileBookPreview[]> {
   const adsId = String(profileId || "").trim();
   if (!adsId) return [];
   const params = new URLSearchParams();
   if (opts?.filterUserId) params.set("filterUserId", opts.filterUserId);
+  if (opts?.cachedOnly) params.set("cachedOnly", "true");
   if (opts?.asins != null) {
     const asins = [...new Set(opts.asins.map(asin => asin.trim().toUpperCase()))];
     if (!asins.length) return [];
@@ -1341,6 +1343,7 @@ export async function fetchAmazonProfileBooks(
       amazonStockStatus?: string | null;
       amazonMetaUpdatedAt?: string | null;
       accountId?: string | null;
+      amazonRetailPending?: boolean;
     }[];
   }>(`/amazon/profiles/${encodeURIComponent(adsId)}/books${q}`, { method: "GET", signal: opts?.signal }, "Couldn't load profile books.");
   const books: AmazonProfileBookPreview[] = [];
@@ -1358,6 +1361,7 @@ export async function fetchAmazonProfileBooks(
       amazonStockStatus: book.amazonStockStatus ?? null,
       amazonMetaUpdatedAt: book.amazonMetaUpdatedAt ?? null,
       accountId: book.accountId ?? null,
+      ...(typeof book.amazonRetailPending === 'boolean' ? { amazonRetailPending: book.amazonRetailPending } : {}),
     });
   }
   return books;
