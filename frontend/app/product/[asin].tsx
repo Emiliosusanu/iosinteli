@@ -1,4 +1,4 @@
-import { canReadBookRetailMetadata } from '@/src/lib/bookRetailWindow';
+import { useBookRetailMetadata } from '@/src/hooks/useBookRetailMetadata';
 import React, { useEffect, useMemo, useState } from "react";
 import {
   FlatList,
@@ -10,7 +10,7 @@ import {
 } from "react-native";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
-import { bookRetailAsins, bookRetailEditions, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { bookRetailEditions, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -31,7 +31,6 @@ import { useApp } from "@/src/contexts/AppContext";
 import { useAuth } from "@/src/contexts/AuthContext";
 import {
   fetchBookCampaignsRange,
-  fetchBookRetailMetadata,
   fetchOwnedBookIdentity,
   fetchTopBooksRange,
   type BookCampaignRow,
@@ -239,32 +238,14 @@ export default function ProductCampaignsScreen() {
 
   const book = useMemo(() => matchBook(booksQ.data ?? [], asin), [booksQ.data, asin]);
   const retailBooks = useMemo(() => book ? [book] : [{ book_key: asin, asin }], [book, asin]);
-  const retailAsins = useMemo(() => bookRetailAsins(retailBooks), [retailBooks]);
-  const retailEnabled = canReadBookRetailMetadata({ userId: user?.id, filterUserId: adminFilterUserId,
-    isAdminViewer, profileIds: retailProfileIds, asins: retailAsins });
-  const retailQ = useQuery({
-    queryKey: ["book-retail-metadata-detail", user?.id ?? "anonymous", adminFilterUserId ?? "self", retailProfileIds, retailAsins],
-    queryFn: () => fetchBookRetailMetadata({
-      books: retailBooks,
-      filterUserId: adminFilterUserId,
-      adsProfileIds: retailProfileIds,
-      marketplaceCodes: Object.fromEntries(profiles.flatMap((profile) => {
-        const code = String(profile.country_code ?? "").trim().toUpperCase();
-        return code ? [[profile.id, code], [profile.profile_id, code]] : [];
-      })),
-      preferredMarketplaceCode: profiles.find((profile) => selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id))?.country_code,
-    }),
-    enabled: retailEnabled,
-    staleTime: 5 * 60_000,
-    retry: false,
-  });
+  const { query: retailQ, snapshots: retailData, refresh: refreshRetail, enabled: retailEnabled } = useBookRetailMetadata(retailBooks, retailProfileIds, "book-retail-metadata-detail");
   const retailEditions = useMemo(
-    () => retailQ.data ? bookRetailEditions(retailBooks[0], retailQ.data.snapshots) : [],
-    [retailBooks, retailQ.data, retailQ.isSuccess],
+    () => Object.keys(retailData).length ? bookRetailEditions(retailBooks[0], retailData) : [],
+    [retailBooks, retailData],
   );
   const primaryRetailEdition = useMemo(
-    () => retailQ.data ? primaryBookRetailEdition(retailBooks[0], retailQ.data.snapshots) : null,
-    [retailBooks, retailQ.data, retailQ.isSuccess],
+    () => Object.keys(retailData).length ? primaryBookRetailEdition(retailBooks[0], retailData) : null,
+    [retailBooks, retailData],
   );
   useEffect(() => {
     markPerf("book_detail.mount");
@@ -328,7 +309,7 @@ export default function ProductCampaignsScreen() {
       campaignsQ.refetch(),
       booksQ.refetch(),
       identityQ.refetch(),
-      ...(retailEnabled ? [retailQ.refetch()] : []),
+      ...(retailEnabled ? [refreshRetail()] : []),
     ]);
     setRefreshing(false);
   };
