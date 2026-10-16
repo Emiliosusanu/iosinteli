@@ -19,6 +19,7 @@ import { BooksReadError, fetchKdpRoyaltiesRange, fetchTopBooksRange, type TopBoo
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
+import { shouldRetryBooksRead } from "@/src/lib/booksReadRecovery";
 import { bookRetailWindow } from "@/src/lib/bookRetailWindow";
 import { bookRetailAsins, bookRetailStockLabel, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import { preferEditionTitle } from "@/src/lib/booksListActivity";
@@ -246,7 +247,8 @@ export default function ProductsScreen() {
     placeholderData: sameScopeWarmPlaceholder(
       queryClient.getQueryData<TopBookRow[]>(overviewBooksKey),
     ),
-    retry: false,
+    retry: shouldRetryBooksRead,
+    retryDelay: attempt => Math.min(5000 * 2 ** attempt, 20_000),
     meta: financialQueryMeta(),
   });
 
@@ -669,8 +671,8 @@ const ProductCard = React.memo(function ProductCard({
                   },
                 ]}
                 numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.78}
+                adjustsFontSizeToFit={false}
+                maxFontSizeMultiplier={1.3}
               >
                 {resolvedNet == null ? "—" : `${netPos ? "+" : ""}${formatCurrency(resolvedNet, currency, { compact: true })}`}
               </Text>
@@ -771,7 +773,7 @@ const styles = StyleSheet.create({
   profitBlock: {
     alignItems: "flex-end",
     paddingTop: 1,
-    minWidth: 76,
+    width: 96,
     flexShrink: 0,
   },
   statusPill: {

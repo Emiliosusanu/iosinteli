@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import * as metadata from '../src/lib/bookRetailMetadata.ts';
 import * as windowing from '../src/lib/bookRetailWindow.ts';
+import * as recovery from '../src/lib/booksReadRecovery.ts';
 const require = createRequire(import.meta.url), ts = require('typescript');
 const compiled = ts.transpileModule(readFileSync(new URL('../src/hooks/useBookRetailMetadata.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -23,10 +24,10 @@ function harness() {
   const dependencies = { react, '@tanstack/react-query': { useQuery: opts => { queryOptions = opts; return query; } },
     '@/src/contexts/AuthContext': { useAuth: () => session }, '@/src/contexts/AppContext': { useApp: () => app },
     '@/src/lib/queries': { fetchBookRetailMetadata: async opts => { fetchOptions = opts; return { snapshots: {}, failedRequests: 0 }; } },
-    '@/src/lib/bookRetailMetadata': metadata, '@/src/lib/bookRetailWindow': windowing };
+    '@/src/lib/booksReadRecovery': recovery, '@/src/lib/bookRetailMetadata': metadata, '@/src/lib/bookRetailWindow': windowing };
   const context = { exports: {}, require: name => { assert.ok(dependencies[name], name); return dependencies[name]; } };
   vm.runInNewContext(compiled, context);
-  const render = () => { cursor = 0; return context.exports.useBookRetailMetadata([{ asin: 'B0ABCDEFGH', book_key: 'B0ABCDEFGH' }], ['ads-us'], 'retail'); };
+  const render = (books = [{ asin: 'B0ABCDEFGH', book_key: 'B0ABCDEFGH' }], plan = {}) => { cursor = 0; return context.exports.useBookRetailMetadata(books, ['ads-us'], 'retail', [], plan); };
   return { render, app, query, start: async signal => queryOptions.queryFn({ signal }), options: () => fetchOptions, queryOptions: () => queryOptions };
 }
 const row = { asin: 'B0ABCDEFGH', rating: 4.1, reviewCount: 100, stockStatus: 'IN_STOCK', checkedAt: null, marketplaceCode: 'US' };
@@ -72,4 +73,16 @@ test('only server-pending cache reads poll and background polling stays disabled
   assert.equal(opts.refetchInterval({ state: { data: { pendingRequests: 0 } } }), false);
   assert.equal(opts.refetchInterval({ state: {} }), false);
   assert.equal(opts.refetchIntervalInBackground, false);
+});
+
+
+test('scrolling the viewport keeps completed observations while rejecting late old-window progress', async () => {
+  const h = harness();
+  h.render([{ asin: 'B0ABCDEFGH', book_key: 'a' }], { B0ABCDEFGH: 'US' });
+  await h.start(new AbortController().signal);
+  const oldRead = h.options();
+  oldRead.onProgress({ B0ABCDEFGH: row });
+  assert.equal(h.render([{ asin: 'B0ABCDEFGI', book_key: 'b' }], { B0ABCDEFGI: 'US' }).snapshots.B0ABCDEFGH.reviewCount, 100);
+  oldRead.onProgress({ B0ABCDEFGH: { ...row, reviewCount: 999 } });
+  assert.equal(h.render([{ asin: 'B0ABCDEFGI', book_key: 'b' }], { B0ABCDEFGI: 'US' }).snapshots.B0ABCDEFGH.reviewCount, 100);
 });

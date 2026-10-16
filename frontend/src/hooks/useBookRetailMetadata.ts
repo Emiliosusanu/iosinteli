@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
+import { shouldRetryBooksRead, bookRetailRefetchInterval } from '@/src/lib/booksReadRecovery';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/src/contexts/AuthContext';
 import { useApp } from '@/src/contexts/AppContext';
@@ -12,9 +13,12 @@ export function useBookRetailMetadata(books: readonly RetailBookIdentity[], prof
   const { profiles, selectedProfileIds, adminFilterUserId, isAdminViewer } = useApp();
   const asins = useMemo(() => bookRetailAsins(books), [books]);
   const preferredMarketplaceCode = profiles.find(profile => selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id))?.country_code;
-  const scope = JSON.stringify([user?.id, adminFilterUserId, profileIds, preferredMarketplaceCode, primaryMarketplaceByAsin]);
-  const currentScope = useRef(scope);
-  currentScope.current = scope;
+  // Observations belong to the viewer/customer/profile scope, not a viewport.
+  // Scrolling changes the request plan but must not erase already loaded cards.
+  const scope = JSON.stringify([user?.id, adminFilterUserId, profileIds, preferredMarketplaceCode]);
+  const requestScope = JSON.stringify([scope, asins, primaryMarketplaceByAsin]);
+  const currentRequest = useRef(requestScope);
+  currentRequest.current = requestScope;
   const forceRefresh = useRef(false);
   const [progress, setProgress] = useState<{ scope: string; data: Record<string, BookRetailSnapshot> }>({ scope: '', data: {} });
   const enabled = canReadBookRetailMetadata({ userId: user?.id, filterUserId: adminFilterUserId, isAdminViewer, profileIds, asins });
@@ -28,15 +32,16 @@ export function useBookRetailMetadata(books: readonly RetailBookIdentity[], prof
         return code ? [[profile.id, code], [profile.profile_id, code]] : [];
       })),
       onProgress: snapshots => {
-        if (!signal.aborted && currentScope.current === scope && Object.keys(snapshots).length) {
+        if (!signal.aborted && currentRequest.current === requestScope && Object.keys(snapshots).length) {
           setProgress(previous => mergeScopedRetailCache(previous, scope, snapshots));
         }
       },
     }),
-    enabled, staleTime: 5 * 60_000, retry: false,
+    enabled, staleTime: 5 * 60_000, retry: shouldRetryBooksRead,
+    retryDelay: attempt => Math.min(5000 * 2 ** attempt, 20_000),
     // These are fast server-cache reads, not Amazon requests from the phone.
     // Pending rows bypass the local observation TTL until the server finishes.
-    refetchInterval: state => (state.state.data?.pendingRequests ?? 0) > 0 ? 2000 : false,
+    refetchInterval: bookRetailRefetchInterval,
     refetchIntervalInBackground: false,
   });
   const status = Number((query.error as { status?: number; statusCode?: number } | null)?.status
