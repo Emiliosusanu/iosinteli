@@ -9,7 +9,7 @@ const source=readFileSync(new URL('../src/lib/bookMarketplacesQuery.ts',import.m
 const start=source.indexOf('export async function fetchSponsoredMarketplaceIndex('),end=source.indexOf('export function sponsoredMarketplaceIndexQueryKey(',start);
 const compiled=ts.transpileModule(source.slice(start,end),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 function run(direct,server){
- const calls={direct:0,server:0};const context={exports:{},profileQueryIds:p=>p.map(x=>x.id),emptySponsoredMarketplaceIndex,mergeSponsoredMarketplaceIndexes,
+ const calls={direct:0,server:0};const context={exports:{},AbortController,setTimeout,clearTimeout,fetchActiveServerMarketplaceIndex:async()=>null,profileQueryIds:p=>p.map(x=>x.id),emptySponsoredMarketplaceIndex,mergeSponsoredMarketplaceIndexes,
  fetchDirectSponsoredMarketplaceIndex:async()=>{calls.direct++;return direct();},fetchServerSponsoredMarketplaceIndex:async()=>{calls.server++;return server();}};
  vm.runInNewContext(compiled,context);return{calls,fetch:opts=>context.exports.fetchSponsoredMarketplaceIndex([{id:'owned-us'}],opts)};
 }
@@ -38,4 +38,26 @@ test('a full pagination limit is incomplete and must not suppress the server fal
  await assert.rejects(c.exports.fetchPages(async()=>({data:[{id:1},{id:2}],error:null})),/incomplete/);
  let calls=0;const rows=await c.exports.fetchPages(async()=>({data:++calls===1?[{id:1},{id:2}]:[{id:3}],error:null}));
  assert.equal(rows.length,3);
+});
+
+
+test('stalled RLS index is cancelled and verified server profile identities avoid all metric scans',async()=>{
+ let signal,legacyCalls=0,activeCalls=0;
+ const c={exports:{},AbortController,setTimeout:(fn,ms)=>setTimeout(fn,ms===1500?5:ms),clearTimeout,profileQueryIds:p=>p.map(x=>x.id),emptySponsoredMarketplaceIndex,mergeSponsoredMarketplaceIndexes,
+ fetchDirectSponsoredMarketplaceIndex:(_p,s)=>{signal=s;return new Promise(()=>{});},
+ fetchActiveServerMarketplaceIndex:async()=>{activeCalls++;return known();},
+ fetchServerSponsoredMarketplaceIndex:async()=>{legacyCalls++;throw new Error('must not traverse per-profile metrics');}};
+ vm.runInNewContext(compiled,c);const result=await Promise.race([c.exports.fetchSponsoredMarketplaceIndex([{id:'owned-us'}]),new Promise((_,reject)=>{const t=setTimeout(()=>reject(new Error('unbounded identity read')),100);t.unref();})]);
+ assert.equal(result.countriesByKey.size,1);assert.equal(signal.aborted,true);assert.equal(activeCalls,1);assert.equal(legacyCalls,0);
+});
+
+
+test('fast identity endpoint keeps exact profile/customer scope and rejects old payloads without profile proof',async()=>{
+ const a=source.indexOf('async function fetchActiveServerMarketplaceIndex('),b=source.indexOf('export async function fetchSponsoredMarketplaceIndex(',a);
+ const js=ts.transpileModule('export '+source.slice(a,b),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+ let payload={books:[{asin:'B0ABCDEFGH',amazonProfileIds:['owned-us'],campaignIds:['real']}]};const calls=[];
+ const c={exports:{},URLSearchParams,profileQueryIds:p=>p.map(x=>x.id),nestApiJson:async path=>{calls.push(path);return payload;},buildActiveMarketplaceIndexFromProfileBooks:(profiles,books)=>{assert.equal(profiles[0].id,'owned-us');assert.equal(books[0].amazonProfileIds[0],'owned-us');return known();}};
+ vm.runInNewContext(js,c);assert.equal((await c.exports.fetchActiveServerMarketplaceIndex([{id:'owned-us'}],'customer & one')).countriesByKey.size,1);
+ const url=new URL(calls[0],'https://example.test');assert.equal(url.searchParams.get('profileIds'),'owned-us');assert.equal(url.searchParams.get('filterUserId'),'customer & one');
+ payload={books:[{asin:'B0ABCDEFGH',campaignIds:['real']}]};assert.equal(await c.exports.fetchActiveServerMarketplaceIndex([{id:'owned-us'}]),null);
 });

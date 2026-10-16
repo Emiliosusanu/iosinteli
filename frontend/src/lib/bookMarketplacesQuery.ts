@@ -3,12 +3,15 @@ import { useQuery } from "@tanstack/react-query";
 import { useApp } from "@/src/contexts/AppContext";
 import { STABLE_SCOPED_CACHE, sortedProfileIds } from "./periodQuery";
 import { supabase } from "./supabase";
+import { nestApiJson } from "./rulesApi";
 import { fetchAggregatedCampaigns } from "./dashboardApi";
 import { fetchTargetingBookOptions } from "./queries";
 import {
   emptySponsoredMarketplaceIndex,
   buildSponsoredMarketplaceIndex,
   buildSponsoredMarketplaceIndexFromCampaignBooks,
+  buildActiveMarketplaceIndexFromProfileBooks,
+  mergeSponsoredMarketplaceIndexes,
   productAdsForVisibleCampaigns,
   type MarketplaceCampaignRef,
   type MarketplaceProductAdRef,
@@ -53,6 +56,7 @@ async function fetchPages<T>(
 
 async function fetchDirectSponsoredMarketplaceIndex(
   profiles: readonly MarketplaceProfileRef[],
+  signal: AbortSignal,
 ): Promise<SponsoredMarketplaceIndex> {
   const profileIds = profileQueryIds(profiles);
   if (!profileIds.length) return emptySponsoredMarketplaceIndex();
@@ -67,6 +71,7 @@ async function fetchDirectSponsoredMarketplaceIndex(
           .from("campaigns")
           .select("id, name, state, amazon_profile_id")
           .in("amazon_profile_id", chunk)
+          .abortSignal(signal)
           .order("id", { ascending: true })
           .range(from, to),
       ),
@@ -75,6 +80,7 @@ async function fetchDirectSponsoredMarketplaceIndex(
           .from("product_ads")
           .select("campaign_id, asin, sku, title, amazon_profile_id")
           .in("amazon_profile_id", chunk)
+          .abortSignal(signal)
           .order("id", { ascending: true })
           .range(from, to),
       ),
@@ -130,6 +136,20 @@ async function fetchServerSponsoredMarketplaceIndex(
   return buildSponsoredMarketplaceIndexFromCampaignBooks({ profiles, campaigns, books });
 }
 
+async function fetchActiveServerMarketplaceIndex(
+  profiles: readonly MarketplaceProfileRef[], filterUserId?: string | null,
+): Promise<SponsoredMarketplaceIndex | null> {
+  const params = new URLSearchParams({ profileIds: profileQueryIds(profiles).join(',') });
+  if (filterUserId) params.set('filterUserId', filterUserId);
+  const result = await nestApiJson<{ books?: Array<{ asin?: string; amazonProfileIds?: string[]; campaignIds?: string[] }> }>(
+    `/campaigns/books?${params}`, { method: 'GET' }, "Couldn't load campaign markets.",
+  );
+  if (!Array.isArray(result.books) || !result.books.length || result.books.some(book =>
+    !Array.isArray(book.amazonProfileIds) || !Array.isArray(book.campaignIds))) return null;
+  const index = buildActiveMarketplaceIndexFromProfileBooks(profiles, result.books);
+  return index.countriesByKey.size ? index : null;
+}
+
 export async function fetchSponsoredMarketplaceIndex(
   profiles: readonly MarketplaceProfileRef[],
   opts?: { start?: string; end?: string; filterUserId?: string | null },
@@ -144,12 +164,27 @@ export async function fetchSponsoredMarketplaceIndex(
   let direct: SponsoredMarketplaceIndex | undefined;
   let directError: unknown;
   if (!opts?.filterUserId) {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      direct = await fetchDirectSponsoredMarketplaceIndex(profiles);
+      direct = await Promise.race([
+        fetchDirectSponsoredMarketplaceIndex(profiles, controller.signal),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort(); reject(new Error('Campaign identity read timed out'));
+          }, 1500);
+        }),
+      ]);
       if (direct.countriesByKey.size) return direct;
     } catch (error) { directError = error; }
+    finally { if (timer) clearTimeout(timer); }
   }
   try {
+    const active = await fetchActiveServerMarketplaceIndex(profiles, opts?.filterUserId).catch(error => {
+      if ([401, 402, 403].includes(Number(error?.status ?? error?.statusCode))) throw error;
+      return null;
+    });
+    if (active) return mergeSponsoredMarketplaceIndexes(direct, active);
     return await fetchServerSponsoredMarketplaceIndex(profiles, {
       start: opts?.start || today,
       end: opts?.end || today,
