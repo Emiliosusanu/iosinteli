@@ -14,13 +14,13 @@ test('server Books does not wait for campaign creation eligibility or replay loc
   const campaignOnly = {asin:'B0ABCDEFGI',royalties:null,spend:0,has_campaign:true};
   let published, unions = 0;
   const context = { exports: {},
-    fetchKdpAccountIdsForRoyaltyQuery: async () => ['owned-kdp'],
+    fetchKdpAccountIdsForRoyaltyQuery: () => {throw new Error('server Books must not wait for local account links');},
     hasMobileApiSession: async () => true,
     fetchNestTopBooks: async () => core,
     nestShelfCatalogRows: () => { throw new Error('Books must not invoke expensive Create eligibility'); },
     finalizeCatalogBooksList: async (rows, profiles, accounts, limit, shelf) => {
       unions++; assert.equal(published,core); assert.equal(rows,core);
-      assert.equal(profiles[0],'owned-us'); assert.equal(accounts[0],'owned-kdp'); assert.equal(limit,0);
+      assert.equal(profiles[0],'owned-us'); assert.equal(accounts.length,0); assert.equal(limit,0);
       assert.equal(shelf.length,0);
       // Existing finalizer adds verified enabled campaign-only identities.
       return [...rows,campaignOnly];
@@ -71,4 +71,16 @@ test('catalog union failure preserves the published server rows and never rebuil
   vm.runInNewContext(compiled,context);
   await assert.rejects(context.exports.fetchTopBooksRange({profileIds:['owned-us'],start:'2026-10-01',end:'2026-10-16',limit:0,activityDays:0,onCoreRows:rows=>{published=rows;}}),e=>e===failure);
   assert.equal(published,core);
+});
+
+
+test('empty server catalog retains the account-scoped fallback and does not invent an empty account scope', async () => {
+ const scopeFailure=new Error('account scope unavailable');let links=0;
+ const context={exports:{},hasMobileApiSession:async()=>true,
+ fetchNestTopBooks:async()=>[],
+ fetchKdpAccountIdsForRoyaltyQuery:async()=>{links++;throw scopeFailure;},
+ nestShelfCatalogRows:()=>{throw new Error('must not build a catalog without account scope');}};
+ vm.runInNewContext(compiled,context);
+ await assert.rejects(context.exports.fetchTopBooksRange({profileIds:['owned-us'],start:'2026-10-01',end:'2026-10-16',limit:0,activityDays:0}),e=>e===scopeFailure);
+ assert.equal(links,1);
 });

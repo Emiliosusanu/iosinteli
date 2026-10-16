@@ -47,3 +47,21 @@ export function canReadBookRetailMetadata(opts: {
   return Boolean(opts.userId) && (!opts.filterUserId || opts.isAdminViewer)
     && opts.profileIds.length > 0 && opts.asins.length > 0;
 }
+
+
+/** Reuse exact viewer/customer/profile observations across list and detail.
+ * ASIN and marketplace observations stay intact; only requested editions leave
+ * this selector. Existing observation dates remain authoritative.
+ */
+export function cachedBookRetailSnapshots(
+  entries: readonly (readonly [readonly unknown[], { snapshots: Record<string, BookRetailSnapshot> } | undefined])[],
+  scope: string, asins: readonly string[],
+): Record<string, BookRetailSnapshot> {
+  let merged = { scope, data: {} as Record<string, BookRetailSnapshot> };
+  for (const [key, value] of entries) {
+    if (!['book-retail-metadata', 'book-retail-metadata-detail'].includes(String(key[0]))
+      || key[1] !== 'primary-market-v2' || key[2] !== scope || !value?.snapshots) continue;
+    merged = mergeScopedRetailCache(merged, scope, value.snapshots);
+  }
+  return Object.fromEntries(asins.flatMap(asin => merged.data[asin] ? [[asin, merged.data[asin]]] : []));
+}

@@ -13,6 +13,7 @@ const compiled = ts.transpileModule(readFileSync(new URL('../src/hooks/useBookRe
 function harness() {
   let cursor = 0, queryOptions, fetchOptions;
   const slots = [];
+  const cacheEntries = [];
   const session = { user: { id: 'viewer' } };
   const app = { profiles: [{ id: 'us', profile_id: 'ads-us', country_code: 'US' }], selectedProfileIds: ['us'], adminFilterUserId: 'one', isAdminViewer: true };
   const query = { data: undefined, error: null, refetch: async () => queryOptions.queryFn({ signal: new AbortController().signal }) };
@@ -21,14 +22,14 @@ function harness() {
     useRef: value => { const i = cursor++; return slots[i] ??= { current: value }; },
     useState: value => { const i = cursor++; slots[i] ??= value; return [slots[i], next => { slots[i] = typeof next === 'function' ? next(slots[i]) : next; }]; },
   };
-  const dependencies = { react, '@tanstack/react-query': { useQuery: opts => { queryOptions = opts; return query; } },
+  const dependencies = { react, '@tanstack/react-query': { useQueryClient: () => ({ getQueriesData: () => cacheEntries }), useQuery: opts => { queryOptions = opts; return query; } },
     '@/src/contexts/AuthContext': { useAuth: () => session }, '@/src/contexts/AppContext': { useApp: () => app },
     '@/src/lib/queries': { fetchBookRetailMetadata: async opts => { fetchOptions = opts; return { snapshots: {}, failedRequests: 0 }; } },
     '@/src/lib/booksReadRecovery': recovery, '@/src/lib/bookRetailMetadata': metadata, '@/src/lib/bookRetailWindow': windowing };
   const context = { exports: {}, require: name => { assert.ok(dependencies[name], name); return dependencies[name]; } };
   vm.runInNewContext(compiled, context);
   const render = (books = [{ asin: 'B0ABCDEFGH', book_key: 'B0ABCDEFGH' }], plan = {}) => { cursor = 0; return context.exports.useBookRetailMetadata(books, ['ads-us'], 'retail', [], plan); };
-  return { render, app, query, start: async signal => queryOptions.queryFn({ signal }), options: () => fetchOptions, queryOptions: () => queryOptions };
+  return { render, app, query, cacheEntries, start: async signal => queryOptions.queryFn({ signal }), options: () => fetchOptions, queryOptions: () => queryOptions };
 }
 const row = { asin: 'B0ABCDEFGH', rating: 4.1, reviewCount: 100, stockStatus: 'IN_STOCK', checkedAt: null, marketplaceCode: 'US' };
 test('actual hook renders progress before final query data arrives, then retains both marketplaces', async () => {
@@ -85,4 +86,16 @@ test('scrolling the viewport keeps completed observations while rejecting late o
   assert.equal(h.render([{ asin: 'B0ABCDEFGI', book_key: 'b' }], { B0ABCDEFGI: 'US' }).snapshots.B0ABCDEFGH.reviewCount, 100);
   oldRead.onProgress({ B0ABCDEFGH: { ...row, reviewCount: 999 } });
   assert.equal(h.render([{ asin: 'B0ABCDEFGI', book_key: 'b' }], { B0ABCDEFGI: 'US' }).snapshots.B0ABCDEFGH.reviewCount, 100);
+});
+
+
+test('actual detail hook uses exact-scope list snapshots before its network request completes', () => {
+ const h=harness();h.render();
+ const scope=h.queryOptions().queryKey[2];
+ h.cacheEntries.push([['book-retail-metadata','primary-market-v2',scope],{snapshots:{B0ABCDEFGH:row}}]);
+ const seed=h.queryOptions().placeholderData();
+ assert.equal(seed.snapshots.B0ABCDEFGH.reviewCount,100);
+ assert.equal(seed.snapshots.B0ABCDEFGH.stockStatus,'IN_STOCK');
+ h.app.adminFilterUserId='another-customer';h.render();
+ assert.equal(h.queryOptions().placeholderData(),undefined);
 });
