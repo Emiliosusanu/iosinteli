@@ -91,6 +91,21 @@ export function indexBookRetailSnapshots(rows: readonly BookRetailSourceRow[]): 
   return byAsin;
 }
 
+/** Several owned profiles can observe the same exact listing. A missing field
+ * in one response must not erase another profile's real observation. Dates for
+ * stock and reviews are independent, and rating/count stay paired.
+ */
+export function mergeBookRetailObservation(previous: BookRetailSnapshot, incoming: BookRetailSnapshot): BookRetailSnapshot {
+  if (previous.asin !== incoming.asin || normalizeFlagCountryCode(previous.marketplaceCode) !== normalizeFlagCountryCode(incoming.marketplaceCode)) return incoming;
+  const reviews = incoming.rating != null || incoming.reviewCount != null;
+  const priorReviews = previous.rating != null || previous.reviewCount != null;
+  const reviewRow = reviews && (!priorReviews || checkedTime(incoming.reviewsCheckedAt ?? incoming.checkedAt) >= checkedTime(previous.reviewsCheckedAt ?? previous.checkedAt)) ? incoming : previous;
+  const stockRow = incoming.stockStatus != null && (previous.stockStatus == null || checkedTime(incoming.checkedAt) >= checkedTime(previous.checkedAt)) ? incoming : previous;
+  return { ...previous, ...incoming, rating: reviewRow.rating, reviewCount: reviewRow.reviewCount,
+    reviewsCheckedAt: reviewRow.reviewsCheckedAt ?? reviewRow.checkedAt, stockStatus: stockRow.stockStatus, checkedAt: stockRow.checkedAt,
+    retailPending: Boolean(previous.retailPending || incoming.retailPending), marketplaceSnapshots: undefined };
+}
+
 /** Use the same per-profile API payload as /amazon; never infer metadata from a sibling ASIN. */
 export function indexProfileBookRetailSnapshots(
   rows: readonly ProfileBookRetailRow[],
@@ -105,7 +120,6 @@ export function indexProfileBookRetailSnapshots(
     const market = String(row.marketplaceCode ?? "").trim().toUpperCase();
     const asin = asinKey(row.asin);
     const key = `${asin}:${market}`;
-    if (byAsinAndMarket.has(key)) continue;
     // The web endpoint's timestamp can be a catalog fetch date rather than a
     // review/stock observation. Use it for image cache invalidation, not as a
     // user-facing "checked" date.
@@ -133,7 +147,8 @@ export function indexProfileBookRetailSnapshots(
     if (snapshot.coverUrl && Number.isFinite(version)) {
       snapshot.coverCacheKey = `${asin}:${market}:${version}:${snapshot.coverUrl}`;
     }
-    byAsinAndMarket.set(key, snapshot);
+    const prior = byAsinAndMarket.get(key);
+    byAsinAndMarket.set(key, prior ? mergeBookRetailObservation(prior, snapshot) : snapshot);
   }
   const preferred = String(preferredMarketplaceCode).trim().toUpperCase();
   const result: Record<string, BookRetailSnapshot> = {};
