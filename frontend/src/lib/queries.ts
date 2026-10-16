@@ -6008,26 +6008,27 @@ export async function fetchTopBooksRange(
   let nestBooksCatalogSeed: TopBookRow[] = [];
 
   let kdpAccountIds: string[] = [];
-  try {
-    kdpAccountIds = await fetchKdpAccountIdsForRoyaltyQuery(kdpLinkProfileIds, kdpScope, {
-      includePausedLinks: opts.includePausedLinks,
-      allowLegacyProfileLinks: opts.allowLegacyProfileLinks,
-    });
-  } catch (error) {
-    if (canReadBooksApi) {
-      const nestRows = await fetchNestTopBooks({
-        filterUserId,
-        startDate: start,
-        endDate: end,
-        profileIds,
-        limit,
+  if (!canReadBooksApi || activityDays > 0) {
+    try {
+      kdpAccountIds = await fetchKdpAccountIdsForRoyaltyQuery(kdpLinkProfileIds, kdpScope, {
+        includePausedLinks: opts.includePausedLinks,
+        allowLegacyProfileLinks: opts.allowLegacyProfileLinks,
       });
-      return finalizeTopBooksList(nestRows, profileIds, [], limit, activityDays);
+    } catch (error) {
+      if (canReadBooksApi) {
+        const nestRows = await fetchNestTopBooks({
+          filterUserId,
+          startDate: start,
+          endDate: end,
+          profileIds,
+          limit,
+        });
+        return finalizeTopBooksList(nestRows, profileIds, [], limit, activityDays);
+      }
+      logBooksStage("kdp_account_links", error);
+      throw new BooksReadError("kdp_account_links", booksErrorCode(error));
     }
-    logBooksStage("kdp_account_links", error);
-    throw new BooksReadError("kdp_account_links", booksErrorCode(error));
   }
-
   if (canReadBooksApi) {
     try {
       const nestRows = await fetchNestTopBooks({
@@ -6068,6 +6069,15 @@ export async function fetchTopBooksRange(
       if (filterUserId || activityDays <= 0 || nestBooksCatalogSeed.length || status === 401 || status === 403) throw error;
       logBooksStage("nest_top_books", error);
     }
+  }
+
+  if (canReadBooksApi && activityDays <= 0) {
+    // An empty server response still uses the existing local fallback below.
+    // Resolve its account scope here, only if that fallback is actually needed.
+    kdpAccountIds = await fetchKdpAccountIdsForRoyaltyQuery(kdpLinkProfileIds, kdpScope, {
+      includePausedLinks: opts.includePausedLinks,
+      allowLegacyProfileLinks: opts.allowLegacyProfileLinks,
+    });
   }
 
   if (activityDays <= 0) {

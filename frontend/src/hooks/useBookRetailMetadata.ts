@@ -1,15 +1,16 @@
 import { useMemo, useRef, useState } from 'react';
 import { shouldRetryBooksRead, bookRetailRefetchInterval } from '@/src/lib/booksReadRecovery';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/src/contexts/AuthContext';
 import { useApp } from '@/src/contexts/AppContext';
 import { fetchBookRetailMetadata } from '@/src/lib/queries';
 import { bookRetailAsins, type BookRetailSnapshot, type RetailBookIdentity } from '@/src/lib/bookRetailMetadata';
-import { canReadBookRetailMetadata, mergeScopedRetailCache } from '@/src/lib/bookRetailWindow';
+import { canReadBookRetailMetadata, mergeScopedRetailCache, cachedBookRetailSnapshots } from '@/src/lib/bookRetailWindow';
 
 /** List and detail share progressive metadata and the same exact-ASIN cache. */
 export function useBookRetailMetadata(books: readonly RetailBookIdentity[], profileIds: string[], key: string, priorityMarketplaceCodes: readonly string[] = [], primaryMarketplaceByAsin: Readonly<Record<string, string>> = {}) {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const { profiles, selectedProfileIds, adminFilterUserId, isAdminViewer } = useApp();
   const asins = useMemo(() => bookRetailAsins(books), [books]);
   const preferredMarketplaceCode = profiles.find(profile => selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id))?.country_code;
@@ -37,6 +38,13 @@ export function useBookRetailMetadata(books: readonly RetailBookIdentity[], prof
         }
       },
     }),
+    placeholderData: () => {
+      if (!enabled) return undefined;
+      const snapshots = cachedBookRetailSnapshots(
+        queryClient.getQueriesData<{ snapshots: Record<string, BookRetailSnapshot> }>({}), scope, asins,
+      );
+      return Object.keys(snapshots).length ? { snapshots, failedRequests: 0, pendingRequests: 0 } : undefined;
+    },
     enabled, staleTime: 5 * 60_000, retry: shouldRetryBooksRead,
     retryDelay: attempt => Math.min(5000 * 2 ** attempt, 20_000),
     // These are fast server-cache reads, not Amazon requests from the phone.

@@ -178,8 +178,9 @@ export default function ProductCampaignsScreen() {
     [royaltyScope.profileIds],
   );
   const kdpQueryScope = overviewKdpQueryScope(profiles, detailProfileIds, royaltyScope);
-  // Keep limit in the key so Overview/Books caches cannot cross-hydrate a truncated list.
-  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, 300] as const;
+  // Detail shares the complete, exact financial scope with Books (limit 0).
+  // A truncated Overview list must never seed this full-catalog query.
+  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, 0] as const;
 
   const booksQ = useQuery({
     queryKey: booksKey,
@@ -191,7 +192,7 @@ export default function ProductCampaignsScreen() {
         start: dateRange.start,
         end: dateRange.end,
         royaltyRate: 0,
-        limit: 300,
+        limit: 0,
         filterUserId: adminFilterUserId,
         activityDays: 0,
       }),
@@ -502,10 +503,10 @@ function BookHeader({
         },
       ]
     : [
-        { label: ADS_SPEND_LABEL, value: formatCurrency(adsTotals.spend, currency, { compact: true }) },
-        { label: "Impr", value: formatInt(adsTotals.impressions) },
-        { label: "Clicks", value: formatInt(adsTotals.clicks) },
-        { label: "Ads orders", value: formatInt(adsTotals.orders) },
+        { label: ADS_SPEND_LABEL, value: adsReady ? formatCurrency(adsTotals.spend, currency, { compact: true }) : "—" },
+        { label: "Impr", value: adsReady ? formatInt(adsTotals.impressions) : "—" },
+        { label: "Clicks", value: adsReady ? formatInt(adsTotals.clicks) : "—" },
+        { label: "Ads orders", value: adsReady ? formatInt(adsTotals.orders) : "—" },
         {
           label: "ACoS",
           value: adsTotals.sales > 0 ? formatPercent(adsAcos) : "—",

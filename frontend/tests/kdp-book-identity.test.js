@@ -165,3 +165,9 @@ test("Barndominium-style parent rollup keeps KU on the DIGITAL/PRINT card", () =
   assert.equal(kindleDay + printDay, 125); // 40 ebook + 25 KU + 60 print
   assert.equal(primaryAsinFromGroupKey(GROUP, [PRINT, KINDLE]), KINDLE);
 });
+
+ test("detail resolves every persisted format ASIN without matching unrelated editions", () => {
+ const row={asin:'B0HJ3N6PQK',book_key:'native-tandem',format_asins:['B0HJ3N6PQK','1807973751']};
+ assert.equal(bookRowMatchesOpenedAsin(row,'1807973751'),true);
+ assert.equal(bookRowMatchesOpenedAsin(row,'1807973752'),false);
+ });

@@ -243,12 +243,13 @@ export function mergeCatalogIntoDailyAsinGroups(
 }
 
 export function bookRowMatchesOpenedAsin(
-  row: { asin?: string | null; sku?: string | null; book_key?: string | null },
+  row: { asin?: string | null; sku?: string | null; book_key?: string | null; format_asins?: readonly string[] },
   openedAsin: string,
 ): boolean {
   const opened = normalizeAsin(openedAsin);
   if (!opened) return false;
   if (normalizeAsin(row.asin) === opened || normalizeAsin(row.sku) === opened) return true;
+  if (row.format_asins?.some(asin => normalizeAsin(asin) === opened)) return true;
   const bookKey = String(row.book_key ?? "").toUpperCase();
   if (!bookKey) return false;
   if (bookKey === opened) return true;
