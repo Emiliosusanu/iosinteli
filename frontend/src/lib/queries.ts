@@ -6054,8 +6054,11 @@ export async function fetchTopBooksRange(
         // The server already calculated this exact financial scope. Union the
         // Create/active-campaign shelf, but do not replay every KDP day and Ads
         // metric page on the phone just to reconstruct the same money.
-        const shelf = await nestShelfCatalogRows();
-        return finalizeCatalogBooksList(nestRows, profileIds, kdpAccountIds, limit, shelf);
+        // Create eligibility performs live catalog/stock discovery and can take
+        // minutes. Books visibility needs period evidence or an enabled campaign,
+        // not eligibility to create another campaign. The finalizer already
+        // unions verified enabled campaign identities without that discovery.
+        return finalizeCatalogBooksList(nestRows, profileIds, kdpAccountIds, limit, []);
       }
     } catch (error) {
       // A catalog error after a valid server financial read must not start a
