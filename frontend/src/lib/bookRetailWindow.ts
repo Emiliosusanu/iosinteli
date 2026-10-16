@@ -1,4 +1,4 @@
-import type { BookRetailSnapshot } from "./bookRetailMetadata.ts";
+import { mergeBookRetailObservation, type BookRetailSnapshot } from "./bookRetailMetadata.ts";
 
 type Book = { book_key: string; asin: string; sku?: string | null };
 const key = (row: Book) => row.book_key || row.asin || row.sku || "";
@@ -29,7 +29,8 @@ export function mergeScopedRetailCache(
     for (const row of [prior, ...(prior.marketplaceSnapshots ?? []), snapshot, ...(snapshot.marketplaceSnapshots ?? [])]) {
       if (row.asin !== asin) continue;
       const market = row.marketplaceCode ?? "";
-      markets.set(market, { ...row, marketplaceSnapshots: undefined });
+      const priorMarket = markets.get(market);
+      markets.set(market, priorMarket ? { ...mergeBookRetailObservation(priorMarket, row), retailPending: row.retailPending } : { ...row, marketplaceSnapshots: undefined });
     }
     const primary = markets.get(snapshot.marketplaceCode ?? "")!;
     data[asin] = { ...primary, marketplaceSnapshots: [...markets.values()].filter(row => row !== primary) };
@@ -45,4 +46,22 @@ export function canReadBookRetailMetadata(opts: {
 }): boolean {
   return Boolean(opts.userId) && (!opts.filterUserId || opts.isAdminViewer)
     && opts.profileIds.length > 0 && opts.asins.length > 0;
+}
+
+
+/** Reuse exact viewer/customer/profile observations across list and detail.
+ * ASIN and marketplace observations stay intact; only requested editions leave
+ * this selector. Existing observation dates remain authoritative.
+ */
+export function cachedBookRetailSnapshots(
+  entries: readonly (readonly [readonly unknown[], { snapshots: Record<string, BookRetailSnapshot> } | undefined])[],
+  scope: string, asins: readonly string[],
+): Record<string, BookRetailSnapshot> {
+  let merged = { scope, data: {} as Record<string, BookRetailSnapshot> };
+  for (const [key, value] of entries) {
+    if (!['book-retail-metadata', 'book-retail-metadata-detail'].includes(String(key[0]))
+      || key[1] !== 'primary-market-v2' || key[2] !== scope || !value?.snapshots) continue;
+    merged = mergeScopedRetailCache(merged, scope, value.snapshots);
+  }
+  return Object.fromEntries(asins.flatMap(asin => merged.data[asin] ? [[asin, merged.data[asin]]] : []));
 }

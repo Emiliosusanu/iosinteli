@@ -3,8 +3,9 @@ import { BookRetailObservationCache } from "./bookRetailCache.ts";
 // All queries are filtered by selected profile IDs and date range when applicable.
 
 import { supabase } from "./supabase";
-import { readBookRetailRequests } from "./bookRetailRequests";
-import { parseNestError, rulesApiFetch, hasNestToken, nestApiJson } from "./rulesApi";
+import { readBookRetailRequests, prioritizeBookRetailRequests } from "./bookRetailRequests";
+import { fetchAdminOverviewActiveAdGroups, fetchAdminOverviewActiveKeywords } from "./overviewAdminWidgets";
+import { parseNestError, rulesApiFetch, hasNestToken, hasMobileApiSession, nestApiJson } from "./rulesApi";
 import { fetchAmazonProfileBooks, fetchNestAmazonProfiles, type AmazonProfileBookPreview } from "./mutations";
 import {
   fetchAggregatedCampaigns,
@@ -1158,14 +1159,14 @@ async function fetchLogicalBookAsins(
   return asins;
 }
 
-async function loadShelfHealQuarantineEntries(): Promise<
+async function loadShelfHealQuarantineEntries(scopedUserId?: string | null): Promise<
   import("./kdp/shelfHeal.ts").QuarantineEntry[]
 > {
   try {
     const { resolveQuarantineUserId, loadKdpAsinQuarantineEntries } = await import(
       "./kdp/shelfHealStore.ts"
     );
-    const userId = await resolveQuarantineUserId();
+    const userId = scopedUserId || await resolveQuarantineUserId();
     if (!userId) return [];
     return await loadKdpAsinQuarantineEntries(userId);
   } catch {
@@ -1782,23 +1783,37 @@ async function attachKdpAccountCountsFromBridge(
     amazon_profile_id?: string | null;
     is_paused?: boolean | null;
   }> = [];
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    for (const chunk of chunkArray(profileIds, BOOKS_IN_CHUNK)) {
-      links.push(
-        ...(await fetchAllPages((from, to) =>
-          supabase
-            .from("kdp_account_amazon_profiles")
-            .select("kdp_account_id, amazon_profile_id, is_paused")
-            .in("amazon_profile_id", chunk)
-            .order("kdp_account_id", { ascending: true })
-            .order("amazon_profile_id", { ascending: true })
-            .range(from, to),
-        )),
-      );
-    }
+    await Promise.race([(async () => {
+      for (const chunk of chunkArray(profileIds, BOOKS_IN_CHUNK)) {
+        links.push(
+          ...(await fetchAllPages((from, to) =>
+            supabase
+              .from("kdp_account_amazon_profiles")
+              .select("kdp_account_id, amazon_profile_id, is_paused")
+              .in("amazon_profile_id", chunk)
+              .order("kdp_account_id", { ascending: true })
+              .order("amazon_profile_id", { ascending: true })
+              .range(from, to)
+              .abortSignal(controller.signal),
+            POSTGREST_PAGE_SIZE,
+            { signal: controller.signal },
+          )),
+        );
+      }
+    })(), new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error("Optional profile KDP counts timed out"));
+      }, 3000);
+    })]);
   } catch {
     // Keep Nest values if bridge read fails (Auth/RLS); do not blank the list.
     return profiles;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 
   const counts = kdpAccountCountsByAmazonProfileId(links);
@@ -2208,6 +2223,46 @@ export async function fetchAdGroups(
       is_auto: isAuto,
     };
   });
+}
+
+/** Active parent scope is resolved BEFORE a widget's top-N cap. Paused
+ * campaigns cannot crowd active ad groups/keywords out of the result pool. */
+async function fetchOverviewActiveGroupScope(profileIds: string[]): Promise<AdGroup[]> {
+  if (!profileIds.length) return [];
+  const campaigns = await fetchAllPages<{ id: string; state: string | null }>((from, to) =>
+    supabase.from("campaigns").select("id,state").in("amazon_profile_id", profileIds)
+      .in("state", ["enabled", "active", "ENABLED", "ACTIVE"]).order("id", { ascending: true }).range(from, to));
+  const chunks = chunkArray(campaigns.map(row => row.id), 100);
+  const batches = await mapPoolLimited(chunks, 3, ids => fetchAllPages<AdGroup>((from, to) =>
+    supabase.from("ad_groups").select("*").in("amazon_profile_id", profileIds).in("campaign_id", ids)
+      .in("state", ["enabled", "active", "ENABLED", "ACTIVE"]).order("id", { ascending: true }).range(from, to)));
+  return batches.flat();
+}
+
+export async function fetchOverviewActiveKeywords(
+  profileIds: string[], opts: { start: string; end: string; limit?: number; filterUserId?: string | null },
+): Promise<Array<Keyword & ParentEntityState>> {
+  if (!profileIds.length) return [];
+  if (opts.filterUserId) return fetchAdminOverviewActiveKeywords(profileIds, { ...opts, filterUserId: opts.filterUserId });
+  const groups = await fetchOverviewActiveGroupScope(profileIds);
+  const groupById = new Map(groups.map(group => [group.id, group]));
+  const batches = await mapPoolLimited(chunkArray(groups.map(group => group.id), 60), 3, ids =>
+    fetchKeywords(profileIds, { ...opts, adGroupIds: ids, status: "enabled", limit: opts.limit ?? 80 }));
+  return batches.flat().filter(row => groupById.get(row.ad_group_id ?? "")?.campaign_id === row.campaign_id)
+    .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0)).slice(0, opts.limit ?? 80);
+}
+
+export async function fetchOverviewActiveAdGroups(
+  profileIds: string[], opts: { start: string; end: string; limit?: number; filterUserId?: string | null },
+): Promise<Array<AdGroupEnriched & ParentEntityState>> {
+  if (!profileIds.length) return [];
+  if (opts.filterUserId) return fetchAdminOverviewActiveAdGroups(profileIds, { ...opts, filterUserId: opts.filterUserId });
+  const groups = (await fetchOverviewActiveGroupScope(profileIds))
+    .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0)).slice(0, opts.limit ?? 80);
+  const totals = await fetchMetricTotalsByEntity("ad_group_metrics", "ad_group_id", groups.map(row => row.id), opts.start, opts.end);
+  return groups.map(group => ({ ...applyMetricTotals(group, totals.get(group.id) ?? emptyTotals()),
+    campaign_state: "enabled", keyword_count: 0, product_target_count: 0, auto_target_count: 0,
+    is_auto: String(group.targeting_type ?? "").toLowerCase() === "auto" }));
 }
 
 // ---------- Keywords ----------
@@ -5491,14 +5546,18 @@ export async function fetchBookRetailMetadata(opts: {
   filterUserId?: string | null;
   marketplaceCodes?: Readonly<Record<string, string>>;
   preferredMarketplaceCode?: string | null;
+  priorityMarketplaceCodes?: readonly string[];
+  primaryMarketplaceByAsin?: Readonly<Record<string, string>>;
   signal?: AbortSignal;
   forceRefresh?: boolean;
   onProgress?: (snapshots: Record<string, BookRetailSnapshot>) => void;
-}): Promise<{ snapshots: Record<string, BookRetailSnapshot>; failedRequests: number }> {
-  const asins = bookRetailAsins(opts.books);
+}): Promise<{ snapshots: Record<string, BookRetailSnapshot>; failedRequests: number; pendingRequests: number }> {
+  const asins = [...new Set(opts.books.flatMap(book => bookRetailAsins([book])))];
   const profileIds = [...new Set(opts.adsProfileIds.map((id) => String(id).trim()).filter(Boolean))];
-  if (!asins.length || !profileIds.length) return { snapshots: {}, failedRequests: 0 };
-  const quarantineEntries = await loadShelfHealQuarantineEntries();
+  if (!asins.length || !profileIds.length) return { snapshots: {}, failedRequests: 0, pendingRequests: 0 };
+  // This viewer/customer identity was already resolved by the hook. Do not
+  // reacquire the auth session before the bounded, user-scoped settings read.
+  const quarantineEntries = await loadShelfHealQuarantineEntries(opts.filterUserId || opts.userId);
   const { isQuarantined } = await import("./kdp/shelfHeal.ts");
   const allRows: ProfileBookRetailRow[] = [];
   const snapshots = () => indexProfileBookRetailSnapshots(allRows, asins, opts.preferredMarketplaceCode ?? "");
@@ -5510,9 +5569,13 @@ export async function fetchBookRetailMetadata(opts: {
   };
   const requests: Array<{ id: string; batch: string[]; scope: string | null; marketplaceCode: string | null }> = [];
   for (const id of profileIds) {
-    const marketplaceCode = String(opts.marketplaceCodes?.[id] ?? "").trim().toUpperCase() || null;
+    const marketplaceCode = String(opts.marketplaceCodes?.[id] ?? "").trim().toUpperCase().replace(/^UK$/, "GB") || null;
+    // Do not walk every marketplace for a card that displays one market.
+    const requestedAsins = asins.filter(asin => !opts.primaryMarketplaceByAsin?.[asin]
+      || opts.primaryMarketplaceByAsin[asin] === marketplaceCode);
+    if (!requestedAsins.length) continue;
     const scope = opts.userId ? JSON.stringify([opts.userId, opts.filterUserId ?? null, id, marketplaceCode]) : null;
-    const cached = scope && !opts.forceRefresh ? retailObservationCache.read(scope, asins) : { rows: [], missing: asins };
+    const cached = scope && !opts.forceRefresh ? retailObservationCache.read(scope, requestedAsins) : { rows: [], missing: requestedAsins };
     publish(cached.rows.map(row => ({ ...row, marketplaceCode })));
     // Scoped server reviews have three workers and a nine-second deadline.
     // Six cold ASINs get at most two worker waves instead of starving a 20-row tail.
@@ -5520,15 +5583,14 @@ export async function fetchBookRetailMetadata(opts: {
   }
   // Start the same viewport slice across markets before moving to the next
   // slice; one large profile cannot delay all other marketplace observations.
-  const batchRank = new Map(asins.map((asin, index) => [asin, index]));
-  requests.sort((a, b) => (batchRank.get(a.batch[0]) ?? 0) - (batchRank.get(b.batch[0]) ?? 0));
+  prioritizeBookRetailRequests(requests, asins, opts.priorityMarketplaceCodes, opts.preferredMarketplaceCode ?? '');
   const { failedRequests } = await readBookRetailRequests(requests, async ({ id, batch, scope, marketplaceCode }, { signal }) => {
-    const result = await fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId, asins: batch, signal });
+    const result = await fetchAmazonProfileBooks(id, { filterUserId: opts.filterUserId, asins: batch, signal, cachedOnly: true });
     if (signal.aborted) throw signal.reason ?? Object.assign(new Error('Listing read cancelled'), { name: 'AbortError' });
     if (scope) retailObservationCache.write(scope, batch, result);
     return result.map(row => ({ ...row, marketplaceCode }));
   }, { signal: opts.signal, onRows: publish });
-  return { snapshots: snapshots(), failedRequests };
+  return { snapshots: snapshots(), failedRequests, pendingRequests: allRows.filter(row => row.amazonRetailPending).length };
 }
 
 /** Book keys (group_key / asin / sku) with KDP or Ads signal in the activity window. */
@@ -5950,6 +6012,7 @@ export async function fetchTopBooksRange(
   const kdpScope = opts.kdpScope ?? "linked_profiles";
   const kdpOnlySession = kdpScope === "user_accounts";
   if (!profileIds.length && !kdpOnlySession) return [];
+  const canReadBooksApi = await hasMobileApiSession();
 
   // Only start the expensive Create-candidate shelf if the web/Nest books read
   // cannot answer this request. Running both paths for the same six-profile
@@ -5959,27 +6022,28 @@ export async function fetchTopBooksRange(
   let nestBooksCatalogSeed: TopBookRow[] = [];
 
   let kdpAccountIds: string[] = [];
-  try {
-    kdpAccountIds = await fetchKdpAccountIdsForRoyaltyQuery(kdpLinkProfileIds, kdpScope, {
-      includePausedLinks: opts.includePausedLinks,
-      allowLegacyProfileLinks: opts.allowLegacyProfileLinks,
-    });
-  } catch (error) {
-    if (await hasNestToken()) {
-      const nestRows = await fetchNestTopBooks({
-        filterUserId,
-        startDate: start,
-        endDate: end,
-        profileIds,
-        limit,
+  if (!canReadBooksApi || activityDays > 0) {
+    try {
+      kdpAccountIds = await fetchKdpAccountIdsForRoyaltyQuery(kdpLinkProfileIds, kdpScope, {
+        includePausedLinks: opts.includePausedLinks,
+        allowLegacyProfileLinks: opts.allowLegacyProfileLinks,
       });
-      return finalizeTopBooksList(nestRows, profileIds, [], limit, activityDays);
+    } catch (error) {
+      if (canReadBooksApi) {
+        const nestRows = await fetchNestTopBooks({
+          filterUserId,
+          startDate: start,
+          endDate: end,
+          profileIds,
+          limit,
+        });
+        return finalizeTopBooksList(nestRows, profileIds, [], limit, activityDays);
+      }
+      logBooksStage("kdp_account_links", error);
+      throw new BooksReadError("kdp_account_links", booksErrorCode(error));
     }
-    logBooksStage("kdp_account_links", error);
-    throw new BooksReadError("kdp_account_links", booksErrorCode(error));
   }
-
-  if (await hasNestToken()) {
+  if (canReadBooksApi) {
     try {
       const nestRows = await fetchNestTopBooks({
         filterUserId,
@@ -6002,11 +6066,32 @@ export async function fetchTopBooksRange(
       if (nestRows.length && activityDays <= 0) {
         nestBooksCatalogSeed = nestRows;
         opts.onCoreRows?.(nestRows);
+        // The server already calculated this exact financial scope. Union the
+        // Create/active-campaign shelf, but do not replay every KDP day and Ads
+        // metric page on the phone just to reconstruct the same money.
+        // Create eligibility performs live catalog/stock discovery and can take
+        // minutes. Books visibility needs period evidence or an enabled campaign,
+        // not eligibility to create another campaign. The finalizer already
+        // unions verified enabled campaign identities without that discovery.
+        return finalizeCatalogBooksList(nestRows, profileIds, kdpAccountIds, limit, []);
       }
     } catch (error) {
-      if (filterUserId) throw error;
+      // A catalog error after a valid server financial read must not start a
+      // second, unbounded reconstruction of those same financial rows.
+      const status = Number((error as { status?: number; statusCode?: number })?.status
+        ?? (error as { statusCode?: number })?.statusCode ?? 0);
+      if (filterUserId || activityDays <= 0 || nestBooksCatalogSeed.length || status === 401 || status === 403) throw error;
       logBooksStage("nest_top_books", error);
     }
+  }
+
+  if (canReadBooksApi && activityDays <= 0) {
+    // An empty server response still uses the existing local fallback below.
+    // Resolve its account scope here, only if that fallback is actually needed.
+    kdpAccountIds = await fetchKdpAccountIdsForRoyaltyQuery(kdpLinkProfileIds, kdpScope, {
+      includePausedLinks: opts.includePausedLinks,
+      allowLegacyProfileLinks: opts.allowLegacyProfileLinks,
+    });
   }
 
   if (activityDays <= 0) {

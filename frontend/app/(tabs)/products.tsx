@@ -19,8 +19,9 @@ import { BooksReadError, fetchKdpRoyaltiesRange, fetchTopBooksRange, type TopBoo
 import { fallbackAsinCoverUrl } from "@/src/lib/targeting";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
+import { shouldRetryBooksRead } from "@/src/lib/booksReadRecovery";
 import { bookRetailWindow } from "@/src/lib/bookRetailWindow";
-import { bookRetailStockLabel, highestBookRetailReviewSnapshot, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { bookRetailAsins, bookRetailStockLabel, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import {
   formatBreakEvenAcos,
@@ -50,7 +51,7 @@ import {
 } from "@/src/lib/kdpRoyaltyScope";
 import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import { loadBooksFilterMemory, saveBooksFilterMemory } from "@/src/lib/filterMemory";
-import { countriesForActiveSponsoredBook, countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
+import { countriesForActiveSponsoredBook, primarySponsoredBookMarketplace, countriesForSponsoredBook, marketplaceFlagsA11y, type SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
 import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
 import { bookDisplayTitle } from "@/src/lib/bookPresentation";
@@ -246,7 +247,8 @@ export default function ProductsScreen() {
     placeholderData: sameScopeWarmPlaceholder(
       queryClient.getQueryData<TopBookRow[]>(overviewBooksKey),
     ),
-    retry: false,
+    retry: shouldRetryBooksRead,
+    retryDelay: attempt => Math.min(5000 * 2 ** attempt, 20_000),
     meta: financialQueryMeta(),
   });
 
@@ -336,7 +338,13 @@ export default function ProductsScreen() {
     setVisibleRetailKeys(previous => JSON.stringify(previous) === JSON.stringify(keys) ? previous : keys);
   }).current;
   const retailBooks = useMemo(() => bookRetailWindow(filtered, visibleRetailKeys), [filtered, visibleRetailKeys]);
-  const { query: retailQ, snapshots: retailData, refresh: refreshRetail } = useBookRetailMetadata(retailBooks, retailProfileIds, "book-retail-metadata");
+  const priorityRetailMarkets = useMemo(() => [...new Set(retailBooks.flatMap(book =>
+    countriesForActiveSponsoredBook(marketplaceIndex, book)))].sort(), [retailBooks, marketplaceIndex]);
+  const primaryMarketByAsin = useMemo(() => Object.fromEntries(retailBooks.flatMap(book => {
+    const market = primarySponsoredBookMarketplace(marketplaceIndex, book, profiles.flatMap(p => p.country_code ? [p.country_code] : []));
+    return market ? bookRetailAsins([book]).map(asin => [asin, market]) : [];
+  })), [retailBooks, marketplaceIndex, profiles]);
+  const { query: retailQ, snapshots: retailData, refresh: refreshRetail } = useBookRetailMetadata(retailBooks, retailProfileIds, "book-retail-metadata", priorityRetailMarkets, primaryMarketByAsin);
 
   const applySort = useCallback(
     (next: Sort) => {
@@ -498,7 +506,7 @@ export default function ProductsScreen() {
             <View style={{ paddingHorizontal: t.layout.pagePad }}>
               <ProductCard
                 item={item}
-                retailEdition={primaryBookRetailEdition(item, retailData)}
+                retailEdition={primaryBookRetailEdition(item, retailData, primaryMarketByAsin[item.asin] ? [primaryMarketByAsin[item.asin]] : countriesForActiveSponsoredBook(marketplaceIndex, item))}
                 retailLoading={retailQ.isFetching}
                 currency={primaryCurrency}
                 color={bookColorMap.get(bookColorKeyFor(item)) ?? fallbackBookColor(bookColorKeyFor(item), index)}
@@ -539,7 +547,7 @@ const ProductCard = React.memo(function ProductCard({
   const scale = useRef(new Animated.Value(1)).current;
 
   const activeReviewMarkets = countriesForActiveSponsoredBook(marketplaceIndex, item);
-  const reviews = retailEdition ? highestBookRetailReviewSnapshot(retailEdition.snapshot, activeReviewMarkets) : null;
+  const reviews = retailEdition?.snapshot;
   const adsReady = bookAdsReady(item);
   const kdpAvailable = bookKdpAvailable(item);
   const kdpReady = bookKdpReady(item);
@@ -623,6 +631,9 @@ const ProductCard = React.memo(function ProductCard({
                   style={t.typography.headline}
                 />
               </View>
+              {retailEdition ? (
+                <BookRetailInfo edition={retailEdition.format} snapshot={retailEdition.snapshot} activeMarketplaceCodes={activeReviewMarkets} loading={retailLoading} compact />
+              ) : null}
               <View
                 accessible={false}
                 importantForAccessibility="no"
@@ -660,8 +671,8 @@ const ProductCard = React.memo(function ProductCard({
                   },
                 ]}
                 numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.78}
+                adjustsFontSizeToFit={false}
+                maxFontSizeMultiplier={1.3}
               >
                 {resolvedNet == null ? "—" : `${netPos ? "+" : ""}${formatCurrency(resolvedNet, currency, { compact: true })}`}
               </Text>
@@ -682,9 +693,6 @@ const ProductCard = React.memo(function ProductCard({
             </View>
           </View>
 
-          {retailEdition ? (
-            <BookRetailInfo edition={retailEdition.format} snapshot={retailEdition.snapshot} activeMarketplaceCodes={activeReviewMarkets} loading={retailLoading} compact />
-          ) : null}
 
           {adsReady && item.acos > 0 ? (
             <View style={styles.breakEven} accessible={false} importantForAccessibility="no">
@@ -765,7 +773,7 @@ const styles = StyleSheet.create({
   profitBlock: {
     alignItems: "flex-end",
     paddingTop: 1,
-    minWidth: 76,
+    width: 96,
     flexShrink: 0,
   },
   statusPill: {

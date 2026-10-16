@@ -31,3 +31,10 @@ test('out-of-request ASINs never enter the cache', () => {
   assert.deepEqual(cache.read('s', ['OTHER'], 1).missing, ['OTHER']);
   assert.deepEqual(cache.read('s', ['A'], 1).rows, []);
 });
+test('pending server observations bypass local TTL until the background refresh completes', () => {
+  const cache = new BookRetailObservationCache();
+  cache.write('s', ['A'], [{ asin: 'A', amazonReviewCount: 10, amazonRetailPending: true }], 100);
+  assert.deepEqual(cache.read('s', ['A'], 101).missing, ['A']);
+  cache.write('s', ['A'], [{ asin: 'A', amazonReviewCount: 11, amazonRetailPending: false }], 102);
+  assert.equal(cache.read('s', ['A'], 103).rows[0].amazonReviewCount, 11);
+});

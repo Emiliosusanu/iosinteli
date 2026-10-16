@@ -147,3 +147,50 @@ test("same ASIN keeps marketplace review snapshots separate", () => {
   assert.deepEqual(editions.map(({ snapshot }) => [snapshot.marketplaceCode, snapshot.reviewCount]), [["CA", 13], ["US", 49]]);
   assert.match(snapshots.B0HFKCDPVG.coverCacheKey ?? "", /CA/);
 });
+
+test('a US-only sponsored book never displays Canadian stock in place of the US observation', () => {
+  const snapshots = indexProfileBookRetailSnapshots([
+    { asin: 'B0ABCDEFGH', marketplaceCode: 'CA', amazonReviewCount: 500, amazonRating: 4.9, amazonStockStatus: 'IN_STOCK' },
+    { asin: 'B0ABCDEFGH', marketplaceCode: 'US', amazonReviewCount: 50, amazonRating: 4.1, amazonStockStatus: 'OUT_OF_STOCK' },
+  ], ['B0ABCDEFGH'], 'CA');
+  const selected = primaryBookRetailEdition({ asin: 'B0ABCDEFGH', book_key: 'B0ABCDEFGH' }, snapshots, ['US']);
+  assert.equal(selected.snapshot.marketplaceCode, 'US');
+  assert.equal(selected.snapshot.stockStatus, 'OUT_OF_STOCK');
+  assert.equal(highestBookRetailReviewSnapshot(selected.snapshot, ['US']).reviewCount, 50);
+});
+test('missing active-market metadata stays unknown instead of borrowing foreign stock and reviews', () => {
+  const snapshots = indexProfileBookRetailSnapshots([
+    { asin: 'B0ABCDEFGH', marketplaceCode: 'CA', amazonReviewCount: 500, amazonStockStatus: 'IN_STOCK' },
+  ], ['B0ABCDEFGH'], 'CA');
+  const selected = primaryBookRetailEdition({ asin: 'B0ABCDEFGH', book_key: 'B0ABCDEFGH' }, snapshots, ['US']);
+  assert.equal(selected.snapshot.marketplaceCode, 'US');
+  assert.equal(selected.snapshot.stockStatus, null);
+  assert.equal(highestBookRetailReviewSnapshot(selected.snapshot, ['US']).reviewCount, null);
+});
+
+test('primary market stays US with multiple active markets even if CA has more reviews or better stock', () => {
+ const asin='B0ABCDEFGH';
+ const indexed=indexProfileBookRetailSnapshots([
+  {asin,marketplaceCode:'CA',amazonReviewCount:999,amazonRating:4.9,amazonStockStatus:'IN_STOCK'},
+  {asin,marketplaceCode:'US',amazonReviewCount:51,amazonRating:4.2,amazonStockStatus:'OUT_OF_STOCK'},
+ ],[asin],'CA');
+ const selected=primaryBookRetailEdition({asin,book_key:asin},indexed,['CA','US']);
+ assert.equal(selected.snapshot.marketplaceCode,'US');assert.equal(selected.snapshot.reviewCount,51);assert.equal(selected.snapshot.stockStatus,'OUT_OF_STOCK');
+});
+
+test('a newer empty catalog row from another owned US profile cannot erase real US stock/reviews',()=>{
+ const asin='B0ABCDEFGH';
+ const indexed=indexProfileBookRetailSnapshots([
+  {asin,marketplaceCode:'US',amazonMetaUpdatedAt:'2026-10-16T12:00:00Z',amazonRetailPending:true},
+  {asin,marketplaceCode:'US',amazonMetaUpdatedAt:'2026-10-15T12:00:00Z',amazonRating:4.5,amazonReviewCount:151,amazonStockStatus:'IN_STOCK',amazonStockCheckedAt:'2026-10-16T10:00:00Z',amazonReviewsCheckedAt:'2026-10-15T10:00:00Z'},
+ ],[asin],'US');
+ assert.equal(indexed[asin].reviewCount,151);assert.equal(indexed[asin].stockStatus,'IN_STOCK');assert.equal(indexed[asin].marketplaceCode,'US');
+});
+test('new actual stock and zero-review corrections win over older observations without mixing review pairs',()=>{
+ const asin='B0ABCDEFGH';
+ const indexed=indexProfileBookRetailSnapshots([
+  {asin,marketplaceCode:'US',amazonMetaUpdatedAt:'2026-10-16T12:00:00Z',amazonRating:4.5,amazonReviewCount:151,amazonStockStatus:'IN_STOCK',amazonStockCheckedAt:'2026-10-15T10:00:00Z',amazonReviewsCheckedAt:'2026-10-15T10:00:00Z'},
+  {asin,marketplaceCode:'US',amazonMetaUpdatedAt:'2026-10-15T12:00:00Z',amazonReviewCount:0,amazonRating:null,amazonStockStatus:'OUT_OF_STOCK',amazonStockCheckedAt:'2026-10-16T10:00:00Z',amazonReviewsCheckedAt:'2026-10-16T10:00:00Z'},
+ ],[asin],'US');
+ assert.equal(indexed[asin].reviewCount,0);assert.equal(indexed[asin].rating,null);assert.equal(indexed[asin].stockStatus,'OUT_OF_STOCK');
+});

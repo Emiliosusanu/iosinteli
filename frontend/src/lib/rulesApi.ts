@@ -233,6 +233,12 @@ async function resolveMobileApiToken(): Promise<{ token: string; source: "nest" 
   return picked;
 }
 
+/** Read APIs support the verified Amazon/Supabase bearer as well as Nest JWTs.
+ * Keep hasNestToken's stricter semantics for existing write/local-RLS choices. */
+export async function hasMobileApiSession(): Promise<boolean> {
+  return !!(await resolveMobileApiToken());
+}
+
 export async function nestApiFetch(path: string, init: NestRequestInit = {}): Promise<Response> {
   if (!API_BASE) {
     throw new NestApiError("The InteliAds API isn't configured yet.", 500);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bookRetailWindow, canReadBookRetailMetadata, mergeScopedRetailCache } from '../src/lib/bookRetailWindow.ts';
+import { bookRetailWindow, canReadBookRetailMetadata, mergeScopedRetailCache, cachedBookRetailSnapshots } from '../src/lib/bookRetailWindow.ts';
 
 test('a thousand-book shelf starts with twelve metadata lookups and follows the viewport', () => {
   const books = Array.from({ length: 1000 }, (_, i) => ({ book_key: `book-${i}`, asin: `B${String(i).padStart(9, '0')}` }));
@@ -40,4 +40,16 @@ test('customer and authorized admin previews can load reviews; invalid scope can
   assert.equal(corrected.data.B0ABCDEFGH.marketplaceSnapshots[0].reviewCount, 400);
   const other = mergeScopedRetailCache(corrected, 'customer-two', { B0ABCDEFGH: ca });
   assert.equal(other.data.B0ABCDEFGH.marketplaceSnapshots, undefined);
+});
+
+
+test('list observations seed detail immediately only inside the exact customer/profile scope', () => {
+ const us={asin:'1807973751',marketplaceCode:'US',reviewCount:49,rating:4.7,stockStatus:'IN_STOCK',checkedAt:'2026-10-16T19:00:00Z'};
+ const entry=[['book-retail-metadata','primary-market-v2','customer-a:profiles-us'],{snapshots:{'1807973751':us,other:{...us,asin:'other'}}}];
+ const selected=cachedBookRetailSnapshots([entry],'customer-a:profiles-us',['1807973751']);
+ assert.equal(selected['1807973751'].reviewCount,49);assert.equal(selected['1807973751'].stockStatus,'IN_STOCK');
+ assert.equal(selected['1807973751'].checkedAt,us.checkedAt);assert.deepEqual(Object.keys(selected),['1807973751']);
+ assert.deepEqual(cachedBookRetailSnapshots([entry],'customer-b:profiles-us',['1807973751']),{});
+ assert.deepEqual(cachedBookRetailSnapshots([entry],'customer-a:profiles-ca',['1807973751']),{});
+ assert.deepEqual(cachedBookRetailSnapshots([[['unrelated','primary-market-v2','customer-a:profiles-us'],entry[1]]],'customer-a:profiles-us',['1807973751']),{});
 });

@@ -1,3 +1,4 @@
+import { sortMarketplaceCountries } from "./bookMarketplaces.ts";
 import { normalizeFlagCountryCode } from "./accountsUi.ts";
 import { formatsFromWorkKey } from "./bookCampaignFormats.ts";
 import { identityAsinsForBookRow } from "./booksListActivity.ts";
@@ -14,6 +15,9 @@ export type BookRetailSnapshot = {
   marketplaceCode?: string;
   coverCacheKey?: string;
   marketplaceSnapshots?: BookRetailSnapshot[];
+  /** Exact listing server refresh state, never the whole viewport's spinner. */
+  retailPending?: boolean;
+  reviewsCheckedAt?: string | null;
 };
 
 export type BookRetailSourceRow = {
@@ -38,6 +42,9 @@ export type ProfileBookRetailRow = {
   coverUrl?: string | null;
   amazonMetaUpdatedAt?: string | null;
   marketplaceCode?: string | null;
+  amazonRetailPending?: boolean;
+  amazonStockCheckedAt?: string | null;
+  amazonReviewsCheckedAt?: string | null;
 };
 
 export type RetailBookIdentity = {
@@ -84,6 +91,21 @@ export function indexBookRetailSnapshots(rows: readonly BookRetailSourceRow[]): 
   return byAsin;
 }
 
+/** Several owned profiles can observe the same exact listing. A missing field
+ * in one response must not erase another profile's real observation. Dates for
+ * stock and reviews are independent, and rating/count stay paired.
+ */
+export function mergeBookRetailObservation(previous: BookRetailSnapshot, incoming: BookRetailSnapshot): BookRetailSnapshot {
+  if (previous.asin !== incoming.asin || normalizeFlagCountryCode(previous.marketplaceCode) !== normalizeFlagCountryCode(incoming.marketplaceCode)) return incoming;
+  const reviews = incoming.rating != null || incoming.reviewCount != null;
+  const priorReviews = previous.rating != null || previous.reviewCount != null;
+  const reviewRow = reviews && (!priorReviews || checkedTime(incoming.reviewsCheckedAt ?? incoming.checkedAt) >= checkedTime(previous.reviewsCheckedAt ?? previous.checkedAt)) ? incoming : previous;
+  const stockRow = incoming.stockStatus != null && (previous.stockStatus == null || checkedTime(incoming.checkedAt) >= checkedTime(previous.checkedAt)) ? incoming : previous;
+  return { ...previous, ...incoming, rating: reviewRow.rating, reviewCount: reviewRow.reviewCount,
+    reviewsCheckedAt: reviewRow.reviewsCheckedAt ?? reviewRow.checkedAt, stockStatus: stockRow.stockStatus, checkedAt: stockRow.checkedAt,
+    retailPending: Boolean(previous.retailPending || incoming.retailPending), marketplaceSnapshots: undefined };
+}
+
 /** Use the same per-profile API payload as /amazon; never infer metadata from a sibling ASIN. */
 export function indexProfileBookRetailSnapshots(
   rows: readonly ProfileBookRetailRow[],
@@ -98,11 +120,10 @@ export function indexProfileBookRetailSnapshots(
     const market = String(row.marketplaceCode ?? "").trim().toUpperCase();
     const asin = asinKey(row.asin);
     const key = `${asin}:${market}`;
-    if (byAsinAndMarket.has(key)) continue;
     // The web endpoint's timestamp can be a catalog fetch date rather than a
     // review/stock observation. Use it for image cache invalidation, not as a
     // user-facing "checked" date.
-    const snapshot = indexBookRetailSnapshots([{
+    let snapshot = indexBookRetailSnapshots([{
       asin,
       amazon_rating: row.amazonRating,
       amazon_review_count: row.amazonReviewCount,
@@ -112,12 +133,22 @@ export function indexProfileBookRetailSnapshots(
       cover_url: row.coverUrl,
       marketplace_code: market,
     }])[asin];
+    if (!snapshot && typeof row.amazonRetailPending === 'boolean') snapshot = {
+      asin, rating: null, reviewCount: null, stockStatus: null, checkedAt: null,
+      ...(market ? { marketplaceCode: market } : {}),
+    };
     if (!snapshot) continue;
+    if (typeof row.amazonRetailPending === 'boolean') snapshot.retailPending = row.amazonRetailPending;
+    // Only explicit observation timestamps are suitable for last-checked UI;
+    // amazonMetaUpdatedAt remains a catalog/image timestamp.
+    if (row.amazonStockCheckedAt && Number.isFinite(Date.parse(row.amazonStockCheckedAt))) snapshot.checkedAt = row.amazonStockCheckedAt;
+    if (row.amazonReviewsCheckedAt && Number.isFinite(Date.parse(row.amazonReviewsCheckedAt))) snapshot.reviewsCheckedAt = row.amazonReviewsCheckedAt;
     const version = checkedTime(row.amazonMetaUpdatedAt ?? null);
     if (snapshot.coverUrl && Number.isFinite(version)) {
       snapshot.coverCacheKey = `${asin}:${market}:${version}:${snapshot.coverUrl}`;
     }
-    byAsinAndMarket.set(key, snapshot);
+    const prior = byAsinAndMarket.get(key);
+    byAsinAndMarket.set(key, prior ? mergeBookRetailObservation(prior, snapshot) : snapshot);
   }
   const preferred = String(preferredMarketplaceCode).trim().toUpperCase();
   const result: Record<string, BookRetailSnapshot> = {};
@@ -164,15 +195,22 @@ export function bookRetailEditions(
 export function primaryBookRetailEdition(
   book: RetailBookIdentity,
   byAsin: Readonly<Record<string, BookRetailSnapshot>>,
+  activeMarketplaceCodes: readonly string[] = [],
 ): { format: string; snapshot: BookRetailSnapshot } | null {
   const editions = bookRetailEditions(book, byAsin);
+  const mainMarket = sortMarketplaceCountries(activeMarketplaceCodes)[0];
+  const active = new Set<string | null>(mainMarket ? [mainMarket] : []);
   const year = (value: string | undefined) => Math.max(0, ...(value?.match(/\b20\d{2}\b/g) ?? []).map(Number));
   const stockRank = (value: string | null) => {
     const tone = bookRetailStockTone(value);
     return tone === "good" ? 2 : tone === "neutral" ? 1 : 0;
   };
   const formatRank = (format: string) => format === "Paperback" ? 2 : format === "Hardcover" ? 1 : 0;
-  const primary = [...editions].sort((a, b) =>
+  const activeEditions = editions.filter(row => active.has(normalizeFlagCountryCode(row.snapshot.marketplaceCode)));
+  const candidates = activeEditions.length ? activeEditions : editions;
+  const primary = [...candidates].sort((a, b) =>
+    Number(active.has(normalizeFlagCountryCode(b.snapshot.marketplaceCode))) -
+      Number(active.has(normalizeFlagCountryCode(a.snapshot.marketplaceCode))) ||
     stockRank(b.snapshot.stockStatus) - stockRank(a.snapshot.stockStatus) ||
     year(b.snapshot.title) - year(a.snapshot.title) ||
     Number(b.snapshot.asin === asinKey(book.asin)) - Number(a.snapshot.asin === asinKey(book.asin)) ||
@@ -181,9 +219,13 @@ export function primaryBookRetailEdition(
     a.snapshot.asin.localeCompare(b.snapshot.asin),
   ).find(({ snapshot }) =>
     snapshot.rating != null || snapshot.reviewCount != null || snapshot.stockStatus != null || snapshot.coverUrl != null,
-  ) ?? editions[0] ?? null;
+  ) ?? candidates[0] ?? null;
   if (!primary) return null;
-  return { ...primary, snapshot: { ...primary.snapshot, marketplaceSnapshots: editions
+  const snapshot = active.size && !active.has(normalizeFlagCountryCode(primary.snapshot.marketplaceCode))
+    ? { ...primary.snapshot, rating: null, reviewCount: null, stockStatus: null, checkedAt: null,
+      marketplaceCode: active.size === 1 ? [...active][0] ?? undefined : undefined }
+    : primary.snapshot;
+  return { ...primary, snapshot: { ...snapshot, marketplaceSnapshots: editions
     .filter(({ snapshot }) => snapshot.asin === primary.snapshot.asin && snapshot.marketplaceCode !== primary.snapshot.marketplaceCode)
     .map(({ snapshot }) => snapshot) } };
 }
@@ -202,7 +244,7 @@ export function highestBookRetailReviewSnapshot(
       && (!active.size || active.has(normalizeFlagCountryCode(row.marketplaceCode))));
   return eligible.sort((a, b) => (b.reviewCount ?? -1) - (a.reviewCount ?? -1)
     || Number(b === snapshot) - Number(a === snapshot)
-    || checkedTime(b.checkedAt) - checkedTime(a.checkedAt))[0] ?? {
+    || checkedTime(b.reviewsCheckedAt ?? b.checkedAt) - checkedTime(a.reviewsCheckedAt ?? a.checkedAt))[0] ?? {
       asin: snapshot.asin, rating: null, reviewCount: null, stockStatus: null, checkedAt: null,
       marketplaceCode: active.size === 1 ? [...active][0] ?? undefined : undefined,
     };
@@ -210,7 +252,7 @@ export function highestBookRetailReviewSnapshot(
 
 export function bookRetailStockTone(value: string | null): "good" | "danger" | "neutral" {
   const status = String(value ?? "").trim().toLowerCase().replace(/[_-]+/g, " ");
-  if (/^(in stock|instock|available)$/.test(status)) return "good";
+  if (/^(in stock|in stock scarce|instock|available)$/.test(status)) return "good";
   if (/^(out of stock|outofstock|not in stock|currently unavailable|unavailable)$/.test(status)) return "danger";
   return "neutral";
 }
@@ -218,6 +260,10 @@ export function bookRetailStockTone(value: string | null): "good" | "danger" | "
 export function bookRetailStockLabel(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/[_-]+/g, " ");
   if (/^(in stock|instock)$/.test(normalized)) return "In stock";
+  if (normalized === "in stock scarce") return "Limited stock";
+  if (normalized === "preorder") return "Pre-order";
+  if (normalized === "leadtime") return "Ships later";
+  if (normalized === "available date") return "Available later";
   if (/^(out of stock|outofstock)$/.test(normalized)) return "Out of stock";
   if (normalized === "currently unavailable") return "Currently unavailable";
   return value.trim();

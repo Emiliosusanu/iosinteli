@@ -10,7 +10,7 @@ import {
 } from "react-native";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
-import { bookRetailEditions, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { bookRetailAsins, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
 import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -75,6 +75,7 @@ import {
 import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialReadVersion";
 import {
   countriesForSponsoredBook,
+  primarySponsoredBookMarketplace,
   marketplaceFlagsA11y,
   type SponsoredBookRef,
   type SponsoredMarketplaceIndex,
@@ -146,7 +147,7 @@ export default function ProductCampaignsScreen() {
   const { user } = useAuth();
   const t = useTheme();
   const router = useRouter();
-  const { profiles, selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
+  const { profiles, profilesLoading, profilesFetching, profilesError, refetchProfiles, selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer } = useApp();
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const params = useLocalSearchParams<{ asin: string; title?: string; imageUrl?: string }>();
   const asin = paramValue(params.asin).toUpperCase();
@@ -177,8 +178,9 @@ export default function ProductCampaignsScreen() {
     [royaltyScope.profileIds],
   );
   const kdpQueryScope = overviewKdpQueryScope(profiles, detailProfileIds, royaltyScope);
-  // Keep limit in the key so Overview/Books caches cannot cross-hydrate a truncated list.
-  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, 300] as const;
+  // Detail shares the complete, exact financial scope with Books (limit 0).
+  // A truncated Overview list must never seed this full-catalog query.
+  const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, 0] as const;
 
   const booksQ = useQuery({
     queryKey: booksKey,
@@ -190,7 +192,7 @@ export default function ProductCampaignsScreen() {
         start: dateRange.start,
         end: dateRange.end,
         royaltyRate: 0,
-        limit: 300,
+        limit: 0,
         filterUserId: adminFilterUserId,
         activityDays: 0,
       }),
@@ -238,15 +240,17 @@ export default function ProductCampaignsScreen() {
 
   const book = useMemo(() => matchBook(booksQ.data ?? [], asin), [booksQ.data, asin]);
   const retailBooks = useMemo(() => book ? [book] : [{ book_key: asin, asin }], [book, asin]);
-  const { query: retailQ, snapshots: retailData, refresh: refreshRetail, enabled: retailEnabled } = useBookRetailMetadata(retailBooks, retailProfileIds, "book-retail-metadata-detail");
-  const retailEditions = useMemo(
-    () => Object.keys(retailData).length ? bookRetailEditions(retailBooks[0], retailData) : [],
-    [retailBooks, retailData],
-  );
+  const primaryRetailMarket = primarySponsoredBookMarketplace(marketplaceIndex, retailBooks[0], profiles.flatMap(p => p.country_code ? [p.country_code] : []));
+  const primaryMarketByAsin = useMemo(() => primaryRetailMarket
+    ? Object.fromEntries(bookRetailAsins(retailBooks).map(asin => [asin, primaryRetailMarket])) : {}, [retailBooks, primaryRetailMarket]);
+  const { query: retailQ, snapshots: retailData, refresh: refreshRetail, enabled: retailEnabled } = useBookRetailMetadata(
+    retailBooks, retailProfileIds, "book-retail-metadata-detail", primaryRetailMarket ? [primaryRetailMarket] : [], primaryMarketByAsin);
   const primaryRetailEdition = useMemo(
-    () => Object.keys(retailData).length ? primaryBookRetailEdition(retailBooks[0], retailData) : null,
-    [retailBooks, retailData],
+    () => primaryBookRetailEdition(retailBooks[0], retailData, primaryRetailMarket ? [primaryRetailMarket] : []),
+    [retailBooks, retailData, primaryRetailMarket],
   );
+  // Same single listing as the Books card, never one row per marketplace.
+  const retailEditions = primaryRetailEdition ? [primaryRetailEdition] : [];
   useEffect(() => {
     markPerf("book_detail.mount");
   }, []);
@@ -313,6 +317,13 @@ export default function ProductCampaignsScreen() {
     ]);
     setRefreshing(false);
   };
+
+  if (moneyProfileIds.length === 0 && (profilesLoading || profilesFetching)) {
+    return <SubScreen title="Book" showDateRange><ScreenSpinner /></SubScreen>;
+  }
+  if (moneyProfileIds.length === 0 && profilesError) {
+    return <SubScreen title="Book" showDateRange><RetryState title="Couldn't load profiles" subtitle="Retry to load your linked Amazon Ads profiles." onRetry={refetchProfiles} retrying={profilesFetching} /></SubScreen>;
+  }
 
   if (moneyProfileIds.length === 0) {
     return (
@@ -499,10 +510,10 @@ function BookHeader({
         },
       ]
     : [
-        { label: ADS_SPEND_LABEL, value: formatCurrency(adsTotals.spend, currency, { compact: true }) },
-        { label: "Impr", value: formatInt(adsTotals.impressions) },
-        { label: "Clicks", value: formatInt(adsTotals.clicks) },
-        { label: "Ads orders", value: formatInt(adsTotals.orders) },
+        { label: ADS_SPEND_LABEL, value: adsReady ? formatCurrency(adsTotals.spend, currency, { compact: true }) : "—" },
+        { label: "Impr", value: adsReady ? formatInt(adsTotals.impressions) : "—" },
+        { label: "Clicks", value: adsReady ? formatInt(adsTotals.clicks) : "—" },
+        { label: "Ads orders", value: adsReady ? formatInt(adsTotals.orders) : "—" },
         {
           label: "ACoS",
           value: adsTotals.sales > 0 ? formatPercent(adsAcos) : "—",
@@ -642,7 +653,7 @@ function BookHeader({
         {retailEditions.length > 0 || retailLoadState === "error" ? (
           <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: t.colors.separator, paddingTop: 8 }}>
             <Text style={[t.typography.caption1, { color: t.colors.text_secondary, fontWeight: "700" }]}>
-              Amazon listing snapshots
+              Amazon listing
             </Text>
             {retailLoadState === "error" ? (
               <Text style={[t.typography.caption1, { color: t.colors.text_secondary, marginTop: 5 }]}>

@@ -46,7 +46,7 @@ export function BookMarketplaceFlags({
   testID?: string;
   style?: StyleProp<TextStyle>;
 }) {
-  return <MarketplaceFlags countries={countriesForSponsoredBook(index, book)} testID={testID} style={style} />;
+  return <MarketplaceFlags countries={countriesForSponsoredBook(index, book, true)} mode="identity" testID={testID} style={style} />;
 }
 
 export function CampaignMarketplaceFlags({

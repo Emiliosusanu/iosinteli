@@ -41,12 +41,25 @@ export async function loadKdpAsinQuarantine(userId: string): Promise<QuarantineD
 
   try {
     const { supabase } = await import("../supabase.ts");
-    const { data, error } = await supabase
-      .from("user_settings")
-      .select("value")
-      .eq("user_id", uid)
-      .eq("field_name", KDP_ASIN_QUARANTINE_FIELD)
-      .maybeSingle();
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let response;
+    try {
+      response = await Promise.race([
+        supabase.from("user_settings").select("value")
+          .eq("user_id", uid).eq("field_name", KDP_ASIN_QUARANTINE_FIELD)
+          .abortSignal(controller.signal).maybeSingle(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error("Quarantine settings read timed out"));
+          }, 3000);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    const { data, error } = response;
     if (!error && data?.value != null) {
       const parsed = parseQuarantineDoc(data.value);
       if (parsed) {
