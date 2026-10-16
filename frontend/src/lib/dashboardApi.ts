@@ -826,6 +826,7 @@ export async function fetchNestTopBooks(params: {
       endDate: params.endDate,
       profileIds: params.profileIds.join(","),
       filterUserId: params.filterUserId,
+      listingCacheOnly: "true",
     })}`,
     { method: "GET" },
     "Couldn't load books.",

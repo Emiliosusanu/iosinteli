@@ -24,7 +24,7 @@ test('verified format identities survive financial mapping for exact edition rev
  const {fetch,calls}=runtime({data:[{asin:'B0ABCDEFGH',formatAsins:['B0ABCDEFGH','1807973751'],title:'Book',royalties:19,adSpend:4,adSales:20,orders:2}]});
  const [row]=await fetch({startDate:'2026-10-01',endDate:'2026-10-16',profileIds:['owned-us'],filterUserId:'owned customer'});
  assert.deepEqual(Array.from(row.format_asins),['B0ABCDEFGH','1807973751']);assert.equal(row.net,15);assert.equal(row.ads_state,'ready');
- const url=new URL(calls[0].path,'https://example.test');assert.equal(url.searchParams.get('filterUserId'),'owned customer');assert.equal(url.searchParams.get('profileIds'),'owned-us');
+ const url=new URL(calls[0].path,'https://example.test');assert.equal(url.searchParams.get('filterUserId'),'owned customer');assert.equal(url.searchParams.get('profileIds'),'owned-us');assert.equal(url.searchParams.get('listingCacheOnly'),'true');
 });
 test('successful empty server result remains empty',async()=>{
  const {fetch}=runtime({data:[]});const rows=await fetch({startDate:'2026-10-01',endDate:'2026-10-16',profileIds:['owned-us']});assert.equal(rows.length,0);

@@ -34,6 +34,7 @@ export type SponsoredBookRef = {
   asin?: string | null;
   sku?: string | null;
   book_key?: string | null;
+  format_asins?: readonly string[] | null;
 };
 
 export type MarketplaceCampaignBookRef = {
@@ -232,6 +233,10 @@ export function bookFamilyKeys(book: SponsoredBookRef): string[] {
   }
   const asin = normalizeBookFamilyKey(book.asin);
   if (asin && isAsinLikeKey(asin)) keys.add(asin);
+  for (const value of book.format_asins ?? []) {
+    const sibling = normalizeBookFamilyKey(value);
+    if (/^[a-z0-9]{10}$/.test(sibling)) keys.add(sibling);
+  }
   const sku = normalizeBookFamilyKey(book.sku);
   if (sku && isAsinLikeKey(sku)) keys.add(sku);
   return [...keys];
@@ -374,6 +379,31 @@ export function buildSponsoredMarketplaceIndexFromCampaignBooks(input: {
   return { countriesByKey, activeCountriesByKey, keysByCampaignId };
 }
 
+/** /campaigns/books returns exact ASINs and profiles with enabled campaigns.
+ * No period metrics, campaign-name inference or invented campaign/profile pairs. */
+export function buildActiveMarketplaceIndexFromProfileBooks(
+  profiles: readonly MarketplaceProfileRef[],
+  books: readonly { asin?: string; amazonProfileIds?: readonly string[]; campaignIds?: readonly string[] }[],
+): SponsoredMarketplaceIndex {
+  const index = emptySponsoredMarketplaceIndex();
+  const countryOf = countryByProfileId(profiles);
+  for (const book of books) {
+    const asin = normalizeBookFamilyKey(book.asin);
+    if (!/^[a-z0-9]{10}$/.test(asin) || !book.campaignIds?.length) continue;
+    for (const id of book.amazonProfileIds ?? []) {
+      const country = countryOf.get(id) ?? null;
+      addCountryForKey(index.countriesByKey, asin, country);
+      addCountryForKey(index.activeCountriesByKey, asin, country);
+    }
+    for (const id of book.campaignIds) {
+      if (!id) continue;
+      const keys = index.keysByCampaignId.get(id) ?? new Set<string>();
+      keys.add(asin); index.keysByCampaignId.set(id, keys);
+    }
+  }
+  return index;
+}
+
 export function mergeSponsoredMarketplaceIndexes(
   ...indexes: Array<SponsoredMarketplaceIndex | null | undefined>
 ): SponsoredMarketplaceIndex {
@@ -425,7 +455,7 @@ export function countriesForSponsoredBook(
   // identity — never title or campaign-name family keys.
   return countriesForKeys(
     index,
-    bookFamilyKeys({ asin: book.asin, sku: book.sku, book_key: book.book_key }),
+    bookFamilyKeys({ asin: book.asin, sku: book.sku, book_key: book.book_key, format_asins: book.format_asins }),
     includeSingle,
   );
 }
@@ -436,7 +466,7 @@ export function countriesForActiveSponsoredBook(
   book: SponsoredBookRef,
 ): string[] {
   const countries = new Set<string>();
-  for (const key of bookFamilyKeys({ asin: book.asin, sku: book.sku, book_key: book.book_key })) {
+  for (const key of bookFamilyKeys({ asin: book.asin, sku: book.sku, book_key: book.book_key, format_asins: book.format_asins })) {
     for (const country of index?.activeCountriesByKey?.get(key) ?? []) countries.add(country);
   }
   return sortMarketplaceCountries(countries);
