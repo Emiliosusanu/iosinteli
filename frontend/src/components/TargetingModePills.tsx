@@ -16,7 +16,7 @@ export type TargetingModeKey =
 /**
  * Targeting mode control — Amazon-style capsules:
  * selected = solid brand-blue pill with white icon+label;
- * inactive = gray pill with a readable label. Five equal slots fill the row.
+ * inactive = gray icon-only pill. The selected slot expands for its label.
  */
 export const TARGETING_MODE_OPTIONS: {
   key: TargetingModeKey;
@@ -55,7 +55,7 @@ export function TargetingModePills({ value, onChange }: Props) {
         const active = option.key === value;
         return (
           // flex must live outside PressableScale — layout styles sit on an inner Animated.View.
-          <View key={option.key} style={styles.slot}>
+          <View key={option.key} style={[styles.slot, active && styles.activeSlot]}>
             <PressableScale
               testID={option.testID}
               accessibilityRole="tab"
@@ -80,18 +80,18 @@ export function TargetingModePills({ value, onChange }: Props) {
                 color={active ? "#FFFFFF" : idleFg}
                 weight={active ? "semibold" : "regular"}
               />
-              {(
+              {active ? (
                 <Text
                   accessible={false}
                   importantForAccessibility="no-hide-descendants"
                   numberOfLines={1}
                   adjustsFontSizeToFit
                   minimumFontScale={0.75}
-                  style={[styles.label, { color: active ? "#FFFFFF" : idleFg }]}
+                  style={styles.label}
                 >
                   {option.label}
                 </Text>
-              )}
+              ) : null}
             </PressableScale>
           </View>
         );
@@ -115,12 +115,15 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  activeSlot: {
+    flex: 2.3,
+  },
   segment: {
     width: "100%",
-    minHeight: 52,
+    minHeight: 44,
     borderRadius: 999,
     borderCurve: "continuous",
-    flexDirection: "column",
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 4,
@@ -128,8 +131,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   label: {
-    fontSize: 12,
-    lineHeight: 14,
+    fontSize: 14,
+    lineHeight: 18,
     letterSpacing: 0,
     fontWeight: "700",
     color: "#FFFFFF",
