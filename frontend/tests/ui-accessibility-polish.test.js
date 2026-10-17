@@ -76,11 +76,15 @@ test("Reduce Motion removes press scaling while preserving opacity and outer hit
 });
 
 test("settings keep long values below the label and preserve their full accessibility text", () => {
+  for (const [file, name] of [
+    ["../src/components/ios/Native.tsx", "IOSSettingsRow"],
+    ["../src/components/settings/SettingsPrimitives.tsx", "SettingsRow"],
+  ]) {
   let fontScale = 1;
-  const component = load("../src/components/ios/Native.tsx", (name) => {
+  const component = load(file, (name) => {
     if (name === "react") return { default: react };
     if (name === "react-native") return {
-      TouchableOpacity: "TouchableOpacity", View: "View", Text: "Text",
+      TouchableOpacity: "TouchableOpacity", Pressable: "Pressable", View: "View", Text: "Text",
       StyleSheet: { create: (s) => s }, Platform: { OS: "ios" },
       useWindowDimensions: () => ({ fontScale }),
     };
@@ -89,11 +93,12 @@ test("settings keep long values below the label and preserve their full accessib
   });
   for (fontScale of [1, 1.6, 2]) {
     const value = "publisher@example-domain.com";
-    const tree = component.IOSSettingsRow({ label: "My account", value, onPress() {} });
+    const tree = component[name]({ label: "My account", value, onPress() {} });
     const texts = flatten(tree).filter((node) => node.type === "Text");
     assert.equal(texts.length, 2);
     assert.equal(texts[1].children[0], value);
     assert.equal(tree.props.accessibilityLabel, `My account. ${value}`);
     assert.equal(texts[1].props.numberOfLines, undefined);
+  }
   }
 });
