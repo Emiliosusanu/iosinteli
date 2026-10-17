@@ -1,5 +1,5 @@
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import { PressableScale } from "@/src/components/Motion";
 import { SFSymbol } from "@/src/components/ios/Native";
@@ -39,6 +39,8 @@ type Props = {
 
 export function TargetingModePills({ value, onChange }: Props) {
   const t = useTheme();
+  const { width } = useWindowDimensions();
+  const compact = width < 400;
   const reduceMotion = useReduceMotion();
   const blue = t.colors.tone_primary;
   const idleBg = t.colors.background_tertiary;
@@ -69,6 +71,7 @@ export function TargetingModePills({ value, onChange }: Props) {
               }}
               style={[
                 styles.segment,
+                compact && { minHeight: 40, paddingVertical: 6, paddingHorizontal: 4 },
                 {
                   backgroundColor: active ? blue : idleBg,
                 },
@@ -76,7 +79,7 @@ export function TargetingModePills({ value, onChange }: Props) {
             >
               <SFSymbol
                 name={option.symbol}
-                size={active ? 15 : 16}
+                size={compact ? 14 : active ? 15 : 16}
                 color={active ? "#FFFFFF" : idleFg}
                 weight={active ? "semibold" : "regular"}
               />

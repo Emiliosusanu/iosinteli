@@ -11,6 +11,12 @@ import { resolveBookNet, bookNetIsKnown } from "@/src/lib/netRoyalties";
 import type { SearchTerm } from "@/src/lib/types";
 import type { SponsoredMarketplaceIndex } from "@/src/lib/bookMarketplaces";
 import { BookMarketplaceFlags } from "@/src/components/MarketplaceFlags";
+import { optionalMetric } from "@/src/lib/metricEvidence";
+
+function observedCount(value: unknown, allowNegative = false): string {
+  const count = optionalMetric(value, allowNegative);
+  return count == null ? "—" : formatInt(count);
+}
 
 const ROW = StyleSheet.create({
   row: {
@@ -62,7 +68,7 @@ export function KeywordWidgetRow({
           {row.keyword_text || "Keyword"}
         </Text>
         <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}>
-          {formatCurrency(spend, currency, { compact: true })} · {formatInt(Number(row.total_orders))} orders · {formatInt(Number(row.total_clicks))} clicks{match ? ` · ${match}` : ""}
+          {formatCurrency(spend, currency, { compact: true })} · {observedCount(row.total_orders)} orders · {observedCount(row.total_clicks)} clicks{match ? ` · ${match}` : ""}
         </Text>
       </View>
       <View style={{ alignItems: "flex-end" }}>
@@ -108,7 +114,7 @@ export function SearchTermWidgetRow({
           {label}
         </Text>
         <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]} numberOfLines={1}>
-          {formatCurrency(spend, currency, { compact: true })} · {formatInt(Number(row.total_orders))} orders · {formatInt(Number(row.total_clicks))} clicks
+          {formatCurrency(spend, currency, { compact: true })} · {observedCount(row.total_orders)} orders · {observedCount(row.total_clicks)} clicks
         </Text>
       </View>
       <View style={{ alignItems: "flex-end" }}>
@@ -156,7 +162,7 @@ export function CampaignWidgetRow({
           {campaign.name}
         </Text>
         <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]} numberOfLines={1}>
-          {formatCurrency(campaign.spend, currency, { compact: true })} · {formatInt(campaign.orders)} orders · {formatInt(campaign.clicks)} clicks
+          {formatCurrency(campaign.spend, currency, { compact: true })} · {observedCount(campaign.orders)} orders · {observedCount(campaign.clicks)} clicks
         </Text>
         {showPlacement ? <PlacementShareLine item={campaign} t={t} /> : null}
       </View>
@@ -205,7 +211,7 @@ export function AdGroupWidgetRow({
           {row.name}
         </Text>
         <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]} numberOfLines={1}>
-          {formatCurrency(spend, currency, { compact: true })} · {formatInt(row.total_orders)} orders · {formatInt(row.total_clicks)} clicks
+          {formatCurrency(spend, currency, { compact: true })} · {observedCount(row.total_orders)} orders · {observedCount(row.total_clicks)} clicks
         </Text>
       </View>
       <Text style={[t.typography.metric_compact, { color: hasSales ? toneColor(acosTone(acos), t.colors) : t.colors.text_secondary }]}>
@@ -276,8 +282,9 @@ export function BookWidgetRow({
           ) : null}
         </View>
         <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 2 }]}>
-          {bookKdpAvailable ? `${formatCurrency(book.royalties!, currency, { compact: true })} · ` : ""}
-          {formatCurrency(book.spend, currency, { compact: true })} · {formatInt(book.orders)} orders · {formatInt(book.clicks)} clicks ·{" "}
+          {bookKdpAvailable ? `Roy. ${formatCurrency(book.royalties!, currency, { compact: true })} · ` : ""}
+          Spend {formatCurrency(book.spend, currency, { compact: true })} · {observedCount(book.orders, book.orders_source === "kdp")} {book.orders_source === "kdp" ? "KDP units" : "ad orders"}
+          {book.clicks != null ? ` · ${observedCount(book.clicks)} clicks` : ""} ·{" "}
           <Text style={{ color: book.sales > 0 ? toneColor(hasAuthoritativeBreakEven(book.breakeven_acos) ? acosTone(book.acos, book.breakeven_acos) : "inactive", t.colors) : t.colors.text_secondary }}>
             {book.sales > 0 ? formatPercent(book.acos) : "—"}
           </Text>

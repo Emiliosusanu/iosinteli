@@ -14,10 +14,11 @@ const targeting = readFileSync(
 );
 
 test("every selected mode renders its icon and full label; the other modes render icons only", () => {
+  let width = 393;
   const exports = {};
   const context = { exports, require(name) {
     if (name === "react") return { default: { createElement: (type, props, ...children) => ({ type, props, children }) } };
-    if (name === "react-native") return { Text: "Text", View: "View", StyleSheet: { create: value => value } };
+    if (name === "react-native") return { Text: "Text", View: "View", StyleSheet: { create: value => value }, useWindowDimensions: () => ({ width }) };
     if (name.endsWith("/Motion")) return { PressableScale: "PressableScale" };
     if (name.endsWith("/Native")) return { SFSymbol: "SFSymbol" };
     if (name.endsWith("/theme")) return { useReduceMotion: () => true, useTheme: () => ({ colors: {} }) };
@@ -25,13 +26,16 @@ test("every selected mode renders its icon and full label; the other modes rende
   } };
   vm.runInNewContext(ts.transpileModule(pills, { compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.CommonJS } }).outputText, context);
   const flatten = node => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(flatten) : [node, ...node.children.flatMap(flatten)];
-  for (const option of exports.TARGETING_MODE_OPTIONS) {
-    const tree = flatten(exports.TargetingModePills({ value: option.key, onChange() {} }));
+  for (width of [320, 393, 430]) for (const option of exports.TARGETING_MODE_OPTIONS) {
+    const changes = [];
+    const tree = flatten(exports.TargetingModePills({ value: option.key, onChange: next => changes.push(next) }));
     const text = tree.filter(node => node.type === "Text");
     assert.equal(text.length, 1, option.key);
     assert.equal(text[0].children[0], option.label);
     assert.equal(tree.filter(node => node.type === "SFSymbol").length, 5);
     assert.equal(tree.filter(node => node.type === "PressableScale" && node.props.accessibilityState.selected).length, 1);
+    for (const button of tree.filter(node => node.type === "PressableScale")) button.props.onPress();
+    assert.deepEqual(changes, Array.from(exports.TARGETING_MODE_OPTIONS).filter(item => item.key !== option.key).map(item => item.key));
   }
 });
 

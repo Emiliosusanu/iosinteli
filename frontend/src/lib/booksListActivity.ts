@@ -3,6 +3,7 @@
  */
 
 import { rangePresets } from "./format.ts";
+import { optionalMetric, knownMetricSum } from "./metricEvidence.ts";
 
 export const BOOKS_LIST_ACTIVITY_DAYS = 60;
 
@@ -14,8 +15,8 @@ export type BookListRow = {
   orders: number;
   spend: number;
   sales: number;
-  impressions: number;
-  clicks: number;
+  impressions: number | null;
+  clicks: number | null;
 };
 
 export function booksListActivityRange(now = new Date()): { start: string; end: string } {
@@ -224,8 +225,10 @@ export function mergeTopBookCatalogRows<T extends CatalogBookRow>(
     const royalties = preferEvidenceRoyalties(catalog.royalties, period.royalties);
     const spend = preferEvidenceMetric(catalog.spend, period.spend);
     const sales = preferEvidenceMetric(catalog.sales, period.sales);
-    const impressions = preferEvidenceMetric(catalog.impressions, period.impressions);
-    const clicks = preferEvidenceMetric(catalog.clicks, period.clicks);
+    const impressions = optionalMetric(period.impressions) == null && optionalMetric(catalog.impressions) == null
+      ? null : preferEvidenceMetric(catalog.impressions, period.impressions);
+    const clicks = optionalMetric(period.clicks) == null && optionalMetric(catalog.clicks) == null
+      ? null : preferEvidenceMetric(catalog.clicks, period.clicks);
     const orders = preferEvidenceMetric(catalog.orders, period.orders);
     const kdpOrders = preferEvidenceMetric(
       (catalog as { kdp_orders?: number | null }).kdp_orders,
@@ -435,8 +438,8 @@ export function collapseTopBooksByFormatGroup<T extends CatalogBookRow>(rows: re
     const spend = sumNum(...bucket.map((row) => row.spend));
     const sales = sumNum(...bucket.map((row) => row.sales));
     const orders = sumNum(...bucket.map((row) => row.orders));
-    const impressions = sumNum(...bucket.map((row) => row.impressions));
-    const clicks = sumNum(...bucket.map((row) => row.clicks));
+    const impressions = knownMetricSum(bucket.map((row) => row.impressions));
+    const clicks = knownMetricSum(bucket.map((row) => row.clicks));
     const kdpOrders = sumNum(...bucket.map((row) => row.kdp_orders));
     let title = preferred.title ?? null;
     for (const row of bucket) title = preferEditionTitle(title, row.title);

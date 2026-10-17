@@ -88,6 +88,7 @@ type MarketPillProps = {
   /** Grow/shrink like Overview header trailing (default true). */
   flex?: boolean;
   compact?: boolean;
+  flagsOnly?: boolean;
 };
 
 /**
@@ -103,6 +104,7 @@ export function MarketPill({
   accessibilityLabel,
   flex = true,
   compact = false,
+  flagsOnly = false,
 }: MarketPillProps) {
   const t = useTheme();
   const resolvedCountries = sortMarketCountryCodes(countries);
@@ -168,7 +170,7 @@ export function MarketPill({
             fillColor={chrome.flagFill}
             textColor={chrome.chevron}
           />
-          <Text
+          {!flagsOnly ? <Text
             style={[t.typography.footnote, styles.marketPillText, { color: chrome.label }, compactMulti ? { fontSize: 12, lineHeight: 14 } : undefined]}
             numberOfLines={compactMulti ? 2 : 1}
             adjustsFontSizeToFit
@@ -176,7 +178,7 @@ export function MarketPill({
             ellipsizeMode="tail"
           >
             {label}
-          </Text>
+          </Text> : null}
           <SFSymbol name="chevron.down" size={10} color={chrome.chevron} />
         </View>
       </View>
@@ -216,7 +218,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minWidth: 0,
     fontWeight: "600",
-    letterSpacing: -0.1,
+    letterSpacing: 0,
   },
   marketFlagStack: {
     flexDirection: "row",

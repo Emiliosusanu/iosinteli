@@ -5544,6 +5544,7 @@ export async function fetchTopKeywordsRange(opts: RangeOpts): Promise<TopKeyword
 }
 
 export interface TopBookRow {
+  orders_source?: "kdp" | "ads";
   book_key: string;
   asin: string;
   sku: string | null;
@@ -5551,8 +5552,8 @@ export interface TopBookRow {
   format_asins?: string[];
   title: string | null;
   image_url: string | null;
-  impressions: number;
-  clicks: number;
+  impressions: number | null;
+  clicks: number | null;
   orders: number;
   /** KDP store units; separate from Amazon Ads attributed orders. */
   kdp_orders?: number;
