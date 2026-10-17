@@ -46,6 +46,7 @@ import {
 import {
   defaultCreateFormatAsin,
   FORMAT_KIND_ACCENT,
+  formatOptionsForAsins,
   formatsFromWorkKey,
   preferredEnabledProfileId,
   type BookFormatOption,
@@ -119,6 +120,7 @@ function bookStatus(item: TopBookRow, hasBreakEven: boolean): { label: string; t
 }
 
 function campaignVerdict(item: BookCampaignRow): { label: string; tone: "good" | "warning" | "danger" | "inactive" } {
+  if (item.metrics_state === "unavailable") return { label: "Metrics unavailable", tone: "warning" };
   const spend = Number(item.spend) || 0;
   const orders = Number(item.orders) || 0;
   const sales = Number(item.sales) || 0;
@@ -138,8 +140,9 @@ function matchSourceCaption(source: BookCampaignRow["match_source"]) {
 function campaignA11yLabel(item: BookCampaignRow, verdict: { label: string }, currency: string) {
   const state = statusLabel(item.state);
   const acos = Number(item.sales) > 0 ? formatPercent(Number(item.acos)) : "not available";
-  const spend = formatCurrency(Number(item.spend) || 0, currency);
-  const orders = formatInt(Number(item.orders) || 0);
+  const unavailable = item.metrics_state === "unavailable";
+  const spend = unavailable ? "not available" : formatCurrency(Number(item.spend) || 0, currency);
+  const orders = unavailable ? "not available" : formatInt(Number(item.orders) || 0);
   return `${item.name}, ${state}, ${verdict.label}, ACoS ${acos}, Spend ${spend}, ${orders} orders`;
 }
 
@@ -255,6 +258,7 @@ export default function ProductCampaignsScreen() {
     markPerf("book_detail.mount");
   }, []);
   const campaigns = campaignsQ.data ?? [];
+  const campaignsMetricsUnavailable = campaigns.some((row) => row.metrics_state === "unavailable");
   const identity = identityQ.data ?? null;
   const title = preferEditionTitle(book?.title || identity?.title || paramTitle, primaryRetailEdition?.snapshot.title) || "Book";
   const imageUrl = primaryRetailEdition?.snapshot.coverUrl ?? book?.image_url ?? identity?.image_url ?? paramImageUrl;
@@ -376,6 +380,7 @@ export default function ProductCampaignsScreen() {
             campaignsLoading={campaignsLoading}
             campaignsFailed={campaignsFailed}
             campaignsFailedSubtitle={campaignsFailedSubtitle}
+            campaignsMetricsUnavailable={campaignsMetricsUnavailable}
             campaignsRetrying={campaignsQ.isRefetching}
             onRetryCampaigns={() => void campaignsQ.refetch()}
             currency={primaryCurrency}
@@ -402,6 +407,7 @@ export default function ProductCampaignsScreen() {
           <CampaignRow
             item={item}
             currency={primaryCurrency}
+            formatOptions={formatOptions}
             marketplaceIndex={marketplaceIndex}
             profiles={profiles}
             onPress={() => {
@@ -429,6 +435,7 @@ function BookHeader({
   campaignsLoading,
   campaignsFailed,
   campaignsFailedSubtitle,
+  campaignsMetricsUnavailable,
   campaignsRetrying,
   onRetryCampaigns,
   currency,
@@ -452,6 +459,7 @@ function BookHeader({
   campaignsLoading: boolean;
   campaignsFailed: boolean;
   campaignsFailedSubtitle: string;
+  campaignsMetricsUnavailable: boolean;
   campaignsRetrying: boolean;
   onRetryCampaigns: () => void;
   currency: string;
@@ -463,11 +471,13 @@ function BookHeader({
   onCreateCampaign: () => void;
 }) {
   const t = useTheme();
-  const adsReady = !campaignsLoading && !campaignsFailed;
+  const adsReady = !campaignsLoading && !campaignsFailed && !campaignsMetricsUnavailable;
   // The campaign list below is the exact-ASIN/product-ad authority for this
   // book. Drive every Ads figure in the header from that same sum so the hero
   // can never show 0 impressions while its own linked campaigns show traffic.
-  const displayBook = book && adsReady
+  const displayBook = book && campaignsMetricsUnavailable
+    ? { ...book, ads_state: "pending" as const }
+    : book && adsReady
     ? {
         ...book,
         impressions: adsTotals.impressions,
@@ -485,7 +495,11 @@ function BookHeader({
       }
     : book;
   const hasBreakEven = !!displayBook && hasAuthoritativeBreakEven(displayBook.breakeven_acos);
-  const status = displayBook ? bookStatus(displayBook, hasBreakEven) : null;
+  const status = campaignsMetricsUnavailable
+    ? { label: "Metrics unavailable", tone: "warning" as const }
+    : displayBook
+    ? bookStatus(displayBook, hasBreakEven)
+    : null;
   const statusColor = status ? toneColor(status.tone, t.colors) : t.colors.text_secondary;
   const kdpAvailable = !!displayBook && displayBook.kdp_state !== "missing" && displayBook.royalties != null;
   const netReady = !!displayBook && bookNetIsKnown(displayBook);
@@ -777,12 +791,14 @@ function BookFormatBadges({ formats }: { formats: readonly BookFormatOption[] })
 function CampaignRow({
   item,
   currency,
+  formatOptions,
   marketplaceIndex,
   profiles,
   onPress,
 }: {
   item: BookCampaignRow;
   currency: string;
+  formatOptions: ReturnType<typeof formatsFromWorkKey>;
   marketplaceIndex: SponsoredMarketplaceIndex;
   profiles: Parameters<typeof CampaignMarketplaceFlags>[0]["profiles"];
   onPress: () => void;
@@ -791,6 +807,7 @@ function CampaignRow({
   const verdict = campaignVerdict(item);
   const strategy = biddingStrategyLabel(item.bidding_strategy);
   const accent = fallbackBookColor(bookColorKeyFor(item));
+  const matchedFormats = formatOptionsForAsins(formatOptions, item.matched_book_asins);
 
   return (
     <TouchableOpacity
@@ -823,6 +840,11 @@ function CampaignRow({
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]} numberOfLines={1}>
             {strategy} · {matchSourceCaption(item.match_source)}
           </Text>
+          {matchedFormats.length > 0 ? (
+            <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]} numberOfLines={1}>
+              {matchedFormats.map((format) => format.label).join(" · ")}
+            </Text>
+          ) : null}
         </View>
         <PlacementSharePills item={item} />
         <View style={[styles.metricsRow, { borderTopColor: t.colors.separator }]} accessible={false} importantForAccessibility="no">
@@ -831,13 +853,13 @@ function CampaignRow({
             items={[
               {
                 label: "ACoS",
-                value: item.sales > 0 ? formatPercent(item.acos ?? 0) : "—",
+                value: item.metrics_state === "unavailable" ? "—" : item.sales > 0 ? formatPercent(item.acos ?? 0) : "—",
                 color: toneColor(acosTone(item.acos ?? 0), t.colors),
               },
-              { label: "Spend", value: formatCurrency(item.spend, currency, { compact: true }) },
-              { label: "Impr", value: formatInt(item.impressions) },
-              { label: "Clicks", value: formatInt(item.clicks) },
-              { label: "Orders", value: formatInt(item.orders) },
+              { label: "Spend", value: item.metrics_state === "unavailable" ? "—" : formatCurrency(item.spend, currency, { compact: true }) },
+              { label: "Impr", value: item.metrics_state === "unavailable" ? "—" : formatInt(item.impressions) },
+              { label: "Clicks", value: item.metrics_state === "unavailable" ? "—" : formatInt(item.clicks) },
+              { label: "Orders", value: item.metrics_state === "unavailable" ? "—" : formatInt(item.orders) },
             ]}
           />
         </View>
@@ -848,6 +870,9 @@ function CampaignRow({
 
 function PlacementSharePills({ item }: { item: BookCampaignRow }) {
   const t = useTheme();
+  if (item.placement_state === "unavailable") {
+    return <Text style={[t.typography.caption1, { color: t.colors.text_tertiary, marginTop: 6 }]}>Placement unavailable</Text>;
+  }
   const shares = [
     { label: "Top", value: Number(item.placement_top_share ?? 0) },
     { label: "Product", value: Number(item.placement_product_share ?? 0) },
