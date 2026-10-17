@@ -2052,6 +2052,7 @@ export default function TargetingScreen() {
         <ScreenSpinner />
       ) : isError && data.length === 0 ? (
         <RetryState
+          systemImage={isHomeQueryTimeout(activeQuery.error) ? "clock" : "exclamationmark.triangle"}
           title={
             segment === "keywords"
               ? "Couldn't load keywords"
@@ -2065,7 +2066,7 @@ export default function TargetingScreen() {
           }
           subtitle={
             isHomeQueryTimeout(activeQuery.error)
-              ? "This range took too long. Try Week instead of Month, or pull to retry."
+              ? "The server took too long for this period. Retry keeps your filters."
               : /period metrics/i.test(
                     activeQuery.error instanceof Error ? activeQuery.error.message : "",
                   )
