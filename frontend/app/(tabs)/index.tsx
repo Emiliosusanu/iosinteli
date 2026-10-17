@@ -996,7 +996,7 @@ export default function OverviewScreen() {
 
   const searchTermsPulseQ = useQuery({
     queryKey: ["search-terms-pulse", user?.id, adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, "active-parents-v1"],
-    queryFn: () => withQueryTimeout(fetchOverviewActiveSearchTerms(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80 })),
+    queryFn: ({ signal }) => withQueryTimeout(fetchOverviewActiveSearchTerms(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80, signal }), undefined, signal),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
     refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
