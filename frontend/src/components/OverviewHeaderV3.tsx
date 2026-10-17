@@ -1011,9 +1011,9 @@ export function OverviewHeaderV3({
   const displayedCountries = selectedMarketCountry
     ? resolvedCountries.filter((country) => country === selectedMarketCountry.toUpperCase())
     : resolvedCountries;
-  const hasMarketPill = resolvedCountries.length > 0;
+  const hasMarketPill = displayedCountries.length > 0;
   // Back-compat: emoji-only callers still get a flag cue without the glass pill.
-  const legacyFlags = !hasMarketPill && marketFlags.length > 0 ? marketFlags : [];
+  const legacyFlags = marketCountries == null && !hasMarketPill && marketFlags.length > 0 ? marketFlags : [];
 
   const periodMotion = useAnimatedStyle(() => ({
     opacity: periodOpacity.get(),
@@ -1150,7 +1150,7 @@ export function OverviewHeaderV3({
             {hasMarketPill ? (
               <MarketPill
                 testID="home-market-pill"
-                countries={displayedCountries.length ? displayedCountries : resolvedCountries}
+                countries={displayedCountries}
                 currency={currency}
                 onPress={onMarketSelectionChange ? () => setMarketOpen(true) : onProfilePress}
               />

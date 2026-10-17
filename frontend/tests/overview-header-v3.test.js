@@ -114,7 +114,7 @@ test("OverviewHeaderV3 expanded shell matches build 209 stadium chrome", () => {
   assert.match(header, /chrome\.colors\.background_secondary/);
 });
 
-test("OverviewHeaderV3 market pill uses separated circular flag discs", () => {
+test("OverviewHeaderV3 market pill uses separated unclipped flag tiles", () => {
   assert.match(header, /from "@\/src\/components\/MarketPill"/);
   assert.match(header, /<MarketPill/);
   assert.match(header, /home-market-pill/);
@@ -127,7 +127,7 @@ test("OverviewHeaderV3 market pill uses separated circular flag discs", () => {
   assert.match(marketPill, /MARKET_FLAG_GAP/);
   assert.match(marketPill, /marginLeft: index > 0 \? MARKET_FLAG_GAP/);
   assert.match(marketPill, /zIndex: index \+ 1/);
-  assert.match(marketPill, /borderRadius: MARKET_FLAG_SIZE \/ 2/);
+  assert.match(marketPill, /borderRadius: 6/);
   assert.match(marketPill, /market_pill_flag_rim/);
   assert.match(marketPill, /overflow:\s*"hidden"/);
   assert.match(marketPill, /formatMarketPillLabel/);
@@ -138,11 +138,14 @@ test("OverviewHeaderV3 market pill uses separated circular flag discs", () => {
   assert.match(marketPill, /market_pill_stroke/);
   assert.doesNotMatch(marketPill, /tint="dark"/);
   assert.match(marketPill, /chevron\.down/);
-  assert.match(marketPill, /MAX_VISIBLE_MARKET_FLAGS = 2/);
-  assert.match(marketPill, /countries\.slice\(0, MAX_VISIBLE_MARKET_FLAGS\)/);
+  assert.match(marketPill, /MAX_VISIBLE_MARKET_FLAGS = 4/);
+  assert.match(marketPill, /resolvedCountries\.slice\(0, visibleLimit\)/);
   assert.match(marketPill, /multi-country-overflow/);
   assert.match(marketPill, /\+\{hiddenCount\}/);
-  assert.match(marketPill, /\$\{resolvedCountries\.length\} markets/);
+  assert.match(marketPill, /resolvedCountries\.length > 1 \? currency : fullLabel/);
+  assert.match(header, /const hasMarketPill = displayedCountries\.length > 0/);
+  assert.doesNotMatch(header, /countries=\{displayedCountries\.length \? displayedCountries : resolvedCountries\}/);
+  assert.doesNotMatch(marketPill, /marginLeft: -6|hiddenCount > 0 && !compact/);
   // Currency merged into pill — no separate currency chip when markets present.
   const marketStart = header.indexOf("hasMarketPill ? (");
   const marketElse = header.indexOf(") : (", marketStart);
