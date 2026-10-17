@@ -1,5 +1,5 @@
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import type { SFSymbol as SFSymbolName } from "expo-symbols";
 import { PressableScale } from "@/src/components/Motion";
 import { SFSymbol } from "@/src/components/ios/Native";
@@ -16,7 +16,7 @@ export type TargetingModeKey =
 /**
  * Targeting mode control — Amazon-style capsules:
  * selected = solid brand-blue pill with white icon+label;
- * inactive = gray pill, icon only. Five equal slots fill the row.
+ * inactive = gray icon-only pill. The selected slot expands for its label.
  */
 export const TARGETING_MODE_OPTIONS: {
   key: TargetingModeKey;
@@ -39,6 +39,8 @@ type Props = {
 
 export function TargetingModePills({ value, onChange }: Props) {
   const t = useTheme();
+  const { width } = useWindowDimensions();
+  const compact = width < 400;
   const reduceMotion = useReduceMotion();
   const blue = t.colors.tone_primary;
   const idleBg = t.colors.background_tertiary;
@@ -55,7 +57,7 @@ export function TargetingModePills({ value, onChange }: Props) {
         const active = option.key === value;
         return (
           // flex must live outside PressableScale — layout styles sit on an inner Animated.View.
-          <View key={option.key} style={styles.slot}>
+          <View key={option.key} style={[styles.slot, active && styles.activeSlot]}>
             <PressableScale
               testID={option.testID}
               accessibilityRole="tab"
@@ -69,6 +71,7 @@ export function TargetingModePills({ value, onChange }: Props) {
               }}
               style={[
                 styles.segment,
+                compact && { minHeight: 40, paddingVertical: 6, paddingHorizontal: 4 },
                 {
                   backgroundColor: active ? blue : idleBg,
                 },
@@ -76,7 +79,7 @@ export function TargetingModePills({ value, onChange }: Props) {
             >
               <SFSymbol
                 name={option.symbol}
-                size={active ? 15 : 16}
+                size={compact ? 14 : active ? 15 : 16}
                 color={active ? "#FFFFFF" : idleFg}
                 weight={active ? "semibold" : "regular"}
               />
@@ -89,7 +92,7 @@ export function TargetingModePills({ value, onChange }: Props) {
                   minimumFontScale={0.75}
                   style={styles.label}
                 >
-                  {option.shortLabel}
+                  {option.label}
                 </Text>
               ) : null}
             </PressableScale>
@@ -115,9 +118,12 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  activeSlot: {
+    flex: 2.3,
+  },
   segment: {
     width: "100%",
-    minHeight: 40,
+    minHeight: 44,
     borderRadius: 999,
     borderCurve: "continuous",
     flexDirection: "row",
@@ -128,9 +134,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   label: {
-    fontSize: 12,
-    lineHeight: 14,
-    letterSpacing: -0.2,
+    fontSize: 14,
+    lineHeight: 18,
+    letterSpacing: 0,
     fontWeight: "700",
     color: "#FFFFFF",
     flexShrink: 1,

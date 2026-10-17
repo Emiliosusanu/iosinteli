@@ -115,6 +115,7 @@ export type OverviewHeaderV3Props = {
    * the overlapping-flag market pill. Prefer this over `marketFlags`.
    */
   marketCountries?: string[];
+  selectedMarketCountries?: string[];
   /** null means every enabled marketplace. */
   selectedMarketCountry?: string | null;
   onMarketSelectionChange?: (country: string | null) => void;
@@ -172,34 +173,6 @@ export function useOverviewHeaderScroll() {
     },
   });
   return { scrollY, onScroll, scrollEventThrottle: 16 as const };
-}
-
-function SyncDot({ color, active }: { color: string; active: boolean }) {
-  const reduceMotion = useReduceMotion();
-  const pulse = useSharedValue(1);
-  const style = useAnimatedStyle(() => ({
-    opacity: pulse.get(),
-    transform: [{ scale: 0.92 + pulse.get() * 0.08 }],
-  }));
-
-  useEffect(() => {
-    if (!active || reduceMotion) {
-      cancelAnimation(pulse);
-      pulse.set(1);
-      return;
-    }
-    pulse.set(1);
-    pulse.set(
-      withRepeat(withTiming(0.55, { duration: motion.fastState, easing: EASE }), -1, true),
-    );
-    return () => {
-      cancelAnimation(pulse);
-    };
-  }, [active, pulse, reduceMotion]);
-
-  return (
-    <Animated.View style={[styles.syncDot, { backgroundColor: color }, style]} />
-  );
 }
 
 const EASE_GLOW = Easing.inOut(Easing.ease);
@@ -322,6 +295,10 @@ function StadiumLateralGlow({
         style={[StyleSheet.absoluteFill, edgeStyle]}
         testID={ready ? "home-header-glow-ready" : "home-header-glow-primary"}
       >
+        <View style={[StyleSheet.absoluteFill, { borderWidth: 1.5, borderRadius: 28,
+          borderColor: ready ? successColor : color,
+          shadowColor: ready ? successColor : color, shadowOpacity: 0.3, shadowRadius: 12,
+          shadowOffset: { width: 0, height: 0 } }]} />
         <StadiumSideGlow color={ready ? successColor : color} side="left" bloomStyle={bloomStyle} />
         <StadiumSideGlow color={ready ? successColor : color} side="right" bloomStyle={bloomStyle} />
       </Animated.View>
@@ -427,7 +404,7 @@ function PeriodToggle({
         style={[
           styles.periodPill,
           {
-            backgroundColor: chrome.colors.chrome_selected,
+            backgroundColor: t.colors.tone_primary,
             borderColor: "transparent",
             borderWidth: 0,
           },
@@ -478,7 +455,7 @@ function PeriodToggle({
                 name={option.symbol}
                 size={iconSize}
                 color={
-                  active ? chrome.colors.chrome_selected_fg : chrome.colors.text_secondary
+                  active ? "#FFFFFF" : chrome.colors.text_secondary
                 }
               />
               {active ? (
@@ -490,7 +467,7 @@ function PeriodToggle({
                     styles.periodLabel,
                     compact && styles.periodLabelCompact,
                     {
-                      color: chrome.colors.chrome_selected_fg,
+                      color: "#FFFFFF",
                       fontSize: labelSize,
                     },
                   ]}
@@ -970,6 +947,7 @@ export function OverviewHeaderCompactSticky({
 export function OverviewHeaderV3({
   profileLabel,
   marketCountries,
+  selectedMarketCountries,
   marketFlags = [],
   selectedMarketCountry = null,
   onMarketSelectionChange,
@@ -1008,9 +986,9 @@ export function OverviewHeaderV3({
   const periodShift = useSharedValue(0);
 
   const resolvedCountries = sortMarketCountryCodes(marketCountries ?? []);
-  const displayedCountries = selectedMarketCountry
+  const displayedCountries = selectedMarketCountries ?? (selectedMarketCountry
     ? resolvedCountries.filter((country) => country === selectedMarketCountry.toUpperCase())
-    : resolvedCountries;
+    : resolvedCountries);
   const hasMarketPill = resolvedCountries.length > 0;
   // Back-compat: emoji-only callers still get a flag cue without the glass pill.
   const legacyFlags = !hasMarketPill && marketFlags.length > 0 ? marketFlags : [];
@@ -1225,32 +1203,7 @@ export function OverviewHeaderV3({
               </>
             )}
 
-            {showRefreshGlow || syncReadyVisible ? (
-              <PressableScale
-                onPress={onSyncPress}
-                accessibilityRole="button"
-                accessibilityLabel={syncA11y}
-                accessibilityValue={{ text: syncReadyVisible ? "Ready" : "Updating" }}
-                hitSlop={6}
-                style={[
-                  styles.syncChip,
-                  styles.syncChipDot,
-                  {
-                    borderColor: (syncReadyVisible ? t.colors.tone_good : t.colors.tone_primary) + "44",
-                    backgroundColor: (syncReadyVisible ? t.colors.tone_good : t.colors.tone_primary) + "16",
-                    marginLeft: "auto",
-                    ...chrome.shadow.stadium,
-                  },
-                ]}
-                testID={syncReadyVisible ? "home-sync-ready" : "home-sync-loading"}
-              >
-                {syncReadyVisible ? (
-                  <SFSymbol name="checkmark" size={15} color={t.colors.tone_good} />
-                ) : (
-                  <SyncDot color={t.colors.tone_primary} active />
-                )}
-              </PressableScale>
-            ) : syncNeedsLabel ? (
+            {syncNeedsLabel ? (
               <PressableScale
                 onPress={onSyncPress}
                 accessibilityRole="button"
@@ -1267,7 +1220,7 @@ export function OverviewHeaderV3({
                   },
                 ]}
               >
-                <SyncDot color={syncColor} active={false} />
+                <SFSymbol name="exclamationmark.triangle" size={13} color={syncColor} />
                 <Text style={[t.typography.caption2, styles.syncText, { color: syncColor }]} numberOfLines={1}>
                   {syncCompact}
                 </Text>
@@ -1305,8 +1258,8 @@ export function OverviewHeaderV3({
         </Animated.View>
         </GlassPanel>
         <StadiumLateralGlow
-          busy={showRefreshGlow}
-          ready={syncReadyVisible}
+          busy={showRefreshGlow && expandedInteractive}
+          ready={syncReadyVisible && expandedInteractive}
           failedOrStale={syncFailedOrStale}
           color={t.colors.tone_primary}
           successColor={t.colors.tone_good}

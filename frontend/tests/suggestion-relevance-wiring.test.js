@@ -91,11 +91,10 @@ test("mutations.ts wires filterSuggestionsForBookRelevance in preview + ad group
   assert.match(mutations, /bookTopic: preview\.book\?\.topic/);
 });
 
-test("targeting.tsx Paused comment no longer claims no parent-chain", () => {
-  assert.doesNotMatch(targeting, /Paused[\s\S]{0,120}no parent-chain/);
+test("targeting.tsx documents the installed entity-only Paused RPC contract", () => {
   assert.match(
     targeting,
-    /Paused = entity paused AND live parents \(ad group \+ campaign enabled\) — use All to see paused-under-paused/,
+    /Paused follows the entity state, including paused parent campaigns/,
   );
 });
 

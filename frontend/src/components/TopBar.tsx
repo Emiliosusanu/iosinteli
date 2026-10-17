@@ -11,6 +11,7 @@ import {
   Switch,
   Platform,
   Alert,
+  useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -28,6 +29,7 @@ import { DateRange } from "../lib/types";
 import { IOSDateField, SFSymbol, sfFromIonicon } from "./ios/Native";
 import { GlassPanel } from "./GlassPanel";
 import { MarketPill } from "./MarketPill";
+import { InteliAdsIcon } from "./InteliAdsIcon";
 import { PressableScale } from "./Motion";
 import {
   NEST_DISABLED_VIEW_MESSAGE,
@@ -55,6 +57,7 @@ import {
 } from "../lib/accountsUi";
 
 interface TopBarProps {
+  condensedMarket?: boolean;
   title?: string;
   showProfileSelector?: boolean;
   showDateRange?: boolean;
@@ -162,15 +165,16 @@ function HeaderPill({
 }) {
   const t = useTheme();
   return (
+    <View style={[
+      flex && { flex: 1, minWidth: 0 },
+      fullWidth && { alignSelf: "stretch", width: "100%" },
+      maxWidth != null && !fullWidth ? { width: maxWidth, maxWidth, flexShrink: 1 } : null,
+    ]}>
     <PressableScale
       testID={testID}
       onPress={onPress}
       accessibilityLabel={accessibilityLabel}
-      style={[
-        flex && { flex: 1, minWidth: 0 },
-        fullWidth && { alignSelf: "stretch" },
-        maxWidth != null && !fullWidth ? { maxWidth } : null,
-      ]}
+      style={{ width: "100%" }}
     >
       <GlassPanel
         strength="chip"
@@ -191,11 +195,11 @@ function HeaderPill({
                 },
           ]}
         >
-          <SFSymbol
+          {icon === "calendar" ? <InteliAdsIcon name="dateRange" size={20} color={t.colors.tone_primary} /> : <SFSymbol
             name={icon}
             size={caption ? 15 : 14}
             color={caption ? t.colors.tone_primary : t.colors.text_secondary}
-          />
+          />}
         </View>
         <View style={styles.pillLabel}>
           {caption ? (
@@ -218,6 +222,7 @@ function HeaderPill({
         <SFSymbol name="chevron.down" size={11} color={t.colors.text_tertiary} />
       </GlassPanel>
     </PressableScale>
+    </View>
   );
 }
 
@@ -327,12 +332,14 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
 }
 
 export function TopBar({
+  condensedMarket = false,
   title,
   showProfileSelector = true,
   showDateRange = true,
   showKdpAccountGroups = true,
   rightAction,
 }: TopBarProps) {
+  const { width } = useWindowDimensions();
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -342,6 +349,7 @@ export function TopBar({
     primaryCurrency,
     toggleProfile,
     selectAllProfiles,
+    selectMarket,
     adminUsers,
     adminFilterUserId,
     setAdminFilterUserId,
@@ -631,6 +639,8 @@ export function TopBar({
               (hasMarketPill ? (
                 <MarketPill
                   testID="profile-selector-btn"
+                  compact
+                  flagsOnly={condensedMarket && width < 400}
                   countries={marketCountries}
                   currency={primaryCurrency}
                   onPress={() => setProfileOpen(true)}
@@ -699,6 +709,15 @@ export function TopBar({
             <Text style={[t.typography.title3, { color: t.colors.text_primary, paddingHorizontal: 16, paddingBottom: 8 }]}>
               Amazon Profiles
             </Text>
+            <ScrollView horizontal style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 16, gap: 16 }}>
+              {[null, ...multiCountryCodes(profiles, { onlyEnabled: true })].map((country) => (
+                <TouchableOpacity key={country ?? "all"} testID={`shared-market-${country ?? "all"}`}
+                  accessibilityRole="button" accessibilityLabel={country ? `Market ${country}` : "All markets"}
+                  style={{ paddingVertical: 12 }} onPress={() => { selectMarket(country); setProfileOpen(false); }}>
+                  <Text style={[t.typography.callout, { color: t.colors.tone_primary }]}>{country ?? "All markets"}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
             <View style={styles.filterRow}>
               <TouchableOpacity
                 testID="profiles-filter-ready"

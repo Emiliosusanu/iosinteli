@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useLocalSearchParams } from "expo-router";
 import {
   View,
   Text,
@@ -140,7 +141,10 @@ export default function CampaignsScreen() {
   const [stateFilter, setStateFilter] = useState<StateFilter>("enabled");
   const [sortKey, setSortKey] = useState<SortKey>("acos");
   const [bookAsins, setBookAsins] = useState<string[]>([]);
-  const [filterMemoryReady, setFilterMemoryReady] = useState(false);
+  const memoryScope = `${user?.id ?? "guest"}:${adminFilterUserId ?? "self"}`;
+  const params = useLocalSearchParams<{ flow?: string; sort?: string }>();
+  const hydrationKey = `${memoryScope}:${params.flow ?? ""}`;
+  const [hydratedScope, setHydratedScope] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [topChromeVisible, setTopChromeVisible] = useState(true);
@@ -161,6 +165,12 @@ export default function CampaignsScreen() {
 
   useEffect(() => {
     let active = true;
+    setSearch(""); setStateFilter("enabled"); setSortKey("acos"); setBookAsins([]);
+    if (params.flow) {
+      if (SORT_CONFIG.some((s) => s.key === params.sort)) setSortKey(params.sort as SortKey);
+      setHydratedScope(hydrationKey);
+      return;
+    }
     const qa = takePendingQaFilters();
     if (qa) {
       if (qa.campaignsState) setStateFilter(qa.campaignsState);
@@ -172,10 +182,10 @@ export default function CampaignsScreen() {
           `[inteliads:qa] campaigns filters state=${qa.campaignsState ?? "-"} sort=${qa.campaignsSort ?? "-"}`,
         );
       }
-      setFilterMemoryReady(true);
+      setHydratedScope(hydrationKey);
       return;
     }
-    void loadCampaignsFilterMemory()
+    void loadCampaignsFilterMemory(memoryScope)
       .then((mem) => {
         if (!active) return;
         if (mem.stateFilter === "all" || mem.stateFilter === "enabled" || mem.stateFilter === "paused") {
@@ -187,17 +197,17 @@ export default function CampaignsScreen() {
         setBookAsins(normalizeBookAsinList(mem.bookAsins));
       })
       .finally(() => {
-        if (active) setFilterMemoryReady(true);
+        if (active) setHydratedScope(hydrationKey);
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [hydrationKey, memoryScope, params.flow, params.sort]);
 
   useEffect(() => {
-    if (!filterMemoryReady) return;
-    void saveCampaignsFilterMemory({ sortKey, stateFilter, bookAsins });
-  }, [filterMemoryReady, sortKey, stateFilter, bookAsins]);
+    if (hydratedScope !== hydrationKey) return;
+    void saveCampaignsFilterMemory({ sortKey, stateFilter, bookAsins }, memoryScope);
+  }, [hydratedScope, hydrationKey, memoryScope, sortKey, stateFilter, bookAsins]);
 
   const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
   const campaignsListKey = [
