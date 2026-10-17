@@ -22,7 +22,8 @@ import { enabledSelectedProfileIds } from "@/src/lib/booksProfileScope";
 import { targetingFreshnessLabel } from "@/src/lib/targetingPageFreshness";
 import { noPeriodPlaceholder, financialPeriodQueryKey, LIST_PERIOD_QUERY_CACHE, STABLE_SCOPED_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
-import { isHomeQueryTimeout, queryStillWaiting, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
+import { isHomeQueryTimeout, queryStillWaiting, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
+import { targetingPageQueryKey, targetingPageQueryOptions } from "@/src/lib/targetingTransport";
 import {
   fetchAdGroupDefaultBids,
   fetchMobileTargetingPage,
@@ -677,6 +678,7 @@ export default function TargetingScreen() {
     sort,
     advancedScopeKey,
     segment,
+    user?.id,
   ]);
 
   const effectiveSortKey = resolveTargetingSortKey(sort, advanced);
@@ -690,11 +692,13 @@ export default function TargetingScreen() {
       ? effectiveSortKey
       : "acos";
 
-  const mobilePageQueryKey = [
+  const mobilePageScopeKey = [
     "mobile-targeting-page-v1",
+    "transport-v2",
     adminFilterUserId ?? "self",
     // Include signed-in owner id so persisted cache cannot paint another account's rows.
-    viewAsOtherUser ? "view" : user?.id ?? "anon",
+    user?.id ?? "anon",
+    viewAsOtherUser ? "view" : "self",
     periodKey,
     profileScopeKey,
     bookAsin ?? "all",
@@ -706,27 +710,27 @@ export default function TargetingScreen() {
     serverSort,
     advancedScopeKey,
     `page-size-${TARGETING_PAGE_SIZE}`,
-    "catalog-head",
   ] as const;
+  const mobilePageQueryKey = targetingPageQueryKey(mobilePageScopeKey, 1, null);
+  const mobilePageScopeIdentity = JSON.stringify(mobilePageScopeKey);
 
   // A failed/missing book map must never widen a filtered read to all campaigns.
   const booksPendingForFilter =
     bookFilterActive && !booksQ.isSuccess && !booksQ.isError;
   const canReadPage =
-    focused && filtersReady && !profilesLoading && !searchPending && scopeProfiles.length > 0 &&
+    focused && Boolean(user?.id) && !guestMode && filtersReady && !profilesLoading && !searchPending && scopeProfiles.length > 0 &&
     (!bookFilterActive || (booksQ.isSuccess && bookCampaignIdList.length > 0));
 
   const mobilePageQ = useQuery({
-    queryKey: mobilePageQueryKey,
-    queryFn: async ({ signal }) => {
+    ...targetingListCache,
+    ...targetingPageQueryOptions(mobilePageScopeKey, 1, null, async (signal) => {
       markPerf("targets.page.start");
       try {
         const bookCampaignScope =
           bookFilterActive && booksQ.isSuccess && bookCampaignIdList.length > 0
             ? { campaignIds: bookCampaignIdList }
             : {};
-        return await withQueryTimeout(
-          fetchMobileTargetingPage({
+        return await fetchMobileTargetingPage({
             segment,
             sort: serverSort,
             page: 1,
@@ -740,7 +744,7 @@ export default function TargetingScreen() {
             // Active = keyword enabled + ad group enabled + campaign enabled (fail-closed).
             // ASINs / Auto / Category: Active = target + ad group + campaign enabled.
             // Placement rows are campaigns — Active = campaign enabled (no ad-group parent).
-            // Paused = entity paused AND live parents (ad group + campaign enabled) — use All to see paused-under-paused.
+            // Paused follows the entity state, including paused parent campaigns.
             // RPC mobile_targeting_page_v1 enforces the same parent-chain rules server-side.
             state: stateFilter,
             search: searchNeedle,
@@ -751,20 +755,30 @@ export default function TargetingScreen() {
             // Title/cover metadata is filled for the visible viewport below;
             // never hold the ranked page behind optional catalog lookups.
             skipDisplayEnrich: true,
-          }),
-          TARGETING_QUERY_TIMEOUT_MS,
-          signal,
-        );
+          });
       } finally {
         markPerf("targets.page.end");
       }
-    },
+    }),
     enabled: canReadPage,
-    ...targetingListCache,
     refetchOnMount: "always",
     refetchInterval: focused && dateRange.end >= new Date().toISOString().slice(0, 10) ? 60_000 : false,
     refetchIntervalInBackground: false,
   });
+  useEffect(() => {
+    const queryKey = JSON.parse(mobilePageScopeIdentity) as unknown[];
+    if (!canReadPage) {
+      void queryClient.cancelQueries({ queryKey });
+      return;
+    }
+    return () => {
+      // Tail reads have no observer to auto-cancel on blur or account changes.
+      catalogGenerationRef.current += 1;
+      catalogPageRequestRef.current = null;
+      setCatalogTailLoading(false);
+      void queryClient.cancelQueries({ queryKey });
+    };
+  }, [queryClient, mobilePageScopeIdentity, canReadPage]);
   const catalogIdentity = `${JSON.stringify(mobilePageQueryKey)}:${mobilePageQ.data?.snapshot ?? ""}`;
 
   useEffect(() => {
@@ -779,8 +793,9 @@ export default function TargetingScreen() {
       setCatalogNextPage(2);
       catalogPageRequestRef.current = null;
       catalogGenerationRef.current += 1;
+      void queryClient.cancelQueries({ queryKey: [...JSON.parse(mobilePageScopeIdentity), "catalog-tail"] });
     }
-  }, [mobilePageQ.data?.snapshot, pageSnapshot]);
+  }, [mobilePageQ.data?.snapshot, pageSnapshot, queryClient, mobilePageScopeIdentity]);
 
   useEffect(() => {
     if (!isMobileTargetingSnapshotChanged(mobilePageQ.error)) return;
@@ -800,7 +815,7 @@ export default function TargetingScreen() {
   catalogHeadRef.current = mobilePageQ.data;
   const loadNextCatalogPage = async () => {
     const head = catalogHeadRef.current;
-    if (!head?.rows || mobilePageQ.isFetching || catalogTailLoading) return;
+    if (!canReadPage || !head?.rows || mobilePageQ.isFetching || catalogTailLoading) return;
     if (head.rows.length + catalogTail.length >= head.total) return;
 
     const snapshot = head.snapshot;
@@ -812,7 +827,7 @@ export default function TargetingScreen() {
     setCatalogTailLoading(true);
     setCatalogTailIncomplete(false);
     try {
-      const next = await withQueryTimeout(fetchMobileTargetingPage({
+      const next = await queryClient.fetchQuery(targetingPageQueryOptions(mobilePageScopeKey, page, snapshot, (signal) => fetchMobileTargetingPage({
         segment,
         sort: serverSort,
         page,
@@ -829,8 +844,9 @@ export default function TargetingScreen() {
         perf,
         advanced: advancedForRpc,
         snapshot,
+        signal,
         skipDisplayEnrich: true,
-      }), TARGETING_QUERY_TIMEOUT_MS);
+      })));
       if (catalogGenerationRef.current !== generation) return;
       if (next.snapshot !== snapshot || catalogHeadRef.current?.snapshot !== snapshot) {
         throw new Error("Targeting snapshot changed");

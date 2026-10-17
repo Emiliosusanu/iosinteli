@@ -81,6 +81,27 @@ export async function withQueryTimeout<T>(
   }
 }
 
+/** Task form for cancellable transports: the deadline also aborts network I/O. */
+export async function withAbortableQueryTimeout<T>(
+  task: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  upstream?: AbortSignal,
+): Promise<T> {
+  if (upstream?.aborted) throw abortError();
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  upstream?.addEventListener("abort", abort, { once: true });
+  try {
+    return await withQueryTimeout(Promise.resolve().then(() => {
+      if (controller.signal.aborted) throw abortError();
+      return task(controller.signal);
+    }), ms, upstream);
+  } finally {
+    upstream?.removeEventListener("abort", abort);
+    controller.abort();
+  }
+}
+
 export function queryStillWaiting(query: {
   isPending: boolean;
   isError: boolean;

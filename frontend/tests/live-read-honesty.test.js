@@ -13,9 +13,11 @@ const source = readFileSync(new URL('../app/(tabs)/targeting.tsx', import.meta.u
 
 test('actual Targets read gate waits for hydration, enabled scope and a successful nonempty book map', () => {
   const expression = source.match(/const canReadPage =([\s\S]*?);/)[1];
-  const base = { focused: true, filtersReady: true, profilesLoading: false, searchPending: false, scopeProfiles: ['enabled-owned'], bookFilterActive: false, booksQ: { isSuccess: false, isError: false }, bookCampaignIdList: [] };
+  const base = { user: { id: 'actor' }, guestMode: false, focused: true, filtersReady: true, profilesLoading: false, searchPending: false, scopeProfiles: ['enabled-owned'], bookFilterActive: false, booksQ: { isSuccess: false, isError: false }, bookCampaignIdList: [] };
   const read = change => vm.runInNewContext(expression, { ...base, ...change });
   assert.equal(read({}), true);
+  assert.equal(read({ user: null }), false);
+  assert.equal(read({ guestMode: true }), false);
   for (const change of [{ filtersReady: false }, { profilesLoading: true }, { scopeProfiles: [] }, { focused: false }, { searchPending: true }, { bookFilterActive: true }, { bookFilterActive: true, booksQ: { isSuccess: false, isError: true } }, { bookFilterActive: true, booksQ: { isSuccess: true } }]) {
     assert.equal(read(change), false);
   }
