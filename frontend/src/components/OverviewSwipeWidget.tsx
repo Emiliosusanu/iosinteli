@@ -21,6 +21,7 @@ export type OverviewSwipePage = {
   hint?: string;
   /** Tertiary caption under title (e.g. break-even %). */
   meta?: string;
+  freshness?: string;
   /** One-line metrics top-right of the header. */
   summary?: React.ReactNode;
   content: React.ReactNode;
@@ -42,6 +43,7 @@ export function OverviewSwipeWidget({
   action,
   testID,
   staggerIndex = 0,
+  freshness,
 }: {
   title: string;
   icon?: InteliAdsIconName;
@@ -51,6 +53,7 @@ export function OverviewSwipeWidget({
   action?: React.ReactNode;
   testID?: string;
   staggerIndex?: number;
+  freshness?: string;
   /** @deprecated Page label is folded into the card title. Kept for call-site compat. */
   inlinePageLabel?: boolean;
 }) {
@@ -121,6 +124,11 @@ export function OverviewSwipeWidget({
         meta={page.meta}
         trailing={page.summary}
       />
+      {page.freshness || freshness ? (
+        <Text accessibilityLiveRegion="polite" style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 4 }]}>
+          {page.freshness ?? freshness}
+        </Text>
+      ) : null}
       {page.hint ? (
         <Text
           style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}

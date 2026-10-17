@@ -18,6 +18,9 @@ import { AppScreen } from "@/src/components/ScreenAmbient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { markPerf } from "@/src/lib/perf";
 import { useLocalSearchParams } from "expo-router";
+import { useIsFocused } from "@react-navigation/native";
+import { enabledSelectedProfileIds } from "@/src/lib/booksProfileScope";
+import { targetingFreshnessLabel } from "@/src/lib/targetingPageFreshness";
 import { noPeriodPlaceholder, financialPeriodQueryKey, LIST_PERIOD_QUERY_CACHE, STABLE_SCOPED_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { isHomeQueryTimeout, queryStillWaiting, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
@@ -442,7 +445,7 @@ export default function TargetingScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const invalidateAds = useInvalidateAds();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles, profilesLoading } = useApp();
   const { user, guestMode } = useAuth();
   const params = useLocalSearchParams<{ flow?: string; segment?: string; perf?: string; sort?: string }>();
   const memoryScope = `${user?.id ?? "guest"}:${adminFilterUserId ?? "self"}`;
@@ -490,6 +493,7 @@ export default function TargetingScreen() {
   const [catalogNextPage, setCatalogNextPage] = useState(2);
   const catalogPageRequestRef = useRef<string | null>(null);
   const catalogGenerationRef = useRef(0);
+  const catalogTailIdentityRef = useRef("");
   const listRef = useRef<FlatList>(null);
 
   useEffect(() => {
@@ -591,10 +595,17 @@ export default function TargetingScreen() {
     setOutboxFailed(local.failed + nest.failed);
   }
 
-  const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
+  const focused = useIsFocused();
+  const filtersReady = hydratedKey === hydrationKey;
+  const scopeProfiles = useMemo(() => sortedProfileIds(enabledSelectedProfileIds(profiles, selectedProfileIds)), [profiles, selectedProfileIds]);
   const periodKey = financialPeriodQueryKey(dateRange, scopeProfiles, primaryCurrency);
   const profileScopeKey = scopeProfiles.join("|");
-  const searchNeedle = search.trim();
+  const [searchNeedle, setSearchNeedle] = useState(search.trim());
+  const searchPending = search.trim() !== searchNeedle;
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchNeedle(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
   const advancedForRpc = advancedFiltersForSegment(segment, advanced);
   const advancedScopeKey = JSON.stringify(advancedForRpc);
   const targetingListCache = {
@@ -605,7 +616,7 @@ export default function TargetingScreen() {
   const adGroupDefaultBidsQ = useQuery({
     queryKey: ["targeting-adgroup-default-bids", adminFilterUserId ?? "self", profileScopeKey],
     queryFn: () => fetchAdGroupDefaultBids(scopeProfiles),
-    enabled: scopeProfiles.length > 0,
+    enabled: focused && filtersReady && !profilesLoading && scopeProfiles.length > 0,
     ...STABLE_SCOPED_CACHE,
   });
   const defaultBidByAdGroupId = adGroupDefaultBidsQ.data ?? {};
@@ -618,7 +629,7 @@ export default function TargetingScreen() {
         TARGETING_BOOK_OPTIONS_TIMEOUT_MS,
         signal,
       ),
-    enabled: scopeProfiles.length > 0,
+    enabled: focused && filtersReady && !profilesLoading && scopeProfiles.length > 0 && (Boolean(bookAsin) || filterOpen || segment === "placement"),
     ...STABLE_SCOPED_CACHE,
   });
   const bookOptions = booksQ.data ?? [];
@@ -640,10 +651,10 @@ export default function TargetingScreen() {
   useEffect(() => {
     if (!bookAsin) return;
     if (booksQ.isLoading || booksQ.isFetching) return;
-    if (!booksQ.isFetched) return;
+    if (!booksQ.isSuccess) return;
     if (selectedBook) return;
     setBookAsin(null);
-  }, [bookAsin, booksQ.isFetched, booksQ.isFetching, booksQ.isLoading, selectedBook]);
+  }, [bookAsin, booksQ.isSuccess, booksQ.isFetching, booksQ.isLoading, selectedBook]);
 
   // Scope / filter / sort / segment / period / book change: drop tail + snapshot so
   // we never paint another selection's ranking under a stale catalog.
@@ -698,15 +709,12 @@ export default function TargetingScreen() {
     "catalog-head",
   ] as const;
 
-  // Book filter: wait for options before enabling the page query (so we don't
-  // send campaignIds:[] and paint an unscoped list). On books error, enable
-  // without campaignIds so RetryState can paint — never infinite blank.
-  // Don't apply book filter until options are fetched — otherwise a remembered
-  // ASIN empties the list while booksQ is still loading (misleading "no matches").
+  // A failed/missing book map must never widen a filtered read to all campaigns.
   const booksPendingForFilter =
     bookFilterActive && !booksQ.isSuccess && !booksQ.isError;
   const canReadPage =
-    scopeProfiles.length > 0 && (!bookFilterActive || booksQ.isSuccess || booksQ.isError);
+    focused && filtersReady && !profilesLoading && !searchPending && scopeProfiles.length > 0 &&
+    (!bookFilterActive || (booksQ.isSuccess && bookCampaignIdList.length > 0));
 
   const mobilePageQ = useQuery({
     queryKey: mobilePageQueryKey,
@@ -753,7 +761,11 @@ export default function TargetingScreen() {
     },
     enabled: canReadPage,
     ...targetingListCache,
+    refetchOnMount: "always",
+    refetchInterval: focused && dateRange.end >= new Date().toISOString().slice(0, 10) ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
+  const catalogIdentity = `${JSON.stringify(mobilePageQueryKey)}:${mobilePageQ.data?.snapshot ?? ""}`;
 
   useEffect(() => {
     const snap = mobilePageQ.data?.snapshot;
@@ -823,6 +835,7 @@ export default function TargetingScreen() {
       if (next.snapshot !== snapshot || catalogHeadRef.current?.snapshot !== snapshot) {
         throw new Error("Targeting snapshot changed");
       }
+      catalogTailIdentityRef.current = catalogIdentity;
       setCatalogTail((previous) => appendTargetingPageRows(head.rows, previous, next.rows));
       setCatalogNextPage(page + 1);
       setCatalogTailIncomplete(false);
@@ -905,6 +918,7 @@ export default function TargetingScreen() {
     const countryCode = profileHit?.country_code ?? profileHit?.countryCode ?? null;
 
     const wave = pendingAsins.slice(0, 80);
+    const generation = catalogGenerationRef.current;
     for (const asin of wave) retailTitleInFlightRef.current.add(asin);
     retailFillBusyRef.current = true;
     void (async () => {
@@ -916,6 +930,7 @@ export default function TargetingScreen() {
             maxAsins: 80,
           },
         );
+        if (generation !== catalogGenerationRef.current) return;
         const titleByAsin = new Map<string, string>();
         for (const row of nextRows as any[]) {
           const asin = productTargetDisplayAsin(row);
@@ -943,10 +958,11 @@ export default function TargetingScreen() {
               const title = titleByAsin.get(asin);
               return title ? { ...row, title } : row;
             });
+          const updatedAt = queryClient.getQueryState(mobilePageQueryKey)?.dataUpdatedAt;
           queryClient.setQueryData(mobilePageQueryKey, (prev: typeof page | undefined) => {
             if (!prev || prev.snapshot !== page.snapshot) return prev;
             return { ...prev, rows: patchTitles(prev.rows as any[]) };
-          });
+          }, { updatedAt });
           setCatalogTail((prev) => (prev.length ? patchTitles(prev) : prev));
         }
         // Keep waving until pending ASINs are titled or exhausted.
@@ -995,8 +1011,9 @@ export default function TargetingScreen() {
 
   // Display-only enrichment — do not re-filter or re-sort a server page.
   const data = useMemo(() => {
+    if (!filtersReady || searchPending) return [];
     const headRows = (mobilePageQ.data?.rows ?? []) as any[];
-    const rows = catalogTail.length ? [...headRows, ...catalogTail] : headRows;
+    const rows = catalogTail.length && catalogTailIdentityRef.current === catalogIdentity ? [...headRows, ...catalogTail] : headRows;
     return rows.map((row) => {
       if (segment === "placement") {
         const campaignId = String(row.campaign_id || String(row.id || "").split("::")[0] || "");
@@ -1023,7 +1040,7 @@ export default function TargetingScreen() {
         __targetingIsCategory: isCategoryTarget(row.expression, row.expression_type),
       };
     });
-  }, [mobilePageQ.data?.rows, catalogTail, segment, campaignBookById]);
+  }, [filtersReady, searchPending, catalogIdentity, mobilePageQ.data?.rows, catalogTail, segment, campaignBookById]);
 
   // Prefetch real Amazon placement % (never invent 0 when Amazon returns null).
   useEffect(() => {
@@ -1080,7 +1097,7 @@ export default function TargetingScreen() {
     data.length === 0 &&
     !activeQuery.isPlaceholderData &&
     !isError &&
-    (booksPendingForFilter ||
+    (!filtersReady || profilesLoading || searchPending || booksPendingForFilter ||
       (canReadPage &&
         (queryStillWaiting(activeQuery) || activeQuery.isFetching)));
   const listUpdating =
@@ -1094,7 +1111,7 @@ export default function TargetingScreen() {
   const hasMoreCatalogRows = Boolean(mobilePageQ.data && data.length < serverTotal);
   const pageSummary = mobilePageQ.data
     ? hasMoreCatalogRows
-      ? `${data.length} of ${serverTotal} loaded`
+      ? `${data.length} of ${serverTotal} loaded${listUpdating ? " · updating" : ""}`
       : `${serverTotal} rows${listUpdating ? " · updating" : ""}`
     : null;
 
@@ -2018,6 +2035,17 @@ export default function TargetingScreen() {
           </View>
         ) : null}
       </View>
+      ) : null}
+
+      {mobilePageQ.data ? (
+        <Text
+          testID="targeting-freshness"
+          accessibilityLiveRegion="polite"
+          style={[t.typography.caption1, { color: isError ? t.colors.tone_danger : t.colors.text_secondary, paddingHorizontal: t.layout.pagePad, paddingTop: 4, paddingBottom: 8 }]}
+        >
+          {searchPending ? "Searching" : targetingFreshnessLabel({ updatedAt: mobilePageQ.dataUpdatedAt, fetching: mobilePageQ.isFetching, failed: isError })}
+          {mobilePageQ.data.metricsCoveredThrough ? ` · Metrics through ${mobilePageQ.data.metricsCoveredThrough.slice(0, 10)}` : " · Metric coverage unknown"}
+        </Text>
       ) : null}
 
       {showBlockingSpinner ? (

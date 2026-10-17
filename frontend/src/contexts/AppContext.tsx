@@ -346,6 +346,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           "campaign-metrics",
           "top-books",
           "products-range",
+          "bleeding-keywords",
+          "overview-ad-groups",
+          "search-terms",
+          "ads-engine-",
         ];
         void queryClient.invalidateQueries({
           predicate: (query) => {

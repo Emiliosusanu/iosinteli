@@ -29,6 +29,7 @@ export const SCOPE_BOUND_QUERY_PREFIXES = [
   "ads-engine-keywords-daily",
   "ads-engine-search-terms-daily",
   "search-terms-pulse",
+  "search-terms",
   "bleeding-keywords",
   "overview-ad-groups",
   "overview-kdp-ingest",
