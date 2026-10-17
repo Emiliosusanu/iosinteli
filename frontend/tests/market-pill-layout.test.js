@@ -61,10 +61,13 @@ test("header flags reflect only selected enabled profiles, including external pr
     { id: "a", profile_id: "amazon-a", country_code: "US", is_enabled: true },
     { id: "b", profile_id: "amazon-b", country_code: "CA", is_enabled: true },
     { id: "c", profile_id: "amazon-c", country_code: "GB", is_enabled: false },
+    { id: "d", profile_id: "amazon-d", country_code: "AU", is_enabled: null },
+    { id: "e", profile_id: "amazon-e", country_code: "DE" },
   ];
   assert.deepEqual(accounts.selectedMarketCountryCodes(profiles, []), []);
   assert.deepEqual(accounts.selectedMarketCountryCodes(profiles, ["missing"]), []);
   assert.deepEqual(accounts.selectedMarketCountryCodes(profiles, ["amazon-a", "c"]), ["US"]);
+  assert.deepEqual(accounts.selectedMarketCountryCodes(profiles, ["amazon-a", "c", "d", "amazon-e"]), ["US"]);
   assert.deepEqual(accounts.selectedMarketCountryCodes(profiles, ["a", "amazon-b"]), ["US", "CA"]);
 });
 
