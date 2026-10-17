@@ -20,11 +20,13 @@ export function MarketFlagStack({
   rimColor,
   fillColor,
   textColor,
+  compact = false,
 }: {
   countries: string[];
   rimColor: string;
   fillColor: string;
   textColor: string;
+  compact?: boolean;
 }) {
   const visibleCountries = countries.slice(0, MAX_VISIBLE_MARKET_FLAGS);
   const hiddenCount = Math.max(0, countries.length - visibleCountries.length);
@@ -41,12 +43,14 @@ export function MarketFlagStack({
           key={code}
           style={[
             styles.marketFlagDisc,
+            compact && styles.compactFlagDisc,
             {
               marginLeft: index > 0 ? MARKET_FLAG_GAP : 0,
               zIndex: index + 1,
               borderColor: rimColor,
               backgroundColor: fillColor,
             },
+            compact && index > 0 ? { marginLeft: -6 } : null,
           ]}
         >
           <Text style={styles.marketFlagDiscText} allowFontScaling={false} numberOfLines={1}>
@@ -54,7 +58,7 @@ export function MarketFlagStack({
           </Text>
         </View>
       ))}
-      {hiddenCount > 0 ? (
+      {hiddenCount > 0 && !compact ? (
         <View
           testID="multi-country-overflow"
           style={[
@@ -157,12 +161,13 @@ export function MarketPill({
           style={[StyleSheet.absoluteFill, { backgroundColor: chrome.wash }]}
         />
         <View style={styles.marketPillInner}>
-          {compactMulti ? <SFSymbol name="globe" size={18} color={chrome.label} /> : <MarketFlagStack
+          <MarketFlagStack
             countries={resolvedCountries}
+            compact={compactMulti}
             rimColor={chrome.flagRim}
             fillColor={chrome.flagFill}
             textColor={chrome.chevron}
-          />}
+          />
           <Text
             style={[t.typography.footnote, styles.marketPillText, { color: chrome.label }, compactMulti ? { fontSize: 12, lineHeight: 14 } : undefined]}
             numberOfLines={compactMulti ? 2 : 1}
@@ -236,6 +241,12 @@ const styles = StyleSheet.create({
     textAlign: "center",
     includeFontPadding: false,
     transform: [{ scale: 1.05 }],
+  },
+  compactFlagDisc: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1,
   },
   marketOverflowBadge: {
     minWidth: 28,

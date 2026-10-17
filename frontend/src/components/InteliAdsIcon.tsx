@@ -63,7 +63,11 @@ const PATHS: Record<InteliAdsIconName, string[]> = {
   error: ["M6 6l12 12M18 6L6 18"],
   filter: ["M4 6h16l-6 7v5l-4-2v-3z"],
   sort: ["M8 5v14M5 8l3-3 3 3M16 19V5M13 16l3 3 3-3"],
-  dateRange: ["M6 5h12v14H6zM8 3v4M16 3v4M6 10h12"],
+  dateRange: [
+    "M7 4.5h10a3 3 0 0 1 3 3v11a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-11a3 3 0 0 1 3-3Z",
+    "M8 2.5v4M16 2.5v4M4 10h16M9.5 15h5",
+    "M9.5 15a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM17.5 15a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z",
+  ],
 };
 
 export const INTELIADS_ICON_NAMES = Object.keys(PATHS) as InteliAdsIconName[];
@@ -96,8 +100,8 @@ export function InteliAdsIcon({
     stroke: color,
     strokeWidth: stroke,
     fill: "none",
-    strokeLinecap: "butt",
-    strokeLinejoin: "miter",
+    strokeLinecap: name === "dateRange" ? "round" : "butt",
+    strokeLinejoin: name === "dateRange" ? "round" : "miter",
     opacity: state === "disabled" ? 0.4 : 1,
   };
   return (

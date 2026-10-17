@@ -28,6 +28,7 @@ import { DateRange } from "../lib/types";
 import { IOSDateField, SFSymbol, sfFromIonicon } from "./ios/Native";
 import { GlassPanel } from "./GlassPanel";
 import { MarketPill } from "./MarketPill";
+import { InteliAdsIcon } from "./InteliAdsIcon";
 import { PressableScale } from "./Motion";
 import {
   NEST_DISABLED_VIEW_MESSAGE,
@@ -192,11 +193,11 @@ function HeaderPill({
                 },
           ]}
         >
-          <SFSymbol
+          {icon === "calendar" ? <InteliAdsIcon name="dateRange" size={20} color={t.colors.tone_primary} /> : <SFSymbol
             name={icon}
             size={caption ? 15 : 14}
             color={caption ? t.colors.tone_primary : t.colors.text_secondary}
-          />
+          />}
         </View>
         <View style={styles.pillLabel}>
           {caption ? (
