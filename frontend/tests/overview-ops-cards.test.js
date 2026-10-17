@@ -50,7 +50,8 @@ test("Marketplace card is real-data only and controls the Ads widget scope", () 
   assert.match(cards, /OverviewMarketplaceAdsCard/);
   assert.match(cards, /if \(!rows\.length\) return null/);
   assert.match(home, /if \(!adsReady\) return \[\]/);
-  assert.match(home, /return adsMarketCountries\.map/);
+  assert.match(home, /return selectedCountries\.map/);
+  assert.doesNotMatch(home, /return adsMarketCountries\.map/);
   assert.match(home, /adsWidgetProfileIds/);
   assert.match(home, /selectedCountry=\{selectedAdsMarket\}/);
   assert.match(home, /onSelect=\{setSelectedAdsMarket\}/);
