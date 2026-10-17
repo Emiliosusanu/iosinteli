@@ -888,6 +888,9 @@ export async function fetchNestBookCampaigns(params: {
       roas: spend > 0 ? sales / spend : null,
       net: null,
       match_source: "product_ad" as const,
+      matched_book_asins: [params.asin.toUpperCase()],
+      metrics_state: "ready" as const,
+      placement_state: "unavailable" as const,
     };
   });
 }

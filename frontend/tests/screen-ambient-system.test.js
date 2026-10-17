@@ -54,7 +54,7 @@ test("filters and buttons share the Overview glass chip chrome", () => {
   assert.match(native, /tone_primary \+ "55"/);
   assert.match(topBar, /glass_background/);
   assert.match(topBar, /MarketPill/);
-  assert.match(topBar, /multiCountryCodes/);
+  assert.match(topBar, /selectedMarketCountryCodes/);
   assert.match(topBar, /formatMarketPillLabel/);
   assert.match(topBar, /profile-selector-btn/);
   assert.match(topBar, /countryFlagEmoji/);

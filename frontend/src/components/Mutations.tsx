@@ -430,6 +430,7 @@ export function BidBudgetEditor({
 
 export function MutationTap({
   label,
+  accessibilityLabel,
   value,
   onPress,
   testID,
@@ -439,6 +440,7 @@ export function MutationTap({
   currency,
 }: {
   label: string;
+  accessibilityLabel?: string;
   value: string;
   onPress: CooldownOverridePress;
   testID?: string;
@@ -470,7 +472,7 @@ export function MutationTap({
     <TouchableOpacity
       testID={testID}
       accessibilityRole="button"
-      accessibilityLabel={`${label} ${value}${locked ? ", cooldown" : ""}`}
+      accessibilityLabel={`${accessibilityLabel ?? `${label} ${value}`}${locked ? ", cooldown" : ""}`}
       accessibilityHint={locked ? "Edit anyway available." : undefined}
       onPress={openEditor}
       activeOpacity={0.75}
@@ -547,7 +549,8 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   tapCompact: {
-    minHeight: 28,
+    minHeight: 44,
+    maxWidth: "100%",
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 4,

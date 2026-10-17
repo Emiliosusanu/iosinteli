@@ -6,6 +6,7 @@ import {
   advertisedAsinForCreateFormat,
   createFlowFormatOptions,
   defaultCreateFormatAsin,
+  formatOptionsForAsins,
   formatsFromWorkKey,
   preferredEnabledProfileId,
 } from "../src/lib/bookCampaignFormats.ts";
@@ -27,6 +28,17 @@ test("formatsFromWorkKey returns empty when work key has no format ASINs", () =>
   assert.deepEqual(formatsFromWorkKey(""), []);
   assert.deepEqual(formatsFromWorkKey("B0H26KZBDN"), []);
   assert.deepEqual(formatsFromWorkKey(null), []);
+});
+
+test("formatOptionsForAsins identifies every parent format matched by product ads", () => {
+  const formats = formatsFromWorkKey(
+    "DIGITAL=B0KINDLE01:PRINT=B0PRINT001:HARDCOVER=B0HARD001:AUDIO=B0AUDIO001::",
+  );
+  assert.deepEqual(
+    formatOptionsForAsins(formats, ["b0print001", "B0AUDIO001"]).map((row) => row.kind),
+    ["paperback", "audiobook"],
+  );
+  assert.deepEqual(formatOptionsForAsins(formats, ["B0UNKNOWN01"]), []);
 });
 
 test("FORMAT_KIND_ACCENT covers every format kind", async () => {

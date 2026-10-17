@@ -277,7 +277,7 @@ export function BookWidgetRow({
         </View>
         <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 2 }]}>
           {bookKdpAvailable ? `${formatCurrency(book.royalties!, currency, { compact: true })} · ` : ""}
-          {formatCurrency(book.spend, currency, { compact: true })} · {formatInt(book.orders)} orders · {formatInt(book.clicks)} clicks ·{" "}
+          {formatCurrency(book.spend, currency, { compact: true })} · {formatInt(book.orders)} orders · {book.clicks != null ? formatInt(book.clicks) : "—"} clicks ·{" "}
           <Text style={{ color: book.sales > 0 ? toneColor(hasAuthoritativeBreakEven(book.breakeven_acos) ? acosTone(book.acos, book.breakeven_acos) : "inactive", t.colors) : t.colors.text_secondary }}>
             {book.sales > 0 ? formatPercent(book.acos) : "—"}
           </Text>

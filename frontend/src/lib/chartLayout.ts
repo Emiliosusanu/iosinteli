@@ -12,6 +12,23 @@ export const CHART_MAX_DAY_STEP_PX = 36;
 /** Prefer this pitch when there is room (still never exceeds the stretch fill). */
 export const CHART_COMFORTABLE_DAY_STEP_PX = 28;
 
+/** Keep extrema labelled; retain the zero gridline even when its label cannot fit. */
+export function valueAxisTicks(min: number, max: number, height: number, inset = 8, minLabelGap = 16) {
+  const values = [max];
+  if (min < 0 && max > 0) values.push(0);
+  if (min !== max) values.push(min);
+  const plotHeight = Math.max(1, height - inset * 2);
+  const ticks = values.map((value) => ({
+    value,
+    y: inset + ((max - value) / Math.max(1e-9, max - min)) * plotHeight,
+  }));
+  return ticks.map((tick, index) => ({
+    ...tick,
+    labelVisible: index === 0 || index === ticks.length - 1 ||
+      [ticks[0], ticks[ticks.length - 1]].every((edge) => Math.abs(edge.y - tick.y) >= minLabelGap),
+  }));
+}
+
 export type DayXLayout = {
   /** Distance between consecutive day centers. */
   step: number;

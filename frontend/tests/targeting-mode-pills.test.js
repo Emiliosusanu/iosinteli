@@ -37,7 +37,7 @@ test("TargetingModePills uses brand-blue selection and SF Symbols", () => {
   assert.match(pills, /tag\.fill/);
   assert.match(pills, /square\.grid\.2x2\.fill/);
   assert.match(pills, /PressableScale/);
-  assert.match(pills, /tone_primary/);
+  assert.match(pills, /control_selected/);
   assert.match(pills, /minHeight:\s*40/);
   assert.match(pills, /accessibilityState=\{\{\s*selected:\s*active/);
   assert.doesNotMatch(pills, /TouchableOpacity/);

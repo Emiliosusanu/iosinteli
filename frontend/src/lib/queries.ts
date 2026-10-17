@@ -4790,6 +4790,8 @@ interface RangeOpts {
 
 /** A book/campaign association is valid only when Amazon Ads exposes its advertised ASIN/SKU. */
 export type BookCampaignMatchSource = "product_ad";
+export type BookCampaignMetricState = "ready" | "unavailable";
+export type BookCampaignPlacementState = "ready" | "unavailable";
 
 export interface TopCampaignRow {
   id: string;
@@ -4837,6 +4839,8 @@ export interface TopCampaignRow {
   book_title?: string | null;
   book_image_url?: string | null;
   book_match_source?: BookCampaignMatchSource | null;
+  metrics_state?: BookCampaignMetricState;
+  placement_state?: BookCampaignPlacementState;
 }
 
 async function enrichTopCampaignsWithSettingsCooldown(
@@ -5237,6 +5241,7 @@ export async function fetchTopCampaignsRange(
 
 export interface BookCampaignRow extends TopCampaignRow {
   match_source: BookCampaignMatchSource;
+  matched_book_asins: string[];
 }
 
 export async function fetchBookCampaignsRange(
@@ -5261,9 +5266,16 @@ export async function fetchBookCampaignsRange(
   if (!asinFilterValues.length) return [];
 
   const matchSourceByCampaignId = new Map<string, BookCampaignMatchSource>();
+  const matchedAsinsByCampaignId = new Map<string, Set<string>>();
   const setMatch = (campaignId: string | null | undefined) => {
     if (!campaignId) return;
     matchSourceByCampaignId.set(campaignId, "product_ad");
+  };
+  const addMatchedAsin = (campaignId: string | null | undefined, value: string) => {
+    if (!campaignId || !value) return;
+    const asins = matchedAsinsByCampaignId.get(campaignId) ?? new Set<string>();
+    asins.add(value);
+    matchedAsinsByCampaignId.set(campaignId, asins);
   };
 
   // Ownership-scoped: only product ads for this logical book's ASINs/SKUs —
@@ -5282,9 +5294,11 @@ export async function fetchBookCampaignsRange(
   for (const ad of productAds) {
     const adAsin = String((ad as any).asin ?? "").toUpperCase();
     const adSku = String((ad as any).sku ?? "").toUpperCase();
-    if (asinBelongsToLogicalBook(adAsin, bookAsins) || asinBelongsToLogicalBook(adSku, bookAsins)) {
-      setMatch((ad as any).campaign_id);
-    }
+    const campaignId = (ad as any).campaign_id;
+    const matched = [adAsin, adSku].filter((value) => asinBelongsToLogicalBook(value, bookAsins));
+    if (!matched.length) continue;
+    setMatch(campaignId);
+    matched.forEach((value) => addMatchedAsin(campaignId, value));
   }
 
   const matchedCampaignIds = Array.from(matchSourceByCampaignId.keys());
@@ -5326,13 +5340,17 @@ export async function fetchBookCampaignsRange(
     : new Map<string, number>();
 
   const campaignById = new Map((campaigns as any[]).map((campaign) => [campaign.id, campaign]));
-  // Placement + metrics are soft — never let either hold the book Campaigns
-  // spinner open until the outer 45s abort. Rows paint with zeros if metrics lag.
+  // Placement + metrics are soft — keep campaign identity visible within the
+  // local budget, but carry availability state so zeros are never mistaken for
+  // a completed metric read.
+  let placementState: BookCampaignPlacementState = "ready";
+  let metricsState: BookCampaignMetricState = "ready";
   const [placementShares, metricRows] = await Promise.all([
     withQueryTimeout(
       fetchCampaignPlacementShares(matchedCampaignIds, start, end),
       BOOK_CAMPAIGN_PLACEMENT_BUDGET_MS,
     ).catch((error) => {
+      placementState = "unavailable";
       // eslint-disable-next-line no-console
       console.warn("[inteliads:book-campaigns] placement shares skipped", error);
       return new Map<string, CampaignPlacementShares>();
@@ -5341,6 +5359,7 @@ export async function fetchBookCampaignsRange(
       fetchCampaignMetricRows(matchedCampaignIds, start, end),
       BOOK_CAMPAIGN_METRICS_BUDGET_MS,
     ).catch((error) => {
+      metricsState = "unavailable";
       // eslint-disable-next-line no-console
       console.warn("[inteliads:book-campaigns] metrics soft-timed out", error);
       return [] as Awaited<ReturnType<typeof fetchCampaignMetricRows>>;
@@ -5368,6 +5387,8 @@ export async function fetchBookCampaignsRange(
       acos: 0,
       roas: 0,
       net: 0,
+      metrics_state: metricsState,
+      placement_state: placementState,
     });
   }
 
@@ -5393,6 +5414,7 @@ export async function fetchBookCampaignsRange(
   return Array.from(totals.values())
     .map((row) => ({
       ...row,
+      matched_book_asins: [...(matchedAsinsByCampaignId.get(row.id) ?? [])].sort(),
       acos: row.sales > 0 ? (row.spend / row.sales) * 100 : 0,
       roas: row.spend > 0 ? row.sales / row.spend : 0,
       // Ads-attributed sales minus spend. Not publisher Net Royalties.

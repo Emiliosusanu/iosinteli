@@ -145,7 +145,7 @@ export default function CampaignsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [topChromeVisible, setTopChromeVisible] = useState(true);
   const topChromeVisibleRef = useRef(true);
-  const [budgetEdit, setBudgetEdit] = useState<{ id: string; value: number } | null>(null);
+  const [budgetEdit, setBudgetEdit] = useState<{ id: string; value: number; currency: string } | null>(null);
   const [placementAdj, setPlacementAdj] = useState<Record<string, PlacementAdjustments>>({});
   const [placementEdit, setPlacementEdit] = useState<{
     id: string;
@@ -516,37 +516,28 @@ export default function CampaignsScreen() {
             const placementCooldown = getPlacementAdjCooldown(item, entityCooldownHours);
             const marketplaceCountries = countriesForSponsoredCampaign(marketplaceIndex, item);
             const rowCurrency = rowCurrencyOfProfile(profiles, item.amazon_profile_id, primaryCurrency);
+            const openDetails = () => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              router.push({ pathname: "/campaign/[id]", params: { id: item.id, childState: "enabled" } });
+            };
+            const openStrategy = () => {
+              if (blockIfCannotWriteAmazon(writeGuard)) return;
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+              setStrategyEdit({ id: item.id, name: item.name, strategy: item.bidding_strategy });
+            };
             return (
               <AnimatedCard
                 key={item.id}
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  router.push({ pathname: "/campaign/[id]", params: { id: item.id, childState: "enabled" } });
-                }}
-                onLongPress={() => {
-                  if (blockIfCannotWriteAmazon(writeGuard)) return;
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-                  setStrategyEdit({
-                    id: item.id,
-                    name: item.name,
-                    strategy: item.bidding_strategy,
-                  });
-                }}
+                onPress={openDetails}
+                onLongPress={openStrategy}
                 delayLongPress={380}
-                testID={`campaign-row-${item.id}`}
-                accessibilityLabel={campaignA11yLabel(
-                  item,
-                  verdict,
-                  rowCurrency,
-                  marketplaceFlagsA11y(marketplaceCountries),
-                )}
-                accessibilityHint="Long press to change bidding strategy"
               >
                 <ListCard compact>
                   <View style={styles.leadRow}>
                     <View onStartShouldSetResponder={() => true} style={styles.switchWell}>
                       <EntityStateSwitch
                         enabled={item.state === "enabled"}
+                        compact={false}
                         noun="campaign"
                         testID={`campaign-state-${item.id}`}
                         onChange={async (next) => {
@@ -564,12 +555,23 @@ export default function CampaignsScreen() {
                     </View>
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <View style={styles.titleRow}>
+                        <TouchableOpacity
+                          testID={`campaign-row-${item.id}`}
+                          accessibilityRole="button"
+                          accessibilityLabel={campaignA11yLabel(item, verdict, rowCurrency, marketplaceFlagsA11y(marketplaceCountries))}
+                          accessibilityHint="Opens campaign details. Long press to change bidding strategy."
+                          onPress={openDetails}
+                          onLongPress={openStrategy}
+                          delayLongPress={380}
+                          style={{ flex: 1, minWidth: 0, minHeight: 44, justifyContent: "center" }}
+                        >
                         <Text
-                          style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600", flex: 1, minWidth: 0 }]}
+                          style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600", minWidth: 0 }]}
                           numberOfLines={1}
                         >
                           {item.name}
                         </Text>
+                        </TouchableOpacity>
                         <CampaignMarketplaceFlags
                           index={marketplaceIndex}
                           profiles={profiles}
@@ -590,7 +592,7 @@ export default function CampaignsScreen() {
                             onPress={() => {
                               if (blockIfCannotWriteAmazon(writeGuard)) return;
                               Haptics.selectionAsync();
-                              setBudgetEdit({ id: item.id, value: Number(item.budget) || 0 });
+                              setBudgetEdit({ id: item.id, value: Number(item.budget) || 0, currency: rowCurrency });
                             }}
                             style={[
                               styles.budgetChip,
@@ -613,6 +615,11 @@ export default function CampaignsScreen() {
                         <CampaignVerdictBadge verdict={verdict} t={t} />
                         <TouchableOpacity
                           testID={`campaign-strategy-${item.id}`}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Bidding strategy: ${strategy}${settingsCooldown.isInCooldown ? ", cooldown" : ""}`}
+                          accessibilityHint="Opens bidding strategy options. Selecting an option writes Amazon Ads."
+                          activeOpacity={0.7}
+                          style={styles.strategyButton}
                           onPress={() => {
                             if (blockIfCannotWriteAmazon(writeGuard)) return;
                             Haptics.selectionAsync();
@@ -622,7 +629,6 @@ export default function CampaignsScreen() {
                               strategy: item.bidding_strategy,
                             });
                           }}
-                          hitSlop={6}
                         >
                           <Text
                             style={[
@@ -634,12 +640,14 @@ export default function CampaignsScreen() {
                                     ? t.colors.tone_primary
                                     : t.colors.text_secondary,
                                 fontWeight: "600",
+                                flexShrink: 1,
                               },
                             ]}
                           >
                             {strategy}
                             {settingsCooldown.isInCooldown ? " · Cooldown" : ""}
                           </Text>
+                          <SFSymbol name="chevron.right" size={10} color={t.colors.text_tertiary} />
                         </TouchableOpacity>
                       </View>
                       <DenseMetricLine
@@ -675,7 +683,7 @@ export default function CampaignsScreen() {
         visible={budgetEdit != null}
         title="Daily budget"
         value={budgetEdit?.value ?? 0}
-        currency={primaryCurrency}
+        currency={budgetEdit?.currency ?? primaryCurrency}
         kind="money"
         testID={budgetEdit ? `campaign-budget-editor-${budgetEdit.id}` : undefined}
         onClose={() => setBudgetEdit(null)}
@@ -959,17 +967,11 @@ function AnimatedCard({
   onPress,
   onLongPress,
   delayLongPress,
-  testID,
-  accessibilityLabel,
-  accessibilityHint,
 }: {
   children: React.ReactNode;
   onPress: () => void;
   onLongPress?: () => void;
   delayLongPress?: number;
-  testID?: string;
-  accessibilityLabel?: string;
-  accessibilityHint?: string;
 }) {
   const reduceMotion = useReduceMotion();
   const scale = useRef(new Animated.Value(1)).current;
@@ -977,10 +979,7 @@ function AnimatedCard({
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
       <TouchableOpacity
-        testID={testID}
-        accessibilityRole="button"
-        accessibilityLabel={accessibilityLabel}
-        accessibilityHint={accessibilityHint}
+        accessible={false}
         activeOpacity={1}
         delayLongPress={delayLongPress}
         onPressIn={() => {
@@ -1053,13 +1052,18 @@ function PlacementSharePills({
           key={field.key}
           testID={`campaign-placement-${field.key}-${item.id}`}
           label={field.label}
+          accessibilityLabel={`${field.title} placement bid, ${adjustments ? (
+            adjustments[field.key] == null || !Number.isFinite(Number(adjustments[field.key]))
+              ? "unavailable"
+              : formatPercent(Number(adjustments[field.key]), 0)
+          ) : "not loaded"}`}
           compact
           value={
             adjustments
               ? adjustments[field.key] == null || !Number.isFinite(Number(adjustments[field.key]))
                 ? "—"
                 : formatPercent(Number(adjustments[field.key]), 0)
-              : "…"
+              : "Load"
           }
           cooldown={
             // Per-slot stamp with settings hours — never default hours via undefined.
@@ -1113,7 +1117,7 @@ const styles = StyleSheet.create({
   },
   cardHeader: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
   leadRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  switchWell: { minWidth: 42, alignItems: "flex-start", justifyContent: "center" },
+  switchWell: { minWidth: 64, minHeight: layout.minTap, alignItems: "center", justifyContent: "center" },
   titleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   metaRow: {
     flexDirection: "row",
@@ -1123,6 +1127,8 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   budgetChip: {
+    minHeight: layout.minTap,
+    minWidth: layout.minTap,
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
@@ -1130,6 +1136,16 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 4,
+  },
+  strategyButton: {
+    minHeight: layout.minTap,
+    minWidth: layout.minTap,
+    maxWidth: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: spacing.xs,
+    flexShrink: 1,
   },
   placementTaps: {
     flexDirection: "row",

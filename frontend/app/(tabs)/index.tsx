@@ -2276,7 +2276,9 @@ export default function OverviewScreen() {
           <DashboardSurface tone="hero" style={{ marginBottom: dashboard.sectionGap, overflow: "hidden" }} testID="home-net-royalties">
             <PressableScale
               onPress={chartDay ? clearChartSelection : undefined}
-              accessibilityRole={chartDay ? "button" : undefined}
+              disabled={!chartDay}
+              accessibilityRole={chartDay ? "button" : "none"}
+              containerStyle={chartDay ? { minHeight: 44, justifyContent: "center" } : undefined}
               accessibilityLabel={chartDay ? `${chartDay.label}. Release to show the period total.` : `${GROSS_ROYALTIES_LABEL} royalties for ${periodLabel}. Swipe a day on the chart to inspect it.`}
             >
               <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
