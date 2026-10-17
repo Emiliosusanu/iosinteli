@@ -13,7 +13,7 @@ test("Overview ops cards use glass + stagger + status affordances", () => {
   assert.match(cards, /StaggerReveal/);
   assert.match(cards, /LinearGradient/);
   assert.match(cards, /SwipeOpen|Gesture\.Pan/);
-  assert.match(cards, /Not synced|Waiting for sync/);
+  assert.match(cards, /Checking spend|Waiting for server/);
   assert.doesNotMatch(cards, /withRepeat/);
   assert.match(cards, /Almost gone|% used/);
   assert.match(cards, /size=\{96\}/);

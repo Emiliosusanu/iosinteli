@@ -2532,6 +2532,8 @@ export default function OverviewScreen() {
               usedPct={budgetUsedPct}
               danger={budgetDanger}
               todaySynced={budgetTodaySynced}
+              todayFailed={viewingAsAdmin ? bootstrapQ.isError : todayMetricsQ.isError}
+              budgetKnown={allBudgetsQ.isSuccess}
               monthToDate={monthlyBudgetForecastReady ? monthlyBudgetForecast.monthToDateSpend : undefined}
               projectedMonthSpend={monthlyBudgetForecastReady ? monthlyBudgetForecast.projectedMonthSpend : undefined}
               monthlyBudget={monthlyBudgetForecastReady ? monthlyBudgetForecast.monthlyBudget : undefined}
