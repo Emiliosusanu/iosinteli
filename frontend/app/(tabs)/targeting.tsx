@@ -23,7 +23,7 @@ import { targetingFreshnessLabel } from "@/src/lib/targetingPageFreshness";
 import { noPeriodPlaceholder, financialPeriodQueryKey, LIST_PERIOD_QUERY_CACHE, STABLE_SCOPED_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { isHomeQueryTimeout, queryStillWaiting, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
-import { targetingPageQueryKey, targetingPageQueryOptions } from "@/src/lib/targetingTransport";
+import { targetingPageQueryKey, targetingPageQueryOptions, targetingCanAutoRefresh } from "@/src/lib/targetingTransport";
 import {
   fetchAdGroupDefaultBids,
   fetchMobileTargetingPage,
@@ -762,7 +762,7 @@ export default function TargetingScreen() {
     }),
     enabled: canReadPage,
     refetchOnMount: "always",
-    refetchInterval: focused && dateRange.end >= new Date().toISOString().slice(0, 10) ? 60_000 : false,
+    refetchInterval: (query) => focused && dateRange.end >= new Date().toISOString().slice(0, 10) && targetingCanAutoRefresh(query.state.error) ? 60_000 : false,
     refetchIntervalInBackground: false,
   });
   useEffect(() => {

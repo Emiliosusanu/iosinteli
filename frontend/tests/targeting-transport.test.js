@@ -17,7 +17,7 @@ function load(name) {
     {exports,require:key=>load(key.replace('./','')),AbortController,Promise,Error,setTimeout,clearTimeout});
   return exports;
 }
-const {targetingPageQueryKey,targetingPageQueryOptions}=load('targetingTransport');
+const {targetingPageQueryKey,targetingPageQueryOptions,targetingCanAutoRefresh}=load('targetingTransport');
 const {withAbortableQueryTimeout}=load('queryTimeout');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const scope=['mobile-targeting-page-v1','transport-v2','customer','actor','view','dates','profiles','book','campaigns','keywords','enabled','','all','acos','{}','page-size-100'];
@@ -83,6 +83,24 @@ test('SQL 57014 is never retried automatically; manual retry keeps the same key 
     await assert.rejects(q.fetchQuery(options));assert.equal(calls,1);
     await assert.rejects(q.fetchQuery(options));assert.equal(calls,2);
     assert.equal(q.getQueryCache().getAll().length,1);
+  } finally {q.clear();}
+});
+
+test('timeout disables polling, reconnect and focus refresh without disabling manual Retry',async()=>{
+  const q=client();let calls=0;
+  const options=targetingPageQueryOptions(scope,1,null,async()=>{calls++;throw {code:'57014'};});
+  try {
+    await assert.rejects(q.fetchQuery(options));
+    const query=q.getQueryCache().find({queryKey:options.queryKey});
+    assert.equal(targetingCanAutoRefresh(query.state.error),false);
+    assert.equal(options.refetchOnReconnect(query),false);
+    assert.equal(options.refetchOnWindowFocus(query),false);
+    assert.equal(targetingCanAutoRefresh(new Error('HOME_QUERY_TIMEOUT')),false);
+    assert.equal(targetingCanAutoRefresh(null),true);
+    assert.equal(targetingCanAutoRefresh(new TypeError('Network request failed')),true);
+    const source=readFileSync(new URL('../app/(tabs)/targeting.tsx',import.meta.url),'utf8');
+    assert.match(source,/refetchInterval: \(query\) =>[^\n]*targetingCanAutoRefresh\(query.state.error\)/);
+    await assert.rejects(q.fetchQuery(options));assert.equal(calls,2);
   } finally {q.clear();}
 });
 
