@@ -102,4 +102,12 @@ test("Reset changes local filters without changing shared market or dates", () =
   const reset = source.slice(source.indexOf('testID="targeting-reset-local"'), source.indexOf('>Reset filters</Text>'));
   assert.match(reset, /setAdvanced/); assert.match(reset, /setSearch/); assert.match(reset, /setBookAsin/);
   assert.doesNotMatch(reset, /setDateRange|selectMarket|setSelectedProfileIds/);
+  const values = {};
+  const setters = Object.fromEntries(["Search", "Perf", "Sort", "StateFilter", "BookAsin", "Advanced", "SelectedIds", "SelectMode"]
+    .map(name => ["set" + name, value => { values[name] = value; }]));
+  const body = reset.slice(reset.indexOf("onPress={() => {") + "onPress={() => {".length, reset.indexOf("}}>", reset.indexOf("onPress={() => {")));
+  vm.runInNewContext(body, { ...setters, DEFAULT_TARGETING_STATE_FILTER: "enabled", EMPTY_TARGETING_ADVANCED_FILTERS: {} });
+  assert.equal(values.Search, ""); assert.equal(values.Perf, "all"); assert.equal(values.Sort, "acos");
+  assert.equal(values.StateFilter, "enabled"); assert.equal(values.BookAsin, null);
+  assert.equal(values.SelectMode, false); assert.equal(values.SelectedIds.length, 0);
 });
