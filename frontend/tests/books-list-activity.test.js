@@ -490,9 +490,9 @@ test("Books tab uses period-scoped list without 60-day gate", () => {
   assert.match(products, /FINANCIAL_QUERY_ROOTS\.products[\s\S]*?,\s*0\s*\]\s*as const/);
 });
 
-test("Books list hierarchy: Net hero weight + statusChip tokens + lg covers", () => {
-  assert.match(products, /statusChipTone/);
-  assert.match(products, /t\.statusChip\./);
+test("Books list hierarchy: one Net amount without redundant status pills", () => {
+  assert.doesNotMatch(products, /statusChipTone/);
+  assert.doesNotMatch(products, /styles\.statusPill,/);
   assert.match(products, /fontWeight:\s*"800"/);
   assert.match(products, /fontSize:\s*22/);
   assert.match(products, /size="lg"/);

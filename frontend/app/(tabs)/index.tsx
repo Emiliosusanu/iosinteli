@@ -133,7 +133,6 @@ import {
 } from "@/src/components/OverviewOpsCards";
 import { DashboardSurface } from "@/src/components/DashboardSurface";
 import {
-  OverviewHeaderCompactSticky,
   OverviewHeaderV3,
   useOverviewHeaderScroll,
   type OverviewPeriodMode,
@@ -2206,12 +2205,6 @@ export default function OverviewScreen() {
   return (
     <AppScreen testID="home-root">
       <View style={{ flex: 1 }} collapsable={false}>
-      {/*
-        Compact sticky overlays this full-screen parent at top:0 (under Dynamic
-        Island). Must NOT live inside GestureDetector — a collapsed gesture host
-        was resolving absolute chrome against the bottom safe area.
-      */}
-      <OverviewHeaderCompactSticky scrollY={headerScrollY} {...headerNavProps} />
       <OverviewPeriodSwipeProvider gesture={periodSwipe}>
       <GestureDetector gesture={periodSwipe}>
       <Animated.ScrollView

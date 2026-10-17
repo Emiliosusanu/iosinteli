@@ -11,6 +11,7 @@ import {
   Switch,
   Platform,
   Alert,
+  useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -56,6 +57,7 @@ import {
 } from "../lib/accountsUi";
 
 interface TopBarProps {
+  condensedMarket?: boolean;
   title?: string;
   showProfileSelector?: boolean;
   showDateRange?: boolean;
@@ -330,12 +332,14 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
 }
 
 export function TopBar({
+  condensedMarket = false,
   title,
   showProfileSelector = true,
   showDateRange = true,
   showKdpAccountGroups = true,
   rightAction,
 }: TopBarProps) {
+  const { width } = useWindowDimensions();
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -636,6 +640,7 @@ export function TopBar({
                 <MarketPill
                   testID="profile-selector-btn"
                   compact
+                  flagsOnly={condensedMarket && width < 400}
                   countries={marketCountries}
                   currency={primaryCurrency}
                   onPress={() => setProfileOpen(true)}
