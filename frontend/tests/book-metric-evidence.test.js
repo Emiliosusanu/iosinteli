@@ -27,6 +27,13 @@ test('old fabricated-zero book caches cannot hydrate under the new contract', ()
   assert.notEqual(FINANCIAL_QUERY_ROOTS.products, 'products-range-complete-v6');
 });
 
+test('catalog-only and enabled-campaign book placeholders never manufacture measured clicks', () => {
+  const queries = readFileSync(new URL('../src/lib/queries.ts', import.meta.url), 'utf8');
+  const seeds = queries.slice(queries.indexOf('liveSeed.push({'), queries.indexOf('const merged = mergeTopBookCatalogRows([...shelf, ...campaignOnlyShelf]'));
+  assert.equal((seeds.match(/clicks: null/g) || []).length, 4);
+  assert.doesNotMatch(seeds, /clicks: 0|impressions: 0/);
+});
+
 test('book widget suppresses missing counts and identifies KDP units separately from Ads orders', () => {
   const rows = readFileSync(new URL('../src/components/OverviewWidgetRows.tsx', import.meta.url), 'utf8');
   assert.match(rows, /book\.clicks != null/);
