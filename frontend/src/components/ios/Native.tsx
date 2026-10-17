@@ -8,6 +8,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -410,6 +411,8 @@ export function IOSSettingsRow({
 }) {
   const t = useTheme();
   const spoken = accessibilityLabel ?? [label, subtitle, value].filter(Boolean).join(". ");
+  const { fontScale } = useWindowDimensions();
+  const stackedValue = Boolean(value && (value.length > 14 || fontScale >= 1.4));
   return (
     <TouchableOpacity
       testID={testID}
@@ -436,9 +439,14 @@ export function IOSSettingsRow({
         {subtitle ? (
           <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}>{subtitle}</Text>
         ) : null}
+        {value && stackedValue ? (
+          <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}>
+            {value}
+          </Text>
+        ) : null}
       </View>
-      {value ? (
-        <Text style={[t.typography.body, { color: t.colors.text_secondary, marginRight: 6, maxWidth: "46%" }]}>
+      {value && !stackedValue ? (
+        <Text style={[t.typography.body, { color: t.colors.text_secondary, marginRight: 6, maxWidth: "46%", textAlign: "right" }]}>
           {value}
         </Text>
       ) : null}
@@ -752,7 +760,7 @@ const styles = StyleSheet.create({
   segmentLabel: {
     fontSize: 12,
     fontWeight: "600",
-    letterSpacing: -0.1,
+    letterSpacing: 0,
   },
   dateFallback: {
     minHeight: 44,
@@ -779,7 +787,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   groupTitle: {
-    letterSpacing: 0.4,
+    letterSpacing: 0,
     marginBottom: 6,
   },
   group: {
@@ -796,7 +804,7 @@ const styles = StyleSheet.create({
   search: {
     flexDirection: "row",
     alignItems: "center",
-    height: dashboard.headerControl,
+    minHeight: 44,
     borderRadius: dashboard.chipRadius,
     borderCurve: "continuous",
     paddingHorizontal: 10,
@@ -804,9 +812,10 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
+    minHeight: 44,
     fontSize: 15,
     fontWeight: "500",
-    paddingVertical: 0,
+    paddingVertical: 8,
   },
   buttonFallback: {
     minHeight: 48,

@@ -174,6 +174,7 @@ function HeaderPill({
       testID={testID}
       onPress={onPress}
       accessibilityLabel={accessibilityLabel}
+      containerStyle={{ minHeight: 44, justifyContent: "center" }}
       style={{ width: "100%" }}
     >
       <GlassPanel

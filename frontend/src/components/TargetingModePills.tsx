@@ -42,7 +42,7 @@ export function TargetingModePills({ value, onChange }: Props) {
   const { width } = useWindowDimensions();
   const compact = width < 400;
   const reduceMotion = useReduceMotion();
-  const blue = t.colors.tone_primary;
+  const blue = t.colors.control_selected;
   const idleBg = t.colors.background_tertiary;
   const idleFg = t.colors.text_secondary;
 
@@ -64,6 +64,7 @@ export function TargetingModePills({ value, onChange }: Props) {
               accessibilityState={{ selected: active }}
               accessibilityLabel={option.label}
               hitSlop={4}
+              containerStyle={styles.touchTarget}
               onPress={() => {
                 if (active) return;
                 void playHaptic("select", reduceMotion);
@@ -115,6 +116,10 @@ export function TargetingModePills({ value, onChange }: Props) {
 }
 
 const styles = StyleSheet.create({
+  touchTarget: {
+    minHeight: 44,
+    justifyContent: "center",
+  },
   track: {
     flexDirection: "row",
     flexWrap: "nowrap",
