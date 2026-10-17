@@ -48,6 +48,7 @@ import {
   groupProfilesByAdsAccount,
   isReadyToEnable,
   multiCountryCodes,
+  selectedMarketCountryCodes,
   profileAssociationHint,
   profileDisplayName,
   profileEnabled,
@@ -391,19 +392,10 @@ export function TopBar({
     () => profiles.filter((p) => profileEnabled(p)),
     [profiles],
   );
-  const selectedProfiles = useMemo(
-    () =>
-      profiles.filter(
-        (p) => selectedProfileIds.includes(p.id) || selectedProfileIds.includes(p.profile_id),
-      ),
+  const marketCountries = useMemo(
+    () => selectedMarketCountryCodes(profiles, selectedProfileIds),
     [profiles, selectedProfileIds],
   );
-  const marketCountries = useMemo(() => {
-    if (selectedProfiles.length > 0) {
-      return multiCountryCodes(selectedProfiles, { onlyEnabled: false });
-    }
-    return multiCountryCodes(profiles, { onlyEnabled: true });
-  }, [profiles, selectedProfiles]);
   const hasMarketPill = marketCountries.length > 0;
 
   const selectedLabel =

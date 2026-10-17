@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import { BlurView } from "expo-blur";
 import { SFSymbol } from "@/src/components/ios/Native";
@@ -10,26 +10,37 @@ import {
 } from "@/src/lib/accountsUi";
 import { useTheme } from "@/src/lib/theme";
 
-const MARKET_FLAG_SIZE = 21;
-const MARKET_FLAG_GAP = 4;
-const MAX_VISIBLE_MARKET_FLAGS = 2;
+const MARKET_FLAG_SIZE = 24;
+const MARKET_FLAG_GAP = 3;
+const MAX_VISIBLE_MARKET_FLAGS = 4;
 
-/** Separated glossy circular flag discs for a centered, readable market pill. */
+export function marketFlagCapacity(width: number | null, compact: boolean, showLabel: boolean) {
+  if (width == null) return MAX_VISIBLE_MARKET_FLAGS;
+  const reserved = (compact ? 16 : 20) + 16 + (showLabel ? 58 : 0);
+  const slot = (compact ? 20 : MARKET_FLAG_SIZE) + MARKET_FLAG_GAP;
+  return Math.max(2, Math.min(MAX_VISIBLE_MARKET_FLAGS, Math.floor((width - reserved + MARKET_FLAG_GAP) / slot)));
+}
+
+/** Separate flag tiles preserve the full glyph; overflow always remains visible. */
 export function MarketFlagStack({
   countries,
   rimColor,
   fillColor,
   textColor,
   compact = false,
+  maxVisible = MAX_VISIBLE_MARKET_FLAGS,
 }: {
   countries: string[];
   rimColor: string;
   fillColor: string;
   textColor: string;
   compact?: boolean;
+  maxVisible?: number;
 }) {
-  const visibleCountries = countries.slice(0, MAX_VISIBLE_MARKET_FLAGS);
-  const hiddenCount = Math.max(0, countries.length - visibleCountries.length);
+  const resolvedCountries = sortMarketCountryCodes(countries);
+  const visibleLimit = resolvedCountries.length > maxVisible ? maxVisible - 1 : maxVisible;
+  const visibleCountries = resolvedCountries.slice(0, visibleLimit);
+  const hiddenCount = Math.max(0, resolvedCountries.length - visibleCountries.length);
 
   return (
     <View
@@ -50,19 +61,19 @@ export function MarketFlagStack({
               borderColor: rimColor,
               backgroundColor: fillColor,
             },
-            compact && index > 0 ? { marginLeft: -6 } : null,
           ]}
         >
-          <Text style={styles.marketFlagDiscText} allowFontScaling={false} numberOfLines={1}>
+          <Text style={[styles.marketFlagDiscText, compact && styles.compactFlagText]} allowFontScaling={false} numberOfLines={1}>
             {countryFlagEmoji(code)}
           </Text>
         </View>
       ))}
-      {hiddenCount > 0 && !compact ? (
+      {hiddenCount > 0 ? (
         <View
           testID="multi-country-overflow"
           style={[
             styles.marketOverflowBadge,
+            compact && styles.compactOverflowBadge,
             {
               marginLeft: MARKET_FLAG_GAP,
               borderColor: rimColor,
@@ -92,7 +103,7 @@ type MarketPillProps = {
 };
 
 /**
- * Frosted glass market pill — overlapping circular flags + `US + CA • USD` + chevron.
+ * Shared market selector: separate flags, optional currency, full spoken context.
  * Shared by OverviewHeaderV3 and TopBar (Campaigns / Targets / Books).
  * Wash / tint / label colors follow the active light/dark scheme.
  */
@@ -110,9 +121,9 @@ export function MarketPill({
   const resolvedCountries = sortMarketCountryCodes(countries);
   const fullLabel = formatMarketPillLabel(resolvedCountries, currency);
   const compactMulti = compact && resolvedCountries.length > 1;
-  const label = compactMulti ? `${resolvedCountries.length} markets\n${currency}` : resolvedCountries.length > MAX_VISIBLE_MARKET_FLAGS
-    ? `${resolvedCountries.length} markets${currency ? ` • ${currency}` : ""}`
-    : fullLabel;
+  const label = resolvedCountries.length > 1 ? currency : fullLabel;
+  const showLabel = !flagsOnly && !compactMulti && Boolean(label);
+  const [measuredWidth, setMeasuredWidth] = useState<number | null>(null);
   const a11y = accessibilityLabel ?? `Profiles, ${fullLabel}`;
   const chrome = useMemo(
     () => ({
@@ -133,7 +144,10 @@ export function MarketPill({
   );
 
   return (
-    <View style={flex ? styles.marketPillHit : undefined}>
+    <View
+      style={flex ? styles.marketPillHit : undefined}
+      onLayout={(event) => setMeasuredWidth(event.nativeEvent.layout.width)}
+    >
     <PressableScale
       testID={testID}
       onPress={onPress}
@@ -163,19 +177,18 @@ export function MarketPill({
           pointerEvents="none"
           style={[StyleSheet.absoluteFill, { backgroundColor: chrome.wash }]}
         />
-        <View style={styles.marketPillInner}>
+        <View style={[styles.marketPillInner, compact && styles.compactPillInner]}>
           <MarketFlagStack
             countries={resolvedCountries}
             compact={compactMulti}
+            maxVisible={marketFlagCapacity(measuredWidth, compactMulti, showLabel)}
             rimColor={chrome.flagRim}
             fillColor={chrome.flagFill}
             textColor={chrome.chevron}
           />
-          {!flagsOnly ? <Text
-            style={[t.typography.footnote, styles.marketPillText, { color: chrome.label }, compactMulti ? { fontSize: 12, lineHeight: 14 } : undefined]}
-            numberOfLines={compactMulti ? 2 : 1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.8}
+          {showLabel ? <Text
+            style={[t.typography.footnote, styles.marketPillText, { color: chrome.label }]}
+            numberOfLines={1}
             ellipsizeMode="tail"
           >
             {label}
@@ -193,7 +206,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexShrink: 1,
     flexBasis: 0,
-    minWidth: 0,
+    minWidth: 80,
     maxWidth: "100%",
   },
   marketPill: {
@@ -214,6 +227,10 @@ const styles = StyleSheet.create({
     position: "relative",
     minWidth: 0,
   },
+  compactPillInner: {
+    paddingHorizontal: 8,
+    gap: 6,
+  },
   marketPillText: {
     flexGrow: 1,
     flexShrink: 1,
@@ -231,41 +248,48 @@ const styles = StyleSheet.create({
   marketFlagDisc: {
     width: MARKET_FLAG_SIZE,
     height: MARKET_FLAG_SIZE,
-    borderRadius: MARKET_FLAG_SIZE / 2,
+    borderRadius: 6,
     borderCurve: "continuous",
     borderWidth: StyleSheet.hairlineWidth,
-    overflow: "hidden",
+    overflow: "visible",
     alignItems: "center",
     justifyContent: "center",
   },
   marketFlagDiscText: {
-    fontSize: 16,
-    lineHeight: 20,
+    fontSize: 20,
+    lineHeight: 24,
     textAlign: "center",
     includeFontPadding: false,
-    transform: [{ scale: 1.05 }],
   },
   compactFlagDisc: {
     width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 1,
+    height: 22,
+    borderRadius: 5,
+  },
+  compactFlagText: {
+    fontSize: 16,
+    lineHeight: 20,
   },
   marketOverflowBadge: {
-    minWidth: 28,
+    minWidth: 24,
     height: MARKET_FLAG_SIZE,
     borderRadius: MARKET_FLAG_SIZE / 2,
     borderCurve: "continuous",
     borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     alignItems: "center",
     justifyContent: "center",
+  },
+  compactOverflowBadge: {
+    minWidth: 20,
+    height: 22,
+    paddingHorizontal: 2,
   },
   marketOverflowText: {
     fontSize: 10,
     lineHeight: 12,
     fontWeight: "800",
-    letterSpacing: -0.15,
+    letterSpacing: 0,
     fontVariant: ["tabular-nums"],
   },
 });
