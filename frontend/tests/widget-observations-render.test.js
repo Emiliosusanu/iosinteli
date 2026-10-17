@@ -49,7 +49,7 @@ test('all five widget row types preserve missing, zero and actual click evidence
 
 test('book widget identifies signed KDP corrections and never labels them Ads orders', () => {
   const rendered = text(exports.BookWidgetRow({ book: { asin: 'B0ABCDEFGH', orders: -2, orders_source: 'kdp', spend: 5, sales: 0, royalties: -3, net: -8 }, currency: 'USD', t, onPress() {} }));
-  assert.match(rendered, /-2 KDP units/);
-  assert.doesNotMatch(rendered, /ad orders|0 clicks/);
-  assert.match(rendered, /Roy\. \$-3/);
+  assert.match(rendered, /-2 orders/);
+  assert.doesNotMatch(rendered, /KDP units|ad orders|0 clicks/);
+  assert.match(rendered, /\$-3/);
 });

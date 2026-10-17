@@ -34,10 +34,11 @@ test('catalog-only and enabled-campaign book placeholders never manufacture meas
   assert.doesNotMatch(seeds, /clicks: 0|impressions: 0/);
 });
 
-test('book widget suppresses missing counts and identifies KDP units separately from Ads orders', () => {
+test('book widget suppresses missing clicks without changing the established metric labels', () => {
   const rows = readFileSync(new URL('../src/components/OverviewWidgetRows.tsx', import.meta.url), 'utf8');
   assert.match(rows, /book\.clicks != null/);
-  assert.match(rows, /book\.orders_source === "kdp" \? "KDP units" : "ad orders"/);
+  assert.match(rows, /formatInt\(book\.orders\)\} orders/);
+  assert.match(rows, /formatPercent\(book\.acos\) : "—"\} ACoS/);
   for (const metric of ['campaign.clicks', 'row.total_clicks']) assert.ok(rows.includes('observedCount(' + metric + ')'));
   const home = readFileSync(new URL('../app/(tabs)/index.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(home, /<OverviewHeaderCompactSticky/);

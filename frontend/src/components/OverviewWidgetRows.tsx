@@ -282,11 +282,11 @@ export function BookWidgetRow({
           ) : null}
         </View>
         <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 2 }]}>
-          {bookKdpAvailable ? `Roy. ${formatCurrency(book.royalties!, currency, { compact: true })} · ` : ""}
-          Spend {formatCurrency(book.spend, currency, { compact: true })} · {observedCount(book.orders, book.orders_source === "kdp")} {book.orders_source === "kdp" ? "KDP units" : "ad orders"}
+          {bookKdpAvailable ? `${formatCurrency(book.royalties!, currency, { compact: true })} · ` : ""}
+          {formatCurrency(book.spend, currency, { compact: true })} · {formatInt(book.orders)} orders
           {book.clicks != null ? ` · ${observedCount(book.clicks)} clicks` : ""} ·{" "}
           <Text style={{ color: book.sales > 0 ? toneColor(hasAuthoritativeBreakEven(book.breakeven_acos) ? acosTone(book.acos, book.breakeven_acos) : "inactive", t.colors) : t.colors.text_secondary }}>
-            {book.sales > 0 ? formatPercent(book.acos) : "—"}
+            {book.sales > 0 ? formatPercent(book.acos) : "—"} ACoS
           </Text>
         </Text>
       </View>
