@@ -7,6 +7,7 @@ import { fetchNestUsers, type NestUser } from "../lib/mutations";
 import { hasNestToken, NestApiError } from "../lib/rulesApi";
 import { AmazonProfile, DateRange } from "../lib/types";
 import { normalizeDateRange, rangePresets } from "../lib/format";
+import { useDateRangeRollover } from "../hooks/useDateRangeRollover";
 import { useAuth } from "./AuthContext";
 import { configureNotifications, registerForPushAsync, clearNotificationIdentity, installBackgroundSyncWakeHandlers, runAlertCheck, subscribeNotificationRefresh } from "../lib/notifications";
 import { anyNotificationPrefEnabled } from "../lib/notificationContract";
@@ -140,10 +141,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   });
   const [hydrated, setHydrated] = useState(false);
   const prevUserIdRef = useRef<string | null | undefined>(undefined);
+  const dateRangeRevisionRef = useRef(0);
 
   // Hydrate persisted values
   useEffect(() => {
     (async () => {
+      const dateRangeRevision = dateRangeRevisionRef.current;
       const [ids, dr, nf, filterUser, kdpSource, exactBidRaw] = await Promise.all([
         storage.getItem(STORAGE_KEYS.selectedProfiles, ""),
         storage.getItem(STORAGE_KEYS.dateRange, ""),
@@ -162,7 +165,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (Array.isArray(parsed)) setSelectedProfileIdsState(parsed);
         } catch {}
       }
-      if (dr && typeof dr === "string") {
+      if (dr && typeof dr === "string" && dateRangeRevisionRef.current === dateRangeRevision) {
         try {
           const parsed = JSON.parse(dr);
           if (parsed?.start && parsed?.end) {
@@ -710,10 +713,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [profiles, selectedProfileIds, setSelectedProfileIds]);
 
   const setDateRange = useCallback((range: DateRange) => {
+    dateRangeRevisionRef.current += 1;
     const normalized = normalizeDateRange(range);
     setDateRangeState(normalized);
     void storage.setItem(STORAGE_KEYS.dateRange, JSON.stringify(normalized));
   }, []);
+
+  useDateRangeRollover(dateRange, hydrated, setDateRange);
 
   const setRoyaltyRate = useCallback((rate: number) => {
     setRoyaltyRateState(rate);
