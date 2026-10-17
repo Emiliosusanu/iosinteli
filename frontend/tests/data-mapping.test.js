@@ -369,7 +369,8 @@ test("search terms and ad group detail avoid fixed pagination gaps", () => {
   assert.equal(targetingSource.includes("sortedProfileIds"), true);
   assert.doesNotMatch(targetingSource.match(/const canReadPage =([\s\S]*?);/)[1], /segment/);
   assert.equal(targetingSource.includes("[inteliads:targeting]"), true);
-  assert.equal(targetingSource.includes("TARGETING_QUERY_TIMEOUT_MS"), true);
+  assert.equal(targetingSource.includes("targetingPageQueryOptions"), true);
+  assert.match(readFileSync(new URL('../src/lib/targetingTransport.ts', import.meta.url), 'utf8'), /timeoutMs = TARGETING_QUERY_TIMEOUT_MS/);
   assert.equal(searchTermsSource.includes("removeClippedSubviews"), true);
   assert.equal(targetingSource.includes("maxToRenderPerBatch"), true);
   assert.equal(adGroupDetailSource.includes('type TabKey = "targets" | "searchTerms" | "history"'), true);

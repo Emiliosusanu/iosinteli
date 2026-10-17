@@ -131,7 +131,7 @@ test("targeting defaults to Active across all segments with parent-chain matchin
   assert.match(targetingSource, /Placement rows are campaigns — Active = campaign enabled/);
   assert.match(
     targetingSource,
-    /Paused = entity paused AND live parents \(ad group \+ campaign enabled\) — use All to see paused-under-paused/,
+    /Paused follows the entity state, including paused parent campaigns/,
   );
   assert.doesNotMatch(targetingSource, /Paused[\s\S]{0,80}no parent-chain/);
   assert.match(targetingSource, /subtitle: "Try All"/);
