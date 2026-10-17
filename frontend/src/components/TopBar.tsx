@@ -592,7 +592,7 @@ export function TopBar({
 
   return (
     <>
-      <View style={[styles.bar, { borderBottomColor: t.colors.border, paddingTop: Math.max(insets.top - 4, 4) }]}>
+      <View style={[styles.bar, { borderBottomColor: t.colors.border, paddingTop: Math.max(insets.top, 4) }]}>
         {title ? (
           <View style={styles.headerRow}>
             <Text style={[t.typography.title2, styles.title, { color: t.colors.text_primary }]} numberOfLines={1}>

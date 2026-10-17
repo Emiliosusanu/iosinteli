@@ -1123,7 +1123,7 @@ export function OverviewHeaderV3({
   const ownsSheet = onCustomOpenChange == null;
 
   return (
-    <View style={{ paddingTop: Math.max(insets.top - 4, 0) }} testID="home-header-expanded">
+    <View style={{ paddingTop: Math.max(insets.top, 0) }} testID="home-header-expanded">
       <View style={styles.shellWrap}>
         <GlassPanel
           testID="home-header-v3"
