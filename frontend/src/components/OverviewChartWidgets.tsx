@@ -207,13 +207,27 @@ export function AdsEngineCampaignsPage({
   breakEvenAcos,
   width,
   emptyMessage = "No ads metrics in this period.",
+  loading = false,
+  error = false,
+  loadingMessage = "Loading campaign metrics...",
+  onRetry,
 }: {
   series: AdsEngineSeries;
   breakEvenAcos: number;
   width: number;
   emptyMessage?: string;
+  loading?: boolean;
+  error?: boolean;
+  loadingMessage?: string;
+  onRetry?: () => void;
 }) {
   const t = useTheme();
+  if (error) return (
+    <TouchableOpacity onPress={onRetry} accessibilityRole="button" accessibilityLabel="Retry campaign metrics">
+      <SwipeEmpty message="Campaign metrics unavailable. Tap to retry." t={t} />
+    </TouchableOpacity>
+  );
+  if (loading) return <SwipeEmpty message={loadingMessage} t={t} />;
   if (!series.impressions.length) return <SwipeEmpty message={emptyMessage} t={t} />;
   return (
     <AdsEngineChart

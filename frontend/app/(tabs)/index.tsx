@@ -2295,9 +2295,14 @@ export default function OverviewScreen() {
                 {
                   key: "ads-campaigns",
                   label: "Campaigns",
+                  freshness: targetingFreshnessLabel({ updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : metricsQ.dataUpdatedAt, fetching: viewingAsAdmin ? bootstrapQ.isFetching : metricsQ.isFetching, failed: viewingAsAdmin ? bootstrapQ.isError : metricsQ.isError }),
                   meta: breakEvenAcos != null ? formatBreakEvenHint(breakEvenAcos) || undefined : undefined,
                   content: (
                     <AdsEngineCampaignsPage
+                      loading={!adsReady}
+                      error={(viewingAsAdmin ? bootstrapQ.isError : metricsQ.isError) || (needsAdsFx && fxRatesQ.isError)}
+                      loadingMessage={!fxMoneyReady ? "Updating currency conversion..." : "Loading campaign metrics..."}
+                      onRetry={() => void onRefresh()}
                       series={adsEngineSeries}
                       breakEvenAcos={breakEvenAcos}
                       width={chartWidgetWidth}
