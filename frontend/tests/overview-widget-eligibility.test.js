@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { activeOverviewRows } from '../src/lib/overviewWidgetEligibility.ts';
 import { searchTermsSpendNoOrders } from '../src/lib/overviewWidgets.ts';
+import { withAbortableQueryTimeout } from '../src/lib/queryTimeout.ts';
 
 test('widget keywords require their own state and both active parents, including uppercase aliases', () => {
   const live = { id: 'live', status: 'ENABLED', campaign_state: 'active', ad_group_state: 'enabled' };
@@ -32,15 +33,20 @@ const source = readFileSync(new URL('../src/lib/queries.ts', import.meta.url), '
 const begin = source.indexOf('async function overviewReadOwner(');
 const end = source.indexOf('// ---------- Keywords ----------', begin);
 const compiled = ts.transpileModule(source.slice(begin, end), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-function harness() {
+function harness({ hold = false, afterOwner } = {}) {
   const calls = [];
-  const supabase = { auth: { getSession: async () => ({ data: { session: { user: { id: 'owner' } } } }) },
+  const supabase = { auth: { getSession: async () => { afterOwner?.(); return { data: { session: { user: { id: 'owner' } } } }; } },
     from: () => { throw Error('Widget must not download the parent catalog'); },
     rpc: (name, payload) => {
       calls.push({ name, payload });
+      let signal;
       const q = { in: (column, ids) => { calls.push({ column, ids }); return q; },
         order: (column, options) => { calls.push({ column, options }); return q; },
-        limit: async limit => { calls.push({ limit }); return { data: [{ id: 'group', state: 'enabled', total_spend: 1 }], error: null }; } };
+        limit: limit => { calls.push({ limit }); return q; },
+        abortSignal: value => { signal = value; calls.push({ signal }); return q; },
+        then: (resolve, reject) => hold
+          ? new Promise((_, fail) => { signal.addEventListener('abort', () => fail(Object.assign(new Error('aborted transport'), { name: 'AbortError' })), { once: true }); }).then(resolve, reject)
+          : Promise.resolve({ data: [{ id: 'group', state: 'enabled', total_spend: 1 }], error: null }).then(resolve, reject) };
       return q;
     } };
   const context = { exports: {}, supabase,
@@ -70,6 +76,27 @@ test('widget reads use server period ranking and enabled parent predicates witho
   assert.deepEqual(Array.from(h.calls[2].ids), ['p']);
   assert.equal(h.calls[3].column, 'total_spend');
   assert.equal(h.calls.at(-1).limit, 1);
+});
+
+test('active ad-group request receives cancellation and a deadline aborts the mock transport', async () => {
+  const h = harness({ hold: true });
+  await assert.rejects(withAbortableQueryTimeout(signal => h.api.fetchOverviewActiveAdGroups(['p'], {
+    start: '2026-10-01', end: '2026-10-18', limit: 500, signal,
+  }), 10), /HOME_QUERY_TIMEOUT/);
+  assert.equal(h.calls.find(c => c.signal).signal.aborted, true);
+  assert.equal(h.calls.filter(c => c.name === 'get_ad_groups_with_metrics').length, 1);
+});
+
+test('abandoned active ad-group reads never start an RPC, even when abandoned during session lookup', async () => {
+  for (const abortEarly of [true, false]) {
+    const controller = new AbortController();
+    const h = harness({ afterOwner: () => controller.abort() });
+    if (abortEarly) controller.abort();
+    await assert.rejects(h.api.fetchOverviewActiveAdGroups(['p'], {
+      start: '2026-10-01', end: '2026-10-18', signal: controller.signal,
+    }), e => e.name === 'AbortError');
+    assert.equal(h.calls.length, 0);
+  }
 });
 
 test('entity mutations invalidate active widget caches and customer campaign keys cannot collide', () => {

@@ -2247,18 +2247,23 @@ export async function fetchOverviewActiveKeywords(
 }
 
 export async function fetchOverviewActiveAdGroups(
-  profileIds: string[], opts: { start: string; end: string; limit?: number; filterUserId?: string | null },
+  profileIds: string[], opts: { start: string; end: string; limit?: number; filterUserId?: string | null; signal?: AbortSignal },
 ): Promise<Array<AdGroupEnriched & ParentEntityState>> {
   if (!profileIds.length) return [];
+  if (opts.signal?.aborted) throw Object.assign(new Error("Aborted"), { name: "AbortError" });
   if (opts.filterUserId) return fetchAdminOverviewActiveAdGroups(profileIds, { ...opts, filterUserId: opts.filterUserId });
   // Aggregate the exact period and apply live-parent predicates on the server
   // before ranking/limiting. Never choose candidates by lifetime spend.
-  const { data, error } = await supabase.rpc("get_ad_groups_with_metrics", {
-    p_user_id: await overviewReadOwner(), p_campaign_id: null, p_campaign_ids: null,
+  const ownerId = await overviewReadOwner();
+  if (opts.signal?.aborted) throw Object.assign(new Error("Aborted"), { name: "AbortError" });
+  let request = supabase.rpc("get_ad_groups_with_metrics", {
+    p_user_id: ownerId, p_campaign_id: null, p_campaign_ids: null,
     p_state: "enabled", p_campaign_status: "enabled", p_search: null,
     p_start_date: opts.start, p_end_date: opts.end,
   }).in("amazon_profile_id", profileIds)
     .order("total_spend", { ascending: false }).order("id", { ascending: true }).limit(opts.limit ?? 80);
+  if (opts.signal) request = request.abortSignal(opts.signal);
+  const { data, error } = await request;
   if (error) throw error;
   if (!Array.isArray(data)) throw new Error("Active ad group response unavailable");
   return (data as AdGroup[]).map(group => ({ ...group,

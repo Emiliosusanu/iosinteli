@@ -229,11 +229,13 @@ export async function fetchAggregatedCampaigns(params: {
   profileIds: string[];
   filterUserId?: string | null;
   state?: string;
+  signal?: AbortSignal;
 }): Promise<TopCampaignRow[]> {
   const data = await nestApiJson<AggregatedEntityMetricsResponse>(
     "/dashboard/aggregated-entity-metrics",
     {
       method: "POST",
+      signal: params.signal,
       body: JSON.stringify({
         entityType: "campaigns",
         metrics: ["impressions", "clicks", "orders", "sales", "spend"],

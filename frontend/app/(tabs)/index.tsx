@@ -166,6 +166,7 @@ import {
   TARGETING_QUERY_TIMEOUT_MS,
   homeWidgetStatus,
   queryStillWaiting,
+  withAbortableQueryTimeout,
   withQueryTimeout,
 } from "@/src/lib/queryTimeout";
 import {
@@ -930,21 +931,28 @@ export default function OverviewScreen() {
   });
 
   const adGroupsQ = useQuery({
-    queryKey: ["overview-ad-groups", adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, "active-v2"],
-    queryFn: () =>
-      withQueryTimeout(
-        fetchOverviewActiveAdGroups(adsWidgetProfileIds, {
+    queryKey: ["overview-ad-groups", user?.id, adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, "active-v2"],
+    queryFn: ({ signal }) =>
+      withAbortableQueryTimeout(
+        readSignal => fetchOverviewActiveAdGroups(adsWidgetProfileIds, {
           start: dateRange.start,
           end: dateRange.end,
           limit: 80,
           filterUserId: adminFilterUserId,
+          signal: readSignal,
         }),
+        HOME_QUERY_TIMEOUT_MS,
+        signal,
       ),
     enabled: sellerSecondary || adminSecondary,
     ...OVERVIEW_QUERY_CACHE,
     refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
     refetchIntervalInBackground: false,
   });
+
+  useEffect(() => {
+    if (!homeVisible) void queryClient.cancelQueries({ queryKey: ["overview-ad-groups", user?.id] });
+  }, [homeVisible, queryClient, user?.id]);
 
   const activeBookKeysQ = useQuery({
     queryKey: ["books-activity-60d", scopeProfiles],
@@ -2480,7 +2488,7 @@ export default function OverviewScreen() {
                 key: "ad-groups",
                 hint: "Within the top 80 enabled ad groups by spend",
                 freshness: overviewReadLabel({ updatedAt: adGroupsQ.dataUpdatedAt, fetching: adGroupsQ.isFetching, failed: adGroupsQ.isError }),
-                onAction: () => router.push("/more/ad-groups"),
+                onAction: () => router.push({ pathname: "/more/ad-groups", params: { flow: String(Date.now()), enabledParents: "1", sort: "acos-high" } }),
                 label: "Ad groups",
                 hidden: adGroupsQ.isPending && !adGroupsQ.data,
                 content:

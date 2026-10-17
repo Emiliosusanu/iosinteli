@@ -3,7 +3,7 @@ import { nestApiJson } from './rulesApi';
 import { normalizeEntityState } from './campaigns';
 import type { AdGroup, Keyword } from './types';
 
-type Scope = { filterUserId: string; start: string; end: string; limit?: number };
+type Scope = { filterUserId: string; start: string; end: string; limit?: number; signal?: AbortSignal };
 type LiveParents = { campaign_state: string; ad_group_state?: string };
 const active = (value: unknown) => normalizeEntityState(value as string | null) === 'enabled';
 const chunks = <T,>(rows: T[], size: number): T[][] => Array.from({ length: Math.ceil(rows.length / size) }, (_, i) => rows.slice(i * size, (i + 1) * size));
@@ -14,7 +14,7 @@ const query = (values: Record<string, unknown>) => new URLSearchParams(Object.en
 async function activeGroups(profiles: string[], scope: Scope): Promise<Array<AdGroup & LiveParents>> {
   if (!profiles.length) return [];
   const campaigns = await fetchAggregatedCampaigns({ profileIds: profiles, filterUserId: scope.filterUserId,
-    startDate: scope.start, endDate: scope.end, state: 'enabled' });
+    startDate: scope.start, endDate: scope.end, state: 'enabled', signal: scope.signal });
   const campaignIds = new Set(campaigns.filter(c => active(c.state)).map(c => c.id));
   const out = new Map<string, AdGroup & LiveParents>();
   for (const ids of chunks([...campaignIds], 80)) {
@@ -24,7 +24,7 @@ async function activeGroups(profiles: string[], scope: Scope): Promise<Array<AdG
       const raw = await nestApiJson<{ data?: Array<Record<string, any>>; total?: number; hasNextPage?: boolean }>(
         `/ad-groups?${query({ filterUserId: scope.filterUserId, campaignIds: ids.join(','), state: 'enabled', campaignStatus: 'enabled',
           startDate: scope.start, endDate: scope.end, per_page: 100, page, sortBy: 'total_spend', sortOrder: 'desc' })}`,
-        { method: 'GET' }, "Couldn't load active ad groups.");
+        { method: 'GET', signal: scope.signal }, "Couldn't load active ad groups.");
       if (!Array.isArray(raw.data)) throw new Error('Active ad group response unavailable');
       let added = 0;
       for (const r of raw.data) {
@@ -66,7 +66,7 @@ export async function fetchAdminOverviewActiveKeywords(profiles: string[], scope
       const raw = await nestApiJson<{ data?: unknown[]; total?: number; hasNextPage?: boolean }>(
         `/keywords?${query({ filterUserId: scope.filterUserId, amazonProfileId: profileId, campaignStatus: 'enabled', status: 'enabled',
           startDate: scope.start, endDate: scope.end, per_page: 200, page, sortBy: 'total_spend', sortOrder: 'desc', includeEnrichments: 'false' })}`,
-        { method: 'GET' }, "Couldn't load active keywords.");
+        { method: 'GET', signal: scope.signal }, "Couldn't load active keywords.");
       if (!Array.isArray(raw.data)) throw new Error('Active keyword response unavailable');
       let added = 0;
       for (const value of raw.data) {
