@@ -102,3 +102,38 @@ test("settings keep long values below the label and preserve their full accessib
   }
   }
 });
+
+test("compact edit controls keep 44 pt bounds and full placement labels without bypassing cooldown", () => {
+  const alerts = [];
+  const component = load("../src/components/Mutations.tsx", (name) => {
+    if (name === "react") return { default: react };
+    if (name === "react-native") return {
+      TouchableOpacity: "TouchableOpacity", View: "View", Text: "Text",
+      StyleSheet: { create: (styles) => styles }, Alert: { alert: (...args) => alerts.push(args) },
+    };
+    if (name.endsWith("/AppContext")) return { useApp: () => ({ entityCooldownHours: 24 }) };
+    if (name.endsWith("/theme")) return { dashboard: {}, useTheme: () => ({ colors: {}, typography: {} }) };
+    if (name.endsWith("/bidCooldown")) return { cooldownAlertMessage: () => "Wait before editing" };
+    return {};
+  });
+  let edits = 0;
+  for (const locked of [false, true]) {
+    const tree = component.MutationTap({
+      label: "Top", value: "Load", compact: true,
+      accessibilityLabel: "Top of search placement bid, not loaded",
+      cooldown: { isInCooldown: locked }, onPress: () => edits++,
+    });
+    assert.equal(tree.props.style[0].minHeight, 44);
+    assert.equal(tree.props.style[0].maxWidth, "100%");
+    assert.equal(tree.props.accessibilityLabel,
+      `Top of search placement bid, not loaded${locked ? ", cooldown" : ""}`);
+    tree.props.onPress();
+  }
+  assert.equal(edits, 1);
+  assert.equal(alerts.length, 1);
+  const fallback = component.MutationTap({ label: "Bid", value: "$0.75", onPress() {} });
+  assert.equal(fallback.props.accessibilityLabel, "Bid $0.75");
+  const campaigns = source("../app/(tabs)/campaigns.tsx");
+  assert.match(campaigns, /: "Load"/);
+  assert.match(campaigns, /field\.title} placement bid/);
+});

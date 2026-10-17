@@ -1053,13 +1053,18 @@ function PlacementSharePills({
           key={field.key}
           testID={`campaign-placement-${field.key}-${item.id}`}
           label={field.label}
+          accessibilityLabel={`${field.title} placement bid, ${adjustments ? (
+            adjustments[field.key] == null || !Number.isFinite(Number(adjustments[field.key]))
+              ? "unavailable"
+              : formatPercent(Number(adjustments[field.key]), 0)
+          ) : "not loaded"}`}
           compact
           value={
             adjustments
               ? adjustments[field.key] == null || !Number.isFinite(Number(adjustments[field.key]))
                 ? "—"
                 : formatPercent(Number(adjustments[field.key]), 0)
-              : "…"
+              : "Load"
           }
           cooldown={
             // Per-slot stamp with settings hours — never default hours via undefined.
