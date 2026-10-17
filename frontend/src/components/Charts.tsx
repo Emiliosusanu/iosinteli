@@ -9,7 +9,7 @@ import Svg, { Path, Circle, Rect, Line, Text as SvgText, Defs, LinearGradient, S
 import { useTheme, toneColor } from "../lib/theme";
 import { formatCompact, formatInt, formatPercent, safeDivide, formatCurrency } from "../lib/format";
 import { hasAuthoritativeBreakEven } from "../lib/kdpTitlePresentation";
-import { dayBarStep, dayLabelTextAnchor, dayXLayout } from "../lib/chartLayout";
+import { dayBarStep, dayLabelTextAnchor, dayXLayout, valueAxisTicks } from "../lib/chartLayout";
 import { resolveChartDayFinance } from "../lib/chartDayFinance";
 import { useOverviewPeriodSwipeGesture } from "./OverviewPeriodSwipe";
 import { useOverviewWidgetPageSwipeGesture } from "./OverviewWidgetPageSwipe";
@@ -223,18 +223,6 @@ function xAxisLabels(data: ChartPoint[]) {
       key: `${index}-${data[index]?.date ?? data[index]?.label ?? index}`,
     }))
     .filter((row) => row.label);
-}
-
-function yAxisTicks(min: number, max: number): number[] {
-  const ticks = [max];
-  if (min < -1e-9 && max > 1e-9) ticks.push(0);
-  if (Math.abs(min - max) > 1e-9) ticks.push(min);
-  // Dedupe near-equals (flat ranges).
-  const out: number[] = [];
-  for (const tick of ticks) {
-    if (out.every((v) => Math.abs(v - tick) > Math.max(1, Math.abs(max - min) * 0.02))) out.push(tick);
-  }
-  return out;
 }
 
 function valueToY(value: number, height: number, min: number, max: number, inset: number) {
@@ -712,7 +700,7 @@ export function NetProfitChart({
   onDaySelect,
 }: NetProfitChartProps) {
   const t = useTheme();
-  const leftGutter = 34;
+  const leftGutter = 52;
   const rightPad = 6;
   const bottomPad = 22;
   const chartWidth = Math.max(200, width);
@@ -761,10 +749,9 @@ export function NetProfitChart({
     const zeroY = clamp(valueToY(0, height, min, max, inset), inset, height - inset);
     const netPath = makeSmoothPath(points);
     const areaPath = makeSmoothAreaPath(points, zeroY);
-    const ticks = yAxisTicks(min, max).map((value) => ({
-      value,
-      y: valueToY(value, height, min, max, inset),
-      label: formatCurrency(value, currency, { compact: true }),
+    const ticks = valueAxisTicks(min, max, height, inset).map((tick) => ({
+      ...tick,
+      label: formatCurrency(tick.value, currency, { compact: true }),
     }));
     const xLabels = xAxisLabels(data);
     return {
@@ -886,7 +873,7 @@ export function NetProfitChart({
                 opacity={tick.value === 0 ? 0.9 : 0.5}
                 strokeDasharray={tick.value === 0 ? undefined : "3 5"}
               />
-              <SvgText
+              {tick.labelVisible ? <SvgText
                 x={leftGutter - 6}
                 y={tick.y + 3.5}
                 textAnchor="end"
@@ -895,7 +882,7 @@ export function NetProfitChart({
                 fill={t.colors.text_tertiary}
               >
                 {tick.label}
-              </SvgText>
+              </SvgText> : null}
             </React.Fragment>
           ))}
 
