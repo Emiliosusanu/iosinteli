@@ -44,7 +44,7 @@ test("multi-profile lists use fair per-profile quota so one profile cannot hide 
 test("stale book filter clears when the ASIN is not in the current profile set", () => {
   assert.match(targeting, /Drop a remembered book filter/);
   assert.match(targeting, /setBookAsin\(null\)/);
-  assert.match(targeting, /booksQ\.isFetched/);
+  assert.match(targeting, /if \(!booksQ\.isSuccess\) return/);
 });
 
 test("book filter UI lists campaign books with searchable cover rows", () => {
@@ -164,8 +164,8 @@ test("targeting placement uses honest Nest-first data and visible segment chips"
 });
 
 test("placement book filter waits for book options and prefers filter ASIN covers", () => {
-  assert.match(targeting, /Don't apply book filter until options are fetched/);
-  assert.match(targeting, /booksQ\.isFetched/);
+  assert.match(targeting, /booksQ\.isSuccess && bookCampaignIdList\.length > 0/);
+  assert.match(targeting, /if \(!booksQ\.isSuccess\) return/);
   assert.match(targeting, /buildCampaignBookMap\(bookOptions, bookAsin\)/);
   assert.match(targeting, /Preferred book first so multi-book campaigns/);
   const bookCover = readFileSync(new URL("../src/components/BookCover.tsx", import.meta.url), "utf8");

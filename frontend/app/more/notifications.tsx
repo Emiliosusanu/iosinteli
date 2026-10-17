@@ -62,7 +62,7 @@ export default function NotificationsScreen() {
   const nowMs = Date.now();
 
   const ingestQ = useQuery({
-    queryKey: ["kdp-ingest-freshness", selectedProfileIds],
+    queryKey: ["kdp-ingest-freshness", user?.id ?? "guest", adminFilterUserId ?? "self", selectedProfileIds],
     queryFn: () => loadScopedKdpFreshness(selectedProfileIds),
     enabled: !guestMode && !viewingCustomer && selectedProfileIds.length > 0,
     staleTime: 60_000,
@@ -102,7 +102,7 @@ export default function NotificationsScreen() {
 
         <SettingsSection
           testID="notification-settings-card"
-          title="Alerts"
+          title="Alerts · all enabled profiles"
           footer={
             notificationFooter({
               guestMode,

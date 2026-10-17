@@ -14,6 +14,8 @@ import {
   buildNotificationPayload,
   notificationIdentifier,
   parseNotificationPayload,
+  shouldRefreshForNotification,
+  shouldPresentNotification,
   preferenceAllowsEvent,
   rollAlertState,
   shouldEvaluateAlerts,
@@ -52,6 +54,7 @@ import {
 import { adsProfileIdsForSelection, filterToEnabledProfileSelection, uniqueProfileIds } from "./notificationScope";
 import { nestApiJson } from "./rulesApi";
 import { resolveApnsEnvironment } from "./apnsEnvironment";
+import { createSingleFlight } from "./kdp/singleFlight";
 
 export const INTELIADS_BACKGROUND_TASK = "io.inteliads.app.background-refresh";
 export const INTELIADS_NOTIFICATION_TASK = "io.inteliads.app.notification-response";
@@ -124,7 +127,7 @@ async function scheduleLocalAlert(input: {
       title: input.title,
       body: input.body,
       sound: "default",
-      data: buildNotificationPayload(input.event, input.userId, input.asin),
+      data: { ...buildNotificationPayload(input.event, input.userId, input.asin), origin: "local" },
     },
     trigger: null,
   });
@@ -140,7 +143,13 @@ async function writeAlertState(state: AlertState): Promise<void> {
  * LOCAL_NEW_ORDER_AUTHORITY is false.
  * Every alert body includes today's spend, orders, and ACoS.
  */
-export async function runAlertCheck(_source: "background" | "foreground" = "background"): Promise<number> {
+const evaluateAlertsOnce = createSingleFlight(evaluateLocalAlerts);
+
+export async function runAlertCheck(source: "background" | "foreground" = "background"): Promise<number> {
+  return evaluateAlertsOnce(source);
+}
+
+async function evaluateLocalAlerts(_source: "background" | "foreground" = "background"): Promise<number> {
   let sent = 0;
   try {
     if (!(await currentPermissionGranted())) return 0;
@@ -199,9 +208,8 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     // and a guessed currency — frankensum Spend/ACoS).
     if (!profiles.length) return 0;
 
-    // Spend/orders/ACoS = every activated profile, matching Home's financial
-    // portfolio. The header picker only filters Ads Engine and must never make a
-    // notification look like an account-wide total while showing a subset.
+    // Notifications remain account-wide across enabled profiles, independent of
+    // the shared screen filters. State this scope in the alert body.
     let queryIds = digestMoneyAdsProfileIds(scope.profileIds, profiles);
     if (!queryIds.length) {
       queryIds = adsProfileIdsForSelection(scope.profileIds, profiles);
@@ -370,7 +378,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
 
     const mixedNote = mixedCurrencyDigestNote(todayLines.map((line) => line.currency));
     const totalsBody = (headline: string, lines: HonestDigestTotals[]) =>
-      `${headline}\n${formatDigestBody({
+      `All enabled profiles · ${headline}\n${formatDigestBody({
         lines,
         includeKdpNet,
         coverageLine: null,
@@ -398,12 +406,12 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
         event: NOTIFICATION_EVENTS.periodCompare,
         userId,
         title: digestTitleForHour(localHour),
-        body: formatDigestBody({
+        body: `All enabled profiles\n${formatDigestBody({
           lines: digestLines,
           includeKdpNet,
           coverageLine,
           mixedCurrencyNote: mixedNote,
-        }),
+        })}`,
       });
       alertState = { ...alertState, digestDay: today, lastDigestHour: localHour };
       sent += 1;
@@ -545,6 +553,17 @@ export async function runBackgroundSyncWhenReady(): Promise<void> {
 }
 
 let backgroundWakeInstalled = false;
+let pendingPushRefresh = false;
+let pendingSilentRefresh = false;
+
+const drainPushRefresh = createSingleFlight(async () => {
+  while (pendingPushRefresh) {
+    const silent = pendingSilentRefresh;
+    pendingPushRefresh = false;
+    pendingSilentRefresh = false;
+    await refreshAfterPush(silent);
+  }
+});
 
 export type NotificationRefreshReason = "push-visible" | "push-silent";
 type NotificationRefreshListener = (reason: NotificationRefreshReason) => void;
@@ -587,10 +606,22 @@ export function installBackgroundSyncWakeHandlers(): void {
       data.event === "kdp-wake" ||
       data["content-available"] === 1;
     void (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!shouldRefreshForNotification(data, session?.user.id ?? null)) return;
+      // Revalidate visible reads now, not after KDP replay and alert evaluation.
+      emitNotificationRefresh(silent ? "push-silent" : "push-visible");
       if (silent && AppState.currentState !== "active") {
         await runBudgetedKdpTask("push");
         return;
       }
+      pendingPushRefresh = true;
+      pendingSilentRefresh ||= silent;
+      await drainPushRefresh();
+    })().catch(error => devWarn("push refresh skipped", error));
+  });
+}
+
+async function refreshAfterPush(silent: boolean): Promise<void> {
       try {
         const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
         await runDualSourceBackgroundRefresh("push", { force: true });
@@ -617,8 +648,6 @@ export function installBackgroundSyncWakeHandlers(): void {
       }
       // Poke live React Query so an open Overview/Campaigns paints the new data.
       emitNotificationRefresh(silent ? "push-silent" : "push-visible");
-    })();
-  });
 }
 
 export async function refreshHomeCacheOpportunistic(): Promise<void> {
@@ -635,7 +664,16 @@ try {
         data.silent === true ||
         data.event === "kdp-wake" ||
         data["content-available"] === 1;
-      if (silent) {
+      let present = false;
+      if (!silent) {
+        try {
+          const [{ data: { session } }, prefs] = await Promise.all([
+            supabase.auth.getSession(), readJson<NotificationPrefs>(PREFS_KEY, {} as NotificationPrefs),
+          ]);
+          present = shouldPresentNotification(data, session?.user.id ?? null, prefs);
+        } catch { /* Keep an unverifiable account notification private. */ }
+      }
+      if (!present) {
         return {
           shouldShowAlert: false,
           shouldShowBanner: false,

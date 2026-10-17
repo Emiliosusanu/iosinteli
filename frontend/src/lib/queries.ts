@@ -12,6 +12,7 @@ import {
   fetchNestCampaignById,
   fetchNestKeywordById,
   fetchNestKeywords,
+  fetchNestSearchTermsPage,
   fetchNestProductTargetById,
   fetchNestProductTargets,
   fetchNestTopBooks,
@@ -29,6 +30,7 @@ import {
   withQueryTimeout,
 } from "./queryTimeout";
 import { createReadQueue } from "./readRequest";
+import { activeOverviewRows } from "./overviewWidgetEligibility";
 import {
   campaignPlacementSharesFromBuckets,
   emptyCampaignPlacementShares,
@@ -2225,18 +2227,10 @@ export async function fetchAdGroups(
   });
 }
 
-/** Active parent scope is resolved BEFORE a widget's top-N cap. Paused
- * campaigns cannot crowd active ad groups/keywords out of the result pool. */
-async function fetchOverviewActiveGroupScope(profileIds: string[]): Promise<AdGroup[]> {
-  if (!profileIds.length) return [];
-  const campaigns = await fetchAllPages<{ id: string; state: string | null }>((from, to) =>
-    supabase.from("campaigns").select("id,state").in("amazon_profile_id", profileIds)
-      .in("state", ["enabled", "active", "ENABLED", "ACTIVE"]).order("id", { ascending: true }).range(from, to));
-  const chunks = chunkArray(campaigns.map(row => row.id), 100);
-  const batches = await mapPoolLimited(chunks, 3, ids => fetchAllPages<AdGroup>((from, to) =>
-    supabase.from("ad_groups").select("*").in("amazon_profile_id", profileIds).in("campaign_id", ids)
-      .in("state", ["enabled", "active", "ENABLED", "ACTIVE"]).order("id", { ascending: true }).range(from, to)));
-  return batches.flat();
+async function overviewReadOwner(): Promise<string> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user.id) throw new Error("Sign in to load active entities");
+  return session.user.id;
 }
 
 export async function fetchOverviewActiveKeywords(
@@ -2244,12 +2238,12 @@ export async function fetchOverviewActiveKeywords(
 ): Promise<Array<Keyword & ParentEntityState>> {
   if (!profileIds.length) return [];
   if (opts.filterUserId) return fetchAdminOverviewActiveKeywords(profileIds, { ...opts, filterUserId: opts.filterUserId });
-  const groups = await fetchOverviewActiveGroupScope(profileIds);
-  const groupById = new Map(groups.map(group => [group.id, group]));
-  const batches = await mapPoolLimited(chunkArray(groups.map(group => group.id), 60), 3, ids =>
-    fetchKeywords(profileIds, { ...opts, adGroupIds: ids, status: "enabled", limit: opts.limit ?? 80 }));
-  return batches.flat().filter(row => groupById.get(row.ad_group_id ?? "")?.campaign_id === row.campaign_id)
-    .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0)).slice(0, opts.limit ?? 80);
+  const page = await fetchMobileTargetingPage({
+    segment: "keywords", sort: "spend", page: 1, pageSize: opts.limit ?? 80,
+    start: opts.start, end: opts.end, profiles: profileIds,
+    ownerId: await overviewReadOwner(), state: "enabled", skipDisplayEnrich: true,
+  });
+  return page.rows as Array<Keyword & ParentEntityState>;
 }
 
 export async function fetchOverviewActiveAdGroups(
@@ -2257,10 +2251,17 @@ export async function fetchOverviewActiveAdGroups(
 ): Promise<Array<AdGroupEnriched & ParentEntityState>> {
   if (!profileIds.length) return [];
   if (opts.filterUserId) return fetchAdminOverviewActiveAdGroups(profileIds, { ...opts, filterUserId: opts.filterUserId });
-  const groups = (await fetchOverviewActiveGroupScope(profileIds))
-    .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0)).slice(0, opts.limit ?? 80);
-  const totals = await fetchMetricTotalsByEntity("ad_group_metrics", "ad_group_id", groups.map(row => row.id), opts.start, opts.end);
-  return groups.map(group => ({ ...applyMetricTotals(group, totals.get(group.id) ?? emptyTotals()),
+  // Aggregate the exact period and apply live-parent predicates on the server
+  // before ranking/limiting. Never choose candidates by lifetime spend.
+  const { data, error } = await supabase.rpc("get_ad_groups_with_metrics", {
+    p_user_id: await overviewReadOwner(), p_campaign_id: null, p_campaign_ids: null,
+    p_state: "enabled", p_campaign_status: "enabled", p_search: null,
+    p_start_date: opts.start, p_end_date: opts.end,
+  }).in("amazon_profile_id", profileIds)
+    .order("total_spend", { ascending: false }).order("id", { ascending: true }).limit(opts.limit ?? 80);
+  if (error) throw error;
+  if (!Array.isArray(data)) throw new Error("Active ad group response unavailable");
+  return (data as AdGroup[]).map(group => ({ ...group,
     campaign_state: "enabled", keyword_count: 0, product_target_count: 0, auto_target_count: 0,
     is_auto: String(group.targeting_type ?? "").toLowerCase() === "auto" }));
 }
@@ -2615,7 +2616,7 @@ export type ParentEntityState = {
 /** Batch-attach parent campaign/ad-group state for Active-parent filtering. */
 export async function attachParentEntityStates<
   T extends { campaign_id?: string | null; ad_group_id?: string | null },
->(rows: T[]): Promise<Array<T & ParentEntityState>> {
+>(rows: T[], options?: { strict?: boolean }): Promise<Array<T & ParentEntityState>> {
   if (!rows.length) return rows as Array<T & ParentEntityState>;
   const campaignIds = uniqueStrings(rows.map((row) => String(row.campaign_id || "")).filter(Boolean));
   const adGroupIds = uniqueStrings(rows.map((row) => String(row.ad_group_id || "")).filter(Boolean));
@@ -2640,6 +2641,7 @@ export async function attachParentEntityStates<
       }),
     ]);
   } catch (error) {
+    if (options?.strict) throw error;
     // Soft-degrade: parent state is filter polish — never blank Keywords/Targets.
     // eslint-disable-next-line no-console
     console.warn("[inteliads:targeting] attachParentEntityStates failed", error);
@@ -4253,6 +4255,32 @@ export async function fetchProductAds(
 }
 
 // ---------- Search Terms ----------
+/** Server-ranked pages, with a bounded live-parent check. Unknown is an error,
+ * never an empty successful widget. The cursor skips fully ineligible pages. */
+export async function fetchEnabledSearchTermsPage(input: Parameters<typeof fetchNestSearchTermsPage>[0]) {
+  if (input.filterUserId) throw new Error("Enabled-parent search terms unavailable in customer preview");
+  for (let page = input.page; page < input.page + 20; page++) {
+    const result = await fetchNestSearchTermsPage({ ...input, page });
+    const rows = await attachParentEntityStates(result.data, { strict: true });
+    const data = activeOverviewRows(rows, "searchTerm");
+    if (data.length || !result.hasNextPage) return { ...result, data };
+  }
+  throw new Error("Live-parent search exceeded the read budget; narrow the filters");
+}
+
+export async function fetchOverviewActiveSearchTerms(profileIds: string[], opts: { start: string; end: string; limit?: number }) {
+  const limit = opts.limit ?? 80;
+  const rows: SearchTerm[] = [];
+  for (let page = 1, reads = 0; reads < 20; reads++) {
+    const result = await fetchEnabledSearchTermsPage({ profileIds, startDate: opts.start, endDate: opts.end,
+      page, perPage: 100, sortBy: "total_spend" });
+    rows.push(...result.data);
+    if (rows.length >= limit || !result.hasNextPage) return rows.slice(0, limit);
+    page = result.page + 1;
+  }
+  throw new Error("Active search term catalog is incomplete");
+}
+
 function assertSearchTermsNotAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
     throw new IncompleteReadError("PostgREST read aborted");

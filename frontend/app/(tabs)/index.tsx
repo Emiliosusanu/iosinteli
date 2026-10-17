@@ -1,4 +1,5 @@
 import { activeOverviewRows } from "@/src/lib/overviewWidgetEligibility";
+import { targetingFreshnessLabel } from "@/src/lib/targetingPageFreshness";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -41,7 +42,7 @@ import {
   fetchTodayExecutionStats,
   fetchHourlyMetrics,
   fetchPlacementMixRange,
-  fetchSearchTerms,
+  fetchOverviewActiveSearchTerms,
   fetchOverviewActiveKeywords,
   fetchOverviewActiveAdGroups,
   fetchKeywordDailyAggregate,
@@ -994,10 +995,12 @@ export default function OverviewScreen() {
   });
 
   const searchTermsPulseQ = useQuery({
-    queryKey: ["search-terms-pulse", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
-    queryFn: () => fetchSearchTerms(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80 }),
+    queryKey: ["search-terms-pulse", user?.id, adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, "active-parents-v1"],
+    queryFn: () => withQueryTimeout(fetchOverviewActiveSearchTerms(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80 })),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
+    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
 
   const bleedersQ = useQuery({
@@ -1005,6 +1008,8 @@ export default function OverviewScreen() {
     queryFn: () => withQueryTimeout(fetchOverviewActiveKeywords(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80, filterUserId: adminFilterUserId })),
     enabled: sellerSecondary || adminSecondary,
     ...OVERVIEW_QUERY_CACHE,
+    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
 
   const adGroupsQ = useQuery({
@@ -1020,6 +1025,8 @@ export default function OverviewScreen() {
       ),
     enabled: sellerSecondary || adminSecondary,
     ...OVERVIEW_QUERY_CACHE,
+    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
 
   const activeBookKeysQ = useQuery({
@@ -2489,6 +2496,7 @@ export default function OverviewScreen() {
             key={`home-campaigns-${adsWidgetProfileIds.join("|")}`}
             staggerIndex={3}
             testID="home-campaigns"
+            freshness={targetingFreshnessLabel({ updatedAt: topCampaignsQ.dataUpdatedAt, fetching: topCampaignsQ.isFetching, failed: topCampaignsQ.isError })}
             title="Campaigns"
             icon="campaigns"
             inlinePageLabel
@@ -2572,6 +2580,7 @@ export default function OverviewScreen() {
               },
               {
                 key: "ad-groups",
+                freshness: targetingFreshnessLabel({ updatedAt: adGroupsQ.dataUpdatedAt, fetching: adGroupsQ.isFetching, failed: adGroupsQ.isError }),
                 onAction: () => router.push("/more/ad-groups"),
                 label: "Ad groups",
                 hidden: adGroupsQ.isPending && !adGroupsQ.data,
@@ -2677,6 +2686,7 @@ export default function OverviewScreen() {
               pages={[
                 {
                   key: "kw-no-orders",
+                  freshness: targetingFreshnessLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
                   onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "wasting", sort: "spend" } }),
                   label: "Keywords",
                   hidden: keywordBleeders.length === 0,
@@ -2697,6 +2707,7 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "kw-high-acos",
+                  freshness: targetingFreshnessLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
                   onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "all" } }),
                   label: "High ACoS",
                   hidden: keywordHighAcos.length === 0,
@@ -2717,8 +2728,9 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "st-no-orders",
+                  freshness: targetingFreshnessLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
                   actionLabel: "Search terms",
-                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "wasted" } }),
+                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "wasted", enabledParents: "1" } }),
                   label: "Search terms",
                   hidden: termSpendNoOrders.length === 0,
                   content: (
@@ -2738,8 +2750,9 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "st-low-acos",
+                  freshness: targetingFreshnessLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
                   actionLabel: "Search terms",
-                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "all", sort: "acos" } }),
+                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "all", sort: "acos", enabledParents: "1" } }),
                   label: "Best ACoS",
                   hidden: termLowAcos.length === 0,
                   content: (
