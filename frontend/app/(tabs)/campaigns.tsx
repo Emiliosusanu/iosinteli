@@ -516,31 +516,21 @@ export default function CampaignsScreen() {
             const placementCooldown = getPlacementAdjCooldown(item, entityCooldownHours);
             const marketplaceCountries = countriesForSponsoredCampaign(marketplaceIndex, item);
             const rowCurrency = rowCurrencyOfProfile(profiles, item.amazon_profile_id, primaryCurrency);
+            const openDetails = () => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              router.push({ pathname: "/campaign/[id]", params: { id: item.id, childState: "enabled" } });
+            };
+            const openStrategy = () => {
+              if (blockIfCannotWriteAmazon(writeGuard)) return;
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+              setStrategyEdit({ id: item.id, name: item.name, strategy: item.bidding_strategy });
+            };
             return (
               <AnimatedCard
                 key={item.id}
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  router.push({ pathname: "/campaign/[id]", params: { id: item.id, childState: "enabled" } });
-                }}
-                onLongPress={() => {
-                  if (blockIfCannotWriteAmazon(writeGuard)) return;
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-                  setStrategyEdit({
-                    id: item.id,
-                    name: item.name,
-                    strategy: item.bidding_strategy,
-                  });
-                }}
+                onPress={openDetails}
+                onLongPress={openStrategy}
                 delayLongPress={380}
-                testID={`campaign-row-${item.id}`}
-                accessibilityLabel={campaignA11yLabel(
-                  item,
-                  verdict,
-                  rowCurrency,
-                  marketplaceFlagsA11y(marketplaceCountries),
-                )}
-                accessibilityHint="Long press to change bidding strategy"
               >
                 <ListCard compact>
                   <View style={styles.leadRow}>
@@ -564,12 +554,23 @@ export default function CampaignsScreen() {
                     </View>
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <View style={styles.titleRow}>
+                        <TouchableOpacity
+                          testID={`campaign-row-${item.id}`}
+                          accessibilityRole="button"
+                          accessibilityLabel={campaignA11yLabel(item, verdict, rowCurrency, marketplaceFlagsA11y(marketplaceCountries))}
+                          accessibilityHint="Opens campaign details. Long press to change bidding strategy."
+                          onPress={openDetails}
+                          onLongPress={openStrategy}
+                          delayLongPress={380}
+                          style={{ flex: 1, minWidth: 0, minHeight: 44, justifyContent: "center" }}
+                        >
                         <Text
-                          style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600", flex: 1, minWidth: 0 }]}
+                          style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600", minWidth: 0 }]}
                           numberOfLines={1}
                         >
                           {item.name}
                         </Text>
+                        </TouchableOpacity>
                         <CampaignMarketplaceFlags
                           index={marketplaceIndex}
                           profiles={profiles}
@@ -959,17 +960,11 @@ function AnimatedCard({
   onPress,
   onLongPress,
   delayLongPress,
-  testID,
-  accessibilityLabel,
-  accessibilityHint,
 }: {
   children: React.ReactNode;
   onPress: () => void;
   onLongPress?: () => void;
   delayLongPress?: number;
-  testID?: string;
-  accessibilityLabel?: string;
-  accessibilityHint?: string;
 }) {
   const reduceMotion = useReduceMotion();
   const scale = useRef(new Animated.Value(1)).current;
@@ -977,10 +972,7 @@ function AnimatedCard({
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
       <TouchableOpacity
-        testID={testID}
-        accessibilityRole="button"
-        accessibilityLabel={accessibilityLabel}
-        accessibilityHint={accessibilityHint}
+        accessible={false}
         activeOpacity={1}
         delayLongPress={delayLongPress}
         onPressIn={() => {

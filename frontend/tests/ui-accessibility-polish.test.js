@@ -137,3 +137,27 @@ test("compact edit controls keep 44 pt bounds and full placement labels without 
   assert.match(campaigns, /: "Load"/);
   assert.match(campaigns, /field\.title} placement bid/);
 });
+
+test("campaign card touch feedback does not group and hide its independent controls", () => {
+  const code = source("../app/(tabs)/campaigns.tsx");
+  const ast = ts.createSourceFile("campaigns.tsx", code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const card = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "AnimatedCard");
+  assert.ok(card);
+  const exports = {};
+  vm.runInNewContext(ts.transpileModule(`${card.getText(ast)}\nexports.card = AnimatedCard;`, {
+    compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.CommonJS },
+  }).outputText, {
+    exports, React: react, useReduceMotion: () => true, useRef: (current) => ({ current }),
+    Animated: { View: "AnimatedView", Value: class {} }, TouchableOpacity: "TouchableOpacity",
+  });
+  let opens = 0;
+  const tree = exports.card({ children: "controls", onPress: () => opens++ });
+  const press = tree.children[0];
+  assert.equal(press.props.accessible, false);
+  assert.equal(press.props.accessibilityRole, undefined);
+  press.props.onPress();
+  assert.equal(opens, 1);
+  assert.match(code, /<TouchableOpacity\s+testID=\{`campaign-row-\$\{item.id\}`\}\s+accessibilityRole="button"/);
+  assert.match(code, /onPress=\{openDetails\}\s+onLongPress=\{openStrategy\}/);
+  assert.match(code, /const openStrategy = \(\) => \{\s+if \(blockIfCannotWriteAmazon\(writeGuard\)\) return/);
+});
