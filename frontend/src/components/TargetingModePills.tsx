@@ -74,6 +74,17 @@ export function TargetingModePills({ value, onChange }: Props) {
                 compact && { minHeight: 40, paddingVertical: 6, paddingHorizontal: 4 },
                 {
                   backgroundColor: active ? blue : idleBg,
+                  borderWidth: active ? 0 : StyleSheet.hairlineWidth,
+                  borderColor: active ? "transparent" : t.colors.separator,
+                  ...(active
+                    ? {
+                        shadowColor: blue,
+                        shadowOpacity: t.scheme === "dark" ? 0.34 : 0.22,
+                        shadowRadius: 10,
+                        shadowOffset: { width: 0, height: 4 },
+                        elevation: 3,
+                      }
+                    : null),
                 },
               ]}
             >

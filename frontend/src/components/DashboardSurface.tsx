@@ -80,7 +80,20 @@ export function OverviewCardHeader({
   const caption = meta ?? subtitle;
   return (
     <View style={styles.header}>
-      {icon ? <InteliAdsIcon name={icon} size={dashboard.iconMd} color={t.colors.text_secondary} /> : null}
+      {icon ? (
+        <View
+          style={[
+            styles.headerIcon,
+            {
+              backgroundColor: t.colors.tone_primary + "14",
+              borderColor: t.colors.tone_primary + "2E",
+            },
+          ]}
+          accessible={false}
+        >
+          <InteliAdsIcon name={icon} size={dashboard.iconMd} color={t.colors.tone_primary} />
+        </View>
+      ) : null}
       <View style={styles.titleBlock}>
         <Text
           style={[t.typography.sectionTitle, { color: t.colors.text_primary }]}
@@ -216,6 +229,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: dashboard.compactGap,
     minHeight: 28,
+  },
+  headerIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
   },
   titleBlock: {
     flex: 1,

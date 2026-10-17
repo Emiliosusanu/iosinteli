@@ -166,6 +166,15 @@ function TabSegment({
           styles.segment,
           { minHeight: scale.segmentMinHeight, backgroundColor: focused ? undefined : chrome.idleFill },
           focused ? styles.segmentActive : styles.segmentIdle,
+          focused
+            ? {
+                shadowColor: chrome.selected,
+                shadowOpacity: 0.26,
+                shadowRadius: 10,
+                shadowOffset: { width: 0, height: 4 },
+                elevation: 3,
+              }
+            : null,
         ]}
       >
         <Animated.View
