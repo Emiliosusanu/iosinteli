@@ -83,6 +83,7 @@ type MarketPillProps = {
   accessibilityLabel?: string;
   /** Grow/shrink like Overview header trailing (default true). */
   flex?: boolean;
+  compact?: boolean;
 };
 
 /**
@@ -97,11 +98,13 @@ export function MarketPill({
   testID,
   accessibilityLabel,
   flex = true,
+  compact = false,
 }: MarketPillProps) {
   const t = useTheme();
   const resolvedCountries = sortMarketCountryCodes(countries);
   const fullLabel = formatMarketPillLabel(resolvedCountries, currency);
-  const label = resolvedCountries.length > MAX_VISIBLE_MARKET_FLAGS
+  const compactMulti = compact && resolvedCountries.length > 1;
+  const label = compactMulti ? `${resolvedCountries.length} markets\n${currency}` : resolvedCountries.length > MAX_VISIBLE_MARKET_FLAGS
     ? `${resolvedCountries.length} markets${currency ? ` • ${currency}` : ""}`
     : fullLabel;
   const a11y = accessibilityLabel ?? `Profiles, ${fullLabel}`;
@@ -154,15 +157,17 @@ export function MarketPill({
           style={[StyleSheet.absoluteFill, { backgroundColor: chrome.wash }]}
         />
         <View style={styles.marketPillInner}>
-          <MarketFlagStack
+          {compactMulti ? <SFSymbol name="globe" size={18} color={chrome.label} /> : <MarketFlagStack
             countries={resolvedCountries}
             rimColor={chrome.flagRim}
             fillColor={chrome.flagFill}
             textColor={chrome.chevron}
-          />
+          />}
           <Text
-            style={[t.typography.footnote, styles.marketPillText, { color: chrome.label }]}
-            numberOfLines={1}
+            style={[t.typography.footnote, styles.marketPillText, { color: chrome.label }, compactMulti ? { fontSize: 12, lineHeight: 14 } : undefined]}
+            numberOfLines={compactMulti ? 2 : 1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
             ellipsizeMode="tail"
           >
             {label}
