@@ -13,6 +13,17 @@ export type BookFormatOption = {
   asin: string;
 };
 
+/** Formats proven by the parent key for the ASINs that matched a campaign. */
+export function formatOptionsForAsins(
+  formats: readonly BookFormatOption[],
+  asins: readonly string[] | null | undefined,
+): BookFormatOption[] {
+  const matched = new Set(
+    (asins ?? []).map((asin) => String(asin ?? "").trim().toUpperCase()).filter(Boolean),
+  );
+  return formats.filter((format) => matched.has(format.asin.toUpperCase()));
+}
+
 /** Accent for format badges — aligned with KDP format chart colors where shared. */
 export const FORMAT_KIND_ACCENT: Record<BookFormatKind, string> = {
   kindle: "#5AC8FA",
