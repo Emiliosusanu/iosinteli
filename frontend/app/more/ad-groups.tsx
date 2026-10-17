@@ -24,6 +24,7 @@ import { applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimis
 import { updateAdGroupState } from "@/src/lib/mutations";
 import { AD_GROUPS_LIST_LIMIT, fetchAdGroups } from "@/src/lib/queries";
 import { statusLabel } from "@/src/lib/campaigns";
+import { optionalMetric } from "@/src/lib/metricEvidence";
 import { formatCurrency, formatInt, formatPercent, safeDivide } from "@/src/lib/format";
 import { LIST_PERIOD_QUERY_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
 import { HOME_QUERY_TIMEOUT_MS, isHomeQueryTimeout, withQueryTimeout } from "@/src/lib/queryTimeout";
@@ -57,14 +58,16 @@ function adGroupContentLabel(item: any): { label: string; tone: "primary" | "goo
 }
 
 function adGroupVerdict(item: any): { label: string; tone: "good" | "warning" | "danger" | "inactive" } {
-  const spend = Number(item.total_spend) || 0;
-  const orders = Number(item.total_orders) || 0;
-  const sales = Number(item.total_sales) || 0;
-  const acos = Number(item.total_acos) || 0;
-  if (spend > 0 && orders === 0) return { label: "Wasting spend", tone: "danger" };
-  if (sales > 0 && acos > 35) return { label: "High ACoS", tone: "warning" };
-  if (sales > 0) return { label: "Profitable", tone: "good" };
-  return { label: "No spend yet", tone: "inactive" };
+  const spend = optionalMetric(item.total_spend);
+  const orders = optionalMetric(item.total_orders);
+  const sales = optionalMetric(item.total_sales);
+  const acos = optionalMetric(item.total_acos);
+  if (spend != null && spend > 0 && orders === 0) return { label: "Spend without orders", tone: "danger" };
+  if (sales != null && sales > 0 && acos != null) {
+    return acos > 35 ? { label: "ACoS >35%", tone: "warning" } : { label: "ACoS ≤35%", tone: "good" };
+  }
+  if (spend === 0) return { label: "No spend in period", tone: "inactive" };
+  return { label: "Metrics incomplete", tone: "inactive" };
 }
 
 function emptyCopy(search: string, stateFilter: StateFilter, rawCount: number) {

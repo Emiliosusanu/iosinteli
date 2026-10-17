@@ -58,7 +58,7 @@ import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
 import { CAMPAIGNS_LIST_TIMEOUT_MS, isHomeQueryTimeout, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
-import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
+import { compareByAcosAscending, compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import { loadCampaignsFilterMemory, normalizeBookAsinList, saveCampaignsFilterMemory } from "@/src/lib/filterMemory";
 import {
   LIST_PERIOD_QUERY_CACHE,
@@ -112,13 +112,14 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 type StateFilter = "all" | "enabled" | "paused";
-type SortKey = "top" | "spend" | "orders" | "acos";
+type SortKey = "top" | "spend" | "orders" | "acos" | "acos-low";
 
 const SORT_CONFIG: { key: SortKey; label: string }[] = [
   { key: "top", label: "ROAS" },
   { key: "spend", label: "Spend" },
   { key: "orders", label: "Orders" },
   { key: "acos", label: "ACoS" },
+  { key: "acos-low", label: "Low ACoS" },
 ];
 
 function CampaignsListSeparator() {
@@ -292,9 +293,10 @@ export default function CampaignsScreen() {
           return b.orders - a.orders;
         case "top":
           return (b.roas ?? 0) - (a.roas ?? 0);
+        case "acos-low":
         case "acos":
         default:
-          return compareByAcosSpendImpressionsSync(
+          return (sortKey === "acos-low" ? compareByAcosAscending : compareByAcosSpendImpressionsSync)(
             {
               total_acos: a.acos,
               total_spend: a.spend,

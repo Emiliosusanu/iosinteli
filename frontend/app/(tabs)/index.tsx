@@ -1,5 +1,5 @@
 import { activeOverviewRows } from "@/src/lib/overviewWidgetEligibility";
-import { targetingFreshnessLabel } from "@/src/lib/targetingPageFreshness";
+import { overviewReadLabel, overviewRecommendationRows } from "@/src/lib/overviewReadEvidence";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -1052,17 +1052,17 @@ export default function OverviewScreen() {
   // Keep paintable ads rows while royalties are still catching up — never blank both forever.
   const topCampaigns = periodLoading && !viewingAsAdmin
     ? []
-    : activeOverviewRows(topCampaignsQ.data ?? [], "campaign");
+    : activeOverviewRows(overviewRecommendationRows(topCampaignsQ.data, topCampaignsQ.isError), "campaign");
   const topBooksRaw = periodLoading && !viewingAsAdmin
     ? []
-    : adminTopBooks ?? topBooksQ.data ?? [];
+    : overviewRecommendationRows(adminTopBooks ?? topBooksQ.data, viewingAsAdmin ? bootstrapQ.isError : topBooksQ.isError);
   const topBooks = useMemo(() => {
     if (!viewingAsAdmin) return topBooksRaw;
     if (activeBookKeysQ.isPending) return [];
     if (activeBookKeysQ.isError || !activeBookKeysQ.data) return topBooksRaw;
     return filterTopBooksByRecentActivity(topBooksRaw, activeBookKeysQ.data);
   }, [topBooksRaw, viewingAsAdmin, activeBookKeysQ.isPending, activeBookKeysQ.isError, activeBookKeysQ.data]);
-  const bleeders = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(bleedersQ.data ?? [], "keyword");
+  const bleeders = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(overviewRecommendationRows(bleedersQ.data, bleedersQ.isError), "keyword");
   const loading = periodLoading;
   const campaignsPhase = metricsWaiting && !viewingAsAdmin
     ? "loading"
@@ -1398,9 +1398,9 @@ export default function OverviewScreen() {
     [budgetHistoryDaily, todayStr, totalDailyBudget],
   );
   const monthlyBudgetForecastReady = budgetHistoryQ.isSuccess;
-  const placementMix = periodLoading && !viewingAsAdmin ? [] : placementMixQ.data ?? [];
-  const searchTerms = periodLoading && !viewingAsAdmin ? [] : searchTermsPulseQ.data ?? [];
-  const adGroups = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(adGroupsQ.data ?? [], "adGroup");
+  const placementMix = periodLoading && !viewingAsAdmin ? [] : overviewRecommendationRows(placementMixQ.data, placementMixQ.isError);
+  const searchTerms = periodLoading && !viewingAsAdmin ? [] : overviewRecommendationRows(searchTermsPulseQ.data, searchTermsPulseQ.isError);
+  const adGroups = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(overviewRecommendationRows(adGroupsQ.data, adGroupsQ.isError), "adGroup");
 
   const [blurBooks, setBlurBooks] = useState(false);
 
@@ -2297,7 +2297,7 @@ export default function OverviewScreen() {
                 {
                   key: "ads-campaigns",
                   label: "Campaigns",
-                  freshness: targetingFreshnessLabel({ updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : metricsQ.dataUpdatedAt, fetching: viewingAsAdmin ? bootstrapQ.isFetching : metricsQ.isFetching, failed: viewingAsAdmin ? bootstrapQ.isError : metricsQ.isError }),
+                  freshness: overviewReadLabel({ updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : metricsQ.dataUpdatedAt, fetching: viewingAsAdmin ? bootstrapQ.isFetching : metricsQ.isFetching, failed: viewingAsAdmin ? bootstrapQ.isError : metricsQ.isError }),
                   meta: breakEvenAcos != null ? formatBreakEvenHint(breakEvenAcos) || undefined : undefined,
                   content: (
                     <AdsEngineCampaignsPage
@@ -2391,7 +2391,7 @@ export default function OverviewScreen() {
             key={`home-campaigns-${adsWidgetProfileIds.join("|")}`}
             staggerIndex={3}
             testID="home-campaigns"
-            freshness={targetingFreshnessLabel({ updatedAt: topCampaignsQ.dataUpdatedAt, fetching: topCampaignsQ.isFetching, failed: topCampaignsQ.isError })}
+            freshness={overviewReadLabel({ updatedAt: topCampaignsQ.dataUpdatedAt, fetching: topCampaignsQ.isFetching, failed: topCampaignsQ.isError })}
             title="Campaigns"
             icon="campaigns"
             inlinePageLabel
@@ -2401,6 +2401,7 @@ export default function OverviewScreen() {
               {
                 key: "high-acos",
                 label: "High ACoS",
+                hint: "Within the top 80 campaigns by spend",
                 content:
                   campaignsWidgetPhase === "loading" ? (
                     <SwipeEmpty message="Loading campaigns…" t={t} />
@@ -2412,7 +2413,7 @@ export default function OverviewScreen() {
                       <SwipeEmpty message="Couldn't load campaigns. Tap to retry." t={t} />
                     </TouchableOpacity>
                   ) : campsHighAcos.length === 0 ? (
-                    <SwipeEmpty message="No campaigns in this period." t={t} />
+                    <SwipeEmpty message="No measured ACoS in this sample." t={t} />
                   ) : (
                     <WidgetRowList>
                       {campsHighAcos.map((campaign, idx) => (
@@ -2431,10 +2432,12 @@ export default function OverviewScreen() {
               {
                 key: "low-acos",
                 label: "Low ACoS",
+                onAction: () => router.push({ pathname: "/(tabs)/campaigns", params: { flow: String(Date.now()), sort: "acos-low" } }),
+                hint: "Within the top 80 campaigns by spend",
                 hidden: (campaignsWidgetPhase !== "success" && campaignsWidgetPhase !== "empty") || !showCampaignsLowAcos,
                 content:
                   campsLowAcos.length === 0 ? (
-                    <SwipeEmpty message="No campaigns in this period." t={t} />
+                    <SwipeEmpty message="No measured ACoS in this sample." t={t} />
                   ) : (
                     <WidgetRowList>
                       {campsLowAcos.map((campaign, idx) => (
@@ -2475,7 +2478,8 @@ export default function OverviewScreen() {
               },
               {
                 key: "ad-groups",
-                freshness: targetingFreshnessLabel({ updatedAt: adGroupsQ.dataUpdatedAt, fetching: adGroupsQ.isFetching, failed: adGroupsQ.isError }),
+                hint: "Within the top 80 enabled ad groups by spend",
+                freshness: overviewReadLabel({ updatedAt: adGroupsQ.dataUpdatedAt, fetching: adGroupsQ.isFetching, failed: adGroupsQ.isError }),
                 onAction: () => router.push("/more/ad-groups"),
                 label: "Ad groups",
                 hidden: adGroupsQ.isPending && !adGroupsQ.data,
@@ -2569,7 +2573,7 @@ export default function OverviewScreen() {
             </View>
           ) : null}
 
-          {(keywordBleeders.length > 0 || keywordHighAcos.length > 0 || termSpendNoOrders.length > 0 || termLowAcos.length > 0) ? (
+          {(bleedersQ.isError || searchTermsPulseQ.isError || keywordBleeders.length > 0 || keywordHighAcos.length > 0 || termSpendNoOrders.length > 0 || termLowAcos.length > 0) ? (
             <OverviewSwipeWidget
               key={`w4-${adsWidgetProfileIds.join("|")}`}
               staggerIndex={4}
@@ -2580,8 +2584,26 @@ export default function OverviewScreen() {
               onAction={() => router.push("/(tabs)/targeting")}
               pages={[
                 {
+                  key: "kw-unavailable",
+                  label: "Keywords",
+                  hidden: !bleedersQ.isError,
+                  freshness: overviewReadLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
+                  onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "all" } }),
+                  content: <TouchableOpacity onPress={() => void bleedersQ.refetch()} accessibilityRole="button"><SwipeEmpty message="Couldn't load keywords. Tap to retry." t={t} /></TouchableOpacity>,
+                },
+                {
+                  key: "st-unavailable",
+                  label: "Search terms",
+                  hidden: !searchTermsPulseQ.isError,
+                  actionLabel: "Search terms",
+                  freshness: overviewReadLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
+                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "all", enabledParents: "1" } }),
+                  content: <TouchableOpacity onPress={() => void searchTermsPulseQ.refetch()} accessibilityRole="button"><SwipeEmpty message="Couldn't load search terms. Tap to retry." t={t} /></TouchableOpacity>,
+                },
+                {
                   key: "kw-no-orders",
-                  freshness: targetingFreshnessLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
+                  freshness: overviewReadLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
+                  hint: "Within the top 80 enabled keywords by spend",
                   onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "wasting", sort: "spend" } }),
                   label: "Keywords",
                   hidden: keywordBleeders.length === 0,
@@ -2602,7 +2624,8 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "kw-high-acos",
-                  freshness: targetingFreshnessLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
+                  freshness: overviewReadLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
+                  hint: "Within the top 80 enabled keywords by spend",
                   onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "all" } }),
                   label: "High ACoS",
                   hidden: keywordHighAcos.length === 0,
@@ -2623,7 +2646,8 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "st-no-orders",
-                  freshness: targetingFreshnessLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
+                  freshness: overviewReadLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
+                  hint: "Within the top 80 enabled-parent terms by spend",
                   actionLabel: "Search terms",
                   onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "wasted", enabledParents: "1" } }),
                   label: "Search terms",
@@ -2645,10 +2669,11 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "st-low-acos",
-                  freshness: targetingFreshnessLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
+                  freshness: overviewReadLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
+                  hint: "Within the top 80 enabled-parent terms by spend",
                   actionLabel: "Search terms",
-                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "all", sort: "acos", enabledParents: "1" } }),
-                  label: "Best ACoS",
+                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "converting", sort: "acos", enabledParents: "1" } }),
+                  label: "Low ACoS",
                   hidden: termLowAcos.length === 0,
                   content: (
                     <WidgetRowList>
@@ -2680,12 +2705,14 @@ export default function OverviewScreen() {
                 {
                   key: "mix",
                   label: "",
+                  freshness: overviewReadLabel({ updatedAt: placementMixQ.dataUpdatedAt, fetching: placementMixQ.isFetching, failed: placementMixQ.isError }),
                   hidden: placementMix.length === 0,
                   content: <PlacementMixV2 rows={placementMix} currency={primaryCurrency} t={t} />,
                 },
                 {
                   key: "campaigns",
                   label: "Campaign placement",
+                  freshness: overviewReadLabel({ updatedAt: topCampaignsQ.dataUpdatedAt, fetching: topCampaignsQ.isFetching, failed: topCampaignsQ.isError }),
                   hidden: placementCampaigns.length === 0,
                   content: (
                     <WidgetRowList>
@@ -2711,6 +2738,7 @@ export default function OverviewScreen() {
             key={`w6-${scopeProfiles.join("|")}`}
             staggerIndex={6}
             title="Top books"
+            freshness={overviewReadLabel({ updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : topBooksQ.dataUpdatedAt, fetching: viewingAsAdmin ? bootstrapQ.isFetching : topBooksQ.isFetching, failed: viewingAsAdmin ? bootstrapQ.isError : topBooksQ.isError })}
             icon="books"
             inlinePageLabel
             action={
@@ -2750,6 +2778,7 @@ export default function OverviewScreen() {
             pages={[
               {
                 key: "top-royalties",
+                hint: "Within loaded books",
                 label: "",
                 content:
                   booksWidgetPhase === "loading" ? (
@@ -2791,6 +2820,7 @@ export default function OverviewScreen() {
               {
                 key: "worst-profit",
                 label: "Worst profit",
+                hint: "Within loaded books · royalties minus ad spend",
                 hidden: booksWidgetPhase !== "success" && booksWidgetPhase !== "empty",
                 content:
                   booksProfit.length === 0 ? (
@@ -2825,9 +2855,10 @@ export default function OverviewScreen() {
                 key: "high-acos",
                 label: "High ACoS",
                 hidden: booksWidgetPhase !== "success" && booksWidgetPhase !== "empty",
+                hint: "Within loaded books",
                 content:
                   booksHigh.length === 0 ? (
-                    <SwipeEmpty message="No ad sales" t={t} />
+                    <SwipeEmpty message="No measured ACoS in this sample." t={t} />
                   ) : (
                     <WidgetRowList>
                       {booksHigh.map((book, idx) => (
@@ -2848,6 +2879,7 @@ export default function OverviewScreen() {
               {
                 key: "ad-spend-no-sales",
                 label: "Ad spend",
+                hint: "Within loaded books · no ad sales",
                 hidden: booksAdSpendNoSales.length === 0,
                 content: (
                   <WidgetRowList>
@@ -2869,6 +2901,7 @@ export default function OverviewScreen() {
               {
                 key: "low-acos",
                 label: "Low ACoS",
+                hint: "Within loaded books",
                 hidden:
                   (booksWidgetPhase !== "success" && booksWidgetPhase !== "empty") ||
                   booksLow.length === 0 ||
