@@ -652,6 +652,7 @@ export async function fetchNestSearchTermsPage(params: {
   search?: string;
   performanceFilter?: "converting" | "wasted";
   sortBy: "total_orders" | "total_acos" | "total_spend" | "total_clicks" | "total_impressions";
+  sortOrder?: "asc" | "desc";
   page: number;
   perPage?: number;
   signal?: AbortSignal;
@@ -672,7 +673,7 @@ export async function fetchNestSearchTermsPage(params: {
       search: params.search?.trim() || undefined,
       performanceFilter: params.performanceFilter,
       sortBy: params.sortBy,
-      sortOrder: "desc",
+      sortOrder: params.sortOrder ?? "desc",
       page: params.page,
       per_page: params.perPage ?? 100,
     })}`,

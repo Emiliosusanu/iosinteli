@@ -16,7 +16,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { alertMutationError, blockIfCannotWriteAmazon } from "@/src/components/Mutations";
@@ -201,8 +201,17 @@ export default function SearchTermsScreen() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("orders");
   const [perfFilter, setPerfFilter] = useState<PerformanceFilter>("all");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [sortOpen, setSortOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const params = useLocalSearchParams<{ flow?: string; perf?: string; sort?: string }>();
+  useEffect(() => {
+    if (!params.flow) return;
+    setSearch(""); setDebouncedSearch("");
+    setPerfFilter(params.perf === "wasted" || params.perf === "converting" ? params.perf : "all");
+    setSortKey(params.sort === "acos" ? "acos" : "spend");
+    setSortOrder(params.sort === "acos" ? "asc" : "desc");
+  }, [params.flow, params.perf, params.sort, adminFilterUserId, user?.id]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search.trim()), 250);
@@ -227,6 +236,7 @@ export default function SearchTermsScreen() {
       debouncedSearch,
       perfFilter,
       sortKey,
+      sortOrder,
       adminFilterUserId,
     ],
     initialPageParam: 1,
@@ -239,6 +249,7 @@ export default function SearchTermsScreen() {
         search: debouncedSearch || undefined,
         performanceFilter: perfFilter === "all" ? undefined : perfFilter,
         sortBy: SORT_FIELDS[sortKey],
+        sortOrder,
         page: pageParam,
         perPage: 100,
         signal,
@@ -270,10 +281,11 @@ export default function SearchTermsScreen() {
   }
 
   function applySort(next: SortKey) {
-    if (next === sortKey) return;
+    if (next === sortKey && sortOrder === "desc") return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     animateList();
     setSortKey(next);
+    setSortOrder("desc");
   }
 
   function applyPerf(next: PerformanceFilter) {
@@ -333,7 +345,7 @@ export default function SearchTermsScreen() {
     [guestMode, viewAsOtherUser, refreshTerms],
   );
 
-  const sortLabel = SORT_CONFIG.find((entry) => entry.key === sortKey)?.label ?? "Orders";
+  const sortLabel = `${SORT_CONFIG.find((entry) => entry.key === sortKey)?.label ?? "Orders"}${sortOrder === "asc" ? " (low first)" : ""}`;
   const sortActive = sortKey !== "orders";
   const showCount = search.trim().length > 0 || perfFilter !== "all" || sortActive;
   const empty = emptyCopy(search, perfFilter);

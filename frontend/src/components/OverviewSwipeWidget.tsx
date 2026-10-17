@@ -25,6 +25,8 @@ export type OverviewSwipePage = {
   summary?: React.ReactNode;
   content: React.ReactNode;
   hidden?: boolean;
+  actionLabel?: string;
+  onAction?: () => void;
 };
 
 /**
@@ -113,8 +115,8 @@ export function OverviewSwipeWidget({
       <OverviewCardHeader
         title={headerTitle}
         icon={icon}
-        actionLabel={actionLabel}
-        onAction={onAction}
+        actionLabel={page.actionLabel ?? actionLabel}
+        onAction={page.onAction ?? onAction}
         action={action}
         meta={page.meta}
         trailing={page.summary}

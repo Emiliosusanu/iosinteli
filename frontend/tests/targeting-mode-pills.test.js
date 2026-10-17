@@ -42,9 +42,8 @@ test("TargetingModePills uses brand-blue selection and SF Symbols", () => {
   assert.match(pills, /accessibilityState=\{\{\s*selected:\s*active/);
   assert.doesNotMatch(pills, /TouchableOpacity/);
   assert.doesNotMatch(pills, /chrome_selected/);
-  // Selected label only — inactive stay icon-only.
-  assert.match(pills, /\{active \? \(/);
-  assert.match(pills, /option\.shortLabel/);
+  assert.doesNotMatch(pills, /\{active \? \(/);
+  assert.match(pills, /option\.label/);
 });
 
 test("Targets tab: unbundled chrome; status in filter sheet; tertiary Select", () => {
