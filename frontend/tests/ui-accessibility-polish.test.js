@@ -161,3 +161,66 @@ test("campaign card touch feedback does not group and hide its independent contr
   assert.match(code, /onPress=\{openDetails\}\s+onLongPress=\{openStrategy\}/);
   assert.match(code, /const openStrategy = \(\) => \{\s+if \(blockIfCannotWriteAmazon\(writeGuard\)\) return/);
 });
+
+test("campaign budget and strategy have real 44 pt bounds and the native switch is not scaled down", () => {
+  const code = source("../app/(tabs)/campaigns.tsx");
+  const ast = ts.createSourceFile("campaigns.tsx", code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const styles = ast.statements.flatMap((node) => ts.isVariableStatement(node) ? [...node.declarationList.declarations] : [])
+    .find((node) => node.name.getText(ast) === "styles");
+  const values = vm.runInNewContext(styles.initializer.getText(ast), {
+    StyleSheet: { create: (value) => value, hairlineWidth: 0.5 }, layout: { minTap: 44 },
+    dashboard: {}, spacing: { xs: 4, sm: 8 },
+  });
+  for (const name of ["budgetChip", "strategyButton"]) {
+    assert.equal(values[name].minHeight, 44);
+    assert.equal(values[name].minWidth, 44);
+  }
+  assert.equal(values.strategyButton.maxWidth, "100%");
+  assert.ok(values.switchWell.minWidth >= 51);
+  assert.equal(values.switchWell.minHeight, 44);
+  assert.match(code, /<EntityStateSwitch\s+enabled=\{item.state === "enabled"\}\s+compact=\{false\}/);
+});
+
+test("campaign control labels distinguish edits and preserve their write guards", () => {
+  const ast = ts.createSourceFile("campaigns.tsx", source("../app/(tabs)/campaigns.tsx"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const buttons = [];
+  const visit = (node) => {
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(ast) === "TouchableOpacity"
+      && node.openingElement.attributes.properties.some((attr) => ts.isJsxAttribute(attr)
+        && attr.name.getText(ast) === "testID" && /campaign-(budget|strategy)-\$\{item.id\}/.test(attr.getText(ast)))) {
+      buttons.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  assert.equal(buttons.length, 2);
+  for (const blocked of [false, true]) {
+    const opened = [];
+    const exports = {};
+    vm.runInNewContext(ts.transpileModule(`exports.buttons = [${buttons.map((node) => node.getText(ast)).join(",")}];`, {
+      compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.CommonJS },
+    }).outputText, {
+      exports, React: react, TouchableOpacity: "button", Text: "Text", SFSymbol: "icon",
+      styles: {}, t: { colors: {}, typography: {} }, settingsCooldown: { isInCooldown: true },
+      strategy: "Dynamic bids - down only", isDynamicBiddingStrategy: () => true,
+      item: { id: "campaign-1", name: "Example", budget: 10, bidding_strategy: "LEGACY_FOR_SALES" },
+      rowCurrency: "CAD", formatCurrency: (value, currency) => `${currency} ${value}`,
+      writeGuard: { canWrite: !blocked }, blockIfCannotWriteAmazon: (guard) => !guard.canWrite,
+      Haptics: { selectionAsync() {} }, setBudgetEdit: (value) => opened.push(value),
+      setStrategyEdit: (value) => opened.push(value),
+    });
+    const [budget, strategy] = exports.buttons;
+    for (const control of [budget, strategy]) {
+      assert.equal(control.props.accessibilityRole, "button");
+      assert.match(control.props.accessibilityHint, /writes Amazon Ads/);
+      control.props.onPress();
+    }
+    assert.match(budget.props.accessibilityLabel, /Daily budget CAD 10/);
+    assert.equal(strategy.props.accessibilityLabel, "Bidding strategy: Dynamic bids - down only, cooldown");
+    assert.equal(opened.length, blocked ? 0 : 2);
+    if (!blocked) {
+      assert.equal(opened[0].id, "campaign-1");
+      assert.equal(opened[1].strategy, "LEGACY_FOR_SALES");
+    }
+  }
+});
