@@ -145,7 +145,7 @@ export default function CampaignsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [topChromeVisible, setTopChromeVisible] = useState(true);
   const topChromeVisibleRef = useRef(true);
-  const [budgetEdit, setBudgetEdit] = useState<{ id: string; value: number } | null>(null);
+  const [budgetEdit, setBudgetEdit] = useState<{ id: string; value: number; currency: string } | null>(null);
   const [placementAdj, setPlacementAdj] = useState<Record<string, PlacementAdjustments>>({});
   const [placementEdit, setPlacementEdit] = useState<{
     id: string;
@@ -592,7 +592,7 @@ export default function CampaignsScreen() {
                             onPress={() => {
                               if (blockIfCannotWriteAmazon(writeGuard)) return;
                               Haptics.selectionAsync();
-                              setBudgetEdit({ id: item.id, value: Number(item.budget) || 0 });
+                              setBudgetEdit({ id: item.id, value: Number(item.budget) || 0, currency: rowCurrency });
                             }}
                             style={[
                               styles.budgetChip,
@@ -683,7 +683,7 @@ export default function CampaignsScreen() {
         visible={budgetEdit != null}
         title="Daily budget"
         value={budgetEdit?.value ?? 0}
-        currency={primaryCurrency}
+        currency={budgetEdit?.currency ?? primaryCurrency}
         kind="money"
         testID={budgetEdit ? `campaign-budget-editor-${budgetEdit.id}` : undefined}
         onClose={() => setBudgetEdit(null)}
