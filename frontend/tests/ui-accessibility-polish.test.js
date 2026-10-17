@@ -220,7 +220,9 @@ test("campaign control labels distinguish edits and preserve their write guards"
     assert.equal(opened.length, blocked ? 0 : 2);
     if (!blocked) {
       assert.equal(opened[0].id, "campaign-1");
+      assert.equal(opened[0].currency, "CAD");
       assert.equal(opened[1].strategy, "LEGACY_FOR_SALES");
     }
   }
+  assert.match(source("../app/(tabs)/campaigns.tsx"), /currency=\{budgetEdit\?\.currency \?\? primaryCurrency\}/);
 });
