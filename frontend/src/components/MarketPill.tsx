@@ -124,13 +124,14 @@ export function MarketPill({
   );
 
   return (
+    <View style={flex ? styles.marketPillHit : undefined}>
     <PressableScale
       testID={testID}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={a11y}
       hitSlop={4}
-      style={flex ? styles.marketPillHit : undefined}
+      style={flex ? { width: "100%" } : undefined}
     >
       <View
         style={[
@@ -170,6 +171,7 @@ export function MarketPill({
         </View>
       </View>
     </PressableScale>
+    </View>
   );
 }
 

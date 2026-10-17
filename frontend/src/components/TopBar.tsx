@@ -162,15 +162,16 @@ function HeaderPill({
 }) {
   const t = useTheme();
   return (
+    <View style={[
+      flex && { flex: 1, minWidth: 0 },
+      fullWidth && { alignSelf: "stretch", width: "100%" },
+      maxWidth != null && !fullWidth ? { width: maxWidth, maxWidth, flexShrink: 1 } : null,
+    ]}>
     <PressableScale
       testID={testID}
       onPress={onPress}
       accessibilityLabel={accessibilityLabel}
-      style={[
-        flex && { flex: 1, minWidth: 0 },
-        fullWidth && { alignSelf: "stretch" },
-        maxWidth != null && !fullWidth ? { maxWidth } : null,
-      ]}
+      style={{ width: "100%" }}
     >
       <GlassPanel
         strength="chip"
@@ -218,6 +219,7 @@ function HeaderPill({
         <SFSymbol name="chevron.down" size={11} color={t.colors.text_tertiary} />
       </GlassPanel>
     </PressableScale>
+    </View>
   );
 }
 
@@ -342,6 +344,7 @@ export function TopBar({
     primaryCurrency,
     toggleProfile,
     selectAllProfiles,
+    selectMarket,
     adminUsers,
     adminFilterUserId,
     setAdminFilterUserId,
@@ -699,6 +702,15 @@ export function TopBar({
             <Text style={[t.typography.title3, { color: t.colors.text_primary, paddingHorizontal: 16, paddingBottom: 8 }]}>
               Amazon Profiles
             </Text>
+            <ScrollView horizontal style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 16, gap: 16 }}>
+              {[null, ...multiCountryCodes(profiles, { onlyEnabled: true })].map((country) => (
+                <TouchableOpacity key={country ?? "all"} testID={`shared-market-${country ?? "all"}`}
+                  accessibilityRole="button" accessibilityLabel={country ? `Market ${country}` : "All markets"}
+                  style={{ paddingVertical: 12 }} onPress={() => { selectMarket(country); setProfileOpen(false); }}>
+                  <Text style={[t.typography.callout, { color: t.colors.tone_primary }]}>{country ?? "All markets"}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
             <View style={styles.filterRow}>
               <TouchableOpacity
                 testID="profiles-filter-ready"

@@ -214,7 +214,6 @@ import {
   booksRoyaltyScopeForSelection,
   enabledSelectedProfileIds,
   overviewKdpQueryScope,
-  overviewPortfolioProfileIds,
 } from "@/src/lib/booksProfileScope";
 import { overviewAdsProfileIdsForMarket, overviewMarketplaceLabel } from "@/src/lib/overviewMarketplace";
 import { buildMonthlyBudgetForecast } from "@/src/lib/monthlyBudgetForecast";
@@ -331,6 +330,7 @@ export default function OverviewScreen() {
     adminFilterUserId,
     profiles,
     selectedProfileIds,
+    selectMarket,
     selectedProfiles,
     primaryCurrency,
     dateRange,
@@ -341,11 +341,10 @@ export default function OverviewScreen() {
   const [setupMemory, setSetupMemory] = useState<SetupProgressMemory | null>(null);
   const viewingUser = adminUsers.find((candidate) => candidate.id === adminFilterUserId);
   const viewingAsAdmin = !!adminFilterUserId;
-  // Overview Ads catalog is full-portfolio; money triad (Gross/Net/spend + Ads Engine)
-  // matches web: enabled ∩ display-currency profiles → owned-active linked KDP.
+  // All Home reads follow the same enabled selection as the list screens.
   const portfolioProfileIds = useMemo(
-    () => sortedProfileIds(overviewPortfolioProfileIds(profiles)),
-    [profiles],
+    () => sortedProfileIds(enabledSelectedProfileIds(profiles, selectedProfileIds)),
+    [profiles, selectedProfileIds],
   );
   // USD chip with US+CA enabled → all enabled Ads ids; Nest/client convert via market FX.
   const moneyProfileIds = useMemo(
@@ -353,16 +352,14 @@ export default function OverviewScreen() {
     [profiles, portfolioProfileIds],
   );
   const adsMarketCountries = useMemo(() => {
-    const inMoneyScope = new Set(moneyProfileIds);
     return multiCountryCodes(
-      profiles.filter((profile) => inMoneyScope.has(profile.id) || inMoneyScope.has(profile.profile_id)),
+      profiles,
       { onlyEnabled: true },
     );
-  }, [moneyProfileIds, profiles]);
-  const [selectedAdsMarket, setSelectedAdsMarket] = useState<string | null>(null);
-  useEffect(() => {
-    if (selectedAdsMarket && !adsMarketCountries.includes(selectedAdsMarket)) setSelectedAdsMarket(null);
-  }, [adsMarketCountries, selectedAdsMarket]);
+  }, [profiles]);
+  const selectedCountries = useMemo(() => multiCountryCodes(selectedProfiles, { onlyEnabled: true }), [selectedProfiles]);
+  const selectedAdsMarket = selectedCountries.length === 1 ? selectedCountries[0] : null;
+  const setSelectedAdsMarket = selectMarket;
   const adsWidgetProfileIds = useMemo(
     () => sortedProfileIds(overviewAdsProfileIdsForMarket(moneyProfileIds, profiles, selectedAdsMarket)),
     [moneyProfileIds, profiles, selectedAdsMarket],
@@ -1193,7 +1190,7 @@ export default function OverviewScreen() {
   const marketplaceAdsRows = useMemo(
     () => {
       if (!adsReady) return [];
-      return adsMarketCountries.map((country) => {
+      return selectedCountries.map((country) => {
         const ids = overviewAdsProfileIdsForMarket(moneyProfileIds, profiles, country);
         const rows = aggregateDailyMetricsForDisplay(metricRows, {
           moneyProfileIds: ids,
@@ -1219,7 +1216,7 @@ export default function OverviewScreen() {
         };
       });
     },
-    [adsReady, adsMarketCountries, moneyProfileIds, profiles, metricRows, primaryCurrency, profileCurrencyById, fxRates],
+    [adsReady, selectedCountries, moneyProfileIds, profiles, metricRows, primaryCurrency, profileCurrencyById, fxRates],
   );
   const prevDaily = useMemo(
     () =>
@@ -2225,6 +2222,7 @@ export default function OverviewScreen() {
           <OverviewHeaderV3
             profileLabel={primaryProfile}
             marketCountries={marketCountries}
+            selectedMarketCountries={selectedCountries}
             selectedMarketCountry={selectedAdsMarket}
             onMarketSelectionChange={setSelectedAdsMarket}
             currency={primaryCurrency}
@@ -2495,7 +2493,7 @@ export default function OverviewScreen() {
             icon="campaigns"
             inlinePageLabel
             actionLabel="View all"
-            onAction={() => router.push("/(tabs)/campaigns")}
+            onAction={() => router.push({ pathname: "/(tabs)/campaigns", params: { flow: String(Date.now()), sort: "acos" } })}
             pages={[
               {
                 key: "high-acos",
@@ -2551,6 +2549,7 @@ export default function OverviewScreen() {
               },
               {
                 key: "top-spend",
+                onAction: () => router.push({ pathname: "/(tabs)/campaigns", params: { flow: String(Date.now()), sort: "spend" } }),
                 label: "Top spend",
                 hidden: campaignsWidgetPhase !== "success" && campaignsWidgetPhase !== "empty",
                 content:
@@ -2573,6 +2572,7 @@ export default function OverviewScreen() {
               },
               {
                 key: "ad-groups",
+                onAction: () => router.push("/more/ad-groups"),
                 label: "Ad groups",
                 hidden: adGroupsQ.isPending && !adGroupsQ.data,
                 content:
@@ -2677,6 +2677,7 @@ export default function OverviewScreen() {
               pages={[
                 {
                   key: "kw-no-orders",
+                  onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "wasting", sort: "spend" } }),
                   label: "Keywords",
                   hidden: keywordBleeders.length === 0,
                   content: (
@@ -2696,6 +2697,7 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "kw-high-acos",
+                  onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "all" } }),
                   label: "High ACoS",
                   hidden: keywordHighAcos.length === 0,
                   content: (
@@ -2715,6 +2717,8 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "st-no-orders",
+                  actionLabel: "Search terms",
+                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "wasted" } }),
                   label: "Search terms",
                   hidden: termSpendNoOrders.length === 0,
                   content: (
@@ -2734,6 +2738,8 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "st-low-acos",
+                  actionLabel: "Search terms",
+                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "all", sort: "acos" } }),
                   label: "Best ACoS",
                   hidden: termLowAcos.length === 0,
                   content: (

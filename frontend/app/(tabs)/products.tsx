@@ -170,24 +170,34 @@ export default function ProductsScreen() {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<Sort>("acos");
   const [refreshing, setRefreshing] = useState(false);
+  const memoryScope = `${user?.id ?? "guest"}:${adminFilterUserId ?? "self"}`;
+  const [hydratedScope, setHydratedScope] = useState("");
 
   useEffect(() => {
+    let active = true;
+    setSearch("");
+    setSort("acos");
     const qa = takePendingQaFilters();
     if (qa?.booksSort) {
       setSort(qa.booksSort);
       console.log(`[inteliads:qa] books filters sort=${qa.booksSort}`);
+      setHydratedScope(memoryScope);
       return;
     }
-    void loadBooksFilterMemory().then((mem) => {
+    void loadBooksFilterMemory(memoryScope).then((mem) => {
+      if (!active) return;
       if (mem.sort === "net" || mem.sort === "spend" || mem.sort === "acos" || mem.sort === "orders") {
         setSort(mem.sort);
       }
+      setHydratedScope(memoryScope);
     });
-  }, []);
+    return () => { active = false; };
+  }, [memoryScope]);
 
   useEffect(() => {
-    void saveBooksFilterMemory({ sort });
-  }, [sort]);
+    if (hydratedScope !== memoryScope) return;
+    void saveBooksFilterMemory({ sort }, memoryScope);
+  }, [hydratedScope, memoryScope, sort]);
 
   const royaltyProfiles = useMemo(
     () => sortedProfileIds(royaltyScope.profileIds),

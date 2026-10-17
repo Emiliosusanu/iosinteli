@@ -115,6 +115,7 @@ export type OverviewHeaderV3Props = {
    * the overlapping-flag market pill. Prefer this over `marketFlags`.
    */
   marketCountries?: string[];
+  selectedMarketCountries?: string[];
   /** null means every enabled marketplace. */
   selectedMarketCountry?: string | null;
   onMarketSelectionChange?: (country: string | null) => void;
@@ -970,6 +971,7 @@ export function OverviewHeaderCompactSticky({
 export function OverviewHeaderV3({
   profileLabel,
   marketCountries,
+  selectedMarketCountries,
   marketFlags = [],
   selectedMarketCountry = null,
   onMarketSelectionChange,
@@ -1008,9 +1010,9 @@ export function OverviewHeaderV3({
   const periodShift = useSharedValue(0);
 
   const resolvedCountries = sortMarketCountryCodes(marketCountries ?? []);
-  const displayedCountries = selectedMarketCountry
+  const displayedCountries = selectedMarketCountries ?? (selectedMarketCountry
     ? resolvedCountries.filter((country) => country === selectedMarketCountry.toUpperCase())
-    : resolvedCountries;
+    : resolvedCountries);
   const hasMarketPill = resolvedCountries.length > 0;
   // Back-compat: emoji-only callers still get a flag cue without the glass pill.
   const legacyFlags = !hasMarketPill && marketFlags.length > 0 ? marketFlags : [];

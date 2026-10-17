@@ -17,6 +17,7 @@ import { BookCover } from "@/src/components/BookCover";
 import { AppScreen } from "@/src/components/ScreenAmbient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { markPerf } from "@/src/lib/perf";
+import { useLocalSearchParams } from "expo-router";
 import { noPeriodPlaceholder, financialPeriodQueryKey, LIST_PERIOD_QUERY_CACHE, STABLE_SCOPED_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { isHomeQueryTimeout, queryStillWaiting, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
@@ -49,7 +50,6 @@ import {
   getBulkOutboxSnapshot,
   isBulkWritableTargetingRow,
   listPermanentFailEntityIds,
-  loadBulkSelectionMemory,
   requeuePermanentBulkFailures,
   saveBulkSelectionMemory,
   type BulkEntityKind,
@@ -215,7 +215,7 @@ const PERF_FILTERS: { key: PerfFilter; label: string; hint: string }[] = [
   { key: "high_acos", label: "ACoS high", hint: "ACoS above ~35%" },
   { key: "low_acos", label: "ACoS low", hint: "ACoS at or under 20%" },
   { key: "no_sales", label: "No sales", hint: "Spend, zero sales" },
-  { key: "profitable", label: "Profit", hint: "Sales and ACoS at or under 35%" },
+  { key: "profitable", label: "Sales · ACoS ≤35%", hint: "Sales and ACoS at or under 35%" },
   { key: "has_clicks", label: "Clicks", hint: "At least 1 click" },
   { key: "has_orders", label: "Orders", hint: "At least 1 order" },
   { key: "has_impressions", label: "Impr", hint: "At least 1 impression" },
@@ -444,6 +444,10 @@ export default function TargetingScreen() {
   const invalidateAds = useInvalidateAds();
   const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles } = useApp();
   const { user, guestMode } = useAuth();
+  const params = useLocalSearchParams<{ flow?: string; segment?: string; perf?: string; sort?: string }>();
+  const memoryScope = `${user?.id ?? "guest"}:${adminFilterUserId ?? "self"}`;
+  const hydrationKey = `${memoryScope}:${params.flow ?? ""}`;
+  const [hydratedKey, setHydratedKey] = useState("");
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
   const writeGuard = { guestMode, viewAsOtherUser };
   const [segment, setSegment] = useState<Segment>("keywords");
@@ -489,7 +493,24 @@ export default function TargetingScreen() {
   const listRef = useRef<FlatList>(null);
 
   useEffect(() => {
+    let active = true;
     markPerf("targets.mount");
+    setSearch("");
+    setSegment("keywords");
+    setPerf("all");
+    setSort("acos");
+    setStateFilter(DEFAULT_TARGETING_STATE_FILTER);
+    setBookAsin(null);
+    setAdvanced({ ...EMPTY_TARGETING_ADVANCED_FILTERS });
+    setSelectedIds([]);
+    setSelectMode(false);
+    if (params.flow) {
+      if (SEGMENTS.some((s) => s.key === params.segment)) setSegment(params.segment as Segment);
+      if (PERF_FILTERS.some((s) => s.key === params.perf)) setPerf(params.perf as PerfFilter);
+      if (SORT_OPTIONS.some((s) => s.key === params.sort)) setSort(params.sort as SortKey);
+      setHydratedKey(hydrationKey);
+      return;
+    }
     const qa = takePendingQaFilters();
     if (qa) {
       if (qa.targetsSegment) setSegment(qa.targetsSegment);
@@ -518,13 +539,13 @@ export default function TargetingScreen() {
         console.log("[inteliads:qa] targets open Filter sheet");
         setFilterOpen(true);
       }
+      setHydratedKey(hydrationKey);
       return;
     }
-    void Promise.all([loadTargetingFilterMemory(), loadBulkSelectionMemory()]).then(([filters, sel]) => {
+    void loadTargetingFilterMemory(memoryScope).then((filters) => {
+      if (!active) return;
       const nextSegment =
-        sel.segment && SEGMENTS.some((s) => s.key === sel.segment)
-          ? (sel.segment as Segment)
-          : filters.segment && SEGMENTS.some((s) => s.key === filters.segment)
+        filters.segment && SEGMENTS.some((s) => s.key === filters.segment)
             ? (filters.segment as Segment)
             : null;
       if (nextSegment) setSegment(nextSegment);
@@ -536,8 +557,7 @@ export default function TargetingScreen() {
       if (typeof filters.bookAsin === "string" && filters.bookAsin) setBookAsin(filters.bookAsin);
       if (filters.sort && SORT_OPTIONS.some((s) => s.key === filters.sort)) setSort(filters.sort as SortKey);
       if (filters.advanced) setAdvanced(normalizeTargetingAdvancedFilters(filters.advanced));
-      if (Array.isArray(sel.ids)) setSelectedIds(sel.ids.filter((id) => typeof id === "string"));
-      if (sel.selectMode) setSelectMode(true);
+      setHydratedKey(hydrationKey);
     });
     void refreshOutboxCounts();
     void drainBulkOutbox().then(() => refreshOutboxCounts());
@@ -545,9 +565,11 @@ export default function TargetingScreen() {
       await refreshOpenNestBulkJobs();
       await refreshOutboxCounts();
     })();
-  }, []);
+    return () => { active = false; };
+  }, [hydrationKey, memoryScope, params.flow, params.perf, params.segment, params.sort]);
 
   useEffect(() => {
+    if (hydratedKey !== hydrationKey) return;
     void saveTargetingFilterMemory({
       segment,
       perf,
@@ -555,12 +577,13 @@ export default function TargetingScreen() {
       bookAsin: bookAsin ?? undefined,
       stateFilter,
       advanced,
-    });
-  }, [segment, perf, sort, bookAsin, stateFilter, advanced]);
+    }, memoryScope);
+  }, [hydratedKey, hydrationKey, memoryScope, segment, perf, sort, bookAsin, stateFilter, advanced]);
 
   useEffect(() => {
+    if (hydratedKey !== hydrationKey) return;
     void saveBulkSelectionMemory({ segment, ids: selectedIds, selectMode });
-  }, [segment, selectedIds, selectMode]);
+  }, [hydratedKey, hydrationKey, segment, selectedIds, selectMode]);
 
   async function refreshOutboxCounts() {
     const [local, nest] = await Promise.all([getBulkOutboxSnapshot(), getNestBulkJobsSnapshot()]);
@@ -1865,6 +1888,18 @@ export default function TargetingScreen() {
             ) : null}
           </ActiveFilterRow>
         ) : null}
+        {(filtersActive || search.length > 0) ? (
+          <TouchableOpacity testID="targeting-reset-local" accessibilityRole="button"
+            accessibilityLabel="Reset local filters" style={{ alignSelf: "flex-end", padding: 12 }}
+            onPress={() => {
+              setSearch(""); setPerf("all"); setSort("acos");
+              setStateFilter(DEFAULT_TARGETING_STATE_FILTER); setBookAsin(null);
+              setAdvanced({ ...EMPTY_TARGETING_ADVANCED_FILTERS });
+              setSelectedIds([]); setSelectMode(false);
+            }}>
+            <Text style={[t.typography.caption1, { color: t.colors.tone_primary }]}>Reset filters</Text>
+          </TouchableOpacity>
+        ) : null}
         {filtersActive &&
         (stateFilter !== "enabled" || bookAsin || perf !== "all" || sort !== "acos" || advancedCount > 0) ? (
           <ActiveFilterRow>
@@ -2905,7 +2940,7 @@ function keywordStatus(item: any): { label: string; tone: "good" | "warning" | "
   const acos = Number(item.total_acos) || 0;
   if (spend > 0 && orders === 0) return { label: "No sales", tone: "danger" };
   if (sales > 0 && acos > 35) return { label: "High ACoS", tone: "warning" };
-  if (sales > 0) return { label: "Profitable", tone: "good" };
+  if (sales > 0) return { label: "Has sales", tone: "good" };
   return { label: "No spend", tone: "inactive" };
 }
 

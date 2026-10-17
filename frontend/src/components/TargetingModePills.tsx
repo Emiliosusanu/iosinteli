@@ -16,7 +16,7 @@ export type TargetingModeKey =
 /**
  * Targeting mode control — Amazon-style capsules:
  * selected = solid brand-blue pill with white icon+label;
- * inactive = gray pill, icon only. Five equal slots fill the row.
+ * inactive = gray pill with a readable label. Five equal slots fill the row.
  */
 export const TARGETING_MODE_OPTIONS: {
   key: TargetingModeKey;
@@ -80,18 +80,18 @@ export function TargetingModePills({ value, onChange }: Props) {
                 color={active ? "#FFFFFF" : idleFg}
                 weight={active ? "semibold" : "regular"}
               />
-              {active ? (
+              {(
                 <Text
                   accessible={false}
                   importantForAccessibility="no-hide-descendants"
                   numberOfLines={1}
                   adjustsFontSizeToFit
                   minimumFontScale={0.75}
-                  style={styles.label}
+                  style={[styles.label, { color: active ? "#FFFFFF" : idleFg }]}
                 >
-                  {option.shortLabel}
+                  {option.label}
                 </Text>
-              ) : null}
+              )}
             </PressableScale>
           </View>
         );
@@ -117,10 +117,10 @@ const styles = StyleSheet.create({
   },
   segment: {
     width: "100%",
-    minHeight: 40,
+    minHeight: 52,
     borderRadius: 999,
     borderCurve: "continuous",
-    flexDirection: "row",
+    flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
     gap: 4,
@@ -130,7 +130,7 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 12,
     lineHeight: 14,
-    letterSpacing: -0.2,
+    letterSpacing: 0,
     fontWeight: "700",
     color: "#FFFFFF",
     flexShrink: 1,
