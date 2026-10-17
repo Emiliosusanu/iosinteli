@@ -68,6 +68,11 @@ test("market US and All only select enabled profiles belonging to the supplied c
   assert.deepEqual(sharedMarketProfileIds(profiles.slice(1), "US"), []);
 });
 
+test("Targets visibility uses Expo Router context, not a second native navigation context", () => {
+  assert.match(source, /usePathname/);
+  assert.doesNotMatch(source, /useIsFocused|from "@react-navigation\/native"/);
+});
+
 test("Targets never saves defaults before memory hydration", async () => {
   const h = harness(); h.render();
   assert.equal(h.writes.length, 0);

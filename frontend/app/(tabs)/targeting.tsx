@@ -18,7 +18,6 @@ import { AppScreen } from "@/src/components/ScreenAmbient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { markPerf } from "@/src/lib/perf";
 import { useLocalSearchParams } from "expo-router";
-import { useIsFocused } from "@react-navigation/native";
 import { enabledSelectedProfileIds } from "@/src/lib/booksProfileScope";
 import { targetingFreshnessLabel } from "@/src/lib/targetingPageFreshness";
 import { noPeriodPlaceholder, financialPeriodQueryKey, LIST_PERIOD_QUERY_CACHE, STABLE_SCOPED_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
@@ -150,7 +149,7 @@ import {
 import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { rowCurrencyOfProfile } from "@/src/lib/accountsUi";
 import { enabledSpoken, matchTypeSpoken, targetingSpeech } from "@/src/lib/targetingA11y";
-import { type Href, useRouter } from "expo-router";
+import { type Href, useRouter, usePathname } from "expo-router";
 
 type Segment = TargetingModeKey;
 
@@ -595,7 +594,8 @@ export default function TargetingScreen() {
     setOutboxFailed(local.failed + nest.failed);
   }
 
-  const focused = useIsFocused();
+  const pathname = usePathname();
+  const focused = pathname === "/targeting" || pathname === "/(tabs)/targeting";
   const filtersReady = hydratedKey === hydrationKey;
   const scopeProfiles = useMemo(() => sortedProfileIds(enabledSelectedProfileIds(profiles, selectedProfileIds)), [profiles, selectedProfileIds]);
   const periodKey = financialPeriodQueryKey(dateRange, scopeProfiles, primaryCurrency);
