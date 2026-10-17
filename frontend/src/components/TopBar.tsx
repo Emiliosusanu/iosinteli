@@ -634,6 +634,7 @@ export function TopBar({
               (hasMarketPill ? (
                 <MarketPill
                   testID="profile-selector-btn"
+                  compact
                   countries={marketCountries}
                   currency={primaryCurrency}
                   onPress={() => setProfileOpen(true)}
