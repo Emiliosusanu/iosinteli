@@ -133,7 +133,7 @@ export function selectedMarketCountryCodes(
   selectedProfileIds: readonly string[],
 ): string[] {
   const selected = new Set(selectedProfileIds);
-  return multiCountryCodes(profiles.filter((profile) => selected.has(profile.id) || selected.has(profile.profile_id)));
+  return multiCountryCodes(profiles.filter((profile) => profileEnabled(profile) && (selected.has(profile.id) || selected.has(profile.profile_id))));
 }
 
 /** Unique flag emojis for enabled (or selected) profiles — multi-country header cue. */
