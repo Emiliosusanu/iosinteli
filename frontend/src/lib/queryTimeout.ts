@@ -45,7 +45,8 @@ export const BOOK_CAMPAIGN_METRICS_BUDGET_MS = 25_000;
 export const HOME_QUERY_TIMEOUT_MESSAGE = "HOME_QUERY_TIMEOUT";
 
 export function isHomeQueryTimeout(error: unknown): boolean {
-  return error instanceof Error && error.message === HOME_QUERY_TIMEOUT_MESSAGE;
+  return (error instanceof Error && error.message === HOME_QUERY_TIMEOUT_MESSAGE) ||
+    (typeof error === "object" && error != null && (error as { code?: unknown }).code === "57014");
 }
 
 function abortError(): Error {

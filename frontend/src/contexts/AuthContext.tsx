@@ -10,6 +10,9 @@ import { clearNotificationIdentity } from "@/src/lib/notifications";
 import { markPerf } from "@/src/lib/perf";
 import { debugIngest } from "@/src/lib/debugIngest";
 import { userLookupProvesSessionInvalid } from "@/src/lib/authRestore";
+import { isPermanentSessionError } from "@/src/lib/sessionRefresh";
+import { supabaseSessionIsUsable } from "@/src/lib/supabaseSession";
+import { withQueryTimeout } from "@/src/lib/queryTimeout";
 
 type AuthState = "loading" | "authenticated" | "unauthenticated";
 
@@ -18,6 +21,8 @@ interface AuthContextType {
   session: Session | null;
   user: User | null;
   guestMode: boolean;
+  restoreError: boolean;
+  retryRestore: () => void;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   signUp: (email: string, password: string) => Promise<{ error?: string; needsConfirmation?: boolean }>;
   signOut: () => Promise<void>;
@@ -35,10 +40,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [guestMode, setGuestMode] = useState<boolean>(false);
   const guestModeRef = useRef(false);
+  const restoreGeneration = useRef(0);
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
+  const [restoreError, setRestoreError] = useState(false);
+  const retryRestore = useCallback(() => {
+    restoreGeneration.current++;
+    setRestoreError(false);
+    setState("loading");
+    setRestoreAttempt(value => value + 1);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
     let restoreSettled = false;
+    const generation = ++restoreGeneration.current;
+    const current = () => mounted && restoreGeneration.current === generation;
 
     const clearStaleAuthCaches = async () => {
       queryClient.clear();
@@ -46,25 +62,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     const fallbackId = setTimeout(() => {
-      if (!mounted || restoreSettled) return;
-      void (async () => {
-        const guest = await storage.getItem<boolean>(GUEST_KEY, false);
-        // Restore may have finished while we awaited storage.
-        if (!mounted || restoreSettled) return;
-        console.warn("[auth] Session hydration timed out; continuing without a live session");
-        // #region agent log
-        debugIngest("AuthContext.tsx:fallback", "auth hydration timeout", { guest: guest === true }, "B");
-        // #endregion
-        setSession(null);
-        setUser(null);
-        if (guest === true) {
-          guestModeRef.current = true;
-          setGuestMode(true);
-          setState("authenticated");
-        } else {
-          setState("unauthenticated");
-        }
-      })();
+      if (!current() || restoreSettled) return;
+      // A deadline proves only that verification is delayed, not a logout.
+      setRestoreError(true);
     }, 8000);
 
     (async () => {
@@ -78,10 +78,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const guest = await storage.getItem<boolean>(GUEST_KEY, false);
         const isGuest = guest === true;
         const { data: { session: s }, error: sessionError } = await supabase.auth.getSession();
+        if (!current()) return;
         // #region agent log
         debugIngest("AuthContext.tsx:getSession", "auth getSession done", { ms: Date.now() - authT0, hasSession: !!s, sessionError: !!sessionError }, "B");
         // #endregion
         let session = s ?? null;
+        if (sessionError && !isPermanentSessionError(sessionError)) throw sessionError;
         if ((sessionError && !session) || (session && !session.refresh_token)) {
           await supabase.auth.signOut({ scope: "local" });
           session = null;
@@ -91,7 +93,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // refresh outage keeps a still-usable access token instead of
           // destroying the persisted mobile session.
           session = await ensureFreshSupabaseSession() ?? session;
-          const { data: { user: liveUser }, error: userError } = await supabase.auth.getUser();
+          if (!current()) return;
+          if (!supabaseSessionIsUsable(session)) throw new Error("Session recovery pending");
+          const { data: { user: liveUser }, error: userError } = await withQueryTimeout(
+            supabase.auth.getUser(), 4_000,
+          ).catch(error => ({ data: { user: null }, error }));
+          if (!current()) return;
           // #region agent log
           debugIngest("AuthContext.tsx:getUser", "auth getUser done", { ms: Date.now() - authT0, hasLiveUser: !!liveUser, userError: !!userError }, "B");
           // #endregion
@@ -104,9 +111,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        if (!mounted) return;
+        if (!current()) return;
         restoreSettled = true;
         clearTimeout(fallbackId);
+        setRestoreError(false);
         guestModeRef.current = isGuest && !session;
         setGuestMode(isGuest && !session);
         setSession(session);
@@ -117,19 +125,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         debugIngest("AuthContext.tsx:restoreEnd", "auth restore end", { ms: Date.now() - authT0, authenticated: !!(session || isGuest), isGuest }, "B");
         // #endregion
       } catch (error) {
-        if (!mounted) return;
+        if (!current()) return;
         restoreSettled = true;
         clearTimeout(fallbackId);
-        console.warn("[auth] Session hydration failed; continuing unauthenticated", error);
-        guestModeRef.current = false;
-        setGuestMode(false);
-        setSession(null);
-        setUser(null);
-        setState("unauthenticated");
+        if (isPermanentSessionError(error)) {
+          setSession(null);
+          setUser(null);
+          setState("unauthenticated");
+          setRestoreError(false);
+        } else {
+          setRestoreError(true);
+        }
       }
     })();
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, s) => {
+      if (event === "INITIAL_SESSION") return;
+      if (s && !supabaseSessionIsUsable(s)) return;
+      // A live auth event supersedes every result from startup verification.
+      restoreGeneration.current++;
+      restoreSettled = true;
+      clearTimeout(fallbackId);
+      setRestoreError(false);
       setSession(s);
       setUser(s?.user ?? null);
       if (s) {
@@ -139,8 +156,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setState("authenticated");
         return;
       }
-      // INITIAL_SESSION(null) races guest hydration — let that IIFE decide.
-      if (event === "INITIAL_SESSION") return;
       setState(guestModeRef.current ? "authenticated" : "unauthenticated");
     });
 
@@ -149,8 +164,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       clearTimeout(fallbackId);
       listener.subscription.unsubscribe();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [restoreAttempt, queryClient]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     guestModeRef.current = false;
@@ -192,6 +206,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    restoreGeneration.current++;
     guestModeRef.current = false;
     setGuestMode(false);
     await storage.setItem(GUEST_KEY, false);
@@ -232,6 +247,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const enterGuestMode = useCallback(() => {
+    restoreGeneration.current++;
+    setRestoreError(false);
     guestModeRef.current = true;
     setGuestMode(true);
     void storage.setItem(GUEST_KEY, true);
@@ -240,7 +257,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ state, session, user, guestMode, signIn, signUp, signOut, resetPassword, enterGuestMode }}
+      value={{ state, session, user, guestMode, restoreError, retryRestore, signIn, signUp, signOut, resetPassword, enterGuestMode }}
     >
       {children}
     </AuthContext.Provider>
