@@ -7,6 +7,7 @@ import { shouldPersistQuery } from '../src/lib/queryPersist.ts';
 import { targetingFreshnessLabel } from '../src/lib/targetingPageFreshness.ts';
 import { shouldRefreshForNotification, shouldPresentNotification } from '../src/lib/notificationContract.ts';
 import { createSingleFlight } from '../src/lib/kdp/singleFlight.ts';
+import { createReadQueue } from '../src/lib/readRequest.ts';
 
 const source = readFileSync(new URL('../app/(tabs)/targeting.tsx', import.meta.url), 'utf8');
 
@@ -85,10 +86,11 @@ test('overlapping alert evaluations share one job and recover after failure', as
 
 test('enabled search-term pages advance past paused parents and propagate failed parent reads', async () => {
   const queries = readFileSync(new URL('../src/lib/queries.ts', import.meta.url), 'utf8');
-  const body = queries.slice(queries.indexOf('export async function fetchEnabledSearchTermsPage('), queries.indexOf('export async function fetchOverviewActiveSearchTerms('));
+  const body = queries.slice(queries.indexOf('const activeSearchTermRead ='), queries.indexOf('export async function fetchOverviewActiveSearchTerms('));
   const js = ts.transpileModule(body, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
   const calls = [];
-  const context = { exports: {}, fetchNestSearchTermsPage: async input => { calls.push(input.page); return { page: input.page, hasNextPage: input.page < 3, data: [{ id: input.page }] }; },
+  const context = { exports: {}, createReadQueue, assertSearchTermsNotAborted: signal => { if (signal?.aborted) throw Error('aborted'); },
+    fetchNestSearchTermsPage: async input => { assert.ok(input.signal); calls.push(input.page); return { page: input.page, hasNextPage: input.page < 3, data: [{ id: input.page }] }; },
     attachParentEntityStates: async (rows, options) => { assert.equal(options.strict, true); return rows; },
     activeOverviewRows: rows => rows.filter(row => row.id === 3) };
   vm.runInNewContext(js, context);
@@ -97,4 +99,6 @@ test('enabled search-term pages advance past paused parents and propagate failed
   context.attachParentEntityStates = async () => { throw Error('offline'); };
   await assert.rejects(context.exports.fetchEnabledSearchTermsPage({ page: 1 }), /offline/);
   await assert.rejects(context.exports.fetchEnabledSearchTermsPage({ page: 1, filterUserId: 'customer' }), /customer preview/);
+  const abort = new AbortController(); abort.abort();
+  await assert.rejects(context.exports.fetchEnabledSearchTermsPage({ page: 1, signal: abort.signal }), /cancelled/);
 });

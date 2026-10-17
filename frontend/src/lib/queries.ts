@@ -2616,7 +2616,7 @@ export type ParentEntityState = {
 /** Batch-attach parent campaign/ad-group state for Active-parent filtering. */
 export async function attachParentEntityStates<
   T extends { campaign_id?: string | null; ad_group_id?: string | null },
->(rows: T[], options?: { strict?: boolean }): Promise<Array<T & ParentEntityState>> {
+>(rows: T[], options?: { strict?: boolean; signal?: AbortSignal }): Promise<Array<T & ParentEntityState>> {
   if (!rows.length) return rows as Array<T & ParentEntityState>;
   const campaignIds = uniqueStrings(rows.map((row) => String(row.campaign_id || "")).filter(Boolean));
   const adGroupIds = uniqueStrings(rows.map((row) => String(row.ad_group_id || "")).filter(Boolean));
@@ -2626,14 +2626,18 @@ export async function attachParentEntityStates<
   try {
     await Promise.all([
       ...chunkArray(campaignIds, 200).map(async (chunk) => {
-        const { data, error } = await supabase.from("campaigns").select("id, state").in("id", chunk);
+        let request = supabase.from("campaigns").select("id, state").in("id", chunk);
+        if (options?.signal) request = request.abortSignal(options.signal);
+        const { data, error } = await request;
         if (error) throw error;
         for (const row of data ?? []) {
           campaignState.set(String((row as any).id), ((row as any).state as string | null) ?? null);
         }
       }),
       ...chunkArray(adGroupIds, 200).map(async (chunk) => {
-        const { data, error } = await supabase.from("ad_groups").select("id, state").in("id", chunk);
+        let request = supabase.from("ad_groups").select("id, state").in("id", chunk);
+        if (options?.signal) request = request.abortSignal(options.signal);
+        const { data, error } = await request;
         if (error) throw error;
         for (const row of data ?? []) {
           adGroupState.set(String((row as any).id), ((row as any).state as string | null) ?? null);
@@ -4257,28 +4261,38 @@ export async function fetchProductAds(
 // ---------- Search Terms ----------
 /** Server-ranked pages, with a bounded live-parent check. Unknown is an error,
  * never an empty successful widget. The cursor skips fully ineligible pages. */
+const activeSearchTermRead = createReadQueue(2);
+
 export async function fetchEnabledSearchTermsPage(input: Parameters<typeof fetchNestSearchTermsPage>[0]) {
+  return activeSearchTermRead(signal => readEnabledSearchTermsPage({ ...input, signal }), input.signal, 18_000);
+}
+
+async function readEnabledSearchTermsPage(input: Parameters<typeof fetchNestSearchTermsPage>[0]) {
   if (input.filterUserId) throw new Error("Enabled-parent search terms unavailable in customer preview");
   for (let page = input.page; page < input.page + 20; page++) {
+    assertSearchTermsNotAborted(input.signal);
     const result = await fetchNestSearchTermsPage({ ...input, page });
-    const rows = await attachParentEntityStates(result.data, { strict: true });
+    assertSearchTermsNotAborted(input.signal);
+    const rows = await attachParentEntityStates(result.data, { strict: true, signal: input.signal });
     const data = activeOverviewRows(rows, "searchTerm");
     if (data.length || !result.hasNextPage) return { ...result, data };
   }
   throw new Error("Live-parent search exceeded the read budget; narrow the filters");
 }
 
-export async function fetchOverviewActiveSearchTerms(profileIds: string[], opts: { start: string; end: string; limit?: number }) {
-  const limit = opts.limit ?? 80;
-  const rows: SearchTerm[] = [];
-  for (let page = 1, reads = 0; reads < 20; reads++) {
-    const result = await fetchEnabledSearchTermsPage({ profileIds, startDate: opts.start, endDate: opts.end,
-      page, perPage: 100, sortBy: "total_spend" });
-    rows.push(...result.data);
-    if (rows.length >= limit || !result.hasNextPage) return rows.slice(0, limit);
-    page = result.page + 1;
-  }
-  throw new Error("Active search term catalog is incomplete");
+export async function fetchOverviewActiveSearchTerms(profileIds: string[], opts: { start: string; end: string; limit?: number; signal?: AbortSignal }) {
+  return activeSearchTermRead(async signal => {
+    const limit = opts.limit ?? 80;
+    const rows: SearchTerm[] = [];
+    for (let page = 1, reads = 0; reads < 20; reads++) {
+      const result = await readEnabledSearchTermsPage({ profileIds, startDate: opts.start, endDate: opts.end,
+        page, perPage: 100, sortBy: "total_spend", signal });
+      rows.push(...result.data);
+      if (rows.length >= limit || !result.hasNextPage) return rows.slice(0, limit);
+      page = result.page + 1;
+    }
+    throw new Error("Active search term catalog is incomplete");
+  }, opts.signal, 18_000);
 }
 
 function assertSearchTermsNotAborted(signal?: AbortSignal) {
