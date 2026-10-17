@@ -394,6 +394,15 @@ export function FilterIconButton({
           height: dashboard.headerControl,
           alignItems: "center",
           justifyContent: "center",
+          ...(active
+            ? {
+                shadowColor: t.colors.tone_primary,
+                shadowOpacity: t.scheme === "dark" ? 0.28 : 0.16,
+                shadowRadius: 8,
+                shadowOffset: { width: 0, height: 3 },
+                elevation: 2,
+              }
+            : null),
         },
       ]}
     >
