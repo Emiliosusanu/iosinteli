@@ -278,8 +278,8 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   pageChevronHit: {
-    width: 28,
-    height: 28,
+    width: 44,
+    height: 44,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -292,8 +292,10 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   dotHit: {
-    paddingVertical: 8,
-    paddingHorizontal: 4,
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
   },
   dot: {
     height: 7,

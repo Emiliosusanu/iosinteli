@@ -166,6 +166,7 @@ function HeaderPill({
       testID={testID}
       onPress={onPress}
       accessibilityLabel={accessibilityLabel}
+      containerStyle={{ minHeight: 44, justifyContent: "center" }}
       style={[
         flex && { flex: 1, minWidth: 0 },
         fullWidth && { alignSelf: "stretch" },

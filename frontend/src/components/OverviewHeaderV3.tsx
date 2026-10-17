@@ -427,7 +427,7 @@ function PeriodToggle({
         style={[
           styles.periodPill,
           {
-            backgroundColor: chrome.colors.chrome_selected,
+            backgroundColor: t.colors.control_selected,
             borderColor: "transparent",
             borderWidth: 0,
           },

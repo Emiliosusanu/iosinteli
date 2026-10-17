@@ -130,6 +130,7 @@ export function MarketPill({
       accessibilityRole="button"
       accessibilityLabel={a11y}
       hitSlop={4}
+      containerStyle={{ minHeight: 44, justifyContent: "center" }}
       style={flex ? styles.marketPillHit : undefined}
     >
       <View

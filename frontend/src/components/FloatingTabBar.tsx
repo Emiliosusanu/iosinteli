@@ -152,7 +152,16 @@ function TabSegment({
   const symbolName = focused ? visual.symbolFill : visual.symbol;
 
   return (
-    <View style={styles.segmentSlot}>
+    <View style={[
+      styles.segmentSlot,
+      focused ? {
+        backgroundColor: chrome.selected,
+        shadowColor: chrome.selected,
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 3 },
+      } : null,
+    ]}>
       <PressableScale
         accessibilityRole="tab"
         accessibilityState={{ selected: focused }}
@@ -165,15 +174,6 @@ function TabSegment({
           styles.segment,
           { minHeight: scale.segmentMinHeight },
           focused ? styles.segmentActive : styles.segmentIdle,
-          focused
-            ? {
-                shadowColor: chrome.selected,
-                shadowOpacity: 0.26,
-                shadowRadius: 10,
-                shadowOffset: { width: 0, height: 4 },
-                elevation: 3,
-              }
-            : null,
         ]}
       >
         <Animated.View
@@ -233,8 +233,8 @@ export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBa
     () => ({
       fill: t.colors.tabbar_background,
       stroke: t.colors.tabbar_stroke,
-      selected: t.colors.tabbar_selected,
-      selectedFg: t.colors.tabbar_selected_fg,
+      selected: t.colors.control_selected,
+      selectedFg: "#FFFFFF",
       inactive: t.colors.tabbar_inactive,
       elevation: t.shadow.floating,
     }),
@@ -346,6 +346,7 @@ const styles = StyleSheet.create({
   },
   /** Equal share — minWidth:0 stops fixed-content pills from blowing the rail. */
   segmentSlot: {
+    borderRadius: 999,
     flex: 1,
     minWidth: 0,
     zIndex: 1,

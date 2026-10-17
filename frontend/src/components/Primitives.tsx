@@ -387,6 +387,7 @@ export function FilterIconButton({
       accessibilityLabel={accessibilityLabel}
       accessibilityHint={accessibilityHint}
       hitSlop={4}
+      containerStyle={{ minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" }}
       style={[
         glassControlStyle(t, !!active),
         {
@@ -445,6 +446,7 @@ export function ActiveFilterChip({
       testID={testID}
       onPress={onPress}
       accessibilityLabel={accessibilityLabel}
+      containerStyle={{ minHeight: 44, justifyContent: "center", maxWidth: "100%" }}
       style={[
         glassControlStyle(t, true),
         {
@@ -461,7 +463,7 @@ export function ActiveFilterChip({
         style={{
           fontSize: 12,
           fontWeight: "600",
-          letterSpacing: -0.1,
+          letterSpacing: 0,
           color: t.colors.tone_primary,
         }}
       >
