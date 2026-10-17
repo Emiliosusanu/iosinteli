@@ -537,6 +537,7 @@ export default function CampaignsScreen() {
                     <View onStartShouldSetResponder={() => true} style={styles.switchWell}>
                       <EntityStateSwitch
                         enabled={item.state === "enabled"}
+                        compact={false}
                         noun="campaign"
                         testID={`campaign-state-${item.id}`}
                         onChange={async (next) => {
@@ -614,6 +615,11 @@ export default function CampaignsScreen() {
                         <CampaignVerdictBadge verdict={verdict} t={t} />
                         <TouchableOpacity
                           testID={`campaign-strategy-${item.id}`}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Bidding strategy: ${strategy}${settingsCooldown.isInCooldown ? ", cooldown" : ""}`}
+                          accessibilityHint="Opens bidding strategy options. Selecting an option writes Amazon Ads."
+                          activeOpacity={0.7}
+                          style={styles.strategyButton}
                           onPress={() => {
                             if (blockIfCannotWriteAmazon(writeGuard)) return;
                             Haptics.selectionAsync();
@@ -623,7 +629,6 @@ export default function CampaignsScreen() {
                               strategy: item.bidding_strategy,
                             });
                           }}
-                          hitSlop={6}
                         >
                           <Text
                             style={[
@@ -635,12 +640,14 @@ export default function CampaignsScreen() {
                                     ? t.colors.tone_primary
                                     : t.colors.text_secondary,
                                 fontWeight: "600",
+                                flexShrink: 1,
                               },
                             ]}
                           >
                             {strategy}
                             {settingsCooldown.isInCooldown ? " · Cooldown" : ""}
                           </Text>
+                          <SFSymbol name="chevron.right" size={10} color={t.colors.text_tertiary} />
                         </TouchableOpacity>
                       </View>
                       <DenseMetricLine
@@ -1110,7 +1117,7 @@ const styles = StyleSheet.create({
   },
   cardHeader: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
   leadRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  switchWell: { minWidth: 42, alignItems: "flex-start", justifyContent: "center" },
+  switchWell: { minWidth: 64, minHeight: layout.minTap, alignItems: "center", justifyContent: "center" },
   titleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   metaRow: {
     flexDirection: "row",
@@ -1120,6 +1127,8 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   budgetChip: {
+    minHeight: layout.minTap,
+    minWidth: layout.minTap,
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
@@ -1127,6 +1136,16 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 4,
+  },
+  strategyButton: {
+    minHeight: layout.minTap,
+    minWidth: layout.minTap,
+    maxWidth: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: spacing.xs,
+    flexShrink: 1,
   },
   placementTaps: {
     flexDirection: "row",
