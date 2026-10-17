@@ -45,8 +45,6 @@ import {
   fetchOverviewActiveSearchTerms,
   fetchOverviewActiveKeywords,
   fetchOverviewActiveAdGroups,
-  fetchKeywordDailyAggregate,
-  fetchSearchTermDailyAggregate,
   type TopBookRow,
 } from "@/src/lib/queries";
 import { fetchBidEngineStatus } from "@/src/lib/mutations";
@@ -67,7 +65,6 @@ import {
   bootstrapToCampaignMetrics,
   bootstrapToRoyalties,
   bootstrapToTopBooks,
-  fetchAggregatedCampaigns,
   fetchDashboardBootstrap,
   tryFetchMobileOverview,
   nestDashboardProfileIds,
@@ -164,7 +161,6 @@ import {
   kdpRoyaltiesOnDate,
 } from "@/src/lib/homePeriod";
 import {
-  ADS_ENGINE_FUNNEL_TIMEOUT_MS,
   CAMPAIGNS_LIST_TIMEOUT_MS,
   HOME_QUERY_TIMEOUT_MS,
   TARGETING_QUERY_TIMEOUT_MS,
@@ -374,6 +370,7 @@ export default function OverviewScreen() {
     [portfolioProfileIds, profiles],
   );
   const [refreshing, setRefreshing] = useState(false);
+  const refreshInFlightRef = useRef(false);
   const contentWidth = Math.max(280, viewportWidth - PAGE_PAD * 2);
   const chartWidth = Math.max(240, contentWidth - 32);
   const heroChartWidth = Math.max(240, contentWidth - 36);
@@ -488,14 +485,6 @@ export default function OverviewScreen() {
   });
   const fxRates = needsAdsFx ? fxRatesQ.data : undefined;
   const adsEngineFxReady = !needsAdsFx || !!fxRates;
-  const adsEngineCurrencyScopeKey = useMemo(
-    () =>
-      [...profileCurrencyById.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([id, currency]) => `${id}:${currency}`)
-        .join("|"),
-    [profileCurrencyById],
-  );
   // Gross: money-chip country scope for linked reads; Nest all-enabled overview
   // widens to owned kdp_accounts via overviewKdpQueryScope (not legacy links).
   const royaltyScope = useMemo(
@@ -645,33 +634,10 @@ export default function OverviewScreen() {
     ...OVERVIEW_QUERY_CACHE,
   });
 
-  const adminCampaignsQ = useQuery({
-    queryKey: ["dashboard-campaigns", adminFilterUserId, nestProfileIds, dateRange.start, dateRange.end],
-    queryFn: () =>
-      withQueryTimeout(
-        fetchAggregatedCampaigns({
-          startDate: dateRange.start,
-          endDate: dateRange.end,
-          profileIds: nestProfileIds,
-          filterUserId: adminFilterUserId,
-        }),
-      ),
-    enabled: viewingAsAdmin && nestProfileIds.length > 0,
-    ...OVERVIEW_QUERY_CACHE,
-  });
-
   const metricsQ = useQuery({
     queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetrics, scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(scopeProfiles, dateRange.start, dateRange.end)),
     enabled: sellerReady,
-    ...FINANCIAL_QUERY_CACHE,
-    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
-    refetchIntervalInBackground: false,
-  });
-  const adsWidgetMetricsQ = useQuery({
-    queryKey: ["overview-ads-market-metrics", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
-    queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(adsWidgetProfileIds, dateRange.start, dateRange.end)),
-    enabled: sellerReady && selectedAdsMarket != null && adsWidgetProfileIds.length > 0,
     ...FINANCIAL_QUERY_CACHE,
     refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
     refetchIntervalInBackground: false,
@@ -739,54 +705,6 @@ export default function OverviewScreen() {
       ((kdpQueryReady || (viewingAsAdmin && scopeProfiles.length > 0)) &&
         kdpRoyaltiesQueryAllowed(royaltyScope) &&
         String(primaryCurrency || "").toUpperCase() === "USD"),
-    ...OVERVIEW_QUERY_CACHE,
-  });
-  useQuery({
-    queryKey: [
-      "ads-engine-keywords-daily",
-      adsWidgetProfileIds,
-      dateRange.start,
-      dateRange.end,
-      moneyProfileIds,
-      primaryCurrency,
-      adsEngineCurrencyScopeKey,
-      fxRatesQ.dataUpdatedAt,
-    ],
-    queryFn: () =>
-      withQueryTimeout(
-        fetchKeywordDailyAggregate(adsWidgetProfileIds, dateRange.start, dateRange.end, {
-          moneyProfileIds: adsWidgetProfileIds,
-          displayCurrency: primaryCurrency,
-          profileCurrencyById,
-          fxRates,
-        }),
-        ADS_ENGINE_FUNNEL_TIMEOUT_MS,
-      ),
-    enabled: sellerReady && adsWidgetProfileIds.length > 0 && adsEngineFxReady,
-    ...OVERVIEW_QUERY_CACHE,
-  });
-  useQuery({
-    queryKey: [
-      "ads-engine-search-terms-daily",
-      adsWidgetProfileIds,
-      dateRange.start,
-      dateRange.end,
-      moneyProfileIds,
-      primaryCurrency,
-      adsEngineCurrencyScopeKey,
-      fxRatesQ.dataUpdatedAt,
-    ],
-    queryFn: () =>
-      withQueryTimeout(
-        fetchSearchTermDailyAggregate(adsWidgetProfileIds, dateRange.start, dateRange.end, {
-          moneyProfileIds: adsWidgetProfileIds,
-          displayCurrency: primaryCurrency,
-          profileCurrencyById,
-          fxRates,
-        }),
-        ADS_ENGINE_FUNNEL_TIMEOUT_MS,
-      ),
-    enabled: sellerReady && adsWidgetProfileIds.length > 0 && adsEngineFxReady,
     ...OVERVIEW_QUERY_CACHE,
   });
 
@@ -1179,19 +1097,15 @@ export default function OverviewScreen() {
       }),
     [metricRows, moneyProfileIds, primaryCurrency, profileCurrencyById, fxRates],
   );
-  const adsWidgetMetricRows = useMemo(
-    () => (selectedAdsMarket ? (adsWidgetMetricsQ.data ?? []) : metricRows),
-    [adsWidgetMetricsQ.data, metricRows, selectedAdsMarket],
-  );
   const adsWidgetDaily = useMemo(
     () =>
-      aggregateDailyMetricsForDisplay(adsWidgetMetricRows, {
+      aggregateDailyMetricsForDisplay(metricRows, {
         moneyProfileIds: adsWidgetProfileIds,
         displayCurrency: primaryCurrency,
         profileCurrencyById,
         fxRates,
       }),
-    [adsWidgetMetricRows, adsWidgetProfileIds, primaryCurrency, profileCurrencyById, fxRates],
+    [metricRows, adsWidgetProfileIds, primaryCurrency, profileCurrencyById, fxRates],
   );
   const marketplaceAdsRows = useMemo(
     () => {
@@ -2057,42 +1971,21 @@ export default function OverviewScreen() {
 
 
   const onRefresh = async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     setRefreshing(true);
-    // Soft-invalidate every scope-bound root so PTR cannot leave sibling
-    // widgets on a prior period/profile while named refetches catch up.
-    await invalidateScopeBoundQueries(queryClient);
-    const primary: Promise<unknown>[] = [
-      snapshotQ.refetch(),
-      metricsQ.refetch(),
-      ...(selectedAdsMarket ? [adsWidgetMetricsQ.refetch()] : []),
-      royaltiesQ.refetch(),
-      syncLogsQ.refetch(),
-      royaltySetup.refetchAccounts(),
-    ];
-    if (viewingAsAdmin) primary.push(bootstrapQ.refetch());
-    await Promise.all(primary);
-    setRefreshing(false);
-    if (belowFoldReady) {
-      void Promise.all([
-        prevMetricsQ.refetch(),
-        prevRoyaltiesQ.refetch(),
-        topBooksQ.refetch(),
-        bleedersQ.refetch(),
-        searchTermsPulseQ.refetch(),
-        adGroupsQ.refetch(),
-        adminCampaignsQ.refetch(),
-        topCampaignsQ.refetch(),
-        placementMixQ.refetch(),
-        todayMetricsQ.refetch(),
-        allBudgetsQ.refetch(),
-        budgetHistoryQ.refetch(),
-        ruleExecsQ.refetch(),
-        rulesQ.refetch(),
-        todayStatsQ.refetch(),
-        bidBotStatusQ.refetch(),
-      ]);
-    } else if (kdpOnlyDashboard) {
-      void Promise.all([prevRoyaltiesQ.refetch(), topBooksQ.refetch(), formatRoyaltiesQ.refetch()]);
+    try {
+      // Invalidation already refetches enabled observers. Explicit refetches
+      // would repeat those reads and also bypass disabled/admin query gates.
+      const reads: Promise<unknown>[] = [invalidateScopeBoundQueries(queryClient)];
+      if (homeVisible && !guestMode && !viewingAsAdmin && user?.id) {
+        reads.push(royaltySetup.refetchAccounts());
+      }
+      reads.push(queryClient.invalidateQueries({ queryKey: ["bid-engine-status"], refetchType: "active" }));
+      await Promise.all(reads);
+    } finally {
+      refreshInFlightRef.current = false;
+      setRefreshing(false);
     }
   };
 
@@ -2417,6 +2310,7 @@ export default function OverviewScreen() {
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineKeywordsPage
+                      active={homeVisible}
                       profileIds={adsWidgetProfileIds}
                       start={dateRange.start}
                       end={dateRange.end}
@@ -2437,6 +2331,7 @@ export default function OverviewScreen() {
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineSearchTermsPage
+                      active={homeVisible}
                       profileIds={adsWidgetProfileIds}
                       start={dateRange.start}
                       end={dateRange.end}
