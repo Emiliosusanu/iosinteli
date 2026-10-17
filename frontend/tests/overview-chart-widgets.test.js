@@ -145,8 +145,10 @@ test("Overview wires Ads Engine + KDP Royalties swipe widgets", () => {
   assert.match(widgets, /Paperback/);
   assert.match(widgets, /onImportRoyalties/);
   assert.match(overview, /royaltySetup\.openCollection/);
-  assert.match(overview, /ads-engine-keywords-daily/);
-  assert.match(overview, /ads-engine-search-terms-daily/);
+  assert.doesNotMatch(overview, /ads-engine-keywords-daily/);
+  assert.doesNotMatch(overview, /ads-engine-search-terms-daily/);
+  assert.match(widgets, /ads-engine-keywords-daily/);
+  assert.match(widgets, /ads-engine-search-terms-daily/);
   assert.match(charts, /Swipe a day to inspect/);
   assert.match(charts, /blocksExternalGesture/);
   assert.match(charts, /periodTotals/);

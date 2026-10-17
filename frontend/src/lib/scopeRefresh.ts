@@ -33,6 +33,7 @@ export const SCOPE_BOUND_QUERY_PREFIXES = [
   "bleeding-keywords",
   "overview-ad-groups",
   "overview-kdp-ingest",
+  "overview-budget-history",
   "sync-logs",
   "all-campaign-budgets",
   "rule-executions-dashboard",
