@@ -60,7 +60,7 @@ export function syncChrome(input: {
   now?: number;
 }): { state: SyncChromeState; compact: string; label: string } {
   if (input.failedRefresh) {
-    return { state: "failed", compact: "Failed", label: "Couldn't refresh" };
+    return { state: "failed", compact: "Refresh failed", label: "Dashboard refresh failed. Retry loading dashboard data" };
   }
   if (input.refreshing) {
     return { state: "refreshing", compact: "Refreshing", label: "Refreshing" };

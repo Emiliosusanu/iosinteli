@@ -34,7 +34,7 @@ import { PressableScale } from "@/src/components/Motion";
 import { countryFlagEmoji, marketPillCountryLabel, sortMarketCountryCodes } from "@/src/lib/accountsUi";
 import { formatDateRangeLabel, rangePresets } from "@/src/lib/format";
 import { playHaptic } from "@/src/lib/hapticPolicy";
-import { motion } from "@/src/lib/motion";
+import { motion, type SyncChromeState } from "@/src/lib/motion";
 import {
   dashboard,
   layout,
@@ -126,6 +126,7 @@ export type OverviewHeaderV3Props = {
   onCurrencyPress?: () => void;
   syncColor: string;
   syncCompact: string;
+  syncState?: SyncChromeState;
   syncA11y: string;
   onSyncPress: () => void;
   periodLabel: string;
@@ -967,6 +968,7 @@ export function OverviewHeaderV3({
   onCurrencyPress,
   syncColor,
   syncCompact,
+  syncState,
   syncA11y,
   onSyncPress,
   periodLabel,
@@ -1078,7 +1080,9 @@ export function OverviewHeaderV3({
   /** Busy refresh uses lateral stadium glow — not the wide orange "Refreshing" pill. */
   const showRefreshGlow = syncBusy || periodRefreshing;
   const syncFailedOrStale =
-    syncCompact === "Failed" || syncCompact.toLocaleLowerCase().includes("stale");
+    syncState === "failed" || syncState === "stale" ||
+    syncCompact === "Failed" || syncCompact === "Refresh failed" ||
+    syncCompact.toLocaleLowerCase().includes("stale");
   const [syncReadyVisible, setSyncReadyVisible] = useState(false);
   const wasRefreshBusy = useRef(false);
   const readyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1219,6 +1223,7 @@ export function OverviewHeaderV3({
                 onPress={onSyncPress}
                 accessibilityRole="button"
                 accessibilityLabel={syncA11y}
+                containerStyle={{ minHeight: 46, flexShrink: 1, minWidth: 0, marginLeft: "auto" }}
                 hitSlop={6}
                 style={[
                   styles.syncChip,
@@ -1226,7 +1231,6 @@ export function OverviewHeaderV3({
                   {
                     borderColor: syncColor + "33",
                     backgroundColor: syncColor + "18",
-                    marginLeft: "auto",
                     ...chrome.shadow.stadium,
                   },
                 ]}
@@ -1491,7 +1495,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
   },
   syncChipWide: {
-    maxWidth: 120,
+    maxWidth: 140,
     paddingHorizontal: 12,
   },
   syncDot: {

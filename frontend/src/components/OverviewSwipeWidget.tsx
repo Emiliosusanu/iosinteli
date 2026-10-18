@@ -270,11 +270,35 @@ function AnimatedDot({
   );
 }
 
-export function SwipeEmpty({ message, t }: { message: string; t: Theme }) {
+export function SwipeEmpty({ message, t, kind = "info" }: {
+  message: string;
+  t: Theme;
+  kind?: "info" | "loading" | "error" | "timeout" | "offline";
+}) {
+  const isError = kind === "error" || kind === "timeout" || kind === "offline";
+  const icon = kind === "loading"
+    ? "arrow.triangle.2.circlepath"
+    : kind === "offline"
+      ? "wifi.slash"
+      : kind === "timeout"
+        ? "clock"
+        : isError
+          ? "exclamationmark.triangle"
+          : "info.circle";
+  const color = isError ? t.colors.tone_warning : t.colors.text_tertiary;
   return (
-    <Text style={[t.typography.meta, { color: t.colors.text_secondary, paddingVertical: t.spacing.sm }]}>
-      {message}
-    </Text>
+    <View
+      testID={`overview-widget-status-${kind}`}
+      style={styles.statusRow}
+      accessibilityLiveRegion={kind === "loading" || isError ? "polite" : "none"}
+    >
+      <View style={[styles.statusIcon, { backgroundColor: color + "18" }]}>
+        <SFSymbol name={icon} size={15} color={color} />
+      </View>
+      <Text style={[t.typography.meta, styles.statusText, { color: t.colors.text_secondary }]}>
+        {message}
+      </Text>
+    </View>
   );
 }
 
@@ -310,5 +334,23 @@ const styles = StyleSheet.create({
   dot: {
     height: 7,
     borderRadius: 3.5,
+  },
+  statusRow: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+  },
+  statusIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  statusText: {
+    flex: 1,
+    lineHeight: 18,
   },
 });
