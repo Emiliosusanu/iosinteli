@@ -1268,7 +1268,7 @@ export function OverviewHeaderV3({
             canCustom={canCustom}
             onCustomPress={() => setCustomOpen(true)}
             periodMotion={periodMotion}
-            suppressRefreshingCaption={showRefreshGlow}
+            suppressRefreshingCaption
           />
 
           <PeriodToggle

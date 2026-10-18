@@ -45,6 +45,7 @@ test("OverviewHeaderV3 uses lateral stadium glow instead of wide Refreshing pill
   assert.match(header, /showRefreshGlow/);
   assert.doesNotMatch(header, /<SyncDot|function SyncDot/);
   assert.match(header, /suppressRefreshingCaption/);
+  assert.match(header, /suppressRefreshingCaption\s*\n/);
   assert.match(header, /expo-linear-gradient/);
   // Quiet primary edge shadow, not neon wash / warning-success animation.
   assert.match(header, /duration: 2100/);

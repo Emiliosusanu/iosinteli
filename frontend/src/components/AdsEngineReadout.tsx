@@ -11,10 +11,11 @@ export function AdsEngineReadout({ label, impressions, clicks, orders, acos }: {
   acos: number | null;
 }) {
   const t = useTheme();
+  const count = (value: number) => !Number.isFinite(value) ? "—" : Math.abs(value) < 1000 ? formatInt(value) : formatCompact(value);
   const metrics = [
-    { label: "Impr", name: "Impressions", value: formatCompact(impressions), exact: formatInt(impressions), color: t.colors.tone_product },
-    { label: "Clicks", name: "Clicks", value: formatCompact(clicks), exact: formatInt(clicks), color: t.colors.tone_primary },
-    { label: "Orders", name: "Orders", value: formatCompact(orders), exact: formatInt(orders), color: t.colors.tone_good },
+    { label: "Impr", name: "Impressions", value: count(impressions), exact: formatInt(impressions), color: t.colors.tone_product },
+    { label: "Clicks", name: "Clicks", value: count(clicks), exact: formatInt(clicks), color: t.colors.tone_primary },
+    { label: "Orders", name: "Orders", value: count(orders), exact: formatInt(orders), color: t.colors.tone_good },
     { label: "ACoS", name: "ACoS", value: acos == null ? "—" : formatPercent(acos), exact: acos == null ? "unavailable" : formatPercent(acos), color: t.colors.tone_warning },
   ];
   return (

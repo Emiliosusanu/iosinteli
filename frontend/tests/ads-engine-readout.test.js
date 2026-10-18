@@ -33,6 +33,7 @@ test('actual readout keeps four distinct metrics and exact spoken counts, includ
     for (const text of metric.children) assert.equal(text.props.numberOfLines, undefined, 'Dynamic Type must wrap rather than ellipsize');
   }
   assert.equal(metrics[3].children[1].children[0], '—');
+  assert.equal(metrics[2].children[1].children[0], '0', 'A count is not a money amount with decimal places');
 });
 
 test('period and inspected-day readouts render finite ACoS without changing the value', () => {
