@@ -189,6 +189,7 @@ import { useSponsoredMarketplaceIndex } from "@/src/lib/bookMarketplacesQuery";
 import { markPerf } from "@/src/lib/perf";
 import { debugIngest } from "@/src/lib/debugIngest";
 import { EmptyState, PrimaryButton, RetryState, StatBadge } from "@/src/components/Primitives";
+import { TopBar } from "@/src/components/TopBar";
 import { NetProfitChart, type ChartDaySelection } from "@/src/components/Charts";
 import { emptyKdpFormatRoyaltyRange } from "@/src/lib/kdpFormatRoyalties";
 import { InteliAdsIcon } from "@/src/components/InteliAdsIcon";
@@ -1570,7 +1571,6 @@ export default function OverviewScreen() {
 
   const { scrollY: headerScrollY, onScroll: onHeaderScroll, scrollEventThrottle } =
     useOverviewHeaderScroll();
-  const [headerCustomOpen, setHeaderCustomOpen] = useState(false);
 
   // ── Header freshness: Ads sync time + KDP data recency ──
   const kdpDaily = royaltyRange?.daily ?? [];
@@ -2000,6 +2000,7 @@ export default function OverviewScreen() {
   if (selectedProfileIds.length === 0 && (profilesLoading || profilesFetching) && !profilesWaitExpired) {
     return (
       <AppScreen>
+        <TopBar title="Home" showProfileSelector={false} />
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
           <ActivityIndicator color={t.colors.tone_primary} />
         </View>
@@ -2010,10 +2011,11 @@ export default function OverviewScreen() {
   if (selectedProfileIds.length === 0 && (profilesLoading || profilesFetching) && profilesWaitExpired) {
     return (
       <AppScreen>
+        <TopBar title="Home" showProfileSelector={false} />
         <View style={{ flex: 1, justifyContent: "center" }}>
           <RetryState
             title="Accounts are taking too long"
-            subtitle="Showing cached data"
+            subtitle="Account availability hasn't been verified."
             onRetry={() => {
               setProfilesWaitExpired(false);
               void refetchProfiles();
@@ -2027,10 +2029,11 @@ export default function OverviewScreen() {
   if (selectedProfileIds.length === 0 && (profilesError || adminUsersError)) {
     return (
       <AppScreen>
+        <TopBar title="Home" showProfileSelector={false} />
         <View style={{ flex: 1, justifyContent: "center" }}>
           <RetryState
             title="Couldn't load accounts"
-            subtitle={adminUsersError ? "Sign out and sign in again." : "Try again in a moment."}
+            subtitle="Account availability couldn't be verified. Try again in a moment."
             onRetry={() => void refetchProfiles()}
           />
         </View>
@@ -2099,8 +2102,6 @@ export default function OverviewScreen() {
     onPeriodModeChange: applyPeriodMode,
     dateRange,
     onCustomRange: applyCustomRange,
-    customOpen: headerCustomOpen,
-    onCustomOpenChange: setHeaderCustomOpen,
   };
 
   return (

@@ -139,7 +139,7 @@ function bookRowKey(item: TopBookRow, index: number) {
 export default function ProductsScreen() {
   const t = useTheme();
   const router = useRouter();
-  const { profiles, selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource } = useApp();
+  const { profiles, selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource, profilesLoading, profilesFetching, profilesError, refetchProfiles } = useApp();
   const { guestMode, user } = useAuth();
   const yesterdayYmd = useMemo(() => {
     const today = parseDateOnly(toDateString(new Date()));
@@ -397,6 +397,18 @@ export default function ProductsScreen() {
   });
   const showSearchCount = search.trim().length > 0 && !showBlockingSpinner;
 
+
+  if (enabledSelectedIds.length === 0 && !kdpOnlyBooks && (profilesLoading || profilesFetching || profilesError)) {
+    return (
+      <AppScreen>
+        <TopBar />
+        {profilesError ? (
+          <RetryState title="Couldn't load accounts" subtitle="Account availability couldn't be verified."
+            onRetry={() => void refetchProfiles()} retrying={profilesFetching} />
+        ) : <ScreenSpinner />}
+      </AppScreen>
+    );
+  }
 
   if (enabledSelectedIds.length === 0 && !kdpOnlyBooks) {
     return (
