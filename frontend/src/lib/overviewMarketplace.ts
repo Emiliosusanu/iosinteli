@@ -1,4 +1,5 @@
 import type { AmazonProfile } from "./types";
+import { normalizeFlagCountryCode } from "./accountsUi.ts";
 
 export type OverviewMarketplaceSelection = string | null;
 
@@ -13,7 +14,8 @@ export function sharedMarketProfileIds(
 }
 
 function normalizedCountry(value: unknown): string {
-  return String(value ?? "").trim().toUpperCase();
+  const raw = String(value ?? "").trim().toUpperCase();
+  return normalizeFlagCountryCode(raw) ?? raw;
 }
 
 function profileAliases(profile: Pick<AmazonProfile, "id" | "profile_id">): string[] {
