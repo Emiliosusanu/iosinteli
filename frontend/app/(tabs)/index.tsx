@@ -1054,32 +1054,24 @@ export default function OverviewScreen() {
     : sellerReady && !metricsWaiting && Array.isArray(metricsQ.data) && !metricsQ.isError && fxMoneyReady;
   const financeComplete = kdpReady && adsReady;
   // Keep paintable ads rows while royalties are still catching up — never blank both forever.
-  const topCampaigns = periodLoading && !viewingAsAdmin
-    ? []
-    : activeOverviewRows(overviewRecommendationRows(topCampaignsQ.data, topCampaignsQ.isError), "campaign");
-  const topBooksRaw = periodLoading && !viewingAsAdmin
-    ? []
-    : overviewRecommendationRows(adminTopBooks ?? topBooksQ.data, viewingAsAdmin ? bootstrapQ.isError : topBooksQ.isError);
+  const topCampaigns = activeOverviewRows(overviewRecommendationRows(topCampaignsQ.data, topCampaignsQ.isError), "campaign");
+  const topBooksRaw = overviewRecommendationRows(adminTopBooks ?? topBooksQ.data, viewingAsAdmin ? bootstrapQ.isError : topBooksQ.isError);
   const topBooks = useMemo(() => {
     if (!viewingAsAdmin) return topBooksRaw;
     if (activeBookKeysQ.isPending) return [];
     if (activeBookKeysQ.isError || !activeBookKeysQ.data) return topBooksRaw;
     return filterTopBooksByRecentActivity(topBooksRaw, activeBookKeysQ.data);
   }, [topBooksRaw, viewingAsAdmin, activeBookKeysQ.isPending, activeBookKeysQ.isError, activeBookKeysQ.data]);
-  const bleeders = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(overviewRecommendationRows(bleedersQ.data, bleedersQ.isError), "keyword");
+  const bleeders = activeOverviewRows(overviewRecommendationRows(bleedersQ.data, bleedersQ.isError), "keyword");
   const loading = periodLoading;
-  const campaignsPhase = metricsWaiting && !viewingAsAdmin
-    ? "loading"
-    : homeWidgetStatus({
+  const campaignsPhase = homeWidgetStatus({
     isPending: topCampaignsQ.isPending,
     isError: topCampaignsQ.isError,
     data: topCampaignsQ.data,
     error: topCampaignsQ.error,
     isEmpty: topCampaigns.length === 0,
   });
-  const booksPhase = (metricsWaiting || royaltiesWaiting) && !viewingAsAdmin
-    ? "loading"
-    : viewingAsAdmin && activeBookKeysQ.isPending
+  const booksPhase = viewingAsAdmin && activeBookKeysQ.isPending && !bootstrapQ.isError
       ? "loading"
     : homeWidgetStatus({
     isPending: viewingAsAdmin ? bootstrapQ.isPending : topBooksQ.isPending,
@@ -1293,9 +1285,9 @@ export default function OverviewScreen() {
     sales: number | null;
     net: number | null;
   }>({ periodKey: "", royalties: null, spend: null, sales: null, net: null });
-  if (paintedFinanceRef.current.periodKey !== activePeriodKey) {
+  if (paintedFinanceRef.current.periodKey !== homeReadContextKey) {
     paintedFinanceRef.current = {
-      periodKey: activePeriodKey,
+      periodKey: homeReadContextKey,
       royalties: null,
       spend: null,
       sales: null,
@@ -1402,9 +1394,9 @@ export default function OverviewScreen() {
     [budgetHistoryDaily, todayStr, totalDailyBudget],
   );
   const monthlyBudgetForecastReady = budgetHistoryQ.isSuccess;
-  const placementMix = periodLoading && !viewingAsAdmin ? [] : overviewRecommendationRows(placementMixQ.data, placementMixQ.isError);
-  const searchTerms = periodLoading && !viewingAsAdmin ? [] : overviewRecommendationRows(searchTermsPulseQ.data, searchTermsPulseQ.isError);
-  const adGroups = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(overviewRecommendationRows(adGroupsQ.data, adGroupsQ.isError), "adGroup");
+  const placementMix = overviewRecommendationRows(placementMixQ.data, placementMixQ.isError);
+  const searchTerms = overviewRecommendationRows(searchTermsPulseQ.data, searchTermsPulseQ.isError);
+  const adGroups = activeOverviewRows(overviewRecommendationRows(adGroupsQ.data, adGroupsQ.isError), "adGroup");
 
   const [blurBooks, setBlurBooks] = useState(false);
 
@@ -1834,22 +1826,24 @@ export default function OverviewScreen() {
     router.push("/more/sync" as Href);
   };
   const scrubbing = chartDay != null;
-  const heroRoyalties = scrubbing
+  const royaltiesFailed = viewingAsAdmin ? bootstrapQ.isError : royaltiesQ.isError;
+  const adsFailed = viewingAsAdmin ? bootstrapQ.isError : metricsQ.isError;
+  const heroRoyalties = royaltiesFailed ? null : scrubbing
     ? chartDay.royalties
     : !royaltiesWaiting && kdpRoyaltiesAreKnown(totals.royalties)
       ? totals.royalties
       : paintedFinance.royalties;
-  const heroSpend = scrubbing
+  const heroSpend = adsFailed ? null : scrubbing
     ? chartDay.spend
     : !metricsWaiting && adsReady
       ? totals.spend
       : paintedFinance.spend;
-  const heroSales = scrubbing
+  const heroSales = adsFailed ? null : scrubbing
     ? chartDay.sales
     : !metricsWaiting && adsReady
       ? totals.sales
       : paintedFinance.sales;
-  const heroNet = scrubbing
+  const heroNet = royaltiesFailed || adsFailed ? null : scrubbing
     ? chartDay.net
     : netRoyalties({ kdpRoyalties: heroRoyalties, adsSpend: heroSpend })
       ?? paintedFinance.net
@@ -1885,8 +1879,6 @@ export default function OverviewScreen() {
   const profitMargin = heroNet == null || !royaltiesKnown || !heroRoyalties
     ? null
     : safeDivide(heroNet, heroRoyalties) * 100;
-  const royaltiesFailed = !viewingAsAdmin && royaltiesQ.isError;
-  const adsFailed = !viewingAsAdmin && metricsQ.isError;
   const metricMode = scrubbing ? "scrub" as const : "crossfade" as const;
   const formatHeroGross = useCallback(
     (n: number) => formatCurrency(n, primaryCurrency, { compact: true }),
@@ -2365,6 +2357,8 @@ export default function OverviewScreen() {
                       profileCurrencyById={profileCurrencyById}
                       fxRates={fxRates}
                       fxReady={adsEngineFxReady}
+                      fxFailed={fxRatesQ.isError}
+                      onRetryFx={() => void fxRatesQ.refetch()}
                       fxRatesUpdatedAt={fxRatesQ.dataUpdatedAt}
                     />
                   ),
@@ -2386,6 +2380,8 @@ export default function OverviewScreen() {
                       profileCurrencyById={profileCurrencyById}
                       fxRates={fxRates}
                       fxReady={adsEngineFxReady}
+                      fxFailed={fxRatesQ.isError}
+                      onRetryFx={() => void fxRatesQ.refetch()}
                       fxRatesUpdatedAt={fxRatesQ.dataUpdatedAt}
                     />
                   ),

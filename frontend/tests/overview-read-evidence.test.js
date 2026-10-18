@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { optionalMetric } from '../src/lib/metricEvidence.ts';
-import { overviewReadLabel, overviewRecommendationRows } from '../src/lib/overviewReadEvidence.ts';
+import { overviewReadLabel, overviewReadFeedback, overviewRecommendationRows } from '../src/lib/overviewReadEvidence.ts';
 import { keywordsSpendingNoOrders, searchTermsSpendNoOrders, booksSpendingNoAdSales,
   campaignsHighAcos, campaignsLowAcos, compareByAcosAscending } from '../src/lib/overviewWidgets.ts';
 
@@ -53,6 +53,15 @@ test('failed cached recommendations disappear without mutating the retained quer
   assert.deepEqual(rows, [{ id: 'old' }]);
   assert.deepEqual(overviewRecommendationRows(rows, false), rows);
   assert.deepEqual(overviewRecommendationRows(undefined, false), []);
+});
+
+test('widget chrome never labels hydrated cache as a new server read', () => {
+  const input = { updatedAt: Date.now(), fetching: false, failed: false };
+  assert.equal(overviewReadFeedback(input).label, 'Cached data');
+  assert.equal(overviewReadFeedback({ ...input, received: false }).label, 'Cached data');
+  assert.match(overviewReadFeedback({ ...input, received: true }).label, /^Server read/);
+  assert.equal(overviewReadFeedback({ ...input, fetching: true }).label, '');
+  assert.equal(overviewReadFeedback({ ...input, failed: true }).label, 'Cached data · update failed');
 });
 
 test('actual ad-group verdict does not invent profit, zeros or period absence', () => {

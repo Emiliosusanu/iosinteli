@@ -58,7 +58,7 @@ export function AppScreen({
             left: 0,
             right: 0,
             height: insets.top,
-            backgroundColor: t.colors.ambient_top,
+            backgroundColor: t.colors.background_primary,
             zIndex: 1,
           }}
         />

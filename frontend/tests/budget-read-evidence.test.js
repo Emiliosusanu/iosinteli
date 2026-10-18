@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { budgetUsageLabel } from '../src/lib/budgetPresentation.ts';
 
 const source = readFileSync(new URL('../src/components/OverviewOpsCards.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('cards.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -17,7 +18,7 @@ const context = { exports: {}, React: { createElement: element },
   StyleSheet: { absoluteFill: {} }, View: 'View', Text: 'Text', styles: {},
   Svg: 'Svg', Defs: 'Defs', SvgGradient: 'Gradient', Stop: 'Stop', Path: 'Path', Circle: 'Circle',
   VerifiedValue: 'VerifiedValue', OpsCardShell: 'Shell', OverviewCardHeader: 'Header', StatusChip: 'Chip',
-  formatCurrency: n => '$' + n.toFixed(2),
+  formatCurrency: n => '$' + n.toFixed(2), budgetUsageLabel,
 };
 vm.runInNewContext(ts.transpileModule(fragment, { compilerOptions: {
   jsx: ts.JsxEmit.React, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
@@ -56,4 +57,15 @@ test('Home passes independent query evidence, not only a fallback amount', () =>
   const home = readFileSync(new URL('../app/(tabs)/index.tsx', import.meta.url), 'utf8');
   assert.match(home, /budgetKnown=\{allBudgetsQ\.isSuccess\}/);
   assert.match(home, /todayFailed=\{viewingAsAdmin \? bootstrapQ\.isError : todayMetricsQ\.isError\}/);
+});
+
+test('positive fractional usage and over-budget usage are not misrepresented as zero or capped at100%', () => {
+  for (const usedPct of [0.001, 0.13, 0.9]) {
+    const result = render({ spent: usedPct, budget: 100, usedPct });
+    assert.match(result.text, /<1%/);
+    assert.match(result.chips[0], /<1% used/);
+  }
+  assert.match(render({ spent: 150, budget: 100, usedPct: 150 }).text, /150%/);
+  assert.equal(budgetUsageLabel(0), '0%');
+  for (const value of [NaN, Infinity, -1]) assert.equal(budgetUsageLabel(value), '—');
 });

@@ -76,7 +76,7 @@ test("shared cards and grouped lists use the 20pt elevated chrome", () => {
 test("iOS status-bar shield tracks insets without padding, input interception or accessible decoration", () => {
   let top = 59;
   let os = "ios";
-  let color = "#E8F1FF";
+  let color = "#FFFFFF";
   const exports = {};
   vm.runInNewContext(ts.transpileModule(ambient, {
     compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.CommonJS },
@@ -86,11 +86,11 @@ test("iOS status-bar shield tracks insets without padding, input interception or
       if (name === "react") return { default: { createElement: (type, props, ...children) => ({ type, props, children }) } };
       if (name === "react-native") return { Platform: { get OS() { return os; } }, View: "View", StyleSheet: { absoluteFill: {} } };
       if (name === "react-native-safe-area-context") return { useSafeAreaInsets: () => ({ top }) };
-      if (name.endsWith("/theme")) return { useTheme: () => ({ colors: { ambient_top: color } }) };
+      if (name.endsWith("/theme")) return { useTheme: () => ({ colors: { ambient_top: "#0000FF", background_primary: color } }) };
       return {};
     },
   });
-  for (color of ["#E8F1FF", "#0C1830"]) {
+  for (color of ["#FFFFFF", "#000000"]) {
     for (top of [0, 20, 59]) {
       const child = { type: "List" };
       const tree = exports.AppScreen({ children: child, testID: "screen" });
@@ -102,6 +102,7 @@ test("iOS status-bar shield tracks insets without padding, input interception or
       assert.equal(shield.props.testID, "screen-status-bar-shield");
       assert.equal(shield.props.style.height, top);
       assert.equal(shield.props.style.backgroundColor, color);
+      assert.equal(shield.props.style.backgroundColor, tree.props.style.backgroundColor, "No contrasting blue status strip");
       assert.equal(shield.props.style.position, "absolute");
       assert.ok(shield.props.style.zIndex > 0);
       assert.equal(shield.props.style.top, 0);

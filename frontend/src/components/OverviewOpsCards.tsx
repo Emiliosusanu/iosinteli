@@ -20,6 +20,7 @@ import { PressableScale, StaggerReveal, VerifiedValue } from "@/src/components/M
 import { autoModeLabel } from "@/src/lib/bidBotContract";
 import { formatCurrency, formatInt, formatPercent } from "@/src/lib/format";
 import { motion } from "@/src/lib/motion";
+import { budgetUsageLabel } from "@/src/lib/budgetPresentation";
 import { dashboard, useReduceMotion, useTheme, type Theme } from "@/src/lib/theme";
 
 const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
@@ -167,7 +168,7 @@ export function OverviewBudgetArc({
   const reduceMotion = useReduceMotion();
   const ratioKnown = spent != null && budget != null && budget > 0;
   const pct = ratioKnown ? Math.min(1, Math.max(0, spent / budget)) : 0;
-  const pctDisplay = ratioKnown ? Math.round(pct * 100) : null;
+  const pctDisplay = ratioKnown ? budgetUsageLabel((spent / budget) * 100) : "—";
   const reveal = useSharedValue(reduceMotion ? 1 : 0);
   const cx = size / 2;
   const cy = size / 2;
@@ -243,7 +244,7 @@ export function OverviewBudgetArc({
           style={[t.typography.title3, { color: t.colors.text_primary, fontWeight: "700", fontVariant: ["tabular-nums"] }]}
         />
         <Text style={{ fontSize: 15, color, fontWeight: "700", marginTop: 2, fontVariant: ["tabular-nums"] }}>
-          {pctDisplay == null ? "—" : `${pctDisplay}%`}
+          {pctDisplay}
         </Text>
       </View>
     </Animated.View>
@@ -313,7 +314,7 @@ export function OverviewBudgetTodayCard({
               <StatusChip label={todayFailed ? "Update unavailable" : "Waiting for server"} tone="inactive" t={t} />
             ) : budgetKnown && budget > 0 ? (
               <StatusChip
-                label={danger ? "Almost gone" : `${Math.round(usedPct)}% used · ${formatCurrency(remaining, currency, { compact: true })} left`}
+                label={danger ? "Almost gone" : `${budgetUsageLabel(usedPct)} used · ${formatCurrency(remaining, currency, { compact: true })} left`}
                 tone={danger ? "danger" : usedPct >= 80 ? "warning" : "primary"}
                 t={t}
               />
