@@ -38,6 +38,8 @@ type AdsEngineMoneyProps = {
   profileCurrencyById: ReadonlyMap<string, string>;
   fxRates?: Map<string, number>;
   fxReady: boolean;
+  fxFailed?: boolean;
+  onRetryFx?: () => void;
   fxRatesUpdatedAt: number;
 };
 
@@ -256,6 +258,8 @@ export function AdsEngineKeywordsPage({
   profileCurrencyById,
   fxRates,
   fxReady,
+  fxFailed = false,
+  onRetryFx,
   fxRatesUpdatedAt,
 }: {
   profileIds: string[];
@@ -297,6 +301,11 @@ export function AdsEngineKeywordsPage({
   });
   const series = useMemo(() => dailyToAdsEngineSeries(q.data?.daily ?? []), [q.data]);
 
+  if (!fxReady) return (
+    <TouchableOpacity onPress={onRetryFx} disabled={!fxFailed} accessibilityRole="button" accessibilityLabel="Retry currency conversion">
+      <SwipeEmpty kind={fxFailed ? "error" : "loading"} message={fxFailed ? "Currency conversion unavailable. Tap to retry." : "Loading currency conversion…"} t={t} />
+    </TouchableOpacity>
+  );
   if (q.isPending) return <SwipeEmpty kind="loading" message="Loading keyword funnel…" t={t} />;
   if (q.isError) {
     return (
@@ -332,6 +341,8 @@ export function AdsEngineSearchTermsPage({
   profileCurrencyById,
   fxRates,
   fxReady,
+  fxFailed = false,
+  onRetryFx,
   fxRatesUpdatedAt,
 }: {
   profileIds: string[];
@@ -373,6 +384,11 @@ export function AdsEngineSearchTermsPage({
   });
   const series = useMemo(() => dailyToAdsEngineSeries(q.data?.daily ?? []), [q.data]);
 
+  if (!fxReady) return (
+    <TouchableOpacity onPress={onRetryFx} disabled={!fxFailed} accessibilityRole="button" accessibilityLabel="Retry currency conversion">
+      <SwipeEmpty kind={fxFailed ? "error" : "loading"} message={fxFailed ? "Currency conversion unavailable. Tap to retry." : "Loading currency conversion…"} t={t} />
+    </TouchableOpacity>
+  );
   if (q.isPending) return <SwipeEmpty kind="loading" message="Loading search-term funnel…" t={t} />;
   if (q.isError) {
     return (

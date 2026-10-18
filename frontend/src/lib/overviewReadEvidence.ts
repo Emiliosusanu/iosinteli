@@ -3,7 +3,8 @@ import type { SyncReadEvidence } from "./syncFeedback";
 export type OverviewReadFeedback = SyncReadEvidence & { label: string };
 
 export function overviewReadFeedback(input: SyncReadEvidence): OverviewReadFeedback {
-  return { ...input, label: input.fetching ? "" : overviewReadLabel(input) };
+  const cachedOnly = input.received !== true && !input.failed && input.updatedAt > 0;
+  return { ...input, label: input.fetching ? "" : cachedOnly ? "Cached data" : overviewReadLabel(input) };
 }
 
 /** A timestamp remains true on an idle screen, unlike a frozen "just now". */
