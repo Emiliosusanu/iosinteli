@@ -122,6 +122,8 @@ function DatePresetList({
         </View>
         <TouchableOpacity
           testID="date-preset-custom"
+          accessibilityRole="button"
+          accessibilityLabel="Apply custom date range"
           onPress={() => {
             if (!/^\d{4}-\d{2}-\d{2}$/.test(customStart) || !/^\d{4}-\d{2}-\d{2}$/.test(customEnd)) return;
             if (customStart > customEnd) return;
@@ -279,7 +281,13 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
           <View style={[styles.sheetFill, { backgroundColor: t.colors.background_secondary }]}>
             <View style={styles.sheetHeader}>
               <Text style={[t.typography.title3, { color: t.colors.text_primary }]}>Date Range</Text>
-              <TouchableOpacity onPress={() => setDateOpen(false)} hitSlop={10}>
+              <TouchableOpacity
+                testID="date-range-done"
+                accessibilityRole="button"
+                accessibilityLabel="Done"
+                onPress={() => setDateOpen(false)}
+                style={styles.dateSheetDone}
+              >
                 <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Done</Text>
               </TouchableOpacity>
             </View>
@@ -307,7 +315,13 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
               <View style={[styles.handle, { backgroundColor: t.colors.separator }]} />
               <View style={styles.sheetHeader}>
                 <Text style={[t.typography.title3, { color: t.colors.text_primary }]}>Date Range</Text>
-                <TouchableOpacity onPress={() => setDateOpen(false)} hitSlop={10}>
+                <TouchableOpacity
+                  testID="date-range-done"
+                  accessibilityRole="button"
+                  accessibilityLabel="Done"
+                  onPress={() => setDateOpen(false)}
+                  style={styles.dateSheetDone}
+                >
                   <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Done</Text>
                 </TouchableOpacity>
               </View>
@@ -1058,9 +1072,20 @@ const styles = StyleSheet.create({
   },
   applyCustom: {
     alignSelf: "flex-start",
+    minWidth: layout.minTap,
+    minHeight: layout.minTap,
+    justifyContent: "center",
+    alignItems: "center",
     borderRadius: dashboard.chipRadius,
     borderCurve: "continuous",
     paddingHorizontal: 12,
     paddingVertical: 8,
+  },
+  dateSheetDone: {
+    minWidth: layout.minTap,
+    minHeight: layout.minTap,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 8,
   },
 });
