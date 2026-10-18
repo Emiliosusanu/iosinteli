@@ -83,5 +83,5 @@ test("value axis uses screen spacing, preserving small values and separated zero
   assert.equal(valueAxisTicks(0, 0, 128).length, 1);
   assert.match(charts, /valueAxisTicks\(min, max, height, inset\)/);
   assert.match(charts, /tick\.labelVisible \? <SvgText/);
-  assert.match(charts, /const leftGutter = 52/);
+  assert.match(charts, /const leftGutter = 44/);
 });

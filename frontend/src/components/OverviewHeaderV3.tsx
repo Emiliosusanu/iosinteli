@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  AppState,
   Modal,
   Platform,
   Pressable,
@@ -35,6 +36,7 @@ import { countryFlagEmoji, marketPillCountryLabel, sortMarketCountryCodes } from
 import { formatDateRangeLabel, rangePresets } from "@/src/lib/format";
 import { playHaptic } from "@/src/lib/hapticPolicy";
 import { motion, type SyncChromeState } from "@/src/lib/motion";
+import { nextSyncFeedback, type SyncFeedbackState, type SyncReadEvidence } from "@/src/lib/syncFeedback";
 import {
   dashboard,
   layout,
@@ -127,6 +129,9 @@ export type OverviewHeaderV3Props = {
   syncColor: string;
   syncCompact: string;
   syncState?: SyncChromeState;
+  syncRead?: SyncReadEvidence;
+  syncReadContextKey?: string;
+  syncVisible?: boolean;
   syncA11y: string;
   onSyncPress: () => void;
   periodLabel: string;
@@ -969,6 +974,9 @@ export function OverviewHeaderV3({
   syncColor,
   syncCompact,
   syncState,
+  syncRead,
+  syncReadContextKey = "",
+  syncVisible = true,
   syncA11y,
   onSyncPress,
   periodLabel,
@@ -1077,34 +1085,32 @@ export function OverviewHeaderV3({
   });
 
   const syncBusy = syncCompact === "Refreshing" || syncCompact === "Syncing";
+  const [foreground, setForeground] = useState(AppState.currentState === "active");
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", state => setForeground(state === "active"));
+    return () => subscription.remove();
+  }, []);
   /** Busy refresh uses lateral stadium glow — not the wide orange "Refreshing" pill. */
-  const showRefreshGlow = syncBusy || periodRefreshing;
+  const showRefreshGlow = syncVisible && foreground && (syncRead?.fetching ?? (syncBusy || periodRefreshing));
   const syncFailedOrStale =
     syncState === "failed" || syncState === "stale" ||
     syncCompact === "Failed" || syncCompact === "Refresh failed" ||
     syncCompact.toLocaleLowerCase().includes("stale");
   const [syncReadyVisible, setSyncReadyVisible] = useState(false);
-  const wasRefreshBusy = useRef(false);
-  const readyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previousRead = useRef<SyncFeedbackState | null>(null);
+  const readFailed = syncFailedOrStale || (syncRead?.failed ?? false);
+  const readUpdatedAt = syncRead?.updatedAt ?? 0;
+  const readReceived = syncRead?.received;
   useEffect(() => {
-    if (readyTimer.current) clearTimeout(readyTimer.current);
-    if (showRefreshGlow) {
-      wasRefreshBusy.current = true;
-      setSyncReadyVisible(false);
-      return;
-    }
-    if (wasRefreshBusy.current && !syncFailedOrStale) {
-      wasRefreshBusy.current = false;
-      setSyncReadyVisible(true);
-      readyTimer.current = setTimeout(() => setSyncReadyVisible(false), reduceMotion ? 700 : 1150);
-    } else {
-      wasRefreshBusy.current = false;
-      setSyncReadyVisible(false);
-    }
-    return () => {
-      if (readyTimer.current) clearTimeout(readyTimer.current);
-    };
-  }, [showRefreshGlow, syncFailedOrStale, reduceMotion]);
+    const next = nextSyncFeedback(previousRead.current, syncReadContextKey, {
+      fetching: showRefreshGlow, failed: readFailed, updatedAt: readUpdatedAt, received: readReceived,
+    }, syncVisible && foreground && expandedInteractive);
+    previousRead.current = next;
+    setSyncReadyVisible(next.phase === "success");
+    if (next.phase !== "success") return;
+    const timer = setTimeout(() => setSyncReadyVisible(false), reduceMotion ? 250 : 700);
+    return () => clearTimeout(timer);
+  }, [expandedInteractive, foreground, readFailed, readReceived, readUpdatedAt, reduceMotion, showRefreshGlow, syncReadContextKey, syncVisible]);
   const syncNeedsLabel =
     !syncBusy &&
     (syncFailedOrStale ||
@@ -1262,7 +1268,7 @@ export function OverviewHeaderV3({
             canCustom={canCustom}
             onCustomPress={() => setCustomOpen(true)}
             periodMotion={periodMotion}
-            suppressRefreshingCaption={showRefreshGlow}
+            suppressRefreshingCaption
           />
 
           <PeriodToggle

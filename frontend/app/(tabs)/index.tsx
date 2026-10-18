@@ -1,5 +1,5 @@
 import { activeOverviewRows } from "@/src/lib/overviewWidgetEligibility";
-import { overviewReadLabel, overviewRecommendationRows } from "@/src/lib/overviewReadEvidence";
+import { overviewReadFeedback, overviewRecommendationRows } from "@/src/lib/overviewReadEvidence";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -11,14 +11,7 @@ import {
   InteractionManager,
   TouchableOpacity,
 } from "react-native";
-import Animated, {
-  Easing,
-  cancelAnimation,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from "react-native-reanimated";
+import Animated from "react-native-reanimated";
 import { AppScreen } from "@/src/components/ScreenAmbient";
 import { adsFxCoveredForDisplay } from "@/src/lib/dailyMetrics";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -141,6 +134,7 @@ import {
 import { FirstReveal, HorizonPane, PressableScale, VerifiedAmount, VerifiedValue } from "@/src/components/Motion";
 import { GestureDetector } from "react-native-gesture-handler";
 import { GlassPanel } from "@/src/components/GlassPanel";
+import { SyncGlowFrame } from "@/src/components/SyncGlowFrame";
 import { syncChrome } from "@/src/lib/motion";
 import { isActiveProfileSyncStale } from "@/src/lib/syncContract";
 import { playHaptic } from "@/src/lib/hapticPolicy";
@@ -983,6 +977,7 @@ export default function OverviewScreen() {
   const adminBleeders = viewingAsAdmin ? bootstrapToBleeders(bootstrapQ.data) : null;
 
   const activePeriodKey = financialPeriodQueryKey(dateRange, scopeProfiles, primaryCurrency);
+  const homeReadContextKey = JSON.stringify([user?.id, viewingAsAdmin ? adminFilterUserId : null, activePeriodKey]);
   const metricsWaiting = sellerReady && periodQueryPending(metricsQ);
   const royaltiesWaiting =
     !viewingAsAdmin && kdpQueryReady && periodQueryPending(royaltiesQ);
@@ -1927,10 +1922,19 @@ export default function OverviewScreen() {
   const marginDisplay = marginDisplayAmount == null
     ? "—"
     : formatPercent(marginDisplayAmount, 0);
-  const financeCaption = loading
+  const financeRead = {
+    fetching: viewingAsAdmin ? bootstrapQ.isFetching : metricsQ.isFetching || (kdpQueryReady && royaltiesQ.isFetching),
+    failed: viewingAsAdmin ? bootstrapQ.isError : royaltiesFailed || adsFailed || !financeComplete,
+    received: viewingAsAdmin ? bootstrapQ.isFetchedAfterMount && bootstrapQ.isSuccess :
+      (!sellerReady || (metricsQ.isFetchedAfterMount && metricsQ.isSuccess)) &&
+      (!kdpQueryReady || (royaltiesQ.isFetchedAfterMount && royaltiesQ.isSuccess)),
+    updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : Math.min(...[
+      ...(sellerReady ? [metricsQ.dataUpdatedAt] : []),
+      ...(kdpQueryReady ? [royaltiesQ.dataUpdatedAt] : []),
+    ], Infinity),
+  };
+  const financeCaption = loading || periodRefreshing
     ? null
-    : periodRefreshing
-      ? "Updating…"
       : !kdpCurrencyComparable
         ? "KDP royalties are in USD; book profit is unavailable in this currency."
       : !kdpReady && !adsReady
@@ -1946,7 +1950,7 @@ export default function OverviewScreen() {
     !loading && adsReady && (heroSales ?? 0) > 0 && breakEvenAcos > 0 && heroAcos != null
       ? toneColor(acosTone(heroAcos, breakEvenAcos), t.colors)
       : t.colors.text_primary;
-  const chartHeight = viewportWidth < 400 ? 138 : Math.max(t.layout.chartHero, 152);
+  const chartHeight = viewportWidth < 400 ? 158 : Math.max(t.layout.chartHero, 158);
   const openBook = useCallback((item: TopBookRow) => {
     const asin = item.asin || item.sku;
     if (!asin) return;
@@ -2139,6 +2143,9 @@ export default function OverviewScreen() {
             syncColor={syncColor}
             syncCompact={syncCompactLabel}
             syncState={syncPresentation.state}
+            syncRead={financeRead}
+            syncReadContextKey={homeReadContextKey}
+            syncVisible={homeVisible}
             syncA11y={
               syncPresentation.state === "failed"
                 ? syncPresentation.label
@@ -2182,7 +2189,15 @@ export default function OverviewScreen() {
           ) : null}
           <FirstReveal>
           <HorizonPane watchKey={activePeriodKey}>
-          <DashboardSurface tone="hero" style={{ marginBottom: dashboard.sectionGap, overflow: "hidden" }} testID="home-net-royalties">
+          <View style={{ marginBottom: dashboard.sectionGap }}>
+          <SyncGlowFrame
+            read={financeRead}
+            contextKey={homeReadContextKey}
+            visible={homeVisible}
+            radius={dashboard.cardRadius}
+            testID="home-gross-sync-glow"
+          >
+          <DashboardSurface tone="hero" style={{ overflow: "hidden" }} testID="home-net-royalties">
             <PressableScale
               onPress={chartDay ? clearChartSelection : undefined}
               disabled={!chartDay}
@@ -2229,7 +2244,6 @@ export default function OverviewScreen() {
             </View>
             <GrossStatusSlot
               caption={financeCaption}
-              updating={periodRefreshing}
               t={t}
             />
             {(royaltiesFailed || adsFailed) && (
@@ -2303,11 +2317,13 @@ export default function OverviewScreen() {
               </View>
             )}
           </DashboardSurface>
+          </SyncGlowFrame>
+          </View>
           </HorizonPane>
           </FirstReveal>
 
           {(sellerReady || viewingAsAdmin) ? (
-            <OverviewSwipeWidget
+            <OverviewSwipeWidget readContextKey={homeReadContextKey} active={homeVisible}
               key={`home-ads-engine-${adsWidgetProfileIds.join("|")}`}
               staggerIndex={1}
               testID="home-ads-engine"
@@ -2318,7 +2334,7 @@ export default function OverviewScreen() {
                 {
                   key: "ads-campaigns",
                   label: "Campaigns",
-                  freshness: overviewReadLabel({ updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : metricsQ.dataUpdatedAt, fetching: viewingAsAdmin ? bootstrapQ.isFetching : metricsQ.isFetching, failed: viewingAsAdmin ? bootstrapQ.isError : metricsQ.isError }),
+                  freshness: overviewReadFeedback({ updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : metricsQ.dataUpdatedAt, received: viewingAsAdmin ? bootstrapQ.isFetchedAfterMount && bootstrapQ.isSuccess : metricsQ.isFetchedAfterMount && metricsQ.isSuccess, fetching: viewingAsAdmin ? bootstrapQ.isFetching : metricsQ.isFetching, failed: (viewingAsAdmin ? bootstrapQ.isError : metricsQ.isError) || !adsEngineFxReady }),
                   meta: breakEvenAcos != null ? formatBreakEvenHint(breakEvenAcos) || undefined : undefined,
                   content: (
                     <AdsEngineCampaignsPage
@@ -2379,10 +2395,11 @@ export default function OverviewScreen() {
           ) : null}
 
           {(sellerReady || viewingAsAdmin || kdpOnlyDashboard) && kdpCurrencyComparable ? (
-            <OverviewSwipeWidget
+            <OverviewSwipeWidget readContextKey={homeReadContextKey} active={homeVisible}
               key={`home-kdp-royalties-format-${scopeProfiles.join("|")}`}
               staggerIndex={2}
               testID="home-kdp-royalties-format"
+              freshness={overviewReadFeedback({ updatedAt: formatRoyaltiesQ.dataUpdatedAt, received: formatRoyaltiesQ.isFetchedAfterMount && formatRoyaltiesQ.isSuccess, fetching: formatRoyaltiesQ.isFetching, failed: formatRoyaltiesQ.isError })}
               title="Format mix"
               icon="royalties"
               actionLabel={royaltySetup.collectionLabel}
@@ -2408,11 +2425,11 @@ export default function OverviewScreen() {
           ) : null}
 
           {(sellerReady || viewingAsAdmin) ? (
-          <OverviewSwipeWidget
+          <OverviewSwipeWidget readContextKey={homeReadContextKey} active={homeVisible}
             key={`home-campaigns-${adsWidgetProfileIds.join("|")}`}
             staggerIndex={3}
             testID="home-campaigns"
-            freshness={overviewReadLabel({ updatedAt: topCampaignsQ.dataUpdatedAt, fetching: topCampaignsQ.isFetching, failed: topCampaignsQ.isError })}
+            freshness={overviewReadFeedback({ updatedAt: topCampaignsQ.dataUpdatedAt, received: topCampaignsQ.isFetchedAfterMount && topCampaignsQ.isSuccess, fetching: topCampaignsQ.isFetching, failed: topCampaignsQ.isError })}
             title="Campaigns"
             icon="campaigns"
             inlinePageLabel
@@ -2500,7 +2517,7 @@ export default function OverviewScreen() {
               {
                 key: "ad-groups",
                 hint: "Within the top 80 enabled ad groups by spend",
-                freshness: overviewReadLabel({ updatedAt: adGroupsQ.dataUpdatedAt, fetching: adGroupsQ.isFetching, failed: adGroupsQ.isError }),
+                freshness: overviewReadFeedback({ updatedAt: adGroupsQ.dataUpdatedAt, received: adGroupsQ.isFetchedAfterMount && adGroupsQ.isSuccess, fetching: adGroupsQ.isFetching, failed: adGroupsQ.isError }),
                 onAction: () => router.push({ pathname: "/more/ad-groups", params: { flow: String(Date.now()), enabledParents: "1", sort: "acos-high" } }),
                 label: "Ad groups",
                 hidden: adGroupsQ.isPending && !adGroupsQ.data,
@@ -2597,7 +2614,7 @@ export default function OverviewScreen() {
           ) : null}
 
           {(bleedersQ.isError || searchTermsPulseQ.isError || keywordBleeders.length > 0 || keywordHighAcos.length > 0 || termSpendNoOrders.length > 0 || termLowAcos.length > 0) ? (
-            <OverviewSwipeWidget
+            <OverviewSwipeWidget readContextKey={homeReadContextKey} active={homeVisible}
               key={`w4-${adsWidgetProfileIds.join("|")}`}
               staggerIndex={4}
               title="Keywords & search"
@@ -2610,7 +2627,7 @@ export default function OverviewScreen() {
                   key: "kw-unavailable",
                   label: "Keywords",
                   hidden: !bleedersQ.isError,
-                  freshness: overviewReadLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
+                  freshness: overviewReadFeedback({ updatedAt: bleedersQ.dataUpdatedAt, received: bleedersQ.isFetchedAfterMount && bleedersQ.isSuccess, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
                   onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "all" } }),
                   content: <TouchableOpacity onPress={() => void bleedersQ.refetch()} accessibilityRole="button"><SwipeEmpty kind="error" message="Couldn't load keywords. Tap to retry." t={t} /></TouchableOpacity>,
                 },
@@ -2619,13 +2636,13 @@ export default function OverviewScreen() {
                   label: "Search terms",
                   hidden: !searchTermsPulseQ.isError,
                   actionLabel: "Search terms",
-                  freshness: overviewReadLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
+                  freshness: overviewReadFeedback({ updatedAt: searchTermsPulseQ.dataUpdatedAt, received: searchTermsPulseQ.isFetchedAfterMount && searchTermsPulseQ.isSuccess, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
                   onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "all", enabledParents: "1" } }),
                   content: <TouchableOpacity onPress={() => void searchTermsPulseQ.refetch()} accessibilityRole="button"><SwipeEmpty kind="error" message="Couldn't load search terms. Tap to retry." t={t} /></TouchableOpacity>,
                 },
                 {
                   key: "kw-no-orders",
-                  freshness: overviewReadLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
+                  freshness: overviewReadFeedback({ updatedAt: bleedersQ.dataUpdatedAt, received: bleedersQ.isFetchedAfterMount && bleedersQ.isSuccess, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
                   hint: "Within the top 80 enabled keywords by spend",
                   onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "wasting", sort: "spend" } }),
                   label: "Keywords",
@@ -2647,7 +2664,7 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "kw-high-acos",
-                  freshness: overviewReadLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
+                  freshness: overviewReadFeedback({ updatedAt: bleedersQ.dataUpdatedAt, received: bleedersQ.isFetchedAfterMount && bleedersQ.isSuccess, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
                   hint: "Within the top 80 enabled keywords by spend",
                   onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "all" } }),
                   label: "High ACoS",
@@ -2669,7 +2686,7 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "st-no-orders",
-                  freshness: overviewReadLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
+                  freshness: overviewReadFeedback({ updatedAt: searchTermsPulseQ.dataUpdatedAt, received: searchTermsPulseQ.isFetchedAfterMount && searchTermsPulseQ.isSuccess, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
                   hint: "Within the top 80 enabled-parent terms by spend",
                   actionLabel: "Search terms",
                   onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "wasted", enabledParents: "1" } }),
@@ -2692,7 +2709,7 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "st-low-acos",
-                  freshness: overviewReadLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
+                  freshness: overviewReadFeedback({ updatedAt: searchTermsPulseQ.dataUpdatedAt, received: searchTermsPulseQ.isFetchedAfterMount && searchTermsPulseQ.isSuccess, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
                   hint: "Within the top 80 enabled-parent terms by spend",
                   actionLabel: "Search terms",
                   onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "converting", sort: "acos", enabledParents: "1" } }),
@@ -2718,7 +2735,7 @@ export default function OverviewScreen() {
           ) : null}
 
           {placementMix.length > 0 || placementCampaigns.length > 0 ? (
-            <OverviewSwipeWidget
+            <OverviewSwipeWidget readContextKey={homeReadContextKey} active={homeVisible}
               key={`w5-${adsWidgetProfileIds.join("|")}`}
               staggerIndex={5}
               title="Placement mix"
@@ -2728,14 +2745,14 @@ export default function OverviewScreen() {
                 {
                   key: "mix",
                   label: "",
-                  freshness: overviewReadLabel({ updatedAt: placementMixQ.dataUpdatedAt, fetching: placementMixQ.isFetching, failed: placementMixQ.isError }),
+                  freshness: overviewReadFeedback({ updatedAt: placementMixQ.dataUpdatedAt, received: placementMixQ.isFetchedAfterMount && placementMixQ.isSuccess, fetching: placementMixQ.isFetching, failed: placementMixQ.isError }),
                   hidden: placementMix.length === 0,
                   content: <PlacementMixV2 rows={placementMix} currency={primaryCurrency} t={t} />,
                 },
                 {
                   key: "campaigns",
                   label: "Campaign placement",
-                  freshness: overviewReadLabel({ updatedAt: topCampaignsQ.dataUpdatedAt, fetching: topCampaignsQ.isFetching, failed: topCampaignsQ.isError }),
+                  freshness: overviewReadFeedback({ updatedAt: topCampaignsQ.dataUpdatedAt, received: topCampaignsQ.isFetchedAfterMount && topCampaignsQ.isSuccess, fetching: topCampaignsQ.isFetching, failed: topCampaignsQ.isError }),
                   hidden: placementCampaigns.length === 0,
                   content: (
                     <WidgetRowList>
@@ -2757,11 +2774,11 @@ export default function OverviewScreen() {
             />
           ) : null}
 
-          <OverviewSwipeWidget
+          <OverviewSwipeWidget readContextKey={homeReadContextKey} active={homeVisible}
             key={`w6-${scopeProfiles.join("|")}`}
             staggerIndex={6}
             title="Top books"
-            freshness={overviewReadLabel({ updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : topBooksQ.dataUpdatedAt, fetching: viewingAsAdmin ? bootstrapQ.isFetching : topBooksQ.isFetching, failed: viewingAsAdmin ? bootstrapQ.isError : topBooksQ.isError })}
+            freshness={overviewReadFeedback({ updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : topBooksQ.dataUpdatedAt, received: viewingAsAdmin ? bootstrapQ.isFetchedAfterMount && bootstrapQ.isSuccess : topBooksQ.isFetchedAfterMount && topBooksQ.isSuccess, fetching: viewingAsAdmin ? bootstrapQ.isFetching : topBooksQ.isFetching, failed: viewingAsAdmin ? bootstrapQ.isError : topBooksQ.isError })}
             icon="books"
             inlinePageLabel
             action={
@@ -2974,92 +2991,20 @@ function AnimatedValueText({
 }
 
 /**
- * A permanently reserved status lane keeps the Gross card and every widget
- * below it anchored while a background refresh starts or finishes. The glow
- * animates only opacity/scale, so it never participates in layout.
+ * Reserve a compact caption lane; long errors may expand for accessibility.
+ * Updating feedback is an overlay on the card, never a moving text badge.
  */
-function GrossStatusSlot({
-  caption,
-  updating,
-  t,
-}: {
-  caption: string | null;
-  updating: boolean;
-  t: any;
-}) {
-  const reduceMotion = useReduceMotion();
-  const breath = useSharedValue(0);
-
-  useEffect(() => {
-    cancelAnimation(breath);
-    if (!caption || !updating || reduceMotion) {
-      breath.set(caption && updating ? 0.55 : 0);
-      return;
-    }
-    breath.set(0);
-    breath.set(
-      withRepeat(
-        withTiming(1, {
-          duration: 1500,
-          easing: Easing.inOut(Easing.ease),
-        }),
-        -1,
-        true,
-      ),
-    );
-    return () => cancelAnimation(breath);
-  }, [breath, caption, reduceMotion, updating]);
-
-  const glowStyle = useAnimatedStyle(() => ({
-    opacity: 0.14 + breath.get() * 0.18,
-    transform: [{ scale: 1 + breath.get() * 0.035 }],
-  }));
-
+function GrossStatusSlot({ caption, t }: { caption: string | null; t: ReturnType<typeof useTheme> }) {
   return (
     <View style={styles.grossStatusSlot} pointerEvents="none">
       {caption ? (
-        <View
+        <Text
           testID="home-gross-status"
-          style={[
-            styles.grossStatusPill,
-            {
-              backgroundColor: updating
-                ? t.colors.tone_primary + "12"
-                : t.colors.background_tertiary,
-              borderColor: updating
-                ? t.colors.tone_primary + "38"
-                : t.colors.separator,
-            },
-          ]}
+          accessibilityLiveRegion="polite"
+          style={[t.typography.caption2, { color: t.colors.text_secondary }]}
         >
-          {updating ? (
-            <Animated.View
-              testID="home-gross-status-glow"
-              style={[
-                StyleSheet.absoluteFill,
-                styles.grossStatusGlow,
-                { backgroundColor: t.colors.tone_primary },
-                glowStyle,
-              ]}
-            />
-          ) : null}
-          {updating ? (
-            <View style={[styles.grossStatusDot, { backgroundColor: t.colors.tone_primary }]} />
-          ) : null}
-          <Text
-            style={[
-              t.typography.caption2,
-              {
-                color: updating ? t.colors.tone_primary : t.colors.text_tertiary,
-                fontWeight: "700",
-              },
-            ]}
-            numberOfLines={1}
-            ellipsizeMode="tail"
-          >
-            {caption}
-          </Text>
-        </View>
+          {caption}
+        </Text>
       ) : null}
     </View>
   );
@@ -3290,33 +3235,11 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   grossStatusSlot: {
-    height: 34,
-    marginTop: 6,
+    minHeight: 18,
+    marginTop: 3,
     alignItems: "flex-start",
     justifyContent: "center",
     overflow: "visible",
-  },
-  grossStatusPill: {
-    position: "relative",
-    maxWidth: "100%",
-    minHeight: 26,
-    borderRadius: 999,
-    borderCurve: "continuous",
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    overflow: "visible",
-  },
-  grossStatusGlow: {
-    borderRadius: 999,
-  },
-  grossStatusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
   },
   stickyHeader: {
     paddingHorizontal: PAGE_PAD,

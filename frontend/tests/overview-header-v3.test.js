@@ -45,6 +45,7 @@ test("OverviewHeaderV3 uses lateral stadium glow instead of wide Refreshing pill
   assert.match(header, /showRefreshGlow/);
   assert.doesNotMatch(header, /<SyncDot|function SyncDot/);
   assert.match(header, /suppressRefreshingCaption/);
+  assert.match(header, /suppressRefreshingCaption\s*\n/);
   assert.match(header, /expo-linear-gradient/);
   // Quiet primary edge shadow, not neon wash / warning-success animation.
   assert.match(header, /duration: 2100/);
@@ -71,7 +72,10 @@ test("OverviewHeaderV3 moves from primary loading glow to brief green ready stat
   assert.match(header, /failedOrStale/);
   assert.match(header, /home-header-glow-primary/);
   assert.match(header, /home-header-glow-ready/);
-  assert.match(header, /setTimeout\(\(\) => setSyncReadyVisible\(false\), reduceMotion \? 700 : 1150\)/);
+  assert.match(header, /setTimeout\(\(\) => setSyncReadyVisible\(false\), reduceMotion \? 250 : 700\)/);
+  assert.match(header, /nextSyncFeedback\(previousRead.current, syncReadContextKey/);
+  assert.match(header, /syncVisible && foreground && expandedInteractive/);
+  assert.doesNotMatch(header, /wasRefreshBusy/);
   assert.match(header, /StadiumSideGlow/);
   assert.match(header, /EASE_GLOW/);
   assert.doesNotMatch(header, /warningColor|greenMix|home-header-glow-amber/);
@@ -156,15 +160,20 @@ test("OverviewHeaderV3 market pill uses separated unclipped flag tiles", () => {
   assert.match(home, /multiCountryCodes/);
 });
 
-test("Gross updating status breathes inside a fixed lane without moving widgets", () => {
+test("Gross reserves a compact caption lane without an updating label or dot", () => {
   assert.match(home, /function GrossStatusSlot/);
   assert.match(home, /testID="home-gross-status"/);
-  assert.match(home, /testID="home-gross-status-glow"/);
-  assert.match(home, /height:\s*34/);
-  assert.match(home, /withRepeat/);
-  assert.match(home, /transform:\s*\[\{ scale:/);
+  assert.doesNotMatch(home, /testID="home-gross-status-glow"|grossStatusDot/);
+  assert.match(home, /minHeight:\s*18/);
   assert.match(home, /caption=\{financeCaption\}/);
-  assert.match(home, /updating=\{periodRefreshing\}/);
+  assert.doesNotMatch(home, /updating=\{periodRefreshing\}/);
+});
+
+test("Gross uses border feedback instead of an Updating layout label", () => {
+  assert.match(home, /SyncGlowFrame/);
+  assert.match(home, /contextKey=\{homeReadContextKey\}/);
+  assert.match(home, /failed: viewingAsAdmin \? bootstrapQ.isError/);
+  assert.doesNotMatch(home, /periodRefreshing\s*\? "Updating…"/);
 });
 
 test("OverviewHeaderV3 lets users select all markets or one detected marketplace", () => {

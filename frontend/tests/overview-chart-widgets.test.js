@@ -166,7 +166,8 @@ test("Gross KDP uses known totals only and widens when all enabled Ads are cover
   // Format mix shares the same royalty account scope as Gross — never a separate invented total.
   assert.match(overview, /fetchKdpFormatRoyaltiesRange\(royaltyProfiles/);
   assert.match(overview, /kdpScope: kdpQueryScope/);
-  assert.match(charts, /selectedAcos == null \? "—"/);
+  const readout = readFileSync(new URL("../src/components/AdsEngineReadout.tsx", import.meta.url), "utf8");
+  assert.match(readout, /acos == null \? "—"/);
 });
 
 test("Ads Engine + Format Mix charts never call hooks after empty early returns", () => {
@@ -187,10 +188,9 @@ test("Ads Engine + Format Mix charts never call hooks after empty early returns"
 
 test("Ads Engine readout keeps Impr / Clicks / Orders / ACoS tags", () => {
   const adsBlock = charts.slice(charts.indexOf("export function AdsEngineChart"));
-  assert.match(adsBlock, /Impr \$\{formatCompact\(selectedImpr\)\}/);
-  assert.match(adsBlock, /Clicks \$\{formatCompact\(selectedClicks\)\}/);
-  assert.match(adsBlock, /Orders \$\{formatInt\(selectedOrders\)\}/);
-  assert.match(adsBlock, /ACoS \$\{/);
+  assert.match(adsBlock, /<AdsEngineReadout label=\{selectedLabel\} impressions=\{selectedImpr\} clicks=\{selectedClicks\} orders=\{selectedOrders\} acos=\{selectedAcos\}/);
+  const readout = readFileSync(new URL("../src/components/AdsEngineReadout.tsx", import.meta.url), "utf8");
+  for (const label of ["Impr", "Clicks", "Orders", "ACoS"]) assert.ok(readout.includes(`label: "${label}"`));
 });
 
 test("Compact widget rows keep spend, orders, clicks and ACoS labels", () => {

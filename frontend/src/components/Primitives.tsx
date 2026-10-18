@@ -662,8 +662,7 @@ export function SectionHeader({
   );
 }
 
-// ─── StatBadge: compact delta / trend pill. Up and down are deliberately
-// different shapes so direction reads without relying on color alone. ─────────
+// Trend direction remains explicit without relying on color alone.
 export function StatBadge({
   delta,
   inverse = false,
@@ -687,17 +686,17 @@ export function StatBadge({
         flexDirection: "row",
         alignItems: "center",
         alignSelf: "flex-start",
-        backgroundColor: up ? col + "22" : "transparent",
-        borderWidth: up ? 0 : StyleSheet.hairlineWidth * 2,
-        borderColor: col,
-        paddingHorizontal: up ? 7 : 6,
-        paddingVertical: up ? 3 : 2,
-        borderRadius: up ? 999 : 6,
+        backgroundColor: col + "18",
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: col + "38",
+        paddingHorizontal: 7,
+        paddingVertical: 3,
+        borderRadius: 999,
         gap: 2,
       }}
     >
       <SFSymbol name={up ? "arrow.up.right" : "arrow.down.right"} size={10} color={col} />
-      <Text style={[t.typography.caption1, { color: col, fontWeight: "700", fontVariant: ["tabular-nums"] }]}>
+      <Text style={[t.typography.caption1, { color: col, fontWeight: "600", fontVariant: ["tabular-nums"] }]}>
         {Math.abs(delta).toFixed(1)}%{suffix ? ` ${suffix}` : ""}
       </Text>
     </View>
