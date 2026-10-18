@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { rangePresets } from '../src/lib/format.ts';
+import { rangePresets as makeRangePresets } from '../src/lib/format.ts';
+
+const rangePresets = () => makeRangePresets(new Date(2026, 9, 18, 12));
 
 const source = readFileSync(new URL('../src/components/TopBar.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('TopBar.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
