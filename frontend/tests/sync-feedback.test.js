@@ -126,3 +126,32 @@ test('actual frame never shows green on failure/cancellation/context change and 
   frame.unmount();
   assert.equal(frame.timers.size, 0);
 });
+
+test('actual header ready effect uses the same evidence and suppresses offscreen/context/failure success', () => {
+  const source = readFileSync(new URL('../src/components/OverviewHeaderV3.tsx', import.meta.url), 'utf8');
+  const start = source.indexOf('  const previousRead = useRef');
+  const block = source.slice(start, source.indexOf('  const syncNeedsLabel', start));
+  const compiled = ts.transpileModule(block, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  let cleanup, green = false;
+  const previous = { current: null }, timers = new Map();
+  const context = {
+    useRef: () => previous, useEffect: f => { cleanup?.(); cleanup = f(); }, nextSyncFeedback,
+    setSyncReadyVisible: value => { green = value; },
+    setTimeout: f => { const id = Symbol(); timers.set(id, f); return id; }, clearTimeout: id => timers.delete(id),
+    syncReadContextKey: 'US/week', syncFailedOrStale: false, reduceMotion: false,
+    showRefreshGlow: false, syncVisible: true, foreground: true, expandedInteractive: true, syncRead: idle,
+  };
+  const update = changes => { Object.assign(context, changes); vm.runInNewContext(compiled, { ...context }); return green; };
+  assert.equal(update({}), false);
+  update({ showRefreshGlow: true });
+  assert.equal(update({ showRefreshGlow: false, syncRead: { ...idle, updatedAt: 200 } }), true);
+  assert.equal(timers.size, 1);
+  update({ showRefreshGlow: true });
+  assert.equal(timers.size, 0);
+  assert.equal(update({ showRefreshGlow: false, syncReadContextKey: 'All/month', syncRead: { ...idle, updatedAt: 300 } }), false);
+  update({ showRefreshGlow: true });
+  assert.equal(update({ showRefreshGlow: false, syncFailedOrStale: true, syncRead: { ...idle, updatedAt: 400 } }), false);
+  update({ showRefreshGlow: true, syncFailedOrStale: false });
+  assert.equal(update({ showRefreshGlow: false, foreground: false, syncRead: { ...idle, updatedAt: 500 } }), false);
+  cleanup?.();
+});

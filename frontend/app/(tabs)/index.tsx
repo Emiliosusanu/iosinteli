@@ -1922,6 +1922,17 @@ export default function OverviewScreen() {
   const marginDisplay = marginDisplayAmount == null
     ? "—"
     : formatPercent(marginDisplayAmount, 0);
+  const financeRead = {
+    fetching: viewingAsAdmin ? bootstrapQ.isFetching : metricsQ.isFetching || (kdpQueryReady && royaltiesQ.isFetching),
+    failed: viewingAsAdmin ? bootstrapQ.isError : royaltiesFailed || adsFailed || !financeComplete,
+    received: viewingAsAdmin ? bootstrapQ.isFetchedAfterMount && bootstrapQ.isSuccess :
+      (!sellerReady || (metricsQ.isFetchedAfterMount && metricsQ.isSuccess)) &&
+      (!kdpQueryReady || (royaltiesQ.isFetchedAfterMount && royaltiesQ.isSuccess)),
+    updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : Math.min(...[
+      ...(sellerReady ? [metricsQ.dataUpdatedAt] : []),
+      ...(kdpQueryReady ? [royaltiesQ.dataUpdatedAt] : []),
+    ], Infinity),
+  };
   const financeCaption = loading || periodRefreshing
     ? null
       : !kdpCurrencyComparable
@@ -2132,6 +2143,9 @@ export default function OverviewScreen() {
             syncColor={syncColor}
             syncCompact={syncCompactLabel}
             syncState={syncPresentation.state}
+            syncRead={financeRead}
+            syncReadContextKey={homeReadContextKey}
+            syncVisible={homeVisible}
             syncA11y={
               syncPresentation.state === "failed"
                 ? syncPresentation.label
@@ -2177,17 +2191,7 @@ export default function OverviewScreen() {
           <HorizonPane watchKey={activePeriodKey}>
           <View style={{ marginBottom: dashboard.sectionGap }}>
           <SyncGlowFrame
-            read={{
-              fetching: viewingAsAdmin ? bootstrapQ.isFetching : metricsQ.isFetching || (kdpQueryReady && royaltiesQ.isFetching),
-              failed: viewingAsAdmin ? bootstrapQ.isError : royaltiesFailed || adsFailed || !financeComplete,
-              received: viewingAsAdmin ? bootstrapQ.isFetchedAfterMount && bootstrapQ.isSuccess :
-                (!sellerReady || (metricsQ.isFetchedAfterMount && metricsQ.isSuccess)) &&
-                (!kdpQueryReady || (royaltiesQ.isFetchedAfterMount && royaltiesQ.isSuccess)),
-              updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : Math.min(...[
-                ...(sellerReady ? [metricsQ.dataUpdatedAt] : []),
-                ...(kdpQueryReady ? [royaltiesQ.dataUpdatedAt] : []),
-              ], Infinity),
-            }}
+            read={financeRead}
             contextKey={homeReadContextKey}
             visible={homeVisible}
             radius={dashboard.cardRadius}

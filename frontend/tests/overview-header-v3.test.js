@@ -71,7 +71,10 @@ test("OverviewHeaderV3 moves from primary loading glow to brief green ready stat
   assert.match(header, /failedOrStale/);
   assert.match(header, /home-header-glow-primary/);
   assert.match(header, /home-header-glow-ready/);
-  assert.match(header, /setTimeout\(\(\) => setSyncReadyVisible\(false\), reduceMotion \? 700 : 1150\)/);
+  assert.match(header, /setTimeout\(\(\) => setSyncReadyVisible\(false\), reduceMotion \? 250 : 700\)/);
+  assert.match(header, /nextSyncFeedback\(previousRead.current, syncReadContextKey/);
+  assert.match(header, /syncVisible && foreground && expandedInteractive/);
+  assert.doesNotMatch(header, /wasRefreshBusy/);
   assert.match(header, /StadiumSideGlow/);
   assert.match(header, /EASE_GLOW/);
   assert.doesNotMatch(header, /warningColor|greenMix|home-header-glow-amber/);
