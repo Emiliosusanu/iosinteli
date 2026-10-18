@@ -1,4 +1,5 @@
 import { activeOverviewRows } from "@/src/lib/overviewWidgetEligibility";
+import { overviewReadLabel, overviewRecommendationRows } from "@/src/lib/overviewReadEvidence";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -41,11 +42,9 @@ import {
   fetchTodayExecutionStats,
   fetchHourlyMetrics,
   fetchPlacementMixRange,
-  fetchSearchTerms,
+  fetchOverviewActiveSearchTerms,
   fetchOverviewActiveKeywords,
   fetchOverviewActiveAdGroups,
-  fetchKeywordDailyAggregate,
-  fetchSearchTermDailyAggregate,
   type TopBookRow,
 } from "@/src/lib/queries";
 import { fetchBidEngineStatus } from "@/src/lib/mutations";
@@ -66,7 +65,6 @@ import {
   bootstrapToCampaignMetrics,
   bootstrapToRoyalties,
   bootstrapToTopBooks,
-  fetchAggregatedCampaigns,
   fetchDashboardBootstrap,
   tryFetchMobileOverview,
   nestDashboardProfileIds,
@@ -132,7 +130,6 @@ import {
 } from "@/src/components/OverviewOpsCards";
 import { DashboardSurface } from "@/src/components/DashboardSurface";
 import {
-  OverviewHeaderCompactSticky,
   OverviewHeaderV3,
   useOverviewHeaderScroll,
   type OverviewPeriodMode,
@@ -164,12 +161,12 @@ import {
   kdpRoyaltiesOnDate,
 } from "@/src/lib/homePeriod";
 import {
-  ADS_ENGINE_FUNNEL_TIMEOUT_MS,
   CAMPAIGNS_LIST_TIMEOUT_MS,
   HOME_QUERY_TIMEOUT_MS,
   TARGETING_QUERY_TIMEOUT_MS,
   homeWidgetStatus,
   queryStillWaiting,
+  withAbortableQueryTimeout,
   withQueryTimeout,
 } from "@/src/lib/queryTimeout";
 import {
@@ -214,7 +211,6 @@ import {
   booksRoyaltyScopeForSelection,
   enabledSelectedProfileIds,
   overviewKdpQueryScope,
-  overviewPortfolioProfileIds,
 } from "@/src/lib/booksProfileScope";
 import { overviewAdsProfileIdsForMarket, overviewMarketplaceLabel } from "@/src/lib/overviewMarketplace";
 import { buildMonthlyBudgetForecast } from "@/src/lib/monthlyBudgetForecast";
@@ -331,6 +327,7 @@ export default function OverviewScreen() {
     adminFilterUserId,
     profiles,
     selectedProfileIds,
+    selectMarket,
     selectedProfiles,
     primaryCurrency,
     dateRange,
@@ -341,11 +338,10 @@ export default function OverviewScreen() {
   const [setupMemory, setSetupMemory] = useState<SetupProgressMemory | null>(null);
   const viewingUser = adminUsers.find((candidate) => candidate.id === adminFilterUserId);
   const viewingAsAdmin = !!adminFilterUserId;
-  // Overview Ads catalog is full-portfolio; money triad (Gross/Net/spend + Ads Engine)
-  // matches web: enabled ∩ display-currency profiles → owned-active linked KDP.
+  // All Home reads follow the same enabled selection as the list screens.
   const portfolioProfileIds = useMemo(
-    () => sortedProfileIds(overviewPortfolioProfileIds(profiles)),
-    [profiles],
+    () => sortedProfileIds(enabledSelectedProfileIds(profiles, selectedProfileIds)),
+    [profiles, selectedProfileIds],
   );
   // USD chip with US+CA enabled → all enabled Ads ids; Nest/client convert via market FX.
   const moneyProfileIds = useMemo(
@@ -353,16 +349,14 @@ export default function OverviewScreen() {
     [profiles, portfolioProfileIds],
   );
   const adsMarketCountries = useMemo(() => {
-    const inMoneyScope = new Set(moneyProfileIds);
     return multiCountryCodes(
-      profiles.filter((profile) => inMoneyScope.has(profile.id) || inMoneyScope.has(profile.profile_id)),
+      profiles,
       { onlyEnabled: true },
     );
-  }, [moneyProfileIds, profiles]);
-  const [selectedAdsMarket, setSelectedAdsMarket] = useState<string | null>(null);
-  useEffect(() => {
-    if (selectedAdsMarket && !adsMarketCountries.includes(selectedAdsMarket)) setSelectedAdsMarket(null);
-  }, [adsMarketCountries, selectedAdsMarket]);
+  }, [profiles]);
+  const selectedCountries = useMemo(() => multiCountryCodes(selectedProfiles, { onlyEnabled: true }), [selectedProfiles]);
+  const selectedAdsMarket = selectedCountries.length === 1 ? selectedCountries[0] : null;
+  const setSelectedAdsMarket = selectMarket;
   const adsWidgetProfileIds = useMemo(
     () => sortedProfileIds(overviewAdsProfileIdsForMarket(moneyProfileIds, profiles, selectedAdsMarket)),
     [moneyProfileIds, profiles, selectedAdsMarket],
@@ -377,6 +371,7 @@ export default function OverviewScreen() {
     [portfolioProfileIds, profiles],
   );
   const [refreshing, setRefreshing] = useState(false);
+  const refreshInFlightRef = useRef(false);
   const contentWidth = Math.max(280, viewportWidth - PAGE_PAD * 2);
   const chartWidth = Math.max(240, contentWidth - 32);
   const heroChartWidth = Math.max(240, contentWidth - 36);
@@ -491,14 +486,6 @@ export default function OverviewScreen() {
   });
   const fxRates = needsAdsFx ? fxRatesQ.data : undefined;
   const adsEngineFxReady = !needsAdsFx || !!fxRates;
-  const adsEngineCurrencyScopeKey = useMemo(
-    () =>
-      [...profileCurrencyById.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([id, currency]) => `${id}:${currency}`)
-        .join("|"),
-    [profileCurrencyById],
-  );
   // Gross: money-chip country scope for linked reads; Nest all-enabled overview
   // widens to owned kdp_accounts via overviewKdpQueryScope (not legacy links).
   const royaltyScope = useMemo(
@@ -648,33 +635,10 @@ export default function OverviewScreen() {
     ...OVERVIEW_QUERY_CACHE,
   });
 
-  const adminCampaignsQ = useQuery({
-    queryKey: ["dashboard-campaigns", adminFilterUserId, nestProfileIds, dateRange.start, dateRange.end],
-    queryFn: () =>
-      withQueryTimeout(
-        fetchAggregatedCampaigns({
-          startDate: dateRange.start,
-          endDate: dateRange.end,
-          profileIds: nestProfileIds,
-          filterUserId: adminFilterUserId,
-        }),
-      ),
-    enabled: viewingAsAdmin && nestProfileIds.length > 0,
-    ...OVERVIEW_QUERY_CACHE,
-  });
-
   const metricsQ = useQuery({
     queryKey: [FINANCIAL_QUERY_ROOTS.campaignMetrics, scopeProfiles, dateRange.start, dateRange.end, primaryCurrency],
     queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(scopeProfiles, dateRange.start, dateRange.end)),
     enabled: sellerReady,
-    ...FINANCIAL_QUERY_CACHE,
-    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
-    refetchIntervalInBackground: false,
-  });
-  const adsWidgetMetricsQ = useQuery({
-    queryKey: ["overview-ads-market-metrics", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
-    queryFn: () => withQueryTimeout(fetchCampaignMetricsRange(adsWidgetProfileIds, dateRange.start, dateRange.end)),
-    enabled: sellerReady && selectedAdsMarket != null && adsWidgetProfileIds.length > 0,
     ...FINANCIAL_QUERY_CACHE,
     refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
     refetchIntervalInBackground: false,
@@ -742,54 +706,6 @@ export default function OverviewScreen() {
       ((kdpQueryReady || (viewingAsAdmin && scopeProfiles.length > 0)) &&
         kdpRoyaltiesQueryAllowed(royaltyScope) &&
         String(primaryCurrency || "").toUpperCase() === "USD"),
-    ...OVERVIEW_QUERY_CACHE,
-  });
-  useQuery({
-    queryKey: [
-      "ads-engine-keywords-daily",
-      adsWidgetProfileIds,
-      dateRange.start,
-      dateRange.end,
-      moneyProfileIds,
-      primaryCurrency,
-      adsEngineCurrencyScopeKey,
-      fxRatesQ.dataUpdatedAt,
-    ],
-    queryFn: () =>
-      withQueryTimeout(
-        fetchKeywordDailyAggregate(adsWidgetProfileIds, dateRange.start, dateRange.end, {
-          moneyProfileIds: adsWidgetProfileIds,
-          displayCurrency: primaryCurrency,
-          profileCurrencyById,
-          fxRates,
-        }),
-        ADS_ENGINE_FUNNEL_TIMEOUT_MS,
-      ),
-    enabled: sellerReady && adsWidgetProfileIds.length > 0 && adsEngineFxReady,
-    ...OVERVIEW_QUERY_CACHE,
-  });
-  useQuery({
-    queryKey: [
-      "ads-engine-search-terms-daily",
-      adsWidgetProfileIds,
-      dateRange.start,
-      dateRange.end,
-      moneyProfileIds,
-      primaryCurrency,
-      adsEngineCurrencyScopeKey,
-      fxRatesQ.dataUpdatedAt,
-    ],
-    queryFn: () =>
-      withQueryTimeout(
-        fetchSearchTermDailyAggregate(adsWidgetProfileIds, dateRange.start, dateRange.end, {
-          moneyProfileIds: adsWidgetProfileIds,
-          displayCurrency: primaryCurrency,
-          profileCurrencyById,
-          fxRates,
-        }),
-        ADS_ENGINE_FUNNEL_TIMEOUT_MS,
-      ),
-    enabled: sellerReady && adsWidgetProfileIds.length > 0 && adsEngineFxReady,
     ...OVERVIEW_QUERY_CACHE,
   });
 
@@ -997,10 +913,12 @@ export default function OverviewScreen() {
   });
 
   const searchTermsPulseQ = useQuery({
-    queryKey: ["search-terms-pulse", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency],
-    queryFn: () => fetchSearchTerms(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80 }),
+    queryKey: ["search-terms-pulse", user?.id, adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, "active-parents-v1"],
+    queryFn: ({ signal }) => withQueryTimeout(fetchOverviewActiveSearchTerms(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80, signal }), undefined, signal),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
+    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
 
   const bleedersQ = useQuery({
@@ -1008,22 +926,33 @@ export default function OverviewScreen() {
     queryFn: () => withQueryTimeout(fetchOverviewActiveKeywords(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80, filterUserId: adminFilterUserId })),
     enabled: sellerSecondary || adminSecondary,
     ...OVERVIEW_QUERY_CACHE,
+    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
 
   const adGroupsQ = useQuery({
-    queryKey: ["overview-ad-groups", adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, "active-v2"],
-    queryFn: () =>
-      withQueryTimeout(
-        fetchOverviewActiveAdGroups(adsWidgetProfileIds, {
+    queryKey: ["overview-ad-groups", user?.id, adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, "active-v2"],
+    queryFn: ({ signal }) =>
+      withAbortableQueryTimeout(
+        readSignal => fetchOverviewActiveAdGroups(adsWidgetProfileIds, {
           start: dateRange.start,
           end: dateRange.end,
           limit: 80,
           filterUserId: adminFilterUserId,
+          signal: readSignal,
         }),
+        HOME_QUERY_TIMEOUT_MS,
+        signal,
       ),
     enabled: sellerSecondary || adminSecondary,
     ...OVERVIEW_QUERY_CACHE,
+    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
+
+  useEffect(() => {
+    if (!homeVisible) void queryClient.cancelQueries({ queryKey: ["overview-ad-groups", user?.id] });
+  }, [homeVisible, queryClient, user?.id]);
 
   const activeBookKeysQ = useQuery({
     queryKey: ["books-activity-60d", scopeProfiles],
@@ -1131,17 +1060,17 @@ export default function OverviewScreen() {
   // Keep paintable ads rows while royalties are still catching up — never blank both forever.
   const topCampaigns = periodLoading && !viewingAsAdmin
     ? []
-    : activeOverviewRows(topCampaignsQ.data ?? [], "campaign");
+    : activeOverviewRows(overviewRecommendationRows(topCampaignsQ.data, topCampaignsQ.isError), "campaign");
   const topBooksRaw = periodLoading && !viewingAsAdmin
     ? []
-    : adminTopBooks ?? topBooksQ.data ?? [];
+    : overviewRecommendationRows(adminTopBooks ?? topBooksQ.data, viewingAsAdmin ? bootstrapQ.isError : topBooksQ.isError);
   const topBooks = useMemo(() => {
     if (!viewingAsAdmin) return topBooksRaw;
     if (activeBookKeysQ.isPending) return [];
     if (activeBookKeysQ.isError || !activeBookKeysQ.data) return topBooksRaw;
     return filterTopBooksByRecentActivity(topBooksRaw, activeBookKeysQ.data);
   }, [topBooksRaw, viewingAsAdmin, activeBookKeysQ.isPending, activeBookKeysQ.isError, activeBookKeysQ.data]);
-  const bleeders = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(bleedersQ.data ?? [], "keyword");
+  const bleeders = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(overviewRecommendationRows(bleedersQ.data, bleedersQ.isError), "keyword");
   const loading = periodLoading;
   const campaignsPhase = metricsWaiting && !viewingAsAdmin
     ? "loading"
@@ -1176,24 +1105,20 @@ export default function OverviewScreen() {
       }),
     [metricRows, moneyProfileIds, primaryCurrency, profileCurrencyById, fxRates],
   );
-  const adsWidgetMetricRows = useMemo(
-    () => (selectedAdsMarket ? (adsWidgetMetricsQ.data ?? []) : metricRows),
-    [adsWidgetMetricsQ.data, metricRows, selectedAdsMarket],
-  );
   const adsWidgetDaily = useMemo(
     () =>
-      aggregateDailyMetricsForDisplay(adsWidgetMetricRows, {
+      aggregateDailyMetricsForDisplay(metricRows, {
         moneyProfileIds: adsWidgetProfileIds,
         displayCurrency: primaryCurrency,
         profileCurrencyById,
         fxRates,
       }),
-    [adsWidgetMetricRows, adsWidgetProfileIds, primaryCurrency, profileCurrencyById, fxRates],
+    [metricRows, adsWidgetProfileIds, primaryCurrency, profileCurrencyById, fxRates],
   );
   const marketplaceAdsRows = useMemo(
     () => {
       if (!adsReady) return [];
-      return adsMarketCountries.map((country) => {
+      return selectedCountries.map((country) => {
         const ids = overviewAdsProfileIdsForMarket(moneyProfileIds, profiles, country);
         const rows = aggregateDailyMetricsForDisplay(metricRows, {
           moneyProfileIds: ids,
@@ -1219,7 +1144,7 @@ export default function OverviewScreen() {
         };
       });
     },
-    [adsReady, adsMarketCountries, moneyProfileIds, profiles, metricRows, primaryCurrency, profileCurrencyById, fxRates],
+    [adsReady, selectedCountries, moneyProfileIds, profiles, metricRows, primaryCurrency, profileCurrencyById, fxRates],
   );
   const prevDaily = useMemo(
     () =>
@@ -1481,9 +1406,9 @@ export default function OverviewScreen() {
     [budgetHistoryDaily, todayStr, totalDailyBudget],
   );
   const monthlyBudgetForecastReady = budgetHistoryQ.isSuccess;
-  const placementMix = periodLoading && !viewingAsAdmin ? [] : placementMixQ.data ?? [];
-  const searchTerms = periodLoading && !viewingAsAdmin ? [] : searchTermsPulseQ.data ?? [];
-  const adGroups = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(adGroupsQ.data ?? [], "adGroup");
+  const placementMix = periodLoading && !viewingAsAdmin ? [] : overviewRecommendationRows(placementMixQ.data, placementMixQ.isError);
+  const searchTerms = periodLoading && !viewingAsAdmin ? [] : overviewRecommendationRows(searchTermsPulseQ.data, searchTermsPulseQ.isError);
+  const adGroups = periodLoading && !viewingAsAdmin ? [] : activeOverviewRows(overviewRecommendationRows(adGroupsQ.data, adGroupsQ.isError), "adGroup");
 
   const [blurBooks, setBlurBooks] = useState(false);
 
@@ -2054,42 +1979,21 @@ export default function OverviewScreen() {
 
 
   const onRefresh = async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     setRefreshing(true);
-    // Soft-invalidate every scope-bound root so PTR cannot leave sibling
-    // widgets on a prior period/profile while named refetches catch up.
-    await invalidateScopeBoundQueries(queryClient);
-    const primary: Promise<unknown>[] = [
-      snapshotQ.refetch(),
-      metricsQ.refetch(),
-      ...(selectedAdsMarket ? [adsWidgetMetricsQ.refetch()] : []),
-      royaltiesQ.refetch(),
-      syncLogsQ.refetch(),
-      royaltySetup.refetchAccounts(),
-    ];
-    if (viewingAsAdmin) primary.push(bootstrapQ.refetch());
-    await Promise.all(primary);
-    setRefreshing(false);
-    if (belowFoldReady) {
-      void Promise.all([
-        prevMetricsQ.refetch(),
-        prevRoyaltiesQ.refetch(),
-        topBooksQ.refetch(),
-        bleedersQ.refetch(),
-        searchTermsPulseQ.refetch(),
-        adGroupsQ.refetch(),
-        adminCampaignsQ.refetch(),
-        topCampaignsQ.refetch(),
-        placementMixQ.refetch(),
-        todayMetricsQ.refetch(),
-        allBudgetsQ.refetch(),
-        budgetHistoryQ.refetch(),
-        ruleExecsQ.refetch(),
-        rulesQ.refetch(),
-        todayStatsQ.refetch(),
-        bidBotStatusQ.refetch(),
-      ]);
-    } else if (kdpOnlyDashboard) {
-      void Promise.all([prevRoyaltiesQ.refetch(), topBooksQ.refetch(), formatRoyaltiesQ.refetch()]);
+    try {
+      // Invalidation already refetches enabled observers. Explicit refetches
+      // would repeat those reads and also bypass disabled/admin query gates.
+      const reads: Promise<unknown>[] = [invalidateScopeBoundQueries(queryClient)];
+      if (homeVisible && !guestMode && !viewingAsAdmin && user?.id) {
+        reads.push(royaltySetup.refetchAccounts());
+      }
+      reads.push(queryClient.invalidateQueries({ queryKey: ["bid-engine-status"], refetchType: "active" }));
+      await Promise.all(reads);
+    } finally {
+      refreshInFlightRef.current = false;
+      setRefreshing(false);
     }
   };
 
@@ -2202,12 +2106,6 @@ export default function OverviewScreen() {
   return (
     <AppScreen testID="home-root">
       <View style={{ flex: 1 }} collapsable={false}>
-      {/*
-        Compact sticky overlays this full-screen parent at top:0 (under Dynamic
-        Island). Must NOT live inside GestureDetector — a collapsed gesture host
-        was resolving absolute chrome against the bottom safe area.
-      */}
-      <OverviewHeaderCompactSticky scrollY={headerScrollY} {...headerNavProps} />
       <OverviewPeriodSwipeProvider gesture={periodSwipe}>
       <GestureDetector gesture={periodSwipe}>
       <Animated.ScrollView
@@ -2225,6 +2123,7 @@ export default function OverviewScreen() {
           <OverviewHeaderV3
             profileLabel={primaryProfile}
             marketCountries={marketCountries}
+            selectedMarketCountries={selectedCountries}
             selectedMarketCountry={selectedAdsMarket}
             onMarketSelectionChange={setSelectedAdsMarket}
             currency={primaryCurrency}
@@ -2406,9 +2305,14 @@ export default function OverviewScreen() {
                 {
                   key: "ads-campaigns",
                   label: "Campaigns",
+                  freshness: overviewReadLabel({ updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : metricsQ.dataUpdatedAt, fetching: viewingAsAdmin ? bootstrapQ.isFetching : metricsQ.isFetching, failed: viewingAsAdmin ? bootstrapQ.isError : metricsQ.isError }),
                   meta: breakEvenAcos != null ? formatBreakEvenHint(breakEvenAcos) || undefined : undefined,
                   content: (
                     <AdsEngineCampaignsPage
+                      loading={!adsReady}
+                      error={(viewingAsAdmin ? bootstrapQ.isError : metricsQ.isError) || (needsAdsFx && fxRatesQ.isError)}
+                      loadingMessage={!fxMoneyReady ? "Updating currency conversion..." : "Loading campaign metrics..."}
+                      onRetry={() => void onRefresh()}
                       series={adsEngineSeries}
                       breakEvenAcos={breakEvenAcos}
                       width={chartWidgetWidth}
@@ -2421,6 +2325,7 @@ export default function OverviewScreen() {
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineKeywordsPage
+                      active={homeVisible}
                       profileIds={adsWidgetProfileIds}
                       start={dateRange.start}
                       end={dateRange.end}
@@ -2441,6 +2346,7 @@ export default function OverviewScreen() {
                   hidden: viewingAsAdmin || selectedProfileIds.length === 0,
                   content: (
                     <AdsEngineSearchTermsPage
+                      active={homeVisible}
                       profileIds={adsWidgetProfileIds}
                       start={dateRange.start}
                       end={dateRange.end}
@@ -2493,15 +2399,17 @@ export default function OverviewScreen() {
             key={`home-campaigns-${adsWidgetProfileIds.join("|")}`}
             staggerIndex={3}
             testID="home-campaigns"
+            freshness={overviewReadLabel({ updatedAt: topCampaignsQ.dataUpdatedAt, fetching: topCampaignsQ.isFetching, failed: topCampaignsQ.isError })}
             title="Campaigns"
             icon="campaigns"
             inlinePageLabel
             actionLabel="View all"
-            onAction={() => router.push("/(tabs)/campaigns")}
+            onAction={() => router.push({ pathname: "/(tabs)/campaigns", params: { flow: String(Date.now()), sort: "acos" } })}
             pages={[
               {
                 key: "high-acos",
                 label: "High ACoS",
+                hint: "Within the top 80 campaigns by spend",
                 content:
                   campaignsWidgetPhase === "loading" ? (
                     <SwipeEmpty message="Loading campaigns…" t={t} />
@@ -2513,7 +2421,7 @@ export default function OverviewScreen() {
                       <SwipeEmpty message="Couldn't load campaigns. Tap to retry." t={t} />
                     </TouchableOpacity>
                   ) : campsHighAcos.length === 0 ? (
-                    <SwipeEmpty message="No campaigns in this period." t={t} />
+                    <SwipeEmpty message="No measured ACoS in this sample." t={t} />
                   ) : (
                     <WidgetRowList>
                       {campsHighAcos.map((campaign, idx) => (
@@ -2532,10 +2440,12 @@ export default function OverviewScreen() {
               {
                 key: "low-acos",
                 label: "Low ACoS",
+                onAction: () => router.push({ pathname: "/(tabs)/campaigns", params: { flow: String(Date.now()), sort: "acos-low" } }),
+                hint: "Within the top 80 campaigns by spend",
                 hidden: (campaignsWidgetPhase !== "success" && campaignsWidgetPhase !== "empty") || !showCampaignsLowAcos,
                 content:
                   campsLowAcos.length === 0 ? (
-                    <SwipeEmpty message="No campaigns in this period." t={t} />
+                    <SwipeEmpty message="No measured ACoS in this sample." t={t} />
                   ) : (
                     <WidgetRowList>
                       {campsLowAcos.map((campaign, idx) => (
@@ -2553,6 +2463,7 @@ export default function OverviewScreen() {
               },
               {
                 key: "top-spend",
+                onAction: () => router.push({ pathname: "/(tabs)/campaigns", params: { flow: String(Date.now()), sort: "spend" } }),
                 label: "Top spend",
                 hidden: campaignsWidgetPhase !== "success" && campaignsWidgetPhase !== "empty",
                 content:
@@ -2575,6 +2486,9 @@ export default function OverviewScreen() {
               },
               {
                 key: "ad-groups",
+                hint: "Within the top 80 enabled ad groups by spend",
+                freshness: overviewReadLabel({ updatedAt: adGroupsQ.dataUpdatedAt, fetching: adGroupsQ.isFetching, failed: adGroupsQ.isError }),
+                onAction: () => router.push({ pathname: "/more/ad-groups", params: { flow: String(Date.now()), enabledParents: "1", sort: "acos-high" } }),
                 label: "Ad groups",
                 hidden: adGroupsQ.isPending && !adGroupsQ.data,
                 content:
@@ -2626,6 +2540,8 @@ export default function OverviewScreen() {
               usedPct={budgetUsedPct}
               danger={budgetDanger}
               todaySynced={budgetTodaySynced}
+              todayFailed={viewingAsAdmin ? bootstrapQ.isError : todayMetricsQ.isError}
+              budgetKnown={allBudgetsQ.isSuccess}
               monthToDate={monthlyBudgetForecastReady ? monthlyBudgetForecast.monthToDateSpend : undefined}
               projectedMonthSpend={monthlyBudgetForecastReady ? monthlyBudgetForecast.projectedMonthSpend : undefined}
               monthlyBudget={monthlyBudgetForecastReady ? monthlyBudgetForecast.monthlyBudget : undefined}
@@ -2667,7 +2583,7 @@ export default function OverviewScreen() {
             </View>
           ) : null}
 
-          {(keywordBleeders.length > 0 || keywordHighAcos.length > 0 || termSpendNoOrders.length > 0 || termLowAcos.length > 0) ? (
+          {(bleedersQ.isError || searchTermsPulseQ.isError || keywordBleeders.length > 0 || keywordHighAcos.length > 0 || termSpendNoOrders.length > 0 || termLowAcos.length > 0) ? (
             <OverviewSwipeWidget
               key={`w4-${adsWidgetProfileIds.join("|")}`}
               staggerIndex={4}
@@ -2678,7 +2594,27 @@ export default function OverviewScreen() {
               onAction={() => router.push("/(tabs)/targeting")}
               pages={[
                 {
+                  key: "kw-unavailable",
+                  label: "Keywords",
+                  hidden: !bleedersQ.isError,
+                  freshness: overviewReadLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
+                  onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "all" } }),
+                  content: <TouchableOpacity onPress={() => void bleedersQ.refetch()} accessibilityRole="button"><SwipeEmpty message="Couldn't load keywords. Tap to retry." t={t} /></TouchableOpacity>,
+                },
+                {
+                  key: "st-unavailable",
+                  label: "Search terms",
+                  hidden: !searchTermsPulseQ.isError,
+                  actionLabel: "Search terms",
+                  freshness: overviewReadLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
+                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "all", enabledParents: "1" } }),
+                  content: <TouchableOpacity onPress={() => void searchTermsPulseQ.refetch()} accessibilityRole="button"><SwipeEmpty message="Couldn't load search terms. Tap to retry." t={t} /></TouchableOpacity>,
+                },
+                {
                   key: "kw-no-orders",
+                  freshness: overviewReadLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
+                  hint: "Within the top 80 enabled keywords by spend",
+                  onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "wasting", sort: "spend" } }),
                   label: "Keywords",
                   hidden: keywordBleeders.length === 0,
                   content: (
@@ -2698,6 +2634,9 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "kw-high-acos",
+                  freshness: overviewReadLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
+                  hint: "Within the top 80 enabled keywords by spend",
+                  onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "all" } }),
                   label: "High ACoS",
                   hidden: keywordHighAcos.length === 0,
                   content: (
@@ -2717,6 +2656,10 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "st-no-orders",
+                  freshness: overviewReadLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
+                  hint: "Within the top 80 enabled-parent terms by spend",
+                  actionLabel: "Search terms",
+                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "wasted", enabledParents: "1" } }),
                   label: "Search terms",
                   hidden: termSpendNoOrders.length === 0,
                   content: (
@@ -2736,7 +2679,11 @@ export default function OverviewScreen() {
                 },
                 {
                   key: "st-low-acos",
-                  label: "Best ACoS",
+                  freshness: overviewReadLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
+                  hint: "Within the top 80 enabled-parent terms by spend",
+                  actionLabel: "Search terms",
+                  onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "converting", sort: "acos", enabledParents: "1" } }),
+                  label: "Low ACoS",
                   hidden: termLowAcos.length === 0,
                   content: (
                     <WidgetRowList>
@@ -2768,12 +2715,14 @@ export default function OverviewScreen() {
                 {
                   key: "mix",
                   label: "",
+                  freshness: overviewReadLabel({ updatedAt: placementMixQ.dataUpdatedAt, fetching: placementMixQ.isFetching, failed: placementMixQ.isError }),
                   hidden: placementMix.length === 0,
                   content: <PlacementMixV2 rows={placementMix} currency={primaryCurrency} t={t} />,
                 },
                 {
                   key: "campaigns",
                   label: "Campaign placement",
+                  freshness: overviewReadLabel({ updatedAt: topCampaignsQ.dataUpdatedAt, fetching: topCampaignsQ.isFetching, failed: topCampaignsQ.isError }),
                   hidden: placementCampaigns.length === 0,
                   content: (
                     <WidgetRowList>
@@ -2799,6 +2748,7 @@ export default function OverviewScreen() {
             key={`w6-${scopeProfiles.join("|")}`}
             staggerIndex={6}
             title="Top books"
+            freshness={overviewReadLabel({ updatedAt: viewingAsAdmin ? bootstrapQ.dataUpdatedAt : topBooksQ.dataUpdatedAt, fetching: viewingAsAdmin ? bootstrapQ.isFetching : topBooksQ.isFetching, failed: viewingAsAdmin ? bootstrapQ.isError : topBooksQ.isError })}
             icon="books"
             inlinePageLabel
             action={
@@ -2838,6 +2788,7 @@ export default function OverviewScreen() {
             pages={[
               {
                 key: "top-royalties",
+                hint: "Within loaded books",
                 label: "",
                 content:
                   booksWidgetPhase === "loading" ? (
@@ -2879,6 +2830,7 @@ export default function OverviewScreen() {
               {
                 key: "worst-profit",
                 label: "Worst profit",
+                hint: "Within loaded books · royalties minus ad spend",
                 hidden: booksWidgetPhase !== "success" && booksWidgetPhase !== "empty",
                 content:
                   booksProfit.length === 0 ? (
@@ -2913,9 +2865,10 @@ export default function OverviewScreen() {
                 key: "high-acos",
                 label: "High ACoS",
                 hidden: booksWidgetPhase !== "success" && booksWidgetPhase !== "empty",
+                hint: "Within loaded books",
                 content:
                   booksHigh.length === 0 ? (
-                    <SwipeEmpty message="No ad sales" t={t} />
+                    <SwipeEmpty message="No measured ACoS in this sample." t={t} />
                   ) : (
                     <WidgetRowList>
                       {booksHigh.map((book, idx) => (
@@ -2936,6 +2889,7 @@ export default function OverviewScreen() {
               {
                 key: "ad-spend-no-sales",
                 label: "Ad spend",
+                hint: "Within loaded books · no ad sales",
                 hidden: booksAdSpendNoSales.length === 0,
                 content: (
                   <WidgetRowList>
@@ -2957,6 +2911,7 @@ export default function OverviewScreen() {
               {
                 key: "low-acos",
                 label: "Low ACoS",
+                hint: "Within loaded books",
                 hidden:
                   (booksWidgetPhase !== "success" && booksWidgetPhase !== "empty") ||
                   booksLow.length === 0 ||

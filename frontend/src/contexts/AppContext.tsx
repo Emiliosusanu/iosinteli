@@ -6,6 +6,7 @@ import { ADMIN_FILTER_KEY, fetchAmazonProfiles, fetchUserSettings, saveUserSetti
 import { fetchNestUsers, type NestUser } from "../lib/mutations";
 import { hasNestToken, NestApiError } from "../lib/rulesApi";
 import { AmazonProfile, DateRange } from "../lib/types";
+import { sharedMarketProfileIds } from "../lib/overviewMarketplace";
 import { normalizeDateRange, rangePresets } from "../lib/format";
 import { useDateRangeRollover } from "../hooks/useDateRangeRollover";
 import { useAuth } from "./AuthContext";
@@ -99,6 +100,7 @@ interface AppContextType {
   setAdminFilterUserId: (id: string | null) => void;
   selectedProfileIds: string[];
   setSelectedProfileIds: (ids: string[]) => void;
+  selectMarket: (country: string | null) => void;
   toggleProfile: (id: string) => void;
   selectAllProfiles: () => void;
   selectedProfiles: AmazonProfile[];
@@ -347,6 +349,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           "campaign-metrics",
           "top-books",
           "products-range",
+          "bleeding-keywords",
+          "overview-ad-groups",
+          "search-terms",
+          "ads-engine-",
         ];
         void queryClient.invalidateQueries({
           predicate: (query) => {
@@ -712,6 +718,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedProfileIds(next);
   }, [profiles, selectedProfileIds, setSelectedProfileIds]);
 
+  const selectMarket = useCallback((country: string | null) => {
+    const ids = sharedMarketProfileIds(profiles, country);
+    if (ids.length > 0) setSelectedProfileIds(ids);
+  }, [profiles, setSelectedProfileIds]);
+
   const setDateRange = useCallback((range: DateRange) => {
     dateRangeRevisionRef.current += 1;
     const normalized = normalizeDateRange(range);
@@ -786,6 +797,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setAdminFilterUserId,
       selectedProfileIds,
       setSelectedProfileIds,
+      selectMarket,
       toggleProfile,
       selectAllProfiles,
       selectedProfiles,
@@ -819,6 +831,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setAdminFilterUserId,
       selectedProfileIds,
       setSelectedProfileIds,
+      selectMarket,
       toggleProfile,
       selectAllProfiles,
       selectedProfiles,

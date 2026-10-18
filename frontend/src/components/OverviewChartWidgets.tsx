@@ -32,6 +32,7 @@ export type { AdsEngineSeries } from "@/src/lib/adsEngineSeries";
 export { adsEnginePeriodLabel, dailyToAdsEngineSeries } from "@/src/lib/adsEngineSeries";
 
 type AdsEngineMoneyProps = {
+  active?: boolean;
   moneyProfileIds: string[];
   displayCurrency: string;
   profileCurrencyById: ReadonlyMap<string, string>;
@@ -206,13 +207,27 @@ export function AdsEngineCampaignsPage({
   breakEvenAcos,
   width,
   emptyMessage = "No ads metrics in this period.",
+  loading = false,
+  error = false,
+  loadingMessage = "Loading campaign metrics...",
+  onRetry,
 }: {
   series: AdsEngineSeries;
   breakEvenAcos: number;
   width: number;
   emptyMessage?: string;
+  loading?: boolean;
+  error?: boolean;
+  loadingMessage?: string;
+  onRetry?: () => void;
 }) {
   const t = useTheme();
+  if (error) return (
+    <TouchableOpacity onPress={onRetry} accessibilityRole="button" accessibilityLabel="Retry campaign metrics">
+      <SwipeEmpty message="Campaign metrics unavailable. Tap to retry." t={t} />
+    </TouchableOpacity>
+  );
+  if (loading) return <SwipeEmpty message={loadingMessage} t={t} />;
   if (!series.impressions.length) return <SwipeEmpty message={emptyMessage} t={t} />;
   return (
     <AdsEngineChart
@@ -230,6 +245,7 @@ export function AdsEngineCampaignsPage({
 
 /** Lazy Keywords page — fetches when this swipe page mounts. */
 export function AdsEngineKeywordsPage({
+  active = true,
   profileIds,
   start,
   end,
@@ -276,7 +292,7 @@ export function AdsEngineKeywordsPage({
         }),
         ADS_ENGINE_FUNNEL_TIMEOUT_MS,
       ),
-    enabled: ids.length > 0 && fxReady,
+    enabled: active && ids.length > 0 && fxReady,
     ...HOME_PERIOD_QUERY_CACHE,
   });
   const series = useMemo(() => dailyToAdsEngineSeries(q.data?.daily ?? []), [q.data]);
@@ -305,6 +321,7 @@ export function AdsEngineKeywordsPage({
 
 /** Lazy Search terms page — fetches when this swipe page mounts. */
 export function AdsEngineSearchTermsPage({
+  active = true,
   profileIds,
   start,
   end,
@@ -351,7 +368,7 @@ export function AdsEngineSearchTermsPage({
         }),
         ADS_ENGINE_FUNNEL_TIMEOUT_MS,
       ),
-    enabled: ids.length > 0 && fxReady,
+    enabled: active && ids.length > 0 && fxReady,
     ...HOME_PERIOD_QUERY_CACHE,
   });
   const series = useMemo(() => dailyToAdsEngineSeries(q.data?.daily ?? []), [q.data]);

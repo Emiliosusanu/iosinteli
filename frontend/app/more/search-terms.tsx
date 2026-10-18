@@ -16,7 +16,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { alertMutationError, blockIfCannotWriteAmazon } from "@/src/components/Mutations";
@@ -26,6 +26,8 @@ import { acosTone, dashboard, layout, spacing, toneColor, useReduceMotion, useTh
 import { addSearchTermAsTarget, harvestAmazonWriteAlert, negateSearchTerm } from "@/src/lib/mutations";
 import { useInvalidateAds } from "@/src/lib/invalidateAds";
 import { fetchNestSearchTermsPage } from "@/src/lib/dashboardApi";
+import { fetchEnabledSearchTermsPage } from "@/src/lib/queries";
+import { enabledSelectedProfileIds } from "@/src/lib/booksProfileScope";
 import { SEARCH_TERMS_PAGE_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { formatCurrency, formatInt, formatPercent } from "@/src/lib/format";
 import type { SearchTerm } from "@/src/lib/types";
@@ -195,14 +197,26 @@ export default function SearchTermsScreen() {
   const reduceMotion = useReduceMotion();
   const { guestMode, user } = useAuth();
   const invalidateAds = useInvalidateAds();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, profiles } = useApp();
+  const scopeProfiles = useMemo(() => enabledSelectedProfileIds(profiles, selectedProfileIds).sort(), [profiles, selectedProfileIds]);
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("orders");
   const [perfFilter, setPerfFilter] = useState<PerformanceFilter>("all");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [sortOpen, setSortOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const params = useLocalSearchParams<{ flow?: string; perf?: string; sort?: string; enabledParents?: string }>();
+  const [enabledParents, setEnabledParents] = useState(params.enabledParents === "1");
+  useEffect(() => {
+    if (!params.flow) return;
+    setSearch(""); setDebouncedSearch("");
+    setPerfFilter(params.perf === "wasted" || params.perf === "converting" ? params.perf : "all");
+    setSortKey(params.sort === "acos" ? "acos" : "spend");
+    setSortOrder(params.sort === "acos" ? "asc" : "desc");
+    setEnabledParents(params.enabledParents === "1" && !viewAsOtherUser);
+  }, [params.flow, params.perf, params.sort, params.enabledParents, adminFilterUserId, user?.id, viewAsOtherUser]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search.trim()), 250);
@@ -221,24 +235,28 @@ export default function SearchTermsScreen() {
   } = useInfiniteQuery({
     queryKey: [
       "search-terms",
-      selectedProfileIds,
+      scopeProfiles,
       dateRange.start,
       dateRange.end,
       debouncedSearch,
       perfFilter,
       sortKey,
+      sortOrder,
       adminFilterUserId,
+      user?.id,
+      enabledParents,
     ],
     initialPageParam: 1,
     queryFn: ({ pageParam, signal }) => withQueryTimeout(
-      fetchNestSearchTermsPage({
-        profileIds: selectedProfileIds,
+      (enabledParents ? fetchEnabledSearchTermsPage : fetchNestSearchTermsPage)({
+        profileIds: scopeProfiles,
         filterUserId: adminFilterUserId,
         startDate: dateRange.start,
         endDate: dateRange.end,
         search: debouncedSearch || undefined,
         performanceFilter: perfFilter === "all" ? undefined : perfFilter,
         sortBy: SORT_FIELDS[sortKey],
+        sortOrder,
         page: pageParam,
         perPage: 100,
         signal,
@@ -247,7 +265,7 @@ export default function SearchTermsScreen() {
       signal,
     ),
     getNextPageParam: (lastPage) => lastPage.hasNextPage ? lastPage.page + 1 : undefined,
-    enabled: selectedProfileIds.length > 0,
+    enabled: scopeProfiles.length > 0,
   });
 
   const data = useMemo(() => {
@@ -270,10 +288,11 @@ export default function SearchTermsScreen() {
   }
 
   function applySort(next: SortKey) {
-    if (next === sortKey) return;
+    if (next === sortKey && sortOrder === "desc") return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     animateList();
     setSortKey(next);
+    setSortOrder("desc");
   }
 
   function applyPerf(next: PerformanceFilter) {
@@ -333,7 +352,7 @@ export default function SearchTermsScreen() {
     [guestMode, viewAsOtherUser, refreshTerms],
   );
 
-  const sortLabel = SORT_CONFIG.find((entry) => entry.key === sortKey)?.label ?? "Orders";
+  const sortLabel = `${SORT_CONFIG.find((entry) => entry.key === sortKey)?.label ?? "Orders"}${sortOrder === "asc" ? " (low first)" : ""}`;
   const sortActive = sortKey !== "orders";
   const showCount = search.trim().length > 0 || perfFilter !== "all" || sortActive;
   const empty = emptyCopy(search, perfFilter);
@@ -390,6 +409,11 @@ export default function SearchTermsScreen() {
             { key: "wasted", label: "No orders" },
           ]}
         />
+        {enabledParents ? (
+          <ActiveFilterRow>
+            <ActiveFilterChip label="Enabled parents" accessibilityLabel="Clear enabled campaign and ad group filter" onPress={() => setEnabledParents(false)} />
+          </ActiveFilterRow>
+        ) : null}
         {sortActive ? (
           <ActiveFilterRow>
             <ActiveFilterChip
@@ -402,7 +426,7 @@ export default function SearchTermsScreen() {
         ) : null}
         {showCount && !listLoading && !listFailed ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>
-            {totalCount === 1 ? "1 search term" : `${formatInt(totalCount)} search terms`}
+            {enabledParents ? `${formatInt(data.length)} search terms${hasNextPage ? " loaded" : ""}` : totalCount === 1 ? "1 search term" : `${formatInt(totalCount)} search terms`}
           </Text>
         ) : null}
       </FilterChrome>

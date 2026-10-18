@@ -13,7 +13,7 @@ test("Overview ops cards use glass + stagger + status affordances", () => {
   assert.match(cards, /StaggerReveal/);
   assert.match(cards, /LinearGradient/);
   assert.match(cards, /SwipeOpen|Gesture\.Pan/);
-  assert.match(cards, /Not synced|Waiting for sync/);
+  assert.match(cards, /Checking spend|Waiting for server/);
   assert.doesNotMatch(cards, /withRepeat/);
   assert.match(cards, /Almost gone|% used/);
   assert.match(cards, /size=\{96\}/);
@@ -50,7 +50,8 @@ test("Marketplace card is real-data only and controls the Ads widget scope", () 
   assert.match(cards, /OverviewMarketplaceAdsCard/);
   assert.match(cards, /if \(!rows\.length\) return null/);
   assert.match(home, /if \(!adsReady\) return \[\]/);
-  assert.match(home, /return adsMarketCountries\.map/);
+  assert.match(home, /return selectedCountries\.map/);
+  assert.doesNotMatch(home, /return adsMarketCountries\.map/);
   assert.match(home, /adsWidgetProfileIds/);
   assert.match(home, /selectedCountry=\{selectedAdsMarket\}/);
   assert.match(home, /onSelect=\{setSelectedAdsMarket\}/);

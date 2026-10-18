@@ -43,8 +43,7 @@ test("OverviewHeaderV3 uses lateral stadium glow instead of wide Refreshing pill
   assert.match(header, /StadiumLateralGlow/);
   assert.match(header, /home-header-refresh-glow/);
   assert.match(header, /showRefreshGlow/);
-  assert.match(header, /home-sync-loading/);
-  assert.match(header, /home-sync-ready/);
+  assert.doesNotMatch(header, /<SyncDot|function SyncDot/);
   assert.match(header, /suppressRefreshingCaption/);
   assert.match(header, /expo-linear-gradient/);
   // Quiet primary edge shadow, not neon wash / warning-success animation.
@@ -61,11 +60,9 @@ test("OverviewHeaderV3 uses lateral stadium glow instead of wide Refreshing pill
   assert.doesNotMatch(header, /\$\{mid\}E6/);
   assert.doesNotMatch(header, /shadowOpacity:\s*0\.85/);
   // Busy sync must not paint the orange "Refreshing"/"Syncing" label chip.
-  assert.match(header, /showRefreshGlow \|\| syncReadyVisible \? \(/);
-  assert.doesNotMatch(
-    header.slice(header.indexOf("showRefreshGlow || syncReadyVisible ? ("), header.indexOf(") : (", header.indexOf("showRefreshGlow || syncReadyVisible ? (")) + 40),
-    /\{syncCompact\}/,
-  );
+  assert.match(header, /busy=\{showRefreshGlow && expandedInteractive\}/);
+  assert.doesNotMatch(header, /home-sync-loading|home-sync-ready|<SyncDot/);
+  assert.match(header, /\{syncNeedsLabel \? \(/);
 });
 
 test("OverviewHeaderV3 moves from primary loading glow to brief green ready state", () => {
@@ -81,7 +78,7 @@ test("OverviewHeaderV3 moves from primary loading glow to brief green ready stat
   assert.match(header, /hexWithAlpha\(color, 0\.48\)/);
   assert.doesNotMatch(header, /hexWithAlpha\(color, 1\)/);
   // A healthy idle state is visually quiet after the transient ready check.
-  assert.match(header, /\) : syncNeedsLabel \? \(/);
+  assert.match(header, /\{syncNeedsLabel \? \(/);
   assert.match(header, /\) : null\}/);
 });
 
@@ -106,10 +103,10 @@ test("OverviewHeaderV3 expanded shell matches build 209 stadium chrome", () => {
   assert.match(header, /maxWidth:\s*"100%"/);
   assert.match(header, /fontSize: compact \? 14 : 17/);
   assert.match(header, /Updating…/);
-  assert.match(header, /chrome_selected/);
+  assert.match(header, /backgroundColor: t\.colors\.tone_primary/);
   assert.match(header, /sun\.max/);
   assert.match(header, /calendar\.badge\.clock/);
-  // Scheme-synced shell + stadium rail tokens (black Month pill retained).
+  // Scheme-synced shell + stadium rail tokens.
   assert.match(header, /chrome\.colors\.chrome_rail/);
   assert.match(header, /chrome\.colors\.background_secondary/);
 });
@@ -194,7 +191,7 @@ test("Overview collapsing header uses Reanimated scroll shared value", () => {
   assert.match(header, /HANDOFF_END/);
   assert.doesNotMatch(header, /useState\(.*scrollY/);
   assert.match(home, /Animated\.ScrollView/);
-  assert.match(home, /OverviewHeaderCompactSticky/);
+  assert.doesNotMatch(home, /OverviewHeaderCompactSticky/);
   assert.match(home, /useOverviewHeaderScroll/);
   assert.doesNotMatch(home, /stickyHeaderIndices/);
 });
@@ -225,12 +222,12 @@ test("Compact sticky chrome is full-bleed under the status bar", () => {
   assert.doesNotMatch(header, /compactRoot:\s*\{[^}]*bottom:\s*0/);
 });
 
-test("Compact sticky mounts outside GestureDetector on Overview", () => {
-  assert.match(home, /OverviewHeaderCompactSticky/);
+test("Home header scrolls away without mounting compact sticky chrome", () => {
+  assert.doesNotMatch(home, /OverviewHeaderCompactSticky/);
   assert.match(home, /GestureDetector/);
   const stickyAt = home.indexOf("<OverviewHeaderCompactSticky");
   const gestureAt = home.indexOf("<GestureDetector gesture={periodSwipe}>");
-  assert.ok(stickyAt >= 0 && gestureAt >= 0 && stickyAt < gestureAt);
+  assert.ok(stickyAt === -1 && gestureAt >= 0);
 });
 
 test("theme exposes header V3 tokens", () => {

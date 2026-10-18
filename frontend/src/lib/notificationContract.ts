@@ -74,6 +74,23 @@ export type NotificationRoute = {
   reason: string;
 };
 
+/** Ignore local alerts, transport tests and pushes for a previous login. */
+export function shouldRefreshForNotification(data: Record<string, unknown>, userId: string | null): boolean {
+  if (!userId || data.origin === "local") return false;
+  if (typeof data.userId === "string" && data.userId !== userId) return false;
+  const payload = parseNotificationPayload(data);
+  if (payload?.event === NOTIFICATION_EVENTS.test) return false;
+  if (payload) return payload.userId === userId;
+  return data.silent === true || data.event === "kdp-wake" || data["content-available"] === 1;
+}
+
+export function shouldPresentNotification(data: Record<string, unknown>, userId: string | null, prefs: NotificationPrefsInput): boolean {
+  if (!userId || data.silent === true || data.event === "kdp-wake" || data["content-available"] === 1) return false;
+  const payload = parseNotificationPayload(data);
+  if (!payload || payload.userId !== userId) return false;
+  return payload.event === NOTIFICATION_EVENTS.test || preferenceAllowsEvent(prefs, payload.event);
+}
+
 const EVENT_SET = new Set<string>(Object.values(NOTIFICATION_EVENTS));
 const ASIN_RE = /^[A-Z0-9]{8,16}$/i;
 
