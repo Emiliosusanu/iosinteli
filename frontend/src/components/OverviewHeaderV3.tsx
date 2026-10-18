@@ -518,7 +518,13 @@ function CustomRangeSheet({
     <>
       <View style={styles.sheetHeader}>
         <Text style={[t.typography.title3, { color: t.colors.text_primary }]}>Custom range</Text>
-        <TouchableOpacity onPress={onClose} hitSlop={10} accessibilityRole="button" accessibilityLabel="Done">
+        <TouchableOpacity
+          testID="home-custom-done"
+          onPress={onClose}
+          style={styles.dateSheetDone}
+          accessibilityRole="button"
+          accessibilityLabel="Done"
+        >
           <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Done</Text>
         </TouchableOpacity>
       </View>
@@ -529,6 +535,9 @@ function CustomRangeSheet({
             <TouchableOpacity
               key={preset.key}
               testID={`home-custom-preset-${preset.key}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              accessibilityLabel={`${preset.range.label}, ${preset.range.start} to ${preset.range.end}`}
               style={[styles.presetRow, { borderBottomColor: t.colors.separator }]}
               onPress={() => onPick(preset.range)}
               activeOpacity={0.6}
@@ -555,6 +564,8 @@ function CustomRangeSheet({
           </View>
           <TouchableOpacity
             testID="home-custom-apply"
+            accessibilityRole="button"
+            accessibilityLabel="Apply custom date range"
             onPress={() => {
               if (!/^\d{4}-\d{2}-\d{2}$/.test(customStart) || !/^\d{4}-\d{2}-\d{2}$/.test(customEnd)) return;
               if (customStart > customEnd) return;
@@ -1735,7 +1746,15 @@ const styles = StyleSheet.create({
     borderRadius: dashboard.chipRadius,
     borderCurve: "continuous",
     minHeight: layout.minTap,
+    minWidth: layout.minTap,
     alignItems: "center",
     justifyContent: "center",
+  },
+  dateSheetDone: {
+    minWidth: layout.minTap,
+    minHeight: layout.minTap,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 8,
   },
 });
