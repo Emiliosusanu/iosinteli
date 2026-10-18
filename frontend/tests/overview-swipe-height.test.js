@@ -36,6 +36,14 @@ test("Overview date page swipe lives outside chart plots", () => {
   assert.match(home, /Swipe a day on the chart/);
 });
 
+test("widget terminal states use a compact, accessible status lane", () => {
+  assert.match(swipe, /overview-widget-status-\$\{kind\}/);
+  assert.match(swipe, /minHeight: 44/);
+  assert.match(swipe, /wifi\.slash/);
+  assert.match(swipe, /exclamationmark\.triangle/);
+  assert.match(swipe, /arrow\.triangle\.2\.circlepath/);
+});
+
 test("Overview campaigns query keeps a wide fill pool and longer timeout", () => {
   assert.match(home, /limit: 80/);
   assert.match(home, /TARGETING_QUERY_TIMEOUT_MS/);

@@ -120,11 +120,11 @@ export function KdpRoyaltiesFormatPage({
     });
   }, []);
 
-  if (loading) return <SwipeEmpty message="Loading KDP royalties…" t={t} />;
+  if (loading) return <SwipeEmpty kind="loading" message="Loading KDP royalties…" t={t} />;
   if (error) {
     return (
       <TouchableOpacity onPress={onRetry} accessibilityRole="button">
-        <SwipeEmpty message="Couldn't load format mix. Tap to retry." t={t} />
+        <SwipeEmpty kind="error" message="Couldn't load format mix. Tap to retry." t={t} />
       </TouchableOpacity>
     );
   }
@@ -224,10 +224,10 @@ export function AdsEngineCampaignsPage({
   const t = useTheme();
   if (error) return (
     <TouchableOpacity onPress={onRetry} accessibilityRole="button" accessibilityLabel="Retry campaign metrics">
-      <SwipeEmpty message="Campaign metrics unavailable. Tap to retry." t={t} />
+      <SwipeEmpty kind="error" message="Campaign metrics unavailable. Tap to retry." t={t} />
     </TouchableOpacity>
   );
-  if (loading) return <SwipeEmpty message={loadingMessage} t={t} />;
+  if (loading) return <SwipeEmpty kind="loading" message={loadingMessage} t={t} />;
   if (!series.impressions.length) return <SwipeEmpty message={emptyMessage} t={t} />;
   return (
     <AdsEngineChart
@@ -297,11 +297,11 @@ export function AdsEngineKeywordsPage({
   });
   const series = useMemo(() => dailyToAdsEngineSeries(q.data?.daily ?? []), [q.data]);
 
-  if (q.isPending) return <SwipeEmpty message="Loading keyword funnel…" t={t} />;
+  if (q.isPending) return <SwipeEmpty kind="loading" message="Loading keyword funnel…" t={t} />;
   if (q.isError) {
     return (
       <TouchableOpacity onPress={() => void q.refetch()} accessibilityRole="button">
-        <SwipeEmpty message="Couldn't load keyword metrics. Tap to retry." t={t} />
+        <SwipeEmpty kind="error" message="Couldn't load keyword metrics. Tap to retry." t={t} />
       </TouchableOpacity>
     );
   }
@@ -373,11 +373,11 @@ export function AdsEngineSearchTermsPage({
   });
   const series = useMemo(() => dailyToAdsEngineSeries(q.data?.daily ?? []), [q.data]);
 
-  if (q.isPending) return <SwipeEmpty message="Loading search-term funnel…" t={t} />;
+  if (q.isPending) return <SwipeEmpty kind="loading" message="Loading search-term funnel…" t={t} />;
   if (q.isError) {
     return (
       <TouchableOpacity onPress={() => void q.refetch()} accessibilityRole="button">
-        <SwipeEmpty message="Couldn't load search-term metrics. Tap to retry." t={t} />
+        <SwipeEmpty kind="error" message="Couldn't load search-term metrics. Tap to retry." t={t} />
       </TouchableOpacity>
     );
   }

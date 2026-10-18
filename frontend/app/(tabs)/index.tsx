@@ -1824,8 +1824,14 @@ export default function OverviewScreen() {
       : syncPresentation.state === "failed" || syncPresentation.state === "stale"
         ? t.colors.tone_danger
         : t.colors.tone_warning;
-  const syncCompactLabel = syncLogsQ.isLoading && !kdpStalled ? "Sync" : syncPresentation.compact;
+  const syncCompactLabel = syncLogsQ.isLoading && !kdpStalled
+    ? "Sync"
+    : syncPresentation.compact;
   const onSyncChromePress = () => {
+    if (syncPresentation.state === "failed") {
+      void onRefresh();
+      return;
+    }
     if (kdpStalled) {
       router.push("/more/kdp-status" as Href);
       return;
@@ -2132,8 +2138,11 @@ export default function OverviewScreen() {
             onCurrencyPress={() => router.push("/more/accounts")}
             syncColor={syncColor}
             syncCompact={syncCompactLabel}
+            syncState={syncPresentation.state}
             syncA11y={
-              kdpStalled
+              syncPresentation.state === "failed"
+                ? syncPresentation.label
+                : kdpStalled
                 ? `${syncPresentation.label}. ${kdpStalledAccounts.map((row) => row.name).join(", ")}`
                 : recentCompletedSync?.completed_at
                   ? `${syncPresentation.label}. Last completed ${String(recentCompletedSync.completed_at).slice(0, 16)}`
@@ -2224,14 +2233,17 @@ export default function OverviewScreen() {
               t={t}
             />
             {(royaltiesFailed || adsFailed) && (
-              <TouchableOpacity
+              <PressableScale
                 onPress={() => void onRefresh()}
                 accessibilityRole="button"
                 accessibilityLabel="Retry financial data"
-                style={{ minHeight: t.layout.minTap, justifyContent: "center", marginTop: t.spacing.xs }}
+                accessibilityHint="Requests the latest financial data from the server"
+                containerStyle={{ minHeight: t.layout.minTap, alignSelf: "flex-start", marginTop: t.spacing.xs }}
+                style={[styles.financeRetryButton, { borderColor: t.colors.tone_primary + "42", backgroundColor: t.colors.tone_primary + "1A" }]}
               >
-                <Text style={[t.typography.callout, { color: t.colors.tone_primary }]}>Retry</Text>
-              </TouchableOpacity>
+                <SFSymbol name="arrow.clockwise" size={14} color={t.colors.tone_primary} />
+                <Text style={[t.typography.callout, { color: t.colors.tone_primary, fontWeight: "600" }]}>Retry</Text>
+              </PressableScale>
             )}
 
             <View
@@ -2413,13 +2425,13 @@ export default function OverviewScreen() {
                 hint: "Within the top 80 campaigns by spend",
                 content:
                   campaignsWidgetPhase === "loading" ? (
-                    <SwipeEmpty message="Loading campaigns…" t={t} />
+                    <SwipeEmpty kind="loading" message="Loading campaigns…" t={t} />
                   ) : campaignsWidgetPhase === "timeout" || campaignsWidgetPhase === "offline" || campaignsWidgetPhase === "error" ? (
                     <TouchableOpacity
                       onPress={() => void topCampaignsQ.refetch()}
                       accessibilityRole="button"
                     >
-                      <SwipeEmpty message="Couldn't load campaigns. Tap to retry." t={t} />
+                      <SwipeEmpty kind={campaignsWidgetPhase} message="Couldn't load campaigns. Tap to retry." t={t} />
                     </TouchableOpacity>
                   ) : campsHighAcos.length === 0 ? (
                     <SwipeEmpty message="No measured ACoS in this sample." t={t} />
@@ -2495,7 +2507,7 @@ export default function OverviewScreen() {
                 content:
                   adGroupsQ.isError && groupsHighAcos.length === 0 ? (
                     <TouchableOpacity onPress={() => void adGroupsQ.refetch()} accessibilityRole="button">
-                      <SwipeEmpty message="Couldn't load ad groups. Tap to retry." t={t} />
+                      <SwipeEmpty kind="error" message="Couldn't load ad groups. Tap to retry." t={t} />
                     </TouchableOpacity>
                   ) : groupsHighAcos.length === 0 ? (
                     <SwipeEmpty message="No ad groups in this period." t={t} />
@@ -2600,7 +2612,7 @@ export default function OverviewScreen() {
                   hidden: !bleedersQ.isError,
                   freshness: overviewReadLabel({ updatedAt: bleedersQ.dataUpdatedAt, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
                   onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "all" } }),
-                  content: <TouchableOpacity onPress={() => void bleedersQ.refetch()} accessibilityRole="button"><SwipeEmpty message="Couldn't load keywords. Tap to retry." t={t} /></TouchableOpacity>,
+                  content: <TouchableOpacity onPress={() => void bleedersQ.refetch()} accessibilityRole="button"><SwipeEmpty kind="error" message="Couldn't load keywords. Tap to retry." t={t} /></TouchableOpacity>,
                 },
                 {
                   key: "st-unavailable",
@@ -2609,7 +2621,7 @@ export default function OverviewScreen() {
                   actionLabel: "Search terms",
                   freshness: overviewReadLabel({ updatedAt: searchTermsPulseQ.dataUpdatedAt, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
                   onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "all", enabledParents: "1" } }),
-                  content: <TouchableOpacity onPress={() => void searchTermsPulseQ.refetch()} accessibilityRole="button"><SwipeEmpty message="Couldn't load search terms. Tap to retry." t={t} /></TouchableOpacity>,
+                  content: <TouchableOpacity onPress={() => void searchTermsPulseQ.refetch()} accessibilityRole="button"><SwipeEmpty kind="error" message="Couldn't load search terms. Tap to retry." t={t} /></TouchableOpacity>,
                 },
                 {
                   key: "kw-no-orders",
@@ -2793,10 +2805,10 @@ export default function OverviewScreen() {
                 label: "",
                 content:
                   booksWidgetPhase === "loading" ? (
-                    <SwipeEmpty message="Loading books…" t={t} />
+                    <SwipeEmpty kind="loading" message="Loading books…" t={t} />
                   ) : booksWidgetPhase === "timeout" || booksWidgetPhase === "offline" || booksWidgetPhase === "error" ? (
                     <TouchableOpacity onPress={() => void topBooksQ.refetch()} accessibilityRole="button">
-                      <SwipeEmpty message="Couldn't load books. Tap to retry." t={t} />
+                      <SwipeEmpty kind={booksWidgetPhase} message="Couldn't load books. Tap to retry." t={t} />
                     </TouchableOpacity>
                   ) : booksRoyalties.length === 0 ? (
                     !kdpCurrencyComparable ? (
@@ -3266,6 +3278,17 @@ function targetingBadge(c: { targeting_type?: string | null; type?: string | nul
 // ─── styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  financeRetryButton: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
   grossStatusSlot: {
     height: 34,
     marginTop: 6,

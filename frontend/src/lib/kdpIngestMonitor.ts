@@ -63,33 +63,30 @@ export async function loadScopedKdpFreshness(
   nowMs = Date.now(),
 ): Promise<KdpAccountFreshness[]> {
   if (!profileIds.length) return [];
-  try {
-    const accounts = await fetchKdpAccounts();
-    const scoped = kdpAccountsLinkedToSelection(accounts, profileIds);
-    if (!scoped.length) return [];
+  // An unavailable account read is not evidence of an empty linked scope.
+  const accounts = await fetchKdpAccounts();
+  const scoped = kdpAccountsLinkedToSelection(accounts, profileIds);
+  if (!scoped.length) return [];
 
-    const [source, helperAccountId, helperState, signals] = await Promise.all([
-      getKdpRoyaltySource(),
-      loadHelperAccountId(),
-      loadHelperSyncState(),
-      loadAccountSignals(scoped.map((account) => account.id)),
-    ]);
+  const [source, helperAccountId, helperState, signals] = await Promise.all([
+    getKdpRoyaltySource(),
+    loadHelperAccountId(),
+    loadHelperSyncState(),
+    loadAccountSignals(scoped.map((account) => account.id)),
+  ]);
 
-    return scoped.map((account) => {
-      const signal = signals.get(account.id);
-      return combineKdpAccountFreshness({
-        accountId: account.id,
-        name: account.name,
-        lastSyncedAt: account.last_synced_at,
-        createdAtMs: signal?.createdAtMs ?? null,
-        dailyWriteAtMs: signal?.dailyWriteAtMs ?? null,
-        helperEnabled: isIosHelperEnabled(source),
-        helperAccountId,
-        helperLastRunAtMs: helperState.lastRunAtMs,
-        nowMs,
-      });
+  return scoped.map((account) => {
+    const signal = signals.get(account.id);
+    return combineKdpAccountFreshness({
+      accountId: account.id,
+      name: account.name,
+      lastSyncedAt: account.last_synced_at,
+      createdAtMs: signal?.createdAtMs ?? null,
+      dailyWriteAtMs: signal?.dailyWriteAtMs ?? null,
+      helperEnabled: isIosHelperEnabled(source),
+      helperAccountId,
+      helperLastRunAtMs: helperState.lastRunAtMs,
+      nowMs,
     });
-  } catch {
-    return [];
-  }
+  });
 }
