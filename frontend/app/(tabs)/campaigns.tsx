@@ -132,7 +132,7 @@ export default function CampaignsScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const reduceMotion = useReduceMotion();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles, profilesLoading, profilesFetching, profilesError, refetchProfiles } = useApp();
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const { user, guestMode } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
@@ -401,6 +401,18 @@ export default function CampaignsScreen() {
   const filtersActive = sortActive || bookFilterActive;
   const empty = emptyCopy(search, stateFilter, bookFilterActive);
   const showCount = search.trim().length > 0 || stateFilter !== "enabled" || filtersActive;
+
+  if (selectedProfileIds.length === 0 && (profilesLoading || profilesFetching || profilesError)) {
+    return (
+      <AppScreen>
+        <TopBar />
+        {profilesError ? (
+          <RetryState title="Couldn't load accounts" subtitle="Account availability couldn't be verified."
+            onRetry={() => void refetchProfiles()} retrying={profilesFetching} />
+        ) : <ScreenSpinner />}
+      </AppScreen>
+    );
+  }
 
   if (selectedProfileIds.length === 0) {
     return (

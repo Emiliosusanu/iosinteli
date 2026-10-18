@@ -445,7 +445,7 @@ export default function TargetingScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const invalidateAds = useInvalidateAds();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles, profilesLoading } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles, profilesLoading, profilesFetching, profilesError, refetchProfiles } = useApp();
   const { user, guestMode } = useAuth();
   const params = useLocalSearchParams<{ flow?: string; segment?: string; perf?: string; sort?: string }>();
   const memoryScope = `${user?.id ?? "guest"}:${adminFilterUserId ?? "self"}`;
@@ -1761,6 +1761,18 @@ export default function TargetingScreen() {
     () => selectedCooldownSummary(segment, selectedIds, data, entityCooldownHours),
     [segment, selectedIds, data, entityCooldownHours],
   );
+
+  if (selectedProfileIds.length === 0 && (profilesLoading || profilesFetching || profilesError)) {
+    return (
+      <AppScreen>
+        <TopBar showKdpAccountGroups={false} condensedMarket />
+        {profilesError ? (
+          <RetryState title="Couldn't load accounts" subtitle="Account availability couldn't be verified."
+            onRetry={() => void refetchProfiles()} retrying={profilesFetching} />
+        ) : <ScreenSpinner />}
+      </AppScreen>
+    );
+  }
 
   if (selectedProfileIds.length === 0) {
     return (
