@@ -1,4 +1,5 @@
 import React from "react";
+import { AdsEngineReadout } from "./AdsEngineReadout";
 import { View, Text, StyleSheet } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { runOnJS } from "react-native-reanimated";
@@ -700,12 +701,12 @@ export function NetProfitChart({
   onDaySelect,
 }: NetProfitChartProps) {
   const t = useTheme();
-  const leftGutter = 52;
-  const rightPad = 6;
-  const bottomPad = 22;
+  const leftGutter = 44;
+  const rightPad = 4;
+  const bottomPad = 18;
   const chartWidth = Math.max(200, width);
   const plotWidth = Math.max(160, chartWidth - leftGutter - rightPad);
-  const inset = 8;
+  const inset = 6;
   const onDaySelectRef = React.useRef(onDaySelect);
   onDaySelectRef.current = onDaySelect;
   const dataRef = React.useRef(data);
@@ -1236,30 +1237,7 @@ export function AdsEngineChart({
     <GestureDetector gesture={gesture}>
       <View style={{ width: chartWidth, overflow: "hidden" }} accessibilityLabel="Ads Engine chart. Swipe a day to inspect it. Release to show the period total.">
         {showReadout ? (
-          <View style={chartStyles.tooltipRowCompact}>
-            <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, flexShrink: 0 }]} numberOfLines={1}>
-              {selectedLabel}
-            </Text>
-            <Text
-              style={[
-                t.typography.caption2,
-                {
-                  color: t.colors.text_primary,
-                  fontWeight: "700",
-                  flex: 1,
-                  textAlign: "right",
-                  fontVariant: ["tabular-nums"],
-                },
-              ]}
-              numberOfLines={1}
-              accessibilityLabel={`Impr ${formatCompact(selectedImpr)}, Clicks ${formatInt(selectedClicks)}, Orders ${formatInt(selectedOrders)}, ACoS ${selectedAcos == null ? "none" : formatPercent(selectedAcos)}`}
-            >
-              {/* Compact clicks so Impr/Clicks/Orders/ACoS tags all fit one line above the dock. */}
-              {`Impr ${formatCompact(selectedImpr)} · Clicks ${formatCompact(selectedClicks)} · Orders ${formatInt(selectedOrders)} · ACoS ${
-                selectedAcos == null ? "—" : formatPercent(selectedAcos)
-              }`}
-            </Text>
-          </View>
+          <AdsEngineReadout label={selectedLabel} impressions={selectedImpr} clicks={selectedClicks} orders={selectedOrders} acos={selectedAcos} />
         ) : null}
         <Svg width={chartWidth} height={chartHeight + 30}>
           <Line
@@ -1792,20 +1770,6 @@ const chartStyles = StyleSheet.create({
     gap: 8,
     marginBottom: 4,
     overflow: "hidden",
-  },
-  // Ads Engine: date on its own line so Impr/Clicks/Orders/ACoS never ellipsis.
-  tooltipStackAds: {
-    gap: 2,
-    marginBottom: 4,
-  },
-  // Ads Engine: keep Impr/Clicks/Orders/ACoS tags visible (wrap instead of ellipsis).
-  tooltipRowCompactAds: {
-    minHeight: 18,
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 8,
-    marginBottom: 4,
   },
   netHeader: {
     minHeight: 28,

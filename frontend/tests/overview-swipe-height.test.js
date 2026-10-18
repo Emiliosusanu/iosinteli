@@ -18,6 +18,9 @@ test("OverviewSwipeWidget pages in-place so nested scroll cannot clip rows", () 
   assert.match(swipe, /chevron\.(left|right)/);
   assert.match(swipe, /Next widget page/);
   assert.match(swipe, /OverviewWidgetPageSwipeContext/);
+  assert.match(swipe, /SyncGlowFrame/);
+  assert.match(swipe, /read\.label \|\| " "/);
+  assert.doesNotMatch(swipe, /\/updating\/i|\/failed\|unavailable\|stale\/i/);
   assert.match(swipe, /title\} · \$\{pageLabel\}/);
   assert.doesNotMatch(swipe, /<FlatList/);
   assert.doesNotMatch(swipe, /<ScrollView/);

@@ -156,15 +156,20 @@ test("OverviewHeaderV3 market pill uses separated unclipped flag tiles", () => {
   assert.match(home, /multiCountryCodes/);
 });
 
-test("Gross updating status breathes inside a fixed lane without moving widgets", () => {
+test("Gross reserves a compact caption lane without an updating label or dot", () => {
   assert.match(home, /function GrossStatusSlot/);
   assert.match(home, /testID="home-gross-status"/);
-  assert.match(home, /testID="home-gross-status-glow"/);
-  assert.match(home, /height:\s*34/);
-  assert.match(home, /withRepeat/);
-  assert.match(home, /transform:\s*\[\{ scale:/);
+  assert.doesNotMatch(home, /testID="home-gross-status-glow"|grossStatusDot/);
+  assert.match(home, /minHeight:\s*18/);
   assert.match(home, /caption=\{financeCaption\}/);
-  assert.match(home, /updating=\{periodRefreshing\}/);
+  assert.doesNotMatch(home, /updating=\{periodRefreshing\}/);
+});
+
+test("Gross uses border feedback instead of an Updating layout label", () => {
+  assert.match(home, /SyncGlowFrame/);
+  assert.match(home, /contextKey=\{homeReadContextKey\}/);
+  assert.match(home, /failed: viewingAsAdmin \? bootstrapQ.isError/);
+  assert.doesNotMatch(home, /periodRefreshing\s*\? "Updating…"/);
 });
 
 test("OverviewHeaderV3 lets users select all markets or one detected marketplace", () => {

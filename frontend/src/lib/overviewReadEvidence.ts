@@ -1,3 +1,11 @@
+import type { SyncReadEvidence } from "./syncFeedback";
+
+export type OverviewReadFeedback = SyncReadEvidence & { label: string };
+
+export function overviewReadFeedback(input: SyncReadEvidence): OverviewReadFeedback {
+  return { ...input, label: input.fetching ? "" : overviewReadLabel(input) };
+}
+
 /** A timestamp remains true on an idle screen, unlike a frozen "just now". */
 export function overviewReadLabel(input: {
   updatedAt: number;

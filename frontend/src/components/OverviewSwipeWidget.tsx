@@ -9,6 +9,8 @@ import { HorizonPane, PressableScale, StaggerReveal } from "@/src/components/Mot
 import { useOverviewPeriodSwipeGesture } from "@/src/components/OverviewPeriodSwipe";
 import { OverviewWidgetPageSwipeContext } from "@/src/components/OverviewWidgetPageSwipe";
 import { SFSymbol } from "@/src/components/ios/Native";
+import { SyncGlowFrame } from "@/src/components/SyncGlowFrame";
+import type { OverviewReadFeedback } from "@/src/lib/overviewReadEvidence";
 import { motion } from "@/src/lib/motion";
 import { dashboard, useReduceMotion, useTheme, type Theme } from "@/src/lib/theme";
 
@@ -21,7 +23,7 @@ export type OverviewSwipePage = {
   hint?: string;
   /** Tertiary caption under title (e.g. break-even %). */
   meta?: string;
-  freshness?: string;
+  freshness?: OverviewReadFeedback;
   /** One-line metrics top-right of the header. */
   summary?: React.ReactNode;
   content: React.ReactNode;
@@ -44,6 +46,8 @@ export function OverviewSwipeWidget({
   testID,
   staggerIndex = 0,
   freshness,
+  readContextKey,
+  active = true,
 }: {
   title: string;
   icon?: InteliAdsIconName;
@@ -53,7 +57,9 @@ export function OverviewSwipeWidget({
   action?: React.ReactNode;
   testID?: string;
   staggerIndex?: number;
-  freshness?: string;
+  freshness?: OverviewReadFeedback;
+  readContextKey: string;
+  active?: boolean;
   /** @deprecated Page label is folded into the card title. Kept for call-site compat. */
   inlinePageLabel?: boolean;
 }) {
@@ -101,14 +107,16 @@ export function OverviewSwipeWidget({
 
   const pageLabel = page.label?.trim() ?? "";
   const headerTitle = pageLabel ? `${title} · ${pageLabel}` : title;
+  const read = page.freshness ?? freshness;
 
   return (
     <StaggerReveal index={staggerIndex}>
+    <View style={{ marginTop: dashboard.sectionGap }}>
+    <SyncGlowFrame read={read ?? { fetching: false, failed: false, updatedAt: 0 }} contextKey={`${readContextKey}:${page.key}`} visible={active} radius={dashboard.cardRadius} testID={testID ? `${testID}-sync-glow` : undefined}>
     <GlassPanel
       strength="card"
       testID={testID}
       style={{
-        marginTop: dashboard.sectionGap,
         borderRadius: dashboard.cardRadius,
         borderCurve: "continuous",
         borderColor: t.colors.glass_stroke,
@@ -124,10 +132,12 @@ export function OverviewSwipeWidget({
         meta={page.meta}
         trailing={page.summary}
       />
-      {page.freshness || freshness ? (
-        <Text accessibilityLiveRegion="polite" style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 4 }]}>
-          {page.freshness ?? freshness}
-        </Text>
+      {read ? (
+        <View style={{ minHeight: 17, marginTop: 4 }}>
+          <Text accessibilityLiveRegion="polite" style={[t.typography.caption2, { color: t.colors.text_secondary }]}>
+            {read.label || " "}
+          </Text>
+        </View>
       ) : null}
       {page.hint ? (
         <Text
@@ -188,6 +198,8 @@ export function OverviewSwipeWidget({
         </View>
       ) : null}
     </GlassPanel>
+    </SyncGlowFrame>
+    </View>
     </StaggerReveal>
   );
 }
