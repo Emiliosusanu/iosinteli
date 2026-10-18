@@ -17,8 +17,9 @@ test("ad groups list is scoped, capped, and cannot spin pull-to-refresh forever"
   assert.match(screen, /withQueryTimeout/);
   assert.match(screen, /setRefreshing\(false\)/);
   assert.match(screen, /Ad groups took too long/);
-  assert.match(screen, /sortedProfileIds\(selectedProfileIds\)/);
-  assert.match(screen, /top \$\{AD_GROUPS_LIST_LIMIT\} by spend/);
+  assert.match(screen, /enabledSelectedProfileIds\(profiles, selectedProfileIds\)\.sort\(\)/);
+  assert.match(screen, /top \$\{AD_GROUPS_LIST_LIMIT\} by period spend/);
+  assert.match(screen, /limited catalog/);
   assert.match(home, /limit: 80/);
   assert.match(home, /fetchOverviewActiveAdGroups/);
   const widgetQuery = queries.slice(queries.indexOf("export async function fetchOverviewActiveAdGroups"), queries.indexOf("// ---------- Keywords ----------"));

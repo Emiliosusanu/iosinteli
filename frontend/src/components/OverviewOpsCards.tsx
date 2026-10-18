@@ -20,6 +20,7 @@ import { PressableScale, StaggerReveal, VerifiedValue } from "@/src/components/M
 import { autoModeLabel } from "@/src/lib/bidBotContract";
 import { formatCurrency, formatInt, formatPercent } from "@/src/lib/format";
 import { motion } from "@/src/lib/motion";
+import { budgetUsageLabel } from "@/src/lib/budgetPresentation";
 import { dashboard, useReduceMotion, useTheme, type Theme } from "@/src/lib/theme";
 
 const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
@@ -158,15 +159,16 @@ export function OverviewBudgetArc({
   currency,
   size = 128,
 }: {
-  spent: number;
-  budget: number;
+  spent: number | null;
+  budget: number | null;
   currency?: string;
   size?: number;
 }) {
   const t = useTheme();
   const reduceMotion = useReduceMotion();
-  const pct = budget > 0 ? Math.min(1, Math.max(0, spent / budget)) : 0;
-  const pctDisplay = budget > 0 ? Math.round(pct * 100) : null;
+  const ratioKnown = spent != null && budget != null && budget > 0;
+  const pct = ratioKnown ? Math.min(1, Math.max(0, spent / budget)) : 0;
+  const pctDisplay = ratioKnown ? budgetUsageLabel((spent / budget) * 100) : "—";
   const reveal = useSharedValue(reduceMotion ? 1 : 0);
   const cx = size / 2;
   const cy = size / 2;
@@ -238,11 +240,11 @@ export function OverviewBudgetArc({
       </Svg>
       <View style={styles.arcCenter} pointerEvents="none">
         <VerifiedValue
-          value={formatCurrency(spent, currency, { compact: true })}
+          value={spent == null ? "—" : formatCurrency(spent, currency, { compact: true })}
           style={[t.typography.title3, { color: t.colors.text_primary, fontWeight: "700", fontVariant: ["tabular-nums"] }]}
         />
         <Text style={{ fontSize: 15, color, fontWeight: "700", marginTop: 2, fontVariant: ["tabular-nums"] }}>
-          {pctDisplay == null ? "—" : `${pctDisplay}%`}
+          {pctDisplay}
         </Text>
       </View>
     </Animated.View>
@@ -256,6 +258,8 @@ export function OverviewBudgetTodayCard({
   usedPct,
   danger,
   todaySynced = true,
+  todayFailed = false,
+  budgetKnown = true,
   monthToDate,
   projectedMonthSpend,
   monthlyBudget,
@@ -267,8 +271,10 @@ export function OverviewBudgetTodayCard({
   currency?: string;
   usedPct: number;
   danger: boolean;
-  /** False when today's Ads metrics are not imported yet — do not imply $0 spend. */
+  /** False until today's metrics read is verified; not evidence of a sync failure. */
   todaySynced?: boolean;
+  todayFailed?: boolean;
+  budgetKnown?: boolean;
   monthToDate?: number;
   projectedMonthSpend?: number;
   monthlyBudget?: number;
@@ -277,7 +283,9 @@ export function OverviewBudgetTodayCard({
 }) {
   const t = useTheme();
   const remaining = Math.max(0, budget - spent);
-  const barColor = danger
+  const barColor = !todaySynced || !budgetKnown
+    ? t.colors.text_tertiary
+    : danger
     ? t.colors.tone_danger
     : usedPct >= 80
       ? t.colors.tone_warning
@@ -288,30 +296,30 @@ export function OverviewBudgetTodayCard({
       <OverviewCardHeader title="Budget today" icon="adSpend" />
       <View style={styles.budgetBody}>
         <OverviewBudgetArc
-          spent={todaySynced ? spent : 0}
-          budget={budget}
+          spent={todaySynced ? spent : null}
+          budget={budgetKnown ? budget : null}
           currency={currency}
           size={96}
         />
         <View style={styles.budgetCopy}>
           <Text style={[t.typography.metric_compact, { color: t.colors.text_primary }]} numberOfLines={1}>
             {!todaySynced
-              ? "Not synced"
-              : budget > 0
+              ? todayFailed ? "Spend unavailable" : "Checking spend"
+              : budgetKnown && budget > 0
                 ? `${formatCurrency(spent, currency, { compact: true })} of ${formatCurrency(budget, currency, { compact: true })}`
                 : formatCurrency(spent, currency, { compact: true })}
           </Text>
           <View style={styles.chipRow}>
             {!todaySynced ? (
-              <StatusChip label="Waiting for sync" tone="inactive" t={t} />
-            ) : budget > 0 ? (
+              <StatusChip label={todayFailed ? "Update unavailable" : "Waiting for server"} tone="inactive" t={t} />
+            ) : budgetKnown && budget > 0 ? (
               <StatusChip
-                label={danger ? "Almost gone" : `${Math.round(usedPct)}% used · ${formatCurrency(remaining, currency, { compact: true })} left`}
+                label={danger ? "Almost gone" : `${budgetUsageLabel(usedPct)} used · ${formatCurrency(remaining, currency, { compact: true })} left`}
                 tone={danger ? "danger" : usedPct >= 80 ? "warning" : "primary"}
                 t={t}
               />
             ) : (
-              <StatusChip label="Spend so far" tone="neutral" t={t} />
+              <StatusChip label={budgetKnown ? "Spend so far" : "Budget unavailable"} tone="neutral" t={t} />
             )}
           </View>
           {todaySynced && projectedMonthSpend != null ? (

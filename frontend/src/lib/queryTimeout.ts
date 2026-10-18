@@ -45,7 +45,8 @@ export const BOOK_CAMPAIGN_METRICS_BUDGET_MS = 25_000;
 export const HOME_QUERY_TIMEOUT_MESSAGE = "HOME_QUERY_TIMEOUT";
 
 export function isHomeQueryTimeout(error: unknown): boolean {
-  return error instanceof Error && error.message === HOME_QUERY_TIMEOUT_MESSAGE;
+  return (error instanceof Error && error.message === HOME_QUERY_TIMEOUT_MESSAGE) ||
+    (typeof error === "object" && error != null && (error as { code?: unknown }).code === "57014");
 }
 
 function abortError(): Error {
@@ -77,6 +78,27 @@ export async function withQueryTimeout<T>(
   } finally {
     if (timer) clearTimeout(timer);
     if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/** Task form for cancellable transports: the deadline also aborts network I/O. */
+export async function withAbortableQueryTimeout<T>(
+  task: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  upstream?: AbortSignal,
+): Promise<T> {
+  if (upstream?.aborted) throw abortError();
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  upstream?.addEventListener("abort", abort, { once: true });
+  try {
+    return await withQueryTimeout(Promise.resolve().then(() => {
+      if (controller.signal.aborted) throw abortError();
+      return task(controller.signal);
+    }), ms, upstream);
+  } finally {
+    upstream?.removeEventListener("abort", abort);
+    controller.abort();
   }
 }
 

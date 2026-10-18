@@ -48,6 +48,10 @@ export function GlassPanel({
           style,
         ]}
       >
+        <View
+          pointerEvents="none"
+          style={[styles.topHighlight, { backgroundColor: t.colors.glass_highlight }]}
+        />
         <View style={contentStyle}>{children}</View>
       </View>
     );
@@ -67,6 +71,10 @@ export function GlassPanel({
         pointerEvents="none"
         style={[StyleSheet.absoluteFill, { backgroundColor: wash }]}
       />
+      <View
+        pointerEvents="none"
+        style={[styles.topHighlight, { backgroundColor: t.colors.glass_highlight }]}
+      />
       <View style={[{ position: "relative" }, contentStyle]}>{children}</View>
     </View>
   );
@@ -76,5 +84,13 @@ const styles = StyleSheet.create({
   base: {
     borderWidth: StyleSheet.hairlineWidth,
     borderCurve: "continuous",
+  },
+  topHighlight: {
+    position: "absolute",
+    top: 0,
+    left: 12,
+    right: 12,
+    height: StyleSheet.hairlineWidth,
+    opacity: 0.72,
   },
 });

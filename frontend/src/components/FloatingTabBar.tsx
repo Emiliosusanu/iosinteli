@@ -35,7 +35,7 @@ type TabVisual = {
 
 const TAB_VISUAL: Record<string, TabVisual> = {
   index: {
-    label: "Overview",
+    label: "Home",
     shortLabel: "Home",
     symbol: "house",
     symbolFill: "house.fill",
@@ -96,6 +96,7 @@ type TabChrome = {
   selected: string;
   selectedFg: string;
   inactive: string;
+  idleFill: string;
 };
 
 type DockScale = ReturnType<typeof dockScaleForWidth>;
@@ -146,13 +147,23 @@ function TabSegment({
   }));
 
   const iconColor = focused ? chrome.selectedFg : chrome.inactive;
-  const iconSize = focused ? scale.iconActive : scale.icon;
-  const labelText = scale.useShortLabel ? visual.shortLabel : visual.label;
+  const iconSize = Math.min(focused ? scale.iconActive : scale.icon, 22);
+  const labelText = visual.label;
   const showLabel = focused && scale.showSelectedLabel;
   const symbolName = focused ? visual.symbolFill : visual.symbol;
 
   return (
-    <View style={styles.segmentSlot}>
+    <View style={[
+      styles.segmentSlot,
+      focused && styles.segmentSlotActive,
+      focused ? {
+        backgroundColor: chrome.selected,
+        shadowColor: chrome.selected,
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 3 },
+      } : null,
+    ]}>
       <PressableScale
         accessibilityRole="tab"
         accessibilityState={{ selected: focused }}
@@ -163,7 +174,7 @@ function TabSegment({
         hitSlop={6}
         style={[
           styles.segment,
-          { minHeight: scale.segmentMinHeight },
+          { minHeight: scale.segmentMinHeight, backgroundColor: focused ? undefined : chrome.idleFill },
           focused ? styles.segmentActive : styles.segmentIdle,
         ]}
       >
@@ -178,7 +189,7 @@ function TabSegment({
         />
         <SFSymbol name={symbolName} size={iconSize} color={iconColor} />
         {showLabel ? (
-          <Animated.View style={labelStyle}>
+          <Animated.View style={[styles.labelWrap, labelStyle]}>
             <Text
               accessible={false}
               importantForAccessibility="no-hide-descendants"
@@ -190,7 +201,7 @@ function TabSegment({
                 styles.label,
                 {
                   color: chrome.selectedFg,
-                  fontSize: scale.labelSize,
+                  fontSize: 14,
                 },
               ]}
             >
@@ -205,8 +216,8 @@ function TabSegment({
 
 /**
  * Floating stadium dock: solid theme-synced pill (white / #141417), soft
- * floating shadow, SF Symbol tabs. Selected = blue-tinted vertical stadium
- * (filled icon + short label); idle = outline icon only.
+ * floating shadow, SF Symbol tabs. The selected icon and label share one row;
+ * inactive capsules display icons only, matching the Targets mode selector.
  */
 export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBarProps) {
   const t = useTheme();
@@ -224,9 +235,10 @@ export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBa
     () => ({
       fill: t.colors.tabbar_background,
       stroke: t.colors.tabbar_stroke,
-      selected: t.colors.tabbar_selected,
-      selectedFg: t.colors.tabbar_selected_fg,
-      inactive: t.colors.tabbar_inactive,
+      selected: t.colors.control_selected,
+      selectedFg: "#FFFFFF",
+      inactive: t.colors.text_secondary,
+      idleFill: t.colors.background_tertiary,
       elevation: t.shadow.floating,
     }),
     [t.colors, t.shadow.floating],
@@ -334,13 +346,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     width: "100%",
+    gap: 4,
   },
-  /** Equal share — minWidth:0 stops fixed-content pills from blowing the rail. */
+  /** The active tab gets space for its inline label. */
   segmentSlot: {
+    borderRadius: 999,
     flex: 1,
     minWidth: 0,
     zIndex: 1,
     alignItems: "stretch",
+  },
+  segmentSlotActive: {
+    flex: 2.3,
   },
   segment: {
     borderRadius: 999,
@@ -349,20 +366,19 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     overflow: "hidden",
   },
-  /** Mockup: icon above short label inside the blue-tinted stadium. */
+  /** Same inline selected treatment as the top mode selector. */
   segmentActive: {
     alignSelf: "stretch",
-    marginHorizontal: 2,
     paddingHorizontal: 8,
     paddingVertical: 6,
-    flexDirection: "column",
-    gap: 2,
+    flexDirection: "row",
+    gap: 6,
   },
   segmentIdle: {
     alignSelf: "stretch",
     width: "100%",
     paddingHorizontal: 0,
-    flexDirection: "column",
+    flexDirection: "row",
   },
   activePill: {
     borderRadius: 999,
@@ -371,8 +387,12 @@ const styles = StyleSheet.create({
   label: {
     flexShrink: 1,
     fontWeight: "700",
-    letterSpacing: -0.2,
+    letterSpacing: 0,
     textAlign: "center",
-    lineHeight: 14,
+    lineHeight: 18,
+  },
+  labelWrap: {
+    minWidth: 0,
+    flexShrink: 1,
   },
 });

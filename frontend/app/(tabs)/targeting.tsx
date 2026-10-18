@@ -17,9 +17,13 @@ import { BookCover } from "@/src/components/BookCover";
 import { AppScreen } from "@/src/components/ScreenAmbient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { markPerf } from "@/src/lib/perf";
+import { useLocalSearchParams } from "expo-router";
+import { enabledSelectedProfileIds } from "@/src/lib/booksProfileScope";
+import { targetingFreshnessLabel } from "@/src/lib/targetingPageFreshness";
 import { noPeriodPlaceholder, financialPeriodQueryKey, LIST_PERIOD_QUERY_CACHE, STABLE_SCOPED_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
-import { isHomeQueryTimeout, queryStillWaiting, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
+import { isHomeQueryTimeout, queryStillWaiting, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
+import { targetingPageQueryKey, targetingPageQueryOptions, targetingCanAutoRefresh } from "@/src/lib/targetingTransport";
 import {
   fetchAdGroupDefaultBids,
   fetchMobileTargetingPage,
@@ -49,7 +53,6 @@ import {
   getBulkOutboxSnapshot,
   isBulkWritableTargetingRow,
   listPermanentFailEntityIds,
-  loadBulkSelectionMemory,
   requeuePermanentBulkFailures,
   saveBulkSelectionMemory,
   type BulkEntityKind,
@@ -147,7 +150,7 @@ import {
 import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { rowCurrencyOfProfile } from "@/src/lib/accountsUi";
 import { enabledSpoken, matchTypeSpoken, targetingSpeech } from "@/src/lib/targetingA11y";
-import { type Href, useRouter } from "expo-router";
+import { type Href, useRouter, usePathname } from "expo-router";
 
 type Segment = TargetingModeKey;
 
@@ -215,7 +218,7 @@ const PERF_FILTERS: { key: PerfFilter; label: string; hint: string }[] = [
   { key: "high_acos", label: "ACoS high", hint: "ACoS above ~35%" },
   { key: "low_acos", label: "ACoS low", hint: "ACoS at or under 20%" },
   { key: "no_sales", label: "No sales", hint: "Spend, zero sales" },
-  { key: "profitable", label: "Profit", hint: "Sales and ACoS at or under 35%" },
+  { key: "profitable", label: "Sales · ACoS ≤35%", hint: "Sales and ACoS at or under 35%" },
   { key: "has_clicks", label: "Clicks", hint: "At least 1 click" },
   { key: "has_orders", label: "Orders", hint: "At least 1 order" },
   { key: "has_impressions", label: "Impr", hint: "At least 1 impression" },
@@ -442,8 +445,12 @@ export default function TargetingScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const invalidateAds = useInvalidateAds();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles, profilesLoading, profilesFetching, profilesError, refetchProfiles } = useApp();
   const { user, guestMode } = useAuth();
+  const params = useLocalSearchParams<{ flow?: string; segment?: string; perf?: string; sort?: string }>();
+  const memoryScope = `${user?.id ?? "guest"}:${adminFilterUserId ?? "self"}`;
+  const hydrationKey = `${memoryScope}:${params.flow ?? ""}`;
+  const [hydratedKey, setHydratedKey] = useState("");
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
   const writeGuard = { guestMode, viewAsOtherUser };
   const [segment, setSegment] = useState<Segment>("keywords");
@@ -486,10 +493,28 @@ export default function TargetingScreen() {
   const [catalogNextPage, setCatalogNextPage] = useState(2);
   const catalogPageRequestRef = useRef<string | null>(null);
   const catalogGenerationRef = useRef(0);
+  const catalogTailIdentityRef = useRef("");
   const listRef = useRef<FlatList>(null);
 
   useEffect(() => {
+    let active = true;
     markPerf("targets.mount");
+    setSearch("");
+    setSegment("keywords");
+    setPerf("all");
+    setSort("acos");
+    setStateFilter(DEFAULT_TARGETING_STATE_FILTER);
+    setBookAsin(null);
+    setAdvanced({ ...EMPTY_TARGETING_ADVANCED_FILTERS });
+    setSelectedIds([]);
+    setSelectMode(false);
+    if (params.flow) {
+      if (SEGMENTS.some((s) => s.key === params.segment)) setSegment(params.segment as Segment);
+      if (PERF_FILTERS.some((s) => s.key === params.perf)) setPerf(params.perf as PerfFilter);
+      if (SORT_OPTIONS.some((s) => s.key === params.sort)) setSort(params.sort as SortKey);
+      setHydratedKey(hydrationKey);
+      return;
+    }
     const qa = takePendingQaFilters();
     if (qa) {
       if (qa.targetsSegment) setSegment(qa.targetsSegment);
@@ -518,13 +543,13 @@ export default function TargetingScreen() {
         console.log("[inteliads:qa] targets open Filter sheet");
         setFilterOpen(true);
       }
+      setHydratedKey(hydrationKey);
       return;
     }
-    void Promise.all([loadTargetingFilterMemory(), loadBulkSelectionMemory()]).then(([filters, sel]) => {
+    void loadTargetingFilterMemory(memoryScope).then((filters) => {
+      if (!active) return;
       const nextSegment =
-        sel.segment && SEGMENTS.some((s) => s.key === sel.segment)
-          ? (sel.segment as Segment)
-          : filters.segment && SEGMENTS.some((s) => s.key === filters.segment)
+        filters.segment && SEGMENTS.some((s) => s.key === filters.segment)
             ? (filters.segment as Segment)
             : null;
       if (nextSegment) setSegment(nextSegment);
@@ -536,8 +561,7 @@ export default function TargetingScreen() {
       if (typeof filters.bookAsin === "string" && filters.bookAsin) setBookAsin(filters.bookAsin);
       if (filters.sort && SORT_OPTIONS.some((s) => s.key === filters.sort)) setSort(filters.sort as SortKey);
       if (filters.advanced) setAdvanced(normalizeTargetingAdvancedFilters(filters.advanced));
-      if (Array.isArray(sel.ids)) setSelectedIds(sel.ids.filter((id) => typeof id === "string"));
-      if (sel.selectMode) setSelectMode(true);
+      setHydratedKey(hydrationKey);
     });
     void refreshOutboxCounts();
     void drainBulkOutbox().then(() => refreshOutboxCounts());
@@ -545,9 +569,11 @@ export default function TargetingScreen() {
       await refreshOpenNestBulkJobs();
       await refreshOutboxCounts();
     })();
-  }, []);
+    return () => { active = false; };
+  }, [hydrationKey, memoryScope, params.flow, params.perf, params.segment, params.sort]);
 
   useEffect(() => {
+    if (hydratedKey !== hydrationKey) return;
     void saveTargetingFilterMemory({
       segment,
       perf,
@@ -555,12 +581,13 @@ export default function TargetingScreen() {
       bookAsin: bookAsin ?? undefined,
       stateFilter,
       advanced,
-    });
-  }, [segment, perf, sort, bookAsin, stateFilter, advanced]);
+    }, memoryScope);
+  }, [hydratedKey, hydrationKey, memoryScope, segment, perf, sort, bookAsin, stateFilter, advanced]);
 
   useEffect(() => {
+    if (hydratedKey !== hydrationKey) return;
     void saveBulkSelectionMemory({ segment, ids: selectedIds, selectMode });
-  }, [segment, selectedIds, selectMode]);
+  }, [hydratedKey, hydrationKey, segment, selectedIds, selectMode]);
 
   async function refreshOutboxCounts() {
     const [local, nest] = await Promise.all([getBulkOutboxSnapshot(), getNestBulkJobsSnapshot()]);
@@ -568,10 +595,18 @@ export default function TargetingScreen() {
     setOutboxFailed(local.failed + nest.failed);
   }
 
-  const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
+  const pathname = usePathname();
+  const focused = pathname === "/targeting" || pathname === "/(tabs)/targeting";
+  const filtersReady = hydratedKey === hydrationKey;
+  const scopeProfiles = useMemo(() => sortedProfileIds(enabledSelectedProfileIds(profiles, selectedProfileIds)), [profiles, selectedProfileIds]);
   const periodKey = financialPeriodQueryKey(dateRange, scopeProfiles, primaryCurrency);
   const profileScopeKey = scopeProfiles.join("|");
-  const searchNeedle = search.trim();
+  const [searchNeedle, setSearchNeedle] = useState(search.trim());
+  const searchPending = search.trim() !== searchNeedle;
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchNeedle(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
   const advancedForRpc = advancedFiltersForSegment(segment, advanced);
   const advancedScopeKey = JSON.stringify(advancedForRpc);
   const targetingListCache = {
@@ -582,7 +617,7 @@ export default function TargetingScreen() {
   const adGroupDefaultBidsQ = useQuery({
     queryKey: ["targeting-adgroup-default-bids", adminFilterUserId ?? "self", profileScopeKey],
     queryFn: () => fetchAdGroupDefaultBids(scopeProfiles),
-    enabled: scopeProfiles.length > 0,
+    enabled: focused && filtersReady && !profilesLoading && scopeProfiles.length > 0,
     ...STABLE_SCOPED_CACHE,
   });
   const defaultBidByAdGroupId = adGroupDefaultBidsQ.data ?? {};
@@ -595,7 +630,7 @@ export default function TargetingScreen() {
         TARGETING_BOOK_OPTIONS_TIMEOUT_MS,
         signal,
       ),
-    enabled: scopeProfiles.length > 0,
+    enabled: focused && filtersReady && !profilesLoading && scopeProfiles.length > 0 && (Boolean(bookAsin) || filterOpen || segment === "placement"),
     ...STABLE_SCOPED_CACHE,
   });
   const bookOptions = booksQ.data ?? [];
@@ -617,10 +652,10 @@ export default function TargetingScreen() {
   useEffect(() => {
     if (!bookAsin) return;
     if (booksQ.isLoading || booksQ.isFetching) return;
-    if (!booksQ.isFetched) return;
+    if (!booksQ.isSuccess) return;
     if (selectedBook) return;
     setBookAsin(null);
-  }, [bookAsin, booksQ.isFetched, booksQ.isFetching, booksQ.isLoading, selectedBook]);
+  }, [bookAsin, booksQ.isSuccess, booksQ.isFetching, booksQ.isLoading, selectedBook]);
 
   // Scope / filter / sort / segment / period / book change: drop tail + snapshot so
   // we never paint another selection's ranking under a stale catalog.
@@ -643,6 +678,7 @@ export default function TargetingScreen() {
     sort,
     advancedScopeKey,
     segment,
+    user?.id,
   ]);
 
   const effectiveSortKey = resolveTargetingSortKey(sort, advanced);
@@ -656,11 +692,13 @@ export default function TargetingScreen() {
       ? effectiveSortKey
       : "acos";
 
-  const mobilePageQueryKey = [
+  const mobilePageScopeKey = [
     "mobile-targeting-page-v1",
+    "transport-v2",
     adminFilterUserId ?? "self",
     // Include signed-in owner id so persisted cache cannot paint another account's rows.
-    viewAsOtherUser ? "view" : user?.id ?? "anon",
+    user?.id ?? "anon",
+    viewAsOtherUser ? "view" : "self",
     periodKey,
     profileScopeKey,
     bookAsin ?? "all",
@@ -672,30 +710,27 @@ export default function TargetingScreen() {
     serverSort,
     advancedScopeKey,
     `page-size-${TARGETING_PAGE_SIZE}`,
-    "catalog-head",
   ] as const;
+  const mobilePageQueryKey = targetingPageQueryKey(mobilePageScopeKey, 1, null);
+  const mobilePageScopeIdentity = JSON.stringify(mobilePageScopeKey);
 
-  // Book filter: wait for options before enabling the page query (so we don't
-  // send campaignIds:[] and paint an unscoped list). On books error, enable
-  // without campaignIds so RetryState can paint — never infinite blank.
-  // Don't apply book filter until options are fetched — otherwise a remembered
-  // ASIN empties the list while booksQ is still loading (misleading "no matches").
+  // A failed/missing book map must never widen a filtered read to all campaigns.
   const booksPendingForFilter =
     bookFilterActive && !booksQ.isSuccess && !booksQ.isError;
   const canReadPage =
-    scopeProfiles.length > 0 && (!bookFilterActive || booksQ.isSuccess || booksQ.isError);
+    focused && Boolean(user?.id) && !guestMode && filtersReady && !profilesLoading && !searchPending && scopeProfiles.length > 0 &&
+    (!bookFilterActive || (booksQ.isSuccess && bookCampaignIdList.length > 0));
 
   const mobilePageQ = useQuery({
-    queryKey: mobilePageQueryKey,
-    queryFn: async ({ signal }) => {
+    ...targetingListCache,
+    ...targetingPageQueryOptions(mobilePageScopeKey, 1, null, async (signal) => {
       markPerf("targets.page.start");
       try {
         const bookCampaignScope =
           bookFilterActive && booksQ.isSuccess && bookCampaignIdList.length > 0
             ? { campaignIds: bookCampaignIdList }
             : {};
-        return await withQueryTimeout(
-          fetchMobileTargetingPage({
+        return await fetchMobileTargetingPage({
             segment,
             sort: serverSort,
             page: 1,
@@ -709,7 +744,7 @@ export default function TargetingScreen() {
             // Active = keyword enabled + ad group enabled + campaign enabled (fail-closed).
             // ASINs / Auto / Category: Active = target + ad group + campaign enabled.
             // Placement rows are campaigns — Active = campaign enabled (no ad-group parent).
-            // Paused = entity paused AND live parents (ad group + campaign enabled) — use All to see paused-under-paused.
+            // Paused follows the entity state, including paused parent campaigns.
             // RPC mobile_targeting_page_v1 enforces the same parent-chain rules server-side.
             state: stateFilter,
             search: searchNeedle,
@@ -720,17 +755,31 @@ export default function TargetingScreen() {
             // Title/cover metadata is filled for the visible viewport below;
             // never hold the ranked page behind optional catalog lookups.
             skipDisplayEnrich: true,
-          }),
-          TARGETING_QUERY_TIMEOUT_MS,
-          signal,
-        );
+          });
       } finally {
         markPerf("targets.page.end");
       }
-    },
+    }),
     enabled: canReadPage,
-    ...targetingListCache,
+    refetchOnMount: "always",
+    refetchInterval: (query) => focused && dateRange.end >= new Date().toISOString().slice(0, 10) && targetingCanAutoRefresh(query.state.error) ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
+  useEffect(() => {
+    const queryKey = JSON.parse(mobilePageScopeIdentity) as unknown[];
+    if (!canReadPage) {
+      void queryClient.cancelQueries({ queryKey });
+      return;
+    }
+    return () => {
+      // Tail reads have no observer to auto-cancel on blur or account changes.
+      catalogGenerationRef.current += 1;
+      catalogPageRequestRef.current = null;
+      setCatalogTailLoading(false);
+      void queryClient.cancelQueries({ queryKey });
+    };
+  }, [queryClient, mobilePageScopeIdentity, canReadPage]);
+  const catalogIdentity = `${JSON.stringify(mobilePageQueryKey)}:${mobilePageQ.data?.snapshot ?? ""}`;
 
   useEffect(() => {
     const snap = mobilePageQ.data?.snapshot;
@@ -744,8 +793,9 @@ export default function TargetingScreen() {
       setCatalogNextPage(2);
       catalogPageRequestRef.current = null;
       catalogGenerationRef.current += 1;
+      void queryClient.cancelQueries({ queryKey: [...JSON.parse(mobilePageScopeIdentity), "catalog-tail"] });
     }
-  }, [mobilePageQ.data?.snapshot, pageSnapshot]);
+  }, [mobilePageQ.data?.snapshot, pageSnapshot, queryClient, mobilePageScopeIdentity]);
 
   useEffect(() => {
     if (!isMobileTargetingSnapshotChanged(mobilePageQ.error)) return;
@@ -765,7 +815,7 @@ export default function TargetingScreen() {
   catalogHeadRef.current = mobilePageQ.data;
   const loadNextCatalogPage = async () => {
     const head = catalogHeadRef.current;
-    if (!head?.rows || mobilePageQ.isFetching || catalogTailLoading) return;
+    if (!canReadPage || !head?.rows || mobilePageQ.isFetching || catalogTailLoading) return;
     if (head.rows.length + catalogTail.length >= head.total) return;
 
     const snapshot = head.snapshot;
@@ -777,7 +827,7 @@ export default function TargetingScreen() {
     setCatalogTailLoading(true);
     setCatalogTailIncomplete(false);
     try {
-      const next = await withQueryTimeout(fetchMobileTargetingPage({
+      const next = await queryClient.fetchQuery(targetingPageQueryOptions(mobilePageScopeKey, page, snapshot, (signal) => fetchMobileTargetingPage({
         segment,
         sort: serverSort,
         page,
@@ -794,12 +844,14 @@ export default function TargetingScreen() {
         perf,
         advanced: advancedForRpc,
         snapshot,
+        signal,
         skipDisplayEnrich: true,
-      }), TARGETING_QUERY_TIMEOUT_MS);
+      })));
       if (catalogGenerationRef.current !== generation) return;
       if (next.snapshot !== snapshot || catalogHeadRef.current?.snapshot !== snapshot) {
         throw new Error("Targeting snapshot changed");
       }
+      catalogTailIdentityRef.current = catalogIdentity;
       setCatalogTail((previous) => appendTargetingPageRows(head.rows, previous, next.rows));
       setCatalogNextPage(page + 1);
       setCatalogTailIncomplete(false);
@@ -882,6 +934,7 @@ export default function TargetingScreen() {
     const countryCode = profileHit?.country_code ?? profileHit?.countryCode ?? null;
 
     const wave = pendingAsins.slice(0, 80);
+    const generation = catalogGenerationRef.current;
     for (const asin of wave) retailTitleInFlightRef.current.add(asin);
     retailFillBusyRef.current = true;
     void (async () => {
@@ -893,6 +946,7 @@ export default function TargetingScreen() {
             maxAsins: 80,
           },
         );
+        if (generation !== catalogGenerationRef.current) return;
         const titleByAsin = new Map<string, string>();
         for (const row of nextRows as any[]) {
           const asin = productTargetDisplayAsin(row);
@@ -920,10 +974,11 @@ export default function TargetingScreen() {
               const title = titleByAsin.get(asin);
               return title ? { ...row, title } : row;
             });
+          const updatedAt = queryClient.getQueryState(mobilePageQueryKey)?.dataUpdatedAt;
           queryClient.setQueryData(mobilePageQueryKey, (prev: typeof page | undefined) => {
             if (!prev || prev.snapshot !== page.snapshot) return prev;
             return { ...prev, rows: patchTitles(prev.rows as any[]) };
-          });
+          }, { updatedAt });
           setCatalogTail((prev) => (prev.length ? patchTitles(prev) : prev));
         }
         // Keep waving until pending ASINs are titled or exhausted.
@@ -972,8 +1027,9 @@ export default function TargetingScreen() {
 
   // Display-only enrichment — do not re-filter or re-sort a server page.
   const data = useMemo(() => {
+    if (!filtersReady || searchPending) return [];
     const headRows = (mobilePageQ.data?.rows ?? []) as any[];
-    const rows = catalogTail.length ? [...headRows, ...catalogTail] : headRows;
+    const rows = catalogTail.length && catalogTailIdentityRef.current === catalogIdentity ? [...headRows, ...catalogTail] : headRows;
     return rows.map((row) => {
       if (segment === "placement") {
         const campaignId = String(row.campaign_id || String(row.id || "").split("::")[0] || "");
@@ -1000,7 +1056,7 @@ export default function TargetingScreen() {
         __targetingIsCategory: isCategoryTarget(row.expression, row.expression_type),
       };
     });
-  }, [mobilePageQ.data?.rows, catalogTail, segment, campaignBookById]);
+  }, [filtersReady, searchPending, catalogIdentity, mobilePageQ.data?.rows, catalogTail, segment, campaignBookById]);
 
   // Prefetch real Amazon placement % (never invent 0 when Amazon returns null).
   useEffect(() => {
@@ -1057,7 +1113,7 @@ export default function TargetingScreen() {
     data.length === 0 &&
     !activeQuery.isPlaceholderData &&
     !isError &&
-    (booksPendingForFilter ||
+    (!filtersReady || profilesLoading || searchPending || booksPendingForFilter ||
       (canReadPage &&
         (queryStillWaiting(activeQuery) || activeQuery.isFetching)));
   const listUpdating =
@@ -1071,7 +1127,7 @@ export default function TargetingScreen() {
   const hasMoreCatalogRows = Boolean(mobilePageQ.data && data.length < serverTotal);
   const pageSummary = mobilePageQ.data
     ? hasMoreCatalogRows
-      ? `${data.length} of ${serverTotal} loaded`
+      ? `${data.length} of ${serverTotal} loaded${listUpdating ? " · updating" : ""}`
       : `${serverTotal} rows${listUpdating ? " · updating" : ""}`
     : null;
 
@@ -1706,10 +1762,22 @@ export default function TargetingScreen() {
     [segment, selectedIds, data, entityCooldownHours],
   );
 
+  if (selectedProfileIds.length === 0 && (profilesLoading || profilesFetching || profilesError)) {
+    return (
+      <AppScreen>
+        <TopBar showKdpAccountGroups={false} condensedMarket />
+        {profilesError ? (
+          <RetryState title="Couldn't load accounts" subtitle="Account availability couldn't be verified."
+            onRetry={() => void refetchProfiles()} retrying={profilesFetching} />
+        ) : <ScreenSpinner />}
+      </AppScreen>
+    );
+  }
+
   if (selectedProfileIds.length === 0) {
     return (
       <AppScreen>
-        <TopBar showKdpAccountGroups={false} />
+        <TopBar showKdpAccountGroups={false} condensedMarket />
         <EmptyState
           icon="business-outline"
           title={isAdminViewer ? "No Amazon account" : "No account connected"}
@@ -1748,7 +1816,7 @@ export default function TargetingScreen() {
 
   return (
     <AppScreen>
-      {topChromeVisible ? <TopBar showKdpAccountGroups={false} /> : null}
+      {topChromeVisible ? <TopBar showKdpAccountGroups={false} condensedMarket /> : null}
 
       {topChromeVisible ? (
       <View
@@ -1864,6 +1932,18 @@ export default function TargetingScreen() {
               />
             ) : null}
           </ActiveFilterRow>
+        ) : null}
+        {(filtersActive || search.length > 0) ? (
+          <TouchableOpacity testID="targeting-reset-local" accessibilityRole="button"
+            accessibilityLabel="Reset local filters" style={{ alignSelf: "flex-end", padding: 12 }}
+            onPress={() => {
+              setSearch(""); setPerf("all"); setSort("acos");
+              setStateFilter(DEFAULT_TARGETING_STATE_FILTER); setBookAsin(null);
+              setAdvanced({ ...EMPTY_TARGETING_ADVANCED_FILTERS });
+              setSelectedIds([]); setSelectMode(false);
+            }}>
+            <Text style={[t.typography.caption1, { color: t.colors.tone_primary }]}>Reset filters</Text>
+          </TouchableOpacity>
         ) : null}
         {filtersActive &&
         (stateFilter !== "enabled" || bookAsin || perf !== "all" || sort !== "acos" || advancedCount > 0) ? (
@@ -1985,10 +2065,22 @@ export default function TargetingScreen() {
       </View>
       ) : null}
 
+      {mobilePageQ.data ? (
+        <Text
+          testID="targeting-freshness"
+          accessibilityLiveRegion="polite"
+          style={[t.typography.caption1, { color: isError ? t.colors.tone_danger : t.colors.text_secondary, paddingHorizontal: t.layout.pagePad, paddingTop: 4, paddingBottom: 8 }]}
+        >
+          {searchPending ? "Searching" : targetingFreshnessLabel({ updatedAt: mobilePageQ.dataUpdatedAt, fetching: mobilePageQ.isFetching, failed: isError })}
+          {mobilePageQ.data.metricsCoveredThrough ? ` · Metrics through ${mobilePageQ.data.metricsCoveredThrough.slice(0, 10)}` : " · Metric coverage unknown"}
+        </Text>
+      ) : null}
+
       {showBlockingSpinner ? (
         <ScreenSpinner />
       ) : isError && data.length === 0 ? (
         <RetryState
+          systemImage={isHomeQueryTimeout(activeQuery.error) ? "clock" : "exclamationmark.triangle"}
           title={
             segment === "keywords"
               ? "Couldn't load keywords"
@@ -2002,7 +2094,7 @@ export default function TargetingScreen() {
           }
           subtitle={
             isHomeQueryTimeout(activeQuery.error)
-              ? "This range took too long. Try Week instead of Month, or pull to retry."
+              ? "The server took too long for this period. Retry keeps your filters."
               : /period metrics/i.test(
                     activeQuery.error instanceof Error ? activeQuery.error.message : "",
                   )
@@ -2905,7 +2997,7 @@ function keywordStatus(item: any): { label: string; tone: "good" | "warning" | "
   const acos = Number(item.total_acos) || 0;
   if (spend > 0 && orders === 0) return { label: "No sales", tone: "danger" };
   if (sales > 0 && acos > 35) return { label: "High ACoS", tone: "warning" };
-  if (sales > 0) return { label: "Profitable", tone: "good" };
+  if (sales > 0) return { label: "Has sales", tone: "good" };
   return { label: "No spend", tone: "inactive" };
 }
 

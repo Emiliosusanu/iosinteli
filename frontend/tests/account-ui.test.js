@@ -368,7 +368,8 @@ test("invalid session restore clears financial caches and cannot race the 8s fal
   assert.match(auth, /const clearStaleAuthCaches = async \(\) => \{/);
   assert.match(auth, /await clearStaleAuthCaches\(\)/);
   assert.match(auth, /let restoreSettled = false/);
-  assert.match(auth, /if \(!mounted \|\| restoreSettled\) return/);
+  assert.match(auth, /if \(!current\(\) \|\| restoreSettled\) return/);
+  assert.match(auth, /restoreGeneration\.current === generation/);
   assert.match(auth, /restoreSettled = true/);
 });
 
