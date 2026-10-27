@@ -260,7 +260,7 @@ test("bulk and filter UI never imply Amazon-confirmed or fake empty from bid ran
   assert.doesNotMatch(targeting, /Sort: \$\{effectiveSortLabel\} · range/);
   assert.doesNotMatch(targeting, /ranges override this/i);
   assert.match(targeting, /No matches/);
-  assert.match(targeting, /Bid \+\$/);
+  assert.match(targeting, /Bid \+ amount/);
   assert.doesNotMatch(targeting, />by amount</);
   assert.doesNotMatch(targeting, />by percent</);
   assert.match(targeting, /selectedCooldownSummary/);

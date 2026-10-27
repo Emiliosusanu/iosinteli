@@ -112,7 +112,8 @@ test("targeting exposes bulk select, durable queue, and expanded filters", () =>
   assert.match(nestBulk, /submitNestBulkManual/);
   assert.match(nestBulk, /failedPermanent/);
   assert.match(nestBulk, /listNestPermanentFailEntityIds/);
-  assert.match(notifications, /drainBulkOutbox/);
+  // Native KDP deliveries no longer append unbounded Ads jobs; AppContext retains their resume paths.
+  assert.match(app, /drainBulkOutbox/);
   assert.match(targeting, /requeuePermanentBulkFailures/);
   assert.match(targeting, /dismissPermanentBulkFailures/);
   assert.match(targeting, /targeting-bulk-outbox-clear/);

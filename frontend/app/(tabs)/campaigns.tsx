@@ -15,6 +15,7 @@ import {
   ScrollView,
 } from "react-native";
 import { AppScreen } from "@/src/components/ScreenAmbient";
+import { BookCover } from "@/src/components/BookCover";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -856,6 +857,7 @@ function SortSheetBody({
               onPress={() => toggleBook(book.asin)}
               style={[styles.bookFilterRow, { borderColor: active ? t.colors.tone_primary : t.colors.separator, backgroundColor: active ? `${t.colors.tone_primary}14` : t.colors.background_tertiary }]}
             >
+              <BookCover uri={book.image_url} asin={book.asin} size="xs" recyclingKey={book.asin} />
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text numberOfLines={2} style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600" }]}>{book.title}</Text>
                 <Text style={[t.typography.caption2, { color: t.colors.text_tertiary }]}>{book.asin} · {book.campaignCount ?? book.campaignIds.length} camp.</Text>

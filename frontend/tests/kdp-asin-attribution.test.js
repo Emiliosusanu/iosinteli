@@ -75,5 +75,6 @@ test("importer keeps an owned explicit helper account before writing royalties",
   assert.match(importer, /saveHelperAccountId/);
   assert.match(accounts, /export async function resolveHelperAccountId/);
   assert.match(accounts, /fetchKdpAccounts/);
-  assert.match(accounts, /Never auto-link a profile that already belongs/);
+  assert.match(accounts, /Ads selection is not proof/);
+  assert.doesNotMatch(accounts, /\.upsert\(/);
 });

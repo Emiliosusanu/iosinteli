@@ -138,6 +138,11 @@ test("OverviewHeaderV3 market pill uses separated circular flag discs", () => {
   assert.match(marketPill, /market_pill_stroke/);
   assert.doesNotMatch(marketPill, /tint="dark"/);
   assert.match(marketPill, /chevron\.down/);
+  assert.match(marketPill, /MAX_VISIBLE_MARKET_FLAGS = 2/);
+  assert.match(marketPill, /countries\.slice\(0, MAX_VISIBLE_MARKET_FLAGS\)/);
+  assert.match(marketPill, /multi-country-overflow/);
+  assert.match(marketPill, /\+\{hiddenCount\}/);
+  assert.match(marketPill, /\$\{resolvedCountries\.length\} markets/);
   // Currency merged into pill — no separate currency chip when markets present.
   const marketStart = header.indexOf("hasMarketPill ? (");
   const marketElse = header.indexOf(") : (", marketStart);
@@ -149,6 +154,17 @@ test("OverviewHeaderV3 market pill uses separated circular flag discs", () => {
   assert.match(header.slice(marketElse), /styles\.currencyChip/);
   assert.match(home, /marketCountries=\{marketCountries\}/);
   assert.match(home, /multiCountryCodes/);
+});
+
+test("Gross updating status breathes inside a fixed lane without moving widgets", () => {
+  assert.match(home, /function GrossStatusSlot/);
+  assert.match(home, /testID="home-gross-status"/);
+  assert.match(home, /testID="home-gross-status-glow"/);
+  assert.match(home, /height:\s*34/);
+  assert.match(home, /withRepeat/);
+  assert.match(home, /transform:\s*\[\{ scale:/);
+  assert.match(home, /caption=\{financeCaption\}/);
+  assert.match(home, /updating=\{periodRefreshing\}/);
 });
 
 test("OverviewHeaderV3 lets users select all markets or one detected marketplace", () => {

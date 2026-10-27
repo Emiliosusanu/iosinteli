@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, FlatList, Alert } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
-import { SFSymbol } from "@/src/components/ios/Native";
 import { useAuth } from "@/src/contexts/AuthContext";
 import { useApp } from "@/src/contexts/AppContext";
 import { dashboard, useTheme, toneColor } from "@/src/lib/theme";
@@ -58,7 +57,8 @@ export default function RuleDetailScreen() {
   const ruleName = paramName || cachedRun?.optimization_rules?.name || "";
   const executedAt = paramWhen || cachedRun?.executed_at || "";
   const status = paramStatus || cachedRun?.status || "";
-  const reportedChanged = Number(paramEntities || cachedRun?.entities || 0);
+  // history.entities is the number of matches, not the number of Amazon writes.
+  const reportedMatched = Number(paramEntities || cachedRun?.entities || 0);
   const reportedErrors = Number(cachedRun?.errors_count || 0);
   const evaluated =
     cachedRun?.entities_checked != null && Number.isFinite(Number(cachedRun.entities_checked))
@@ -74,12 +74,28 @@ export default function RuleDetailScreen() {
   const entityRows = entitiesQ.data ?? [];
   const changedFromRows = entityRows.filter((e) => e.success && entityResultLabel(e.success, e.old_value, e.new_value) === "Changed").length;
   const failedFromRows = entityRows.filter((e) => !e.success).length;
-  const changed = entityRows.length ? changedFromRows : reportedChanged;
+  const hasEntityDetail = entityRows.length > 0;
+  const changed = hasEntityDetail ? changedFromRows : null;
   const failed = entityRows.length ? failedFromRows : reportedErrors;
-  const outcome = presentExecutionOutcome({ status, changed, failed });
+  const baseOutcome = presentExecutionOutcome({ status, changed: changed ?? 0, failed });
+  const completedWithUnverifiedChanges = !hasEntityDetail && reportedMatched > 0 &&
+    ["completed", "success", "reapplied"].includes(String(status).toLowerCase());
+  const outcome = completedWithUnverifiedChanges
+    ? {
+        ...baseOutcome,
+        outcome: entitiesQ.isError
+          ? "Individual changes could not be loaded."
+          : entitiesQ.isLoading
+            ? "Loading individual changes…"
+            : "Individual changes were not recorded for this run.",
+      }
+    : baseOutcome;
   const when = formatAuditWhen(executedAt || null);
+  const canRevert = cachedRun?.apply_status === "applied" && entityRows.some((e) => e.success && e.status === "applied");
+  const canReapply = cachedRun?.apply_status === "reverted" && entityRows.some((e) => e.success && e.status === "reverted");
 
   const runExecutionAction = (kind: "revert" | "reapply") => {
+    if ((kind === "revert" && !canRevert) || (kind === "reapply" && !canReapply)) return;
     if (guestMode) {
       Alert.alert("Sign in required", SIGN_IN_TO_MUTATE_MESSAGE);
       return;
@@ -147,7 +163,8 @@ export default function RuleDetailScreen() {
         )}
 
         <View style={[styles.counts, { backgroundColor: t.colors.background_secondary, borderColor: t.colors.border }]}>
-          <Count label="Changed" value={formatInt(changed)} t={t} />
+          <Count label="Matched" value={formatInt(reportedMatched)} t={t} />
+          <Count label="Recorded changes" value={changed == null ? "—" : formatInt(changed)} t={t} />
           <Count label="Failed" value={formatInt(failed)} emphasize={failed > 0} t={t} />
           {evaluated != null ? <Count label="Evaluated" value={formatInt(evaluated)} t={t} /> : null}
         </View>
@@ -162,7 +179,7 @@ export default function RuleDetailScreen() {
         </Text>
       </View>
     ),
-    [changed, evaluated, failed, outcome.outcome, outcome.statusLabel, outcome.tone, ruleName, t, when.absolute, when.relative],
+    [changed, evaluated, failed, outcome.outcome, outcome.statusLabel, outcome.tone, reportedMatched, ruleName, t, when.absolute, when.relative],
   );
 
   if (!id) {
@@ -198,10 +215,10 @@ export default function RuleDetailScreen() {
             />
           ) : String(status).toLowerCase() === "failed" ? (
             <EmptyState icon="alert-circle-outline" title="No entity records" subtitle="This run failed. Individual entity rows were not stored." />
-          ) : reportedChanged === 0 && failed === 0 ? (
+          ) : reportedMatched === 0 && failed === 0 ? (
             <EmptyState icon="checkmark-circle-outline" title="No changes needed" subtitle="This run did not change any entities." />
           ) : (
-            <EmptyState icon="albums-outline" title="No entity records" subtitle="This run has no stored entity rows." />
+            <EmptyState icon="albums-outline" title="No entity records" subtitle="Matched entities are not confirmed Amazon changes. Individual changes were not stored for this run." />
           )
         }
         renderItem={({ item }) => <EntityRow entity={item} currency={primaryCurrency} t={t} />}
@@ -216,7 +233,7 @@ export default function RuleDetailScreen() {
                   testID="rule-revert"
                   label={busy === "revert" ? "Reverting…" : "Revert"}
                   full
-                  disabled={!id || busy != null}
+                  disabled={!id || busy != null || !canRevert}
                   onPress={() => runExecutionAction("revert")}
                 />
               </View>
@@ -225,7 +242,7 @@ export default function RuleDetailScreen() {
                   testID="rule-reapply"
                   label="Reapply"
                   full
-                  disabled={!id || busy != null}
+                  disabled={!id || busy != null || !canReapply}
                   loading={busy === "reapply"}
                   onPress={() => runExecutionAction("reapply")}
                 />
@@ -322,7 +339,7 @@ function Count({
   t: ReturnType<typeof useTheme>;
 }) {
   return (
-    <View style={{ flex: 1, minWidth: 72 }} accessibilityRole="text" accessibilityLabel={`${label} ${value}`}>
+    <View style={{ flexGrow: 1, flexBasis: "40%", minWidth: 72 }} accessibilityRole="text" accessibilityLabel={`${label} ${value}`}>
       <Text style={[t.typography.title3, { color: emphasize ? t.colors.tone_danger : t.colors.text_primary, fontWeight: "600" }]}>
         {value}
       </Text>
@@ -333,7 +350,7 @@ function Count({
 
 const styles = StyleSheet.create({
   statusPill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, minHeight: 28, justifyContent: "center" },
-  counts: { flexDirection: "row", gap: 12, marginTop: 16, borderRadius: dashboard.cardRadius, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, padding: 14 },
+  counts: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 16, borderRadius: dashboard.cardRadius, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, padding: 14 },
   row: { borderRadius: dashboard.cardRadius, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, padding: 12, marginBottom: 8 },
   actions: { flexDirection: "row", gap: 10, marginTop: 12 },
 });

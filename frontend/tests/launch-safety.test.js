@@ -56,6 +56,7 @@ test("InteliAdsNativeSync is optional at module load", () => {
   assert.doesNotMatch(nativeSync, /requireNativeModule\("InteliAdsNativeSync"\)/);
 });
 
-test("shipping build number is 368", () => {
-  assert.match(appJson, /"buildNumber": "368"/);
+test("shipping build never regresses below the external 369 baseline", () => {
+  const build = Number(JSON.parse(appJson).expo?.ios?.buildNumber);
+  assert.ok(Number.isInteger(build) && build >= 369, `unexpected iOS build ${build}`);
 });

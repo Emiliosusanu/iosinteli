@@ -1,0 +1,67 @@
+(node:6173) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/emiliansusanu/Downloads/iosapp-inteli-wt-release-20261007/frontend/tests/kdp-background-webview.test.js is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/emiliansusanu/Downloads/iosapp-inteli-wt-release-20261007/frontend/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ pricing returns native HTML without a suspended WebView while background (25.8115ms)
+✔ pricing returns native HTML without a suspended WebView while inactive (4.564708ms)
+✔ foreground pricing retains its authenticated WebView fallback (3.455625ms)
+✔ locking during the native request rechecks current app state before fallback (2.785542ms)
+✔ background transport failure rejects for retry without waiting on a WebView (3.390917ms)
+✔ background pricing login response preserves reports session (2.052375ms)
+✔ background without saved cookies does not inject into a suspended helper (2.770416ms)
+(node:6176) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/emiliansusanu/Downloads/iosapp-inteli-wt-release-20261007/frontend/tests/kdp-bookshelf-primary-pricing.test.js is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/emiliansusanu/Downloads/iosapp-inteli-wt-release-20261007/frontend/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ live ISBN updates one primary native market after persisting retry (3.751875ms)
+✔ unchanged, draft, foreign account, alias and setup mismatch produce no wake (0.738584ms)
+✔ cross-tier and non-US prices persist retry without overwriting economics (1.372ms)
+✔ failed price write preserves dirty retry (0.253375ms)
+(node:6178) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/emiliansusanu/Downloads/iosapp-inteli-wt-release-20261007/frontend/tests/kdp-bookshelf-retry-flow.test.js is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/emiliansusanu/Downloads/iosapp-inteli-wt-release-20261007/frontend/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ persisted ebook alias never receives print pricing when recent report has only paperback (57.777084ms)
+✔ format identity fetch failure preserves existing prices and performs no fast or detailed write (18.013417ms)
+✔ locked gate applies fast price despite fresh detail; next wake retries and open gate fills native markets (15.418667ms)
+(node:6180) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/emiliansusanu/Downloads/iosapp-inteli-wt-release-20261007/frontend/tests/kdp-pricing-auth-clear.test.js is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/emiliansusanu/Downloads/iosapp-inteli-wt-release-20261007/frontend/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ pricing sync clears auth when no refresh is due (0.474292ms)
+✔ pricing sync treats HTML/non-JSON setup-page as auth, not 17 silent fails (0.127708ms)
+✔ pricing sync tries every setup-page route before declaring the auth gate (0.116375ms)
+✔ pricing sync moves WebView onto kdp.amazon.com before setup-page probes (0.072834ms)
+✔ pricing sync requests auth for stale prices when a refresh probe is blocked (0.064542ms)
+✔ permanent 404 setup IDs do not stop later live books (0.069167ms)
+✔ helper hydrates sticky pricing auth and allows print-setup while focused (0.962584ms)
+✔ visible helper falls back from native HTML shell to authenticated WebView (1.032875ms)
+✔ iOS helper tick integrates pricing without forcing unchanged books (4.82775ms)
+✔ KDP helper presents pricing gate separately from report session (0.295292ms)
+✔ iOS pricing gate rechecks every metronome wake and sweeps the live shelf (0.350833ms)
+✔ pricing auth has a one-shot onboarding prompt with a direct retry (0.160042ms)
+(node:6181) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/emiliansusanu/Downloads/iosapp-inteli-wt-release-20261007/frontend/tests/kdp-pricing-capture.test.js is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/emiliansusanu/Downloads/iosapp-inteli-wt-release-20261007/frontend/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ persisted ebook format excludes a historical paperback setup alias (1.425791ms)
+✔ pricing URL candidates prefer the proven KDP V2 endpoint (0.180917ms)
+✔ BE ACoS = net royalty / list price × 100 (Chrome formula) (0.430166ms)
+✔ parseKdpGetSetupPage computes net and BE from get-setup-page JSON (0.219709ms)
+✔ sign-in gate detection matches Chrome (0.146583ms)
+✔ WebKit Load failed / status-0 is a transport failure, not a silent miss (0.287125ms)
+✔ print-setup URL clears pricing gate (0.135458ms)
+✔ collectPricingCandidatesForIos merges bookshelf HTML + format rows (1.119167ms)
+✔ live Bookshelf setup ID replaces stale stored ID for the same ASIN (0.464292ms)
+✔ draft Bookshelf paperback is excluded while live paperback remains (0.555208ms)
+✔ extractPrintSetupIdsFromJsonDeep finds nested setup ids (0.075041ms)
+✔ pricing editor context + save mutation match Chrome (0.176875ms)
+✔ current Bookshelf digital ASIN is excluded before any format report exists (0.27325ms)
+ℹ tests 39
+ℹ suites 0
+ℹ pass 39
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 376.633667

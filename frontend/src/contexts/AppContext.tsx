@@ -11,7 +11,7 @@ import { useAuth } from "./AuthContext";
 import { configureNotifications, registerForPushAsync, clearNotificationIdentity, installBackgroundSyncWakeHandlers, runAlertCheck, subscribeNotificationRefresh } from "../lib/notifications";
 import { anyNotificationPrefEnabled } from "../lib/notificationContract";
 import { pickEntityCooldownHours } from "../lib/bidCooldown";
-import { DEFAULT_KDP_ROYALTY_SOURCE, normalizeKdpRoyaltySource, type KdpRoyaltySource } from "../lib/kdp/source";
+import { DEFAULT_KDP_ROYALTY_SOURCE, isIosHelperEnabled, normalizeKdpRoyaltySource, type KdpRoyaltySource } from "../lib/kdp/source";
 import { getKdpRoyaltySource, setKdpRoyaltySource as persistKdpRoyaltySource } from "../lib/kdp/sourceStore";
 import {
   coalesceExactHarvestBid,
@@ -591,7 +591,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // Silent KDP / server pushes need a live APNs token.
       await m.registerForPushAsync({ requestPermission: true });
     });
-    if (kdpRoyaltySource !== "extension_ios") return;
+    if (!isIosHelperEnabled(kdpRoyaltySource)) return;
     const id = setInterval(() => {
       void import("../lib/kdp/importer").then(async (m) => {
         const { resolveLockedPhoneKdpWakeMode } = await import("../lib/kdp/backgroundWake");

@@ -251,7 +251,8 @@ test("token association and sign-out detach live in product code", () => {
   assert.match(app, /bookAttention: true/);
   assert.match(app, /campaignSpend: true/);
   assert.match(app, /kdpDataStale: true/);
-  assert.match(notifications, /refreshOpenNestBulkJobs/);
+  // Native KDP deliveries no longer append unbounded Ads jobs; AppContext retains their resume paths.
+  assert.match(app, /refreshOpenNestBulkJobs/);
   assert.match(notifications, /loadScopedKdpFreshness/);
   assert.match(notifications, /NOTIFICATION_EVENTS.kdpDataStale/);
   assert.match(layout, /more\/notifications/);

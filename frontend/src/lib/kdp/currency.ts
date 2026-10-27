@@ -6,6 +6,23 @@
 /** Default for onboarding / first tick when Ads profiles and templates are silent. */
 export const DEFAULT_KDP_REPLAY_CURRENCY = "USD" as const;
 
+export type KdpReplayCurrency =
+  | "USD"
+  | "CAD"
+  | "MXN"
+  | "GBP"
+  | "EUR"
+  | "PLN"
+  | "SEK"
+  | "AUD"
+  | "JPY"
+  | "INR"
+  | "BRL";
+
+const KDP_REPLAY_CURRENCIES = new Set<KdpReplayCurrency>([
+  "USD", "CAD", "MXN", "GBP", "EUR", "PLN", "SEK", "AUD", "JPY", "INR", "BRL",
+]);
+
 const CURRENCY_KEYS = new Set([
   "preferredcurrency",
   "preferred_currency",
@@ -16,17 +33,16 @@ const CURRENCY_KEYS = new Set([
   "default_currency",
 ]);
 
-export function normalizeKdpReplayCurrency(raw: string | null | undefined): "EUR" | "USD" | null {
+export function normalizeKdpReplayCurrency(raw: string | null | undefined): KdpReplayCurrency | null {
   const c = String(raw || "")
     .trim()
     .toUpperCase();
-  if (c === "EUR" || c === "USD") return c;
-  return null;
+  return KDP_REPLAY_CURRENCIES.has(c as KdpReplayCurrency) ? (c as KdpReplayCurrency) : null;
 }
 
 export function preferredCurrencyFromTemplates(
   templates: Record<string, { url?: string; requestBody?: string | null } | undefined>,
-): "EUR" | "USD" | null {
+): KdpReplayCurrency | null {
   for (const row of Object.values(templates)) {
     if (!row) continue;
     const blob = `${row.url || ""}\n${row.requestBody || ""}`;
@@ -41,10 +57,10 @@ export function preferredCurrencyFromTemplates(
 /** Prefer EUR when any selected Ads profile is EUR; else first known currency. */
 export function preferredCurrencyFromProfiles(
   profiles: Array<{ currency_code?: string | null }>,
-): "EUR" | "USD" | null {
+): KdpReplayCurrency | null {
   const codes = profiles
     .map((p) => normalizeKdpReplayCurrency(p.currency_code))
-    .filter((c): c is "EUR" | "USD" => c != null);
+    .filter((c): c is KdpReplayCurrency => c != null);
   if (!codes.length) return null;
   if (codes.includes("EUR")) return "EUR";
   return codes[0] ?? null;
@@ -58,7 +74,7 @@ export function resolvePreferredReplayCurrency(opts: {
   profiles: Array<{ currency_code?: string | null }>;
   templates: Record<string, { url?: string; requestBody?: string | null } | undefined>;
   saved: "EUR" | "USD" | null;
-}): "EUR" | "USD" {
+}): KdpReplayCurrency {
   return (
     preferredCurrencyFromProfiles(opts.profiles) ||
     preferredCurrencyFromTemplates(opts.templates) ||

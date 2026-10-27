@@ -9,9 +9,9 @@ const overview = readFileSync(new URL("../src/lib/kdp/activityOverview.ts", impo
 test("KDP helper resolves Nest JWT user when Supabase AS session is empty", () => {
   assert.match(importer, /resolveHelperUserId/);
   assert.match(importer, /loadLastMobileHomeScope/);
-  assert.match(importer, /15 min sync skipped · sign in required/);
+  assert.match(importer, /reason: "signed_out"/);
   assert.match(importer, /supabase_session_missing/);
-  assert.match(importer, /Amazon session missing for KDP writes/);
+  assert.match(importer, /InteliAds session unavailable for KDP writes/);
   assert.match(rulesApi, /export async function resolveHelperUserId/);
   assert.match(rulesApi, /readJwtSub\(token\)/);
 });

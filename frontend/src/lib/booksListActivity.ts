@@ -147,6 +147,15 @@ function editionYear(title: string | null | undefined): number {
   return years.reduce((latest, value) => Math.max(latest, Number(value) || 0), 0);
 }
 
+function coverForPreferredEdition<T extends { title?: string | null; image_url?: string | null; in_stock?: boolean }>(
+  rows: readonly T[],
+): string | null {
+  return pickFirstCover([...rows]
+    .filter((row) => String(row.image_url ?? "").trim())
+    .sort((a, b) => editionYear(b.title) - editionYear(a.title) || Number(!!b.in_stock) - Number(!!a.in_stock))
+    .map((row) => row.image_url));
+}
+
 /** Keep stable copy unless the candidate is a clearly newer edition. */
 export function preferEditionTitle(
   current: string | null | undefined,
@@ -248,7 +257,7 @@ export function mergeTopBookCatalogRows<T extends CatalogBookRow>(
       sku: catalog.sku ?? period.sku,
       format_asins: [...formatAsins],
       title: preferEditionTitle(catalog.title, period.title),
-      image_url: catalog.image_url ?? period.image_url,
+      image_url: coverForPreferredEdition([catalog, period]),
       royalties,
       spend,
       sales,
@@ -444,7 +453,7 @@ export function collapseTopBooksByFormatGroup<T extends CatalogBookRow>(rows: re
     return {
       ...preferred,
       title,
-      image_url: pickFirstCover(bucket.map((row) => row.image_url)),
+      image_url: coverForPreferredEdition(bucket),
       format_asins: [...formatAsins],
       royalties,
       kdp_orders: kdpOrders,

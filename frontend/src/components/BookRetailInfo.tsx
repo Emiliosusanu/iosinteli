@@ -46,7 +46,7 @@ export function BookRetailInfo({
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
             <SFSymbol name="star.fill" size={12} color="#F5A623" />
             <Text style={[t.typography.caption1, { color: t.colors.text_primary }]}>
-              {reviewLabel}{checkedDate ? ` · ${checkedDate}` : ""}
+              {reviewLabel}{snapshot.marketplaceCode ? ` · ${snapshot.marketplaceCode}` : ""}{checkedDate ? ` · ${checkedDate}` : ""}
             </Text>
           </View>
         ) : (
@@ -54,7 +54,7 @@ export function BookRetailInfo({
         )}
         {stockLabel ? (
           <Text style={[t.typography.caption1, { color: stockColor }]}>
-            Stock snapshot: {stockLabel}{checkedDate ? ` · ${checkedDate}` : ""}
+            Stock snapshot: {stockLabel}{snapshot.marketplaceCode ? ` · ${snapshot.marketplaceCode}` : ""}{checkedDate ? ` · ${checkedDate}` : ""}
           </Text>
         ) : (
           <Text style={[t.typography.caption1, { color: t.colors.text_secondary }]}>Stock unknown</Text>

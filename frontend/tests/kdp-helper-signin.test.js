@@ -64,7 +64,7 @@ test("helper destination is explicit and Ads filters cannot silently switch KDP 
   assert.match(helper, /Ads profile and marketplace filters never change it/);
   assert.match(importer, /if \(owned\?\.id\) return cached/);
   assert.doesNotMatch(importer, /accountLinkedToProfiles\(cached, profileIds\)/);
-  assert.match(accounts, /if \(linked\.length > 1\)/);
+  assert.match(accounts, /if \(ids\.length > 1\)/);
   assert.match(accounts, /Choose the KDP import account/);
   assert.match(persist, /export async function selectHelperAccountId/);
   assert.match(persist, /removeItem\(STATE_KEY\)/);
@@ -72,7 +72,8 @@ test("helper destination is explicit and Ads filters cannot silently switch KDP 
   assert.match(persist, /removeItem\(TEMPLATES_KEY\)/);
   assert.match(persist, /clearKdpWebSession/);
   assert.match(persist, /clearNativeAmazonKdpCookies/);
-  assert.match(persist, /if \(!nativeCookiesCleared\)/);
+  assert.match(persist, /webSessionCleared !== true \|\| nativeCookiesCleared !== true/);
+  assert.match(persist, /progressCleared\.some/);
   assert.ok(
     persist.indexOf("clearNativeAmazonKdpCookies()") < persist.indexOf("saveHelperAccountId(next)"),
     "the new helper account must only be saved after Amazon cookies are cleared",

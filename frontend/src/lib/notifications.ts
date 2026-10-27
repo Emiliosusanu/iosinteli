@@ -1,4 +1,4 @@
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import * as BackgroundTask from "expo-background-task";
 import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
@@ -587,6 +587,10 @@ export function installBackgroundSyncWakeHandlers(): void {
       data.event === "kdp-wake" ||
       data["content-available"] === 1;
     void (async () => {
+      if (silent && AppState.currentState !== "active") {
+        await runBudgetedKdpTask("push");
+        return;
+      }
       try {
         const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
         await runDualSourceBackgroundRefresh("push", { force: true });
@@ -667,87 +671,31 @@ function defineLaunchSafeTask(
   }
 }
 
-defineLaunchSafeTask(INTELIADS_BACKGROUND_TASK, async () => {
+/** Critical capture first. Auxiliary finance/alerts/outbox polling have their
+ * own foreground/service paths and must not consume a short Amazon wake. */
+async function runBudgetedKdpTask(reason: "background" | "push"): Promise<(typeof BackgroundTask)["BackgroundTaskResult"]["Success"]> {
+  const enteredAtMs = Date.now();
   try {
-    try {
-      const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
-      await runDualSourceBackgroundRefresh("background");
-    } catch (error) {
-      devWarn("background financial refresh skipped", error);
-    }
-    try {
-      const { runKdpIosHelperTick } = await import("./kdp/importer");
-      const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
-      const wakeMode = await resolveLockedPhoneKdpWakeMode("background");
-      await runKdpIosHelperTick(wakeMode === "processing" ? "processing" : "background", {
-        wakeMode,
-      });
-    } catch (error) {
-      devWarn("KDP helper background wake skipped", error);
-    }
-    try {
-      await runAlertCheck("background");
-    } catch (error) {
-      devWarn("background alert check skipped", error);
-    }
-    try {
-      const { drainBulkOutbox } = await import("./bulkOutbox");
-      await drainBulkOutbox();
-    } catch (error) {
-      devWarn("background outbox drain skipped", error);
-    }
-    try {
-      const { refreshOpenNestBulkJobs } = await import("./nestBulkJobs");
-      await refreshOpenNestBulkJobs();
-    } catch (error) {
-      devWarn("background nest bulk poll skipped", error);
-    }
-    // Leftover nightly/deferred is expected work, not a failed wake (iOS throttles false).
-    return BackgroundTask.BackgroundTaskResult.Success;
-  } catch {
-    return BackgroundTask.BackgroundTaskResult.Success;
-  }
-});
+    const [{ runKdpIosHelperTick }, { resolveLockedPhoneKdpWakeMode },
+      { getNativeWakeDeadline }, { taskDeadline }] = await Promise.all([
+      import("./kdp/importer"), import("./kdp/backgroundWake"),
+      import("inteliads-native-sync"), import("./kdp/backgroundBudget"),
+    ]);
+    const [wakeMode, nativeDeadline] = await Promise.all([
+      resolveLockedPhoneKdpWakeMode(reason), getNativeWakeDeadline(),
+    ]);
+    const deadlineAtMs = taskDeadline(wakeMode, enteredAtMs, nativeDeadline);
+    await runKdpIosHelperTick(wakeMode === "processing" ? "processing" : reason, { wakeMode, deadlineAtMs });
+    // A KDP wake owns a finite native delivery. Finance, alerts and Ads writes
+    // have independent resume/visible-push/service paths. Do not append their
+    // currently unbounded request chains (or detached prefetches) here, even
+    // on a processing delivery: admission time is not an execution deadline.
+  } catch (error) { devWarn("KDP background task deferred", error); }
+  return BackgroundTask.BackgroundTaskResult.Success;
+}
 
-defineLaunchSafeTask(INTELIADS_NOTIFICATION_TASK, async () => {
-  try {
-    try {
-      const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
-      await runDualSourceBackgroundRefresh("background");
-    } catch (error) {
-      devWarn("notification financial refresh skipped", error);
-    }
-    try {
-      const { runKdpIosHelperTick } = await import("./kdp/importer");
-      const { resolveLockedPhoneKdpWakeMode } = await import("./kdp/backgroundWake");
-      // Push defaults to recent; native pending kind still wins if set.
-      const wakeMode = await resolveLockedPhoneKdpWakeMode("push");
-      await runKdpIosHelperTick("push", { wakeMode });
-    } catch (error) {
-      devWarn("KDP helper notification wake skipped", error);
-    }
-    try {
-      await runAlertCheck("background");
-    } catch (error) {
-      devWarn("notification alert check skipped", error);
-    }
-    try {
-      const { drainBulkOutbox } = await import("./bulkOutbox");
-      await drainBulkOutbox();
-    } catch (error) {
-      devWarn("notification outbox drain skipped", error);
-    }
-    try {
-      const { refreshOpenNestBulkJobs } = await import("./nestBulkJobs");
-      await refreshOpenNestBulkJobs();
-    } catch (error) {
-      devWarn("notification nest bulk poll skipped", error);
-    }
-    return BackgroundTask.BackgroundTaskResult.Success;
-  } catch {
-    return BackgroundTask.BackgroundTaskResult.Success;
-  }
-});
+defineLaunchSafeTask(INTELIADS_BACKGROUND_TASK, () => runBudgetedKdpTask("background"));
+defineLaunchSafeTask(INTELIADS_NOTIFICATION_TASK, () => runBudgetedKdpTask("push"));
 
 export async function registerForPushAsync(opts?: {
   requestPermission?: boolean;

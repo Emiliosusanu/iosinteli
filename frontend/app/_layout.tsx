@@ -40,11 +40,17 @@ const queryClient = appQueryClient;
 /** Pull latest financial reality when returning from background — no stale paint. */
 function FinancialForegroundRefetch() {
   useEffect(() => {
+    void import("@/src/lib/kdp/remoteDiagnostics").then(({ flushKdpRemoteDiagnostics }) => {
+      void flushKdpRemoteDiagnostics();
+    });
     let appState: AppStateStatus = AppState.currentState;
     const sub = AppState.addEventListener("change", (next) => {
       const wasBackground = appState === "background" || appState === "inactive";
       appState = next;
       if (!wasBackground || next !== "active") return;
+      void import("@/src/lib/kdp/remoteDiagnostics").then(({ flushKdpRemoteDiagnostics }) => {
+        void flushKdpRemoteDiagnostics();
+      });
       void import("@/src/lib/backgroundFinancialSync").then(({ backgroundFinancialQueryRoots }) => {
         const roots = backgroundFinancialQueryRoots();
         void queryClient.invalidateQueries({

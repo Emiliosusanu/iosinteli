@@ -195,6 +195,10 @@ public class InteliAdsNativeSyncModule: Module {
       InteliAdsBackgroundRefreshManager.shared.statusDictionary()
     }
 
+    AsyncFunction("getPendingWakeDeadlineAsync") { () -> Double? in
+      InteliAdsBackgroundRefreshManager.pendingWakeDeadline()
+    }
+
     AsyncFunction("consumePendingWakeKindAsync") { () -> String? in
       InteliAdsBackgroundRefreshManager.consumePendingWakeKind()
     }

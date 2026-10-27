@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { activeLinkedKdpAccountIdsFromRows } from "../src/lib/kdpAccountLinks.ts";
 import {
+  bookDetailProfileSelection,
   booksKdpQueryScope,
   booksListAwaitingRows,
   booksMoneyProfileIds,
@@ -62,6 +63,15 @@ test("booksMoneyProfileIds never includes Disabled Sebastian-style profiles", ()
   assert.ok(ids.includes("us") || ids.includes("ads-us"));
   assert.equal(ids.includes("hr"), false);
   assert.equal(ids.includes("ads-hr"), false);
+});
+
+test("USD book detail covers enabled marketplaces while preserving non-USD selection", () => {
+  const markets = [
+    ...profiles,
+    { ...profiles[0], id: "ca", profile_id: "ads-ca", country_code: "CA", currency_code: "CAD" },
+  ];
+  assert.deepEqual(bookDetailProfileSelection(markets, ["us"], "USD"), ["us", "ca"]);
+  assert.deepEqual(bookDetailProfileSelection(markets, ["us"], "CAD"), ["us"]);
 });
 
 test("booksRoyaltyScopeForSelection follows the money chip, not every Enabled country", () => {
@@ -360,8 +370,9 @@ test("Books tab uses enabled profile scope and empty-state gate", () => {
 
 test("Book detail scopes to enabled profiles and offers Create campaign", () => {
   assert.match(detail, /booksMoneyProfileIds/);
+  assert.match(detail, /bookDetailProfileSelection/);
   assert.match(detail, /booksRoyaltyScopeForSelection/);
-  assert.match(detail, /overviewKdpQueryScope\(profiles, selectedProfileIds, royaltyScope\)/);
+  assert.match(detail, /overviewKdpQueryScope\(profiles, detailProfileIds, royaltyScope\)/);
   assert.doesNotMatch(detail, /const kdpQueryScope = booksKdpQueryScope\(royaltyScope\)/);
   assert.match(detail, /Create campaign/);
   assert.match(detail, /\/campaign\/create/);

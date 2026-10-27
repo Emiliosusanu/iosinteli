@@ -351,3 +351,33 @@ never from `main`, and never from the active Cursor checkout.
 - [x] App Store IPA `/tmp/InteliAds-368-signed/InteliAds.ipa` has SHA-256 `8a934a935a56883fba53d4d8e578d90e03e19f3e5d9aba8915a88b142f94d2af`, production APNs, `get-task-allow=false`, and the shared App Group. Xcode reported `Upload succeeded`, `Uploaded InteliAds`, and `EXPORT SUCCEEDED` on October 4, 2026; Apple package processing follows the upload.
 - [x] Build 368 installed over the existing app on the connected iPhone 14 Pro without erasing the session. Home and Books opened, and the Aruba book detail displayed the exact live API values above. Device captures: `/tmp/InteliAds-368-launch.png`, `/tmp/InteliAds-368-books.png`, and `/tmp/InteliAds-368-aruba.png`.
 - [ ] Confirm Apple processing and associate build 368 with the external **Intelyads** group (3 testers). The Safari App Store Connect session was expired immediately after upload; no external distribution is claimed until the portal confirms it.
+
+
+## Build 368 follow-up — identity, metadata, and marketplace scope
+
+- [x] Regression tests cover exact ASIN identity, Nova Scotia old/new review separation, same-ASIN US/CA review snapshots, Iceland cover refresh, parent aggregation, stock eligibility, Ads/Target book filters, and SKU ASIN fallback.
+- [x] UK country code is normalized from `UK` to Unicode's `GB`; the installed iPhone 14 Pro build renders 🇬🇧 in the shared market header.
+- [x] A new local Release build was compiled from the follow-up source and installed in place on the connected iPhone 14 Pro.
+- [x] Device stress after that install passed: `js_errors=0`, `hard_errors=0`, `perf_lines=826`; evidence is `/tmp/inteliads-14pro-stress-20261005-200129`.
+- [x] Full unit suite after the follow-up source: 1,012/1,012; TypeScript and `git diff --check` pass.
+- [ ] Live Nova Scotia/Iceland API rows were not re-captured in this pass, so external TestFlight build certification is not claimed until the new numbered build is uploaded and its authenticated metadata is checked.
+
+## Build 369 — external upload (2026-10-05)
+
+- [x] Build number 369 is present in the app and WidgetKit project settings at the committed bump `7ca1b6a1`.
+- [x] Clean archive `/tmp/InteliAds-369-v2.xcarchive` completed with version `1.0.1 (369)` and strict code-signature verification passed on the archived app.
+- [x] Xcode exported with `ios/ExportOptionsTestFlightPublic.plist` (`testFlightInternalTestingOnly=false`). The distribution log records Apple Distribution signing and iOS Team Store profiles for the app and widget.
+- [x] App Store Connect Transporter reported `Upload succeeded`, `Uploaded InteliAds`, and `** EXPORT SUCCEEDED **` at 2026-10-05 23:47:57 local time. Apple processing and external-group association still require portal confirmation.
+- [ ] Confirm Apple processing and attach build 369 to the external **Intelyads** group. The current App Store Connect browser session is expired (`authResult=FAILED`), so this is deliberately not claimed here.
+
+## Build 376 — stable marketplace header and native bid currency (2026-10-08)
+
+- [x] Release candidate commit `affbbfb3` is pushed on `codex/ios-merge-20261007`. The header renders at most two marketplace flags plus a compact `+N` badge, while accessibility keeps the complete marketplace list.
+- [x] The Gross refresh state uses a fixed-height status lane and animates opacity/scale only. Updating no longer changes card or page layout, and the dashboard background remains fixed behind its cards.
+- [x] Targeting bid editors retain the exact row marketplace currency. A single-row edit writes the row's native currency; mixed-currency absolute bulk edits fail closed and instruct the tester to choose one market; percentage bulk edits remain available because they do not mix money values. The existing Markets filter continues to scope the profile IDs used by Targeting.
+- [x] TypeScript, release guard, `git diff --check`, focused lint with zero errors, and the complete 1,032-test suite pass.
+- [x] Clean archive `/tmp/InteliAds-376-20261008214519.xcarchive` is `io.inteliads.app` version `1.0.1 (376)`. The app and embedded WidgetKit extension pass strict signature verification.
+- [x] Build 376 installed in place and launched on the physical iPhone 17 Pro Max (`E04E7387-7AD4-505A-9E19-0019BD757FCC`) without erasing its container. Device inventory reports `io.inteliads.app 1.0.1 (376)`.
+- [x] Public App Store export/upload succeeded with `ios/ExportOptionsTestFlightPublic.plist`; Xcode reported `Upload succeeded`, `Uploaded InteliAds`, and `EXPORT SUCCEEDED`.
+- [x] App Store Connect processed build 376 and shows it as **Ready to Submit**, uploaded October 8, 2026 at 9:52 PM local time.
+- [x] App Store Connect shows build `1.0.1 (376)` in the external **Intelyads** group with 3 testers and status **Testing**. The group now contains 30 builds; the portal lists the upload at October 8, 2026, 9:52 PM local time.

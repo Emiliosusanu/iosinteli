@@ -22,6 +22,8 @@ const APNS_BUNDLE_ID = Deno.env.get("APNS_BUNDLE_ID") ?? "io.inteliads.app";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const KDP_WAKE_SECRET = Deno.env.get("KDP_WAKE_SECRET") ?? "";
+// Dedicated cron credential: do not persist a service-role JWT in cron commands.
+const KDP_WAKE_CRON_SECRET = Deno.env.get("KDP_WAKE_CRON_SECRET") ?? "";
 
 const MIN_INTERVAL_SECONDS = 14 * 60;
 const APNS_COLLAPSE_SLOT_SECONDS = 15 * 60;
@@ -108,18 +110,6 @@ async function secretsMatch(provided: string, expected: string): Promise<boolean
   let mismatch = 0;
   for (let i = 0; i < lhs.length; i++) mismatch |= lhs[i] ^ rhs[i];
   return mismatch === 0;
-}
-
-function jwtRole(jwt: string): string | null {
-  try {
-    const part = jwt.split(".")[1];
-    if (!part) return null;
-    const padded = part + "=".repeat((4 - (part.length % 4)) % 4);
-    const payload = JSON.parse(atob(padded.replace(/-/g, "+").replace(/_/g, "/")));
-    return typeof payload?.role === "string" ? payload.role : null;
-  } catch {
-    return null;
-  }
 }
 
 type TokenRow = {
@@ -215,11 +205,12 @@ Deno.serve(async (req) => {
   const authHeader = req.headers.get("Authorization") ?? "";
   const jwt = authHeader.replace(/^Bearer\s+/i, "").trim();
   const wakeSecret = req.headers.get("X-InteliAds-Wake-Secret") ?? "";
-  const role = jwtRole(jwt);
-  const isService =
-    role === "service_role" ||
-    (SERVICE_ROLE_KEY.length > 0 && jwt === SERVICE_ROLE_KEY);
-  const secretOk = await secretsMatch(wakeSecret, KDP_WAKE_SECRET);
+  // verify_jwt is disabled so the secret-header cron is supported.
+  // A decoded role is not authentication: compare the configured credential.
+  const isService = await secretsMatch(jwt, SERVICE_ROLE_KEY);
+  const secretOk =
+    await secretsMatch(wakeSecret, KDP_WAKE_SECRET) ||
+    await secretsMatch(wakeSecret, KDP_WAKE_CRON_SECRET);
   if (!isService && !secretOk) {
     return json({ error: "unauthorized" }, 401);
   }
@@ -233,8 +224,10 @@ Deno.serve(async (req) => {
     minimum_interval_seconds: MIN_INTERVAL_SECONDS,
   });
   if (claimError) {
-    // Table/RPC missing → still send once (dev / first deploy), but report.
+    // No distributed lease means duplicate fleet sends cannot be prevented.
+    // Leave tokens untouched and retry after the lease service is restored.
     console.warn("claim_kdp_wake_dispatch unavailable", claimError.message);
+    return json({ error: "wake_lease_unavailable" }, 503);
   } else if (claim === false || claim === null) {
     return json(
       { accepted: false, reason: "rate_limited" },

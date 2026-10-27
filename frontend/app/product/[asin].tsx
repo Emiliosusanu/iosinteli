@@ -9,7 +9,8 @@ import {
 } from "react-native";
 import { BookCover } from "@/src/components/BookCover";
 import { BookRetailInfo } from "@/src/components/BookRetailInfo";
-import { bookRetailAsins, bookRetailEditions, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { bookRetailAsins, bookRetailEditions, primaryBookRetailEdition, type BookRetailSnapshot } from "@/src/lib/bookRetailMetadata";
+import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import { SFSymbol } from "@/src/components/ios/Native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -37,6 +38,7 @@ import {
 } from "@/src/lib/queries";
 import { isKdpOnlySessionScope } from "@/src/lib/kdpRoyaltyScope";
 import {
+  bookDetailProfileSelection,
   booksMoneyProfileIds,
   booksRoyaltyScopeForSelection,
   overviewKdpQueryScope,
@@ -152,9 +154,13 @@ export default function ProductCampaignsScreen() {
   const paramImageUrl = paramValue(params.imageUrl);
   const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
+  const detailProfileIds = useMemo(
+    () => bookDetailProfileSelection(profiles, selectedProfileIds, primaryCurrency),
+    [profiles, selectedProfileIds, primaryCurrency],
+  );
   const moneyProfileIds = useMemo(
-    () => sortedProfileIds(booksMoneyProfileIds(profiles, selectedProfileIds)),
-    [profiles, selectedProfileIds],
+    () => sortedProfileIds(booksMoneyProfileIds(profiles, detailProfileIds)),
+    [profiles, detailProfileIds],
   );
   const retailProfileIds = useMemo(
     () => sortedProfileIds(amazonAdsProfileIdsForSelection(profiles, moneyProfileIds)),
@@ -168,7 +174,7 @@ export default function ProductCampaignsScreen() {
     () => sortedProfileIds(royaltyScope.profileIds),
     [royaltyScope.profileIds],
   );
-  const kdpQueryScope = overviewKdpQueryScope(profiles, selectedProfileIds, royaltyScope);
+  const kdpQueryScope = overviewKdpQueryScope(profiles, detailProfileIds, royaltyScope);
   // Keep limit in the key so Overview/Books caches cannot cross-hydrate a truncated list.
   const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, 300] as const;
 
@@ -233,7 +239,15 @@ export default function ProductCampaignsScreen() {
   const retailAsins = useMemo(() => bookRetailAsins(retailBooks), [retailBooks]);
   const retailQ = useQuery({
     queryKey: ["book-retail-metadata-detail", user?.id ?? "anonymous", adminFilterUserId ?? "self", retailProfileIds, retailAsins],
-    queryFn: () => fetchBookRetailMetadata({ books: retailBooks, adsProfileIds: retailProfileIds }),
+    queryFn: () => fetchBookRetailMetadata({
+      books: retailBooks,
+      adsProfileIds: retailProfileIds,
+      marketplaceCodes: Object.fromEntries(profiles.flatMap((profile) => {
+        const code = String(profile.country_code ?? "").trim().toUpperCase();
+        return code ? [[profile.id, code], [profile.profile_id, code]] : [];
+      })),
+      preferredMarketplaceCode: profiles.find((profile) => selectedProfileIds.includes(profile.id) || selectedProfileIds.includes(profile.profile_id))?.country_code,
+    }),
     enabled: Boolean(user?.id) && !adminFilterUserId && retailProfileIds.length > 0 && retailAsins.length > 0,
     staleTime: 5 * 60_000,
     retry: false,
@@ -242,13 +256,17 @@ export default function ProductCampaignsScreen() {
     () => retailQ.isSuccess ? bookRetailEditions(retailBooks[0], retailQ.data) : [],
     [retailBooks, retailQ.data, retailQ.isSuccess],
   );
+  const primaryRetailEdition = useMemo(
+    () => retailQ.isSuccess ? primaryBookRetailEdition(retailBooks[0], retailQ.data) : null,
+    [retailBooks, retailQ.data, retailQ.isSuccess],
+  );
   useEffect(() => {
     markPerf("book_detail.mount");
   }, []);
   const campaigns = campaignsQ.data ?? [];
   const identity = identityQ.data ?? null;
-  const title = book?.title || identity?.title || paramTitle || "Book";
-  const imageUrl = book?.image_url ?? identity?.image_url ?? paramImageUrl;
+  const title = preferEditionTitle(book?.title || identity?.title || paramTitle, primaryRetailEdition?.snapshot.title) || "Book";
+  const imageUrl = primaryRetailEdition?.snapshot.coverUrl ?? book?.image_url ?? identity?.image_url ?? paramImageUrl;
   const bookIdentity = book ?? {
     title,
     asin,
@@ -366,6 +384,7 @@ export default function ProductCampaignsScreen() {
             marketplaceIndex={marketplaceIndex}
             formatOptions={formatOptions}
             retailEditions={retailEditions}
+            coverCacheKey={primaryRetailEdition?.snapshot.coverCacheKey}
             retailLoadState={retailQ.isError ? "error" : retailQ.isPending ? "loading" : "ready"}
             onCreateCampaign={openCreateCampaign}
           />
@@ -418,6 +437,7 @@ function BookHeader({
   marketplaceIndex,
   formatOptions,
   retailEditions,
+  coverCacheKey,
   retailLoadState,
   onCreateCampaign,
 }: {
@@ -440,6 +460,7 @@ function BookHeader({
   marketplaceIndex: SponsoredMarketplaceIndex;
   formatOptions: ReturnType<typeof formatsFromWorkKey>;
   retailEditions: { format: string; snapshot: BookRetailSnapshot }[];
+  coverCacheKey?: string;
   retailLoadState: "loading" | "ready" | "error";
   onCreateCampaign: () => void;
 }) {
@@ -531,6 +552,7 @@ function BookHeader({
               asin={asin}
               size="lg"
               recyclingKey={asin}
+              cacheKey={coverCacheKey}
             />
 
             <View style={styles.titleBlock}>
@@ -641,7 +663,7 @@ function BookHeader({
               </Text>
             ) : null}
             {retailEditions.map(({ format, snapshot }) => (
-              <BookRetailInfo key={snapshot.asin} edition={format} snapshot={snapshot} />
+              <BookRetailInfo key={`${snapshot.asin}:${snapshot.marketplaceCode ?? ""}`} edition={format} snapshot={snapshot} />
             ))}
           </View>
         ) : null}

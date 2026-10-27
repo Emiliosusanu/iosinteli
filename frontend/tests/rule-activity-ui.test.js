@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import {
   RULE_ACTIVITY_LIMIT,
   activityCapCopy,
-  activityChangedCount,
+  activityMatchedCount,
   activityCountsLabel,
   activityEvaluatedCount,
   activityFailedCount,
@@ -32,7 +32,7 @@ test("rows navigate with the execution id, not the rule id", () => {
       ruleName: "Daily ACoS Control",
       executedAt: "2026-08-22T12:32:00.000Z",
       rawStatus: "completed",
-      changed: 3,
+      matched: 3,
     }),
     {
       id: "exec-77",
@@ -57,7 +57,7 @@ test("status labels stay shared with Execution Detail", () => {
   assert.match(labels, /return "Running"/);
   assert.match(labels, /return "Pending"/);
   assert.match(labels, /return "Reapplied"/);
-  assert.match(helper, /presentExecutionOutcome\(\{ status: run\.status, changed, failed \}\)/);
+  assert.match(helper, /presentExecutionOutcome\(\{ status: run\.status, changed: 0, failed \}\)/);
   assert.match(screen, /presentActivityRow/);
   assert.doesNotMatch(screen, /ok = run\.status === "completed"/);
 });
@@ -70,23 +70,38 @@ test("completed with zero changes is not formatted as failed", () => {
   assert.match(helper, /countsLabel \?\? outcomeSpoken/);
 });
 
-test("partial failure copy uses real changed and failed counts", () => {
-  assert.equal(activityCountsLabel({ status: "partial_fail", changed: 12, failed: 2 }), "12 changed · 2 failed");
-  assert.equal(activityCountsLabel({ status: "completed", changed: 0, failed: 0 }), null);
-  assert.equal(activityCountsLabel({ status: "failed", changed: 0, failed: 0 }), null);
+test("partial failure copy distinguishes matched and failed counts", () => {
+  assert.equal(activityCountsLabel({ status: "partial_fail", matched: 12, failed: 2 }), "12 matched · 2 failed");
+  assert.equal(activityCountsLabel({ status: "completed", matched: 0, failed: 0 }), null);
+  assert.equal(activityCountsLabel({ status: "failed", matched: 0, failed: 0 }), null);
   assert.match(presentation, /"partial_fail" \|\| key === "partial_failed"/);
-  assert.match(helper, /activityCountsLabel\(\{ status: run\.status, changed, failed \}\)/);
+  assert.match(helper, /activityCountsLabel\(\{ status: run\.status, matched, failed \}\)/);
 });
 
-test("changed and evaluated stay separate; evaluated is never invented", () => {
-  assert.equal(activityChangedCount({ entities: 12 }), 12);
+test("matched and evaluated stay separate; changed is never invented", () => {
+  assert.equal(activityMatchedCount({ entities: 12 }), 12);
   assert.equal(activityFailedCount({ errors_count: 2 }), 2);
   assert.equal(activityEvaluatedCount({}), null);
   assert.equal(activityEvaluatedCount({ entities_checked: 40 }), 40);
   assert.match(helper, /activityEvaluatedCount\(run\)/);
-  assert.doesNotMatch(helper, /changed \+ failed|evaluated = changed/);
+  assert.doesNotMatch(helper, /matched \+ failed|evaluated = matched/);
   assert.doesNotMatch(screen, /When |Then |ACoS >/);
   assert.doesNotMatch(screen, /entities_checked \+|changed \+ failed/);
+});
+
+test("a skipped-only run with 37 matches is never presented as 37 changes", () => {
+  assert.equal(activityMatchedCount({ entities: 37 }), 37);
+  assert.equal(activityCountsLabel({ status: "completed", matched: 37, failed: 0 }), "37 matched");
+  assert.match(detail, /const reportedMatched =/);
+  assert.match(detail, /const changed = hasEntityDetail \? changedFromRows : null/);
+  assert.match(detail, /label="Matched" value=\{formatInt\(reportedMatched\)\}/);
+  assert.match(detail, /label="Recorded changes" value=\{changed == null \? "—"/);
+  assert.match(detail, /disabled=\{!id \|\| busy != null \|\| !canRevert\}/);
+  assert.match(detail, /disabled=\{!id \|\| busy != null \|\| !canReapply\}/);
+  assert.doesNotMatch(detail, /reportedChanged|changedFromRows : reportedMatched/);
+  assert.doesNotMatch(list, /"change" : "changes"/);
+  assert.match(helper, /Individual changes not verified/);
+  assert.doesNotMatch(helper, /activityChangedCount\(run\)/);
 });
 
 test("recent history is not presented as complete lifetime history", () => {
@@ -148,7 +163,7 @@ test("running and pending stay in progress", () => {
   assert.equal(activityIsInProgress("running"), true);
   assert.equal(activityIsInProgress("pending"), true);
   assert.equal(activityIsInProgress("completed"), false);
-  assert.equal(activityCountsLabel({ status: "running", changed: 4, failed: 1 }), null);
+  assert.equal(activityCountsLabel({ status: "running", matched: 4, failed: 1 }), null);
   assert.match(presentation, /This run is still in progress/);
   assert.match(helper, /activityIsInProgress\(run\.status\)/);
 });

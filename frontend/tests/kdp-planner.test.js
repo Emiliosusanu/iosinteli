@@ -14,6 +14,7 @@ import {
   ONBOARDING_DAYS,
   ONBOARDING_MILESTONE_30_DAYS,
   SYNC_EVERY_MS,
+  STEADY_WAKE_GRACE_MS,
   countPlanDays,
   createInitialSyncState,
   nightlyWindow,
@@ -132,6 +133,29 @@ test("force pulls steady even inside the 15-min window", () => {
   const soon = new Date(now.getTime() + 60_000);
   const r = planSync(soon, state, { ...PROC, force: true });
   assert.equal((rangesByKind(r).steady || []).length, 1);
+});
+
+test("quarter-hour wake does not miss the slot because the last capture started seconds later", () => {
+  const previous = new Date('2026-10-10T17:00:15.637Z');
+  const state = completedState(previous);
+  const delivery = new Date('2026-10-10T17:15:02.981Z');
+  const result = planSync(delivery, state, { timeZone: TZ, wakeMode: 'recent' });
+  assert.equal((rangesByKind(result).steady || []).length, 1);
+  assert.equal(result.nextState.lastSteadyAtMs, delivery.getTime());
+  const duplicate = planSync(new Date('2026-10-10T17:15:17Z'), result.nextState, PROC);
+  assert.equal((rangesByKind(duplicate).steady || []).length, 0);
+});
+
+test("wake grace is bounded to one minute and still throttles early captures", () => {
+  assert.equal(STEADY_WAKE_GRACE_MS, 60_000);
+  const previous = new Date('2026-10-10T17:00:15.637Z');
+  const state = completedState(previous);
+  for (const wakeMode of ['recent', 'processing']) {
+    const early = new Date(previous.getTime() + SYNC_EVERY_MS - STEADY_WAKE_GRACE_MS - 1);
+    const boundary = new Date(early.getTime() + 1);
+    assert.equal((rangesByKind(planSync(early, state, { timeZone: TZ, wakeMode })).steady || []).length, 0);
+    assert.equal((rangesByKind(planSync(boundary, state, { timeZone: TZ, wakeMode })).steady || []).length, 1);
+  }
 });
 
 test("nightly correction opens last 30 days at/after 02:00 and does not seal itself", () => {
