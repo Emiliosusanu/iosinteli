@@ -8,7 +8,7 @@ import { resolveBookNet } from '../src/lib/netRoyalties.ts';
 const source = readFileSync(new URL('../app/(tabs)/products.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('products.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) &&
-  ['bookAdsReady', 'bookKdpAvailable', 'bookStatus'].includes(node.name?.text));
+  ['bookAdsReady', 'bookKdpAvailable', 'bookStatus', 'bookA11yLabel'].includes(node.name?.text));
 const context = { resolveBookNet };
 vm.runInNewContext(ts.transpileModule(functions.map(node => node.getText(ast)).join('\n'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
@@ -23,6 +23,17 @@ test('Books never claims no sales from zero KDP units when attributed Ads sales 
     assert.equal(context.bookStatus({ ...row, sales }, true).label, 'Net negative');
   }
   assert.equal(context.bookStatus({ ...row, royalties: 30 }, true).label, 'Net positive');
+});
+
+test('unavailable campaign-only Ads are not announced as measured zero spend or orders',()=>{
+ Object.assign(context,{formatCurrency:n=>`$${n}`,formatPercent:n=>`${n}%`,formatInt:String,
+  bookNetIsKnown:r=>resolveBookNet(r)!=null,formatBreakEvenAcos:String,
+  netRoyaltiesVoiceOver:r=>`Spend ${r.adsSpend}; net ${r.netRoyalties}`});
+ const row={title:'Advertised book',spend:0,sales:0,orders:0,orders_source:'ads',orders_state:'missing',
+  royalties:null,ads_state:'missing',kdp_state:'missing',breakeven_acos:0};
+ assert.equal(context.bookStatus(row,false).label,'Ads unavailable');
+ const label=context.bookA11yLabel(row,context.bookStatus(row,false),'USD');
+ assert.match(label,/Spend unavailable/);assert.match(label,/unavailable ads orders/);assert.doesNotMatch(label,/Spend \$0|0 ads orders/);
 });
 
 test('the Books row VoiceOver preserves unknown reviews even with an observation date', () => {

@@ -16,6 +16,7 @@ import {
   fetchNestProductTargetById,
   fetchNestProductTargets,
   fetchNestTopBooks,
+  fetchNestBookAdsMetrics,
   isNestKeywordSortAvailable,
   noteNestKeywordSortFailure,
 } from "./dashboardApi";
@@ -3981,10 +3982,11 @@ async function fetchEnabledSponsoredBooksForProfiles(
     data = await fetchAllPages<any>((from, to) =>
       supabase
         .from("product_ads")
-        .select("asin, sku, title, campaign_id, image_url, status, campaigns!inner(state)")
+        .select("asin, sku, title, campaign_id, ad_group_id, image_url, status, campaigns!inner(state), ad_groups!inner(state, campaign_id)")
         .in("amazon_profile_id", profileIds)
         .in("status", ["enabled"])
         .in("campaigns.state", ["enabled"])
+        .in("ad_groups.state", ["enabled"])
         .order("id", { ascending: true })
         .range(from, to),
     );
@@ -3993,7 +3995,7 @@ async function fetchEnabledSponsoredBooksForProfiles(
     const ads = await fetchAllPages<any>((from, to) =>
       supabase
         .from("product_ads")
-        .select("asin, sku, title, campaign_id, image_url, status")
+        .select("asin, sku, title, campaign_id, ad_group_id, image_url, status")
         .in("amazon_profile_id", profileIds)
         .in("status", ["enabled"])
         .order("id", { ascending: true })
@@ -4015,7 +4017,16 @@ async function fetchEnabledSponsoredBooksForProfiles(
         liveCampaignIds.add(String((row as any).id));
       }
     }
-    data = ads.filter((row) => liveCampaignIds.has(String(row.campaign_id || "").trim()));
+    const groupIds = [...new Set(ads.map(row => String(row.ad_group_id || '').trim()).filter(Boolean))];
+    const liveGroups = new Map<string, string>();
+    for (let offset = 0; offset < groupIds.length; offset += 200) {
+      const groups = await fetchAllPages<any>((from, to) => supabase.from('ad_groups')
+        .select('id, campaign_id, state').in('id', groupIds.slice(offset, offset + 200))
+        .in('state', ['enabled']).order('id', { ascending: true }).range(from, to));
+      for (const group of groups) liveGroups.set(String(group.id), String(group.campaign_id));
+    }
+    data = ads.filter(row => liveCampaignIds.has(String(row.campaign_id || '').trim())
+      && liveGroups.get(String(row.ad_group_id || '').trim()) === String(row.campaign_id || '').trim());
   }
 
   const byAsin = new Map<
@@ -4032,6 +4043,8 @@ async function fetchEnabledSponsoredBooksForProfiles(
     const imageUrl = String((row as any).image_url || "").trim() || null;
     const campaignState = String((row as any).campaigns?.state || "").toLowerCase();
     if (campaignState && !liveCampaignStates.has(campaignState)) continue;
+    if (row.ad_groups && (String(row.ad_groups.state).toLowerCase() !== 'enabled'
+      || String(row.ad_groups.campaign_id) !== campaignId)) continue;
     const cur = byAsin.get(asin) ?? {
       title,
       image_url: null as string | null,
@@ -5586,6 +5599,7 @@ export async function fetchTopKeywordsRange(opts: RangeOpts): Promise<TopKeyword
 
 export interface TopBookRow {
   orders_source?: "kdp" | "ads";
+  orders_state?: "ready" | "missing";
   book_key: string;
   asin: string;
   sku: string | null;
@@ -5978,6 +5992,8 @@ async function finalizeCatalogBooksList(
   kdpAccountIds: string[],
   limit: number,
   preloadedShelf?: TopBookRow[] | null,
+  startDate?: string,
+  endDate?: string,
 ): Promise<TopBookRow[]> {
   const shelf = preloadedShelf ?? (await nestShelfCatalogRows());
   const sponsorableAsins = new Set<string>();
@@ -6048,7 +6064,9 @@ async function finalizeCatalogBooksList(
           roas: null,
           net: null,
           breakeven_acos: 0,
-          ads_state: "ready",
+          ads_state: "missing",
+          orders_state: "missing",
+          orders_source: "ads",
           kdp_state: "missing",
           sponsorable: true,
           has_campaign: true,
@@ -6056,8 +6074,29 @@ async function finalizeCatalogBooksList(
           has_format_activity: false,
         });
       }
-    } catch {
-      // Soft-fail — periodRows has_campaign stamps still apply.
+    } catch (error) {
+      // A failed inventory read cannot certify complete campaign membership.
+      throw error;
+    }
+  }
+  if (campaignOnlyShelf.length && startDate && endDate) {
+    for (let offset = 0; offset < campaignOnlyShelf.length; offset += 200) {
+      const batch = campaignOnlyShelf.slice(offset, offset + 200);
+      try {
+        const metrics = await fetchNestBookAdsMetrics({ profileIds, startDate, endDate, asins: batch.map(row => row.asin) });
+        const byAsin = new Map(metrics.map(row => [row.asin, row]));
+        for (const row of batch) {
+          const measured = byAsin.get(row.asin);
+          if (!measured) continue;
+          Object.assign(row, { spend: measured.spend, sales: measured.sales, clicks: measured.clicks,
+            impressions: measured.impressions, orders: measured.orders ?? 0,
+            orders_state: measured.orders == null ? "missing" : "ready", ads_state: "ready",
+            acos: measured.sales > 0 ? measured.spend / measured.sales * 100 : 0,
+            roas: measured.spend > 0 ? measured.sales / measured.spend : null });
+        }
+      } catch {
+        // Keep advertised identities visible, but never present missing reads as measured zero.
+      }
     }
   }
   const merged = mergeTopBookCatalogRows([...shelf, ...campaignOnlyShelf], periodRows);
@@ -6157,7 +6196,7 @@ export async function fetchTopBooksRange(
         // minutes. Books visibility needs period evidence or an enabled campaign,
         // not eligibility to create another campaign. The finalizer already
         // unions verified enabled campaign identities without that discovery.
-        return finalizeCatalogBooksList(nestRows, profileIds, kdpAccountIds, limit, []);
+        return finalizeCatalogBooksList(nestRows, profileIds, kdpAccountIds, limit, [], start, end);
       }
     } catch (error) {
       // A catalog error after a valid server financial read must not start a
@@ -6543,6 +6582,8 @@ export async function fetchTopBooksRange(
           kdpAccountIds,
           limit,
           await (nestShelfPromise ?? Promise.resolve([])),
+          start,
+          end,
         );
       }
       return finalizeTopBooksList(assembled, profileIds, kdpAccountIds, limit, activityDays);
@@ -6558,6 +6599,8 @@ export async function fetchTopBooksRange(
       kdpAccountIds,
       limit,
       await (nestShelfPromise ?? Promise.resolve([])),
+      start,
+      end,
     );
   }
 

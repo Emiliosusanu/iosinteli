@@ -19,9 +19,9 @@ export const FINANCIAL_QUERY_ROOTS = {
   kdpRoyaltiesSevenDay: "kdp-royalties-7d-complete-v4",
   kdpRoyaltiesYesterday: "kdp-royalties-yesterday-complete-v4",
   kdpRoyaltiesDaybefore: "kdp-royalties-daybefore-complete-v4",
-  topBooks: "top-books-range-complete-v6",
+  topBooks: "top-books-range-complete-v7",
   // v6: products queryKey must include `limit` so Overview (300) cannot poison Books (0).
-  products: "products-range-complete-v7",
+  products: "products-range-complete-v8",
   topBooksYesterday: "top-books-yesterday-complete-v6",
 } as const;
 
