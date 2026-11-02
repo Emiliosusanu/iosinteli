@@ -51,7 +51,7 @@ test("Home exposes KDP Manager while Targets keeps its profile picker Ads-scoped
   assert.match(home, /testID="home-kdp-manager"/);
   assert.match(home, /router\.push\("\/more\/kdp-manager" as Href\)/);
   assert.match(home, /Manage KDP accounts and books/);
-  assert.match(targeting, /<TopBar showKdpAccountGroups=\{false\} \/>/);
+  assert.match(targeting, /<TopBar showKdpAccountGroups=\{false\} condensedMarket \/>/);
   assert.match(topBar, /showKdpAccountGroups \? \(/);
 });
 

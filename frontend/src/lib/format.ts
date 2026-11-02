@@ -252,7 +252,12 @@ export function shortDateRangeContextLabel(
   range: Pick<DateRange, "start" | "end" | "label">,
   now = new Date(),
 ): string {
-  if (isDynamicRangeLabel(range.label)) return String(range.label);
+  const selectedPreset = presetRangeFromLabel(range.label, now);
+  if (selectedPreset) {
+    return selectedPreset.start === range.start && selectedPreset.end === range.end
+      ? selectedPreset.label
+      : formatDateRangeLabel(range);
+  }
   const presets = rangePresets(now);
   for (const preset of Object.values(presets)) {
     if (preset.start === range.start && preset.end === range.end) return preset.label;

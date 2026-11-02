@@ -13,7 +13,7 @@ function harness(respond) {
     './campaigns': { normalizeEntityState },
     './dashboardApi': { fetchAggregatedCampaigns: async opts => { calls.push({ campaigns: opts }); return [{ id: 'campaign-live', state: 'enabled' }, { id: 'campaign-paused', state: 'paused' }]; },
       mapNestKeyword: r => ({ ...r, campaign_id: r.campaignId, ad_group_id: r.adGroupId, status: r.status, amazon_profile_id: r.amazonProfileId, total_spend: r.total_spend }) },
-    './rulesApi': { nestApiJson: async path => { const u = new URL('https://qa.invalid' + path); calls.push(u); return respond(u); } },
+    './rulesApi': { nestApiJson: async (path, init) => { const u = new URL('https://qa.invalid' + path); calls.push(u); return respond(u, init); } },
   };
   const context = { exports: {}, URLSearchParams, require: name => { assert.ok(dependencies[name], name); return dependencies[name]; } };
   vm.runInNewContext(compiled, context);
@@ -43,6 +43,15 @@ test('admin uses customer-scoped API for active parents and walks past a full pa
   assert.deepEqual(Array.from(rows, r => r.id), ['live-keyword']);
   assert.equal(rows[0].campaign_state, 'enabled'); assert.equal(rows[0].ad_group_state, 'enabled');
   assert.equal(h.calls.filter(c => c.pathname === '/keywords').length, 2);
+});
+test('customer active ad-group reads propagate the same AbortSignal through campaign and group requests', async () => {
+  const controller = new AbortController();
+  const h = harness((u, init) => {
+    assert.equal(init.signal, controller.signal);
+    return { data: [group], hasNextPage: false };
+  });
+  await h.api.fetchAdminOverviewActiveAdGroups(['US'], { ...scope, signal: controller.signal });
+  assert.equal(h.calls[0].campaigns.signal, controller.signal);
 });
 test('admin ad groups preserve API period metrics and reject foreign/paused parents', async () => {
   const h = harness(() => ({ data: [group, { ...group, id: 'foreign', amazonProfileId: 'CA' }, { ...group, id: 'paused', campaignId: 'campaign-paused' }], hasNextPage: false }));

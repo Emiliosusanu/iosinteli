@@ -96,8 +96,10 @@ test("Home financial and Books reads use complete-v4/v5 keys", () => {
   assert.equal(FINANCIAL_QUERY_ROOTS.kdpRoyalties, "kdp-royalties-complete-v4");
   // Books parent-format + KU rollup bump (catalog must not overwrite DIGITAL/PRINT).
   // v6: products key includes limit so Overview(300) cannot poison Books(0).
-  assert.equal(FINANCIAL_QUERY_ROOTS.products, "products-range-complete-v6");
-  assert.equal(FINANCIAL_QUERY_ROOTS.topBooks, "top-books-range-complete-v5");
+  assert.equal(FINANCIAL_QUERY_ROOTS.products, "products-range-complete-v7");
+  assert.equal(FINANCIAL_QUERY_ROOTS.topBooks, "top-books-range-complete-v6");
+  assert.equal(isObsoleteFinancialQueryRoot("products-range-complete-v6"), true);
+  assert.equal(isObsoleteFinancialQueryRoot("top-books-range-complete-v5"), true);
   assert.equal(isObsoleteFinancialQueryRoot("products-range-complete-v4"), true);
   assert.equal(isObsoleteFinancialQueryRoot("products-range-complete-v5"), true);
   assert.equal(isObsoleteFinancialQueryRoot("top-books-range-complete-v4"), true);

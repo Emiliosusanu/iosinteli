@@ -86,7 +86,20 @@ export function indexBookRetailSnapshots(rows: readonly BookRetailSourceRow[]): 
     };
     if (snapshot.rating == null && snapshot.reviewCount == null && !snapshot.stockStatus && !snapshot.coverUrl) continue;
     const prior = byAsin[asin];
-    if (!prior || checkedTime(snapshot.checkedAt) > checkedTime(prior.checkedAt)) byAsin[asin] = snapshot;
+    if (!prior) {
+      byAsin[asin] = snapshot;
+      continue;
+    }
+    const priorMarket = normalizeFlagCountryCode(prior.marketplaceCode);
+    const nextMarket = normalizeFlagCountryCode(snapshot.marketplaceCode);
+    if (!priorMarket || !nextMarket || priorMarket === nextMarket) {
+      byAsin[asin] = mergeBookRetailObservation(
+        { ...prior, marketplaceCode: prior.marketplaceCode ?? snapshot.marketplaceCode },
+        { ...snapshot, marketplaceCode: snapshot.marketplaceCode ?? prior.marketplaceCode },
+      );
+    } else if (checkedTime(snapshot.checkedAt) > checkedTime(prior.checkedAt)) {
+      byAsin[asin] = snapshot;
+    }
   }
   return byAsin;
 }
@@ -103,7 +116,7 @@ export function mergeBookRetailObservation(previous: BookRetailSnapshot, incomin
   const stockRow = incoming.stockStatus != null && (previous.stockStatus == null || checkedTime(incoming.checkedAt) >= checkedTime(previous.checkedAt)) ? incoming : previous;
   return { ...previous, ...incoming, rating: reviewRow.rating, reviewCount: reviewRow.reviewCount,
     reviewsCheckedAt: reviewRow.reviewsCheckedAt ?? reviewRow.checkedAt, stockStatus: stockRow.stockStatus, checkedAt: stockRow.checkedAt,
-    retailPending: Boolean(previous.retailPending || incoming.retailPending), marketplaceSnapshots: undefined };
+    retailPending: incoming.retailPending ?? previous.retailPending, marketplaceSnapshots: undefined };
 }
 
 /** Use the same per-profile API payload as /amazon; never infer metadata from a sibling ASIN. */

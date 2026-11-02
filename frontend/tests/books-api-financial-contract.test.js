@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import {createRequire} from 'node:module';
 import {readFileSync} from 'node:fs';
 import {netRoyaltiesKnown} from '../src/lib/netRoyalties.ts';
+import {optionalMetric} from '../src/lib/metricEvidence.ts';
 import {resolveAuthoritativeBreakEvenAcos} from '../src/lib/kdpTitlePresentation.ts';
 const require=createRequire(import.meta.url),ts=require('typescript');
 const source=readFileSync(new URL('../src/lib/dashboardApi.ts',import.meta.url),'utf8');
@@ -13,7 +14,7 @@ const fragment=ast.statements.filter(n=>ts.isFunctionDeclaration(n)&&names.has(n
 const js=ts.transpileModule(fragment,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 function runtime(payload){
  class NestApiError extends Error{constructor(message,status){super(message);this.status=status;}}
- const calls=[],context={exports:{},URLSearchParams,netRoyaltiesKnown,resolveAuthoritativeBreakEvenAcos,NestApiError,nestApiJson:async(path,init)=>{calls.push({path,init});return payload;}};
+ const calls=[],context={exports:{},URLSearchParams,optionalMetric,netRoyaltiesKnown,resolveAuthoritativeBreakEvenAcos,NestApiError,nestApiJson:async(path,init)=>{calls.push({path,init});return payload;}};
  vm.runInNewContext(js,context);return {fetch:context.exports.fetchNestTopBooks,calls};
 }
 test('server unavailable marker cannot turn into a complete empty Books result',async()=>{
@@ -24,8 +25,14 @@ test('verified format identities survive financial mapping for exact edition rev
  const {fetch,calls}=runtime({data:[{asin:'B0ABCDEFGH',formatAsins:['B0ABCDEFGH','1807973751'],title:'Book',royalties:19,adSpend:4,adSales:20,orders:2}]});
  const [row]=await fetch({startDate:'2026-10-01',endDate:'2026-10-16',profileIds:['owned-us'],filterUserId:'owned customer'});
  assert.deepEqual(Array.from(row.format_asins),['B0ABCDEFGH','1807973751']);assert.equal(row.net,15);assert.equal(row.ads_state,'ready');
+ assert.equal(row.clicks,null);assert.equal(row.impressions,null);assert.equal(row.orders_source,'kdp');
  const url=new URL(calls[0].path,'https://example.test');assert.equal(url.searchParams.get('filterUserId'),'owned customer');assert.equal(url.searchParams.get('profileIds'),'owned-us');assert.equal(url.searchParams.get('listingCacheOnly'),'true');
 });
 test('successful empty server result remains empty',async()=>{
  const {fetch}=runtime({data:[]});const rows=await fetch({startDate:'2026-10-01',endDate:'2026-10-16',profileIds:['owned-us']});assert.equal(rows.length,0);
+});
+test('actual counts survive, absent royalties never become a zero net',async()=>{
+ const {fetch}=runtime({data:[{asin:'B0ABCDEFGH',title:'Book',royalties:null,adSpend:4,adSales:20,orders:2,clicks:18,impressions:500}]});
+ const [row]=await fetch({startDate:'2026-10-01',endDate:'2026-10-16',profileIds:['owned-us']});
+ assert.equal(row.clicks,18);assert.equal(row.impressions,500);assert.equal(row.royalties,null);assert.equal(row.net,null);assert.equal(row.kdp_state,'missing');
 });

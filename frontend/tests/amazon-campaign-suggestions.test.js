@@ -509,7 +509,7 @@ test("buildKeywordSuggestionCountStats + label: New England 156→468 fixture (e
   assert.equal(fullKeep.grokFiltered, false);
   assert.equal(
     formatKeywordSuggestionCountLabel(fullKeep),
-    "Amazon · 156 · 468 · AI kept all",
+    "Amazon · 156 · 468 · Kept all",
   );
   const pending = { ...fullKeep, grokPending: true, relevanceOutcome: "pending" };
   assert.match(
@@ -529,18 +529,18 @@ test("buildKeywordSuggestionCountStats + label: New England 156→468 fixture (e
     formatKeywordSuggestionCountLabel(failed),
     /Amazon suggestions/,
   );
-  assert.doesNotMatch(formatKeywordSuggestionCountLabel(failed), /AI kept all/);
+  assert.doesNotMatch(formatKeywordSuggestionCountLabel(failed), /Kept all/);
   const restored = {
     ...fullKeep,
     relevanceOutcome: "restored_empty",
   };
   assert.match(
     formatKeywordSuggestionCountLabel(restored),
-    /Amazon restored \(AI empty\)/,
+    /Amazon restored/,
   );
   assert.doesNotMatch(
     formatKeywordSuggestionCountLabel(restored),
-    /AI kept all|Kept/,
+    /Kept all|Kept/,
   );
 });
 
@@ -553,7 +553,7 @@ test("empty Amazon set does not claim AI kept all", () => {
     relevanceOutcome: "kept_all",
   });
   assert.equal(formatKeywordSuggestionCountLabel(empty), "Amazon · 0");
-  assert.doesNotMatch(formatKeywordSuggestionCountLabel(empty), /AI kept all/);
+  assert.doesNotMatch(formatKeywordSuggestionCountLabel(empty), /Kept all/);
 });
 
 test("buildKeywordSuggestionCountStats + label: live counts for any list size", () => {
@@ -587,7 +587,7 @@ test("buildKeywordSuggestionCountStats + label: live counts for any list size", 
       grokFiltered: false,
       relevanceOutcome: "kept_all",
     }),
-    "Amazon · 7 · 21 · AI kept all",
+    "Amazon · 7 · 21 · Kept all",
   );
 });
 

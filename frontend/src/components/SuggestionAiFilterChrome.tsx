@@ -47,7 +47,7 @@ export function SuggestionAiFilterChrome({
     stats.amazonRowCount === 0 &&
     stats.amazonApiRowCount === 0;
 
-  let statusTitle = "AI filter";
+  let statusTitle = "Suggestions";
   let statusDetail: string | null = null;
   if (pending) {
     statusTitle = "Filtering…";
@@ -58,17 +58,17 @@ export function SuggestionAiFilterChrome({
         ? "Paste keywords below, or retry."
         : "Paste ASINs below, or retry.";
   } else if (stats?.relevanceOutcome === "failed_unfiltered") {
-    statusTitle = "AI filter unavailable";
-    statusDetail = "Nothing selected. Retry, or choose the original Amazon suggestions.";
+    statusTitle = "Suggestions unavailable";
+    statusDetail = "Nothing selected. Retry, or use the Amazon list.";
   } else if (stats?.relevanceOutcome === "restored_empty") {
-    statusTitle = "AI empty · Amazon restored";
+    statusTitle = "Amazon list restored";
     statusDetail = "Confirm before adding all, or retry.";
   } else if (stats?.relevanceOutcome === "user_accepted_unfiltered") {
     statusTitle = "Amazon unfiltered";
   } else if (stats?.relevanceOutcome === "filtered" || stats?.grokFiltered) {
-    statusTitle = "AI filtered";
+    statusTitle = "Filtered";
   } else if (stats && !stats.grokPending) {
-    statusTitle = "AI kept all";
+    statusTitle = "All kept";
   }
 
   return (
@@ -134,7 +134,7 @@ export function SuggestionAiFilterChrome({
       </View>
       {/* Keep testID for harnesses that still poll the old steps slot */}
       <Text testID={`${testIDPrefix}-steps`} style={styles.srOnly}>
-        AI filter
+        Suggestions
       </Text>
       {statusDetail ? (
         <Text
@@ -153,7 +153,7 @@ export function SuggestionAiFilterChrome({
             <Pressable
               testID={`${testIDPrefix}-retry`}
               accessibilityRole="button"
-              accessibilityLabel="Retry AI filter"
+              accessibilityLabel="Retry suggestions"
               disabled={retrying}
               onPress={onRetry}
               style={({ pressed }) => [

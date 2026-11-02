@@ -2,6 +2,7 @@
 // on Supabase RLS; profile-book preview uses the authenticated Nest read API.
 
 import { nestApiFetch, nestApiJson, nestLogout, parseNestError, NestApiError } from "./rulesApi";
+import { isHomeQueryTimeout } from "./queryTimeout";
 import { supabase } from "./supabase";
 import {
   normalizeNestPricingPlansPayload,
@@ -477,11 +478,9 @@ export async function previewCampaignCreation(input: {
         error instanceof Error &&
         (error.name === "AbortError" || /aborted|timed out|timeout/i.test(error.message));
       const retryable =
-        aborted ||
-        status === 0 ||
-        status === 408 ||
-        status === 429 ||
-        status >= 500;
+        !aborted &&
+        !isHomeQueryTimeout(error) &&
+        (status === 0 || status === 429 || status >= 500);
       if (!retryable || attempt === 2) break;
       await new Promise((resolve) =>
         setTimeout(resolve, Math.min(8000, 1200 * 2 ** attempt)),
@@ -889,11 +888,9 @@ export async function fetchAdGroupSuggestions(input: {
         error instanceof Error &&
         (error.name === "AbortError" || /aborted|timed out|timeout/i.test(error.message));
       const retryable =
-        aborted ||
-        status === 0 ||
-        status === 408 ||
-        status === 429 ||
-        status >= 500;
+        !aborted &&
+        !isHomeQueryTimeout(error) &&
+        (status === 0 || status === 429 || status >= 500);
       if (!retryable || attempt === 2) break;
       await new Promise((resolve) =>
         setTimeout(resolve, Math.min(8000, 1200 * 2 ** attempt)),

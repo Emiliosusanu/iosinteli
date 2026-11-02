@@ -1,4 +1,5 @@
 import React from "react";
+import { AdsEngineReadout } from "./AdsEngineReadout";
 import { View, Text, StyleSheet } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { runOnJS } from "react-native-reanimated";
@@ -9,7 +10,7 @@ import Svg, { Path, Circle, Rect, Line, Text as SvgText, Defs, LinearGradient, S
 import { useTheme, toneColor } from "../lib/theme";
 import { formatCompact, formatInt, formatPercent, safeDivide, formatCurrency } from "../lib/format";
 import { hasAuthoritativeBreakEven } from "../lib/kdpTitlePresentation";
-import { dayBarStep, dayLabelTextAnchor, dayXLayout } from "../lib/chartLayout";
+import { dayBarStep, dayLabelTextAnchor, dayXLayout, valueAxisTicks } from "../lib/chartLayout";
 import { resolveChartDayFinance } from "../lib/chartDayFinance";
 import { useOverviewPeriodSwipeGesture } from "./OverviewPeriodSwipe";
 import { useOverviewWidgetPageSwipeGesture } from "./OverviewWidgetPageSwipe";
@@ -223,18 +224,6 @@ function xAxisLabels(data: ChartPoint[]) {
       key: `${index}-${data[index]?.date ?? data[index]?.label ?? index}`,
     }))
     .filter((row) => row.label);
-}
-
-function yAxisTicks(min: number, max: number): number[] {
-  const ticks = [max];
-  if (min < -1e-9 && max > 1e-9) ticks.push(0);
-  if (Math.abs(min - max) > 1e-9) ticks.push(min);
-  // Dedupe near-equals (flat ranges).
-  const out: number[] = [];
-  for (const tick of ticks) {
-    if (out.every((v) => Math.abs(v - tick) > Math.max(1, Math.abs(max - min) * 0.02))) out.push(tick);
-  }
-  return out;
 }
 
 function valueToY(value: number, height: number, min: number, max: number, inset: number) {
@@ -712,12 +701,12 @@ export function NetProfitChart({
   onDaySelect,
 }: NetProfitChartProps) {
   const t = useTheme();
-  const leftGutter = 34;
-  const rightPad = 6;
-  const bottomPad = 22;
+  const leftGutter = 44;
+  const rightPad = 4;
+  const bottomPad = 18;
   const chartWidth = Math.max(200, width);
   const plotWidth = Math.max(160, chartWidth - leftGutter - rightPad);
-  const inset = 8;
+  const inset = 6;
   const onDaySelectRef = React.useRef(onDaySelect);
   onDaySelectRef.current = onDaySelect;
   const dataRef = React.useRef(data);
@@ -761,10 +750,9 @@ export function NetProfitChart({
     const zeroY = clamp(valueToY(0, height, min, max, inset), inset, height - inset);
     const netPath = makeSmoothPath(points);
     const areaPath = makeSmoothAreaPath(points, zeroY);
-    const ticks = yAxisTicks(min, max).map((value) => ({
-      value,
-      y: valueToY(value, height, min, max, inset),
-      label: formatCurrency(value, currency, { compact: true }),
+    const ticks = valueAxisTicks(min, max, height, inset).map((tick) => ({
+      ...tick,
+      label: formatCurrency(tick.value, currency, { compact: true }),
     }));
     const xLabels = xAxisLabels(data);
     return {
@@ -886,7 +874,7 @@ export function NetProfitChart({
                 opacity={tick.value === 0 ? 0.9 : 0.5}
                 strokeDasharray={tick.value === 0 ? undefined : "3 5"}
               />
-              <SvgText
+              {tick.labelVisible ? <SvgText
                 x={leftGutter - 6}
                 y={tick.y + 3.5}
                 textAnchor="end"
@@ -895,7 +883,7 @@ export function NetProfitChart({
                 fill={t.colors.text_tertiary}
               >
                 {tick.label}
-              </SvgText>
+              </SvgText> : null}
             </React.Fragment>
           ))}
 
@@ -1249,30 +1237,7 @@ export function AdsEngineChart({
     <GestureDetector gesture={gesture}>
       <View style={{ width: chartWidth, overflow: "hidden" }} accessibilityLabel="Ads Engine chart. Swipe a day to inspect it. Release to show the period total.">
         {showReadout ? (
-          <View style={chartStyles.tooltipRowCompact}>
-            <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, flexShrink: 0 }]} numberOfLines={1}>
-              {selectedLabel}
-            </Text>
-            <Text
-              style={[
-                t.typography.caption2,
-                {
-                  color: t.colors.text_primary,
-                  fontWeight: "700",
-                  flex: 1,
-                  textAlign: "right",
-                  fontVariant: ["tabular-nums"],
-                },
-              ]}
-              numberOfLines={1}
-              accessibilityLabel={`Impr ${formatCompact(selectedImpr)}, Clicks ${formatInt(selectedClicks)}, Orders ${formatInt(selectedOrders)}, ACoS ${selectedAcos == null ? "none" : formatPercent(selectedAcos)}`}
-            >
-              {/* Compact clicks so Impr/Clicks/Orders/ACoS tags all fit one line above the dock. */}
-              {`Impr ${formatCompact(selectedImpr)} · Clicks ${formatCompact(selectedClicks)} · Orders ${formatInt(selectedOrders)} · ACoS ${
-                selectedAcos == null ? "—" : formatPercent(selectedAcos)
-              }`}
-            </Text>
-          </View>
+          <AdsEngineReadout label={selectedLabel} impressions={selectedImpr} clicks={selectedClicks} orders={selectedOrders} acos={selectedAcos} />
         ) : null}
         <Svg width={chartWidth} height={chartHeight + 30}>
           <Line
@@ -1805,20 +1770,6 @@ const chartStyles = StyleSheet.create({
     gap: 8,
     marginBottom: 4,
     overflow: "hidden",
-  },
-  // Ads Engine: date on its own line so Impr/Clicks/Orders/ACoS never ellipsis.
-  tooltipStackAds: {
-    gap: 2,
-    marginBottom: 4,
-  },
-  // Ads Engine: keep Impr/Clicks/Orders/ACoS tags visible (wrap instead of ellipsis).
-  tooltipRowCompactAds: {
-    minHeight: 18,
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 8,
-    marginBottom: 4,
   },
   netHeader: {
     minHeight: 28,

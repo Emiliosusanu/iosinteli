@@ -18,6 +18,9 @@ test("OverviewSwipeWidget pages in-place so nested scroll cannot clip rows", () 
   assert.match(swipe, /chevron\.(left|right)/);
   assert.match(swipe, /Next widget page/);
   assert.match(swipe, /OverviewWidgetPageSwipeContext/);
+  assert.match(swipe, /SyncGlowFrame/);
+  assert.match(swipe, /read\.label \|\| " "/);
+  assert.doesNotMatch(swipe, /\/updating\/i|\/failed\|unavailable\|stale\/i/);
   assert.match(swipe, /title\} · \$\{pageLabel\}/);
   assert.doesNotMatch(swipe, /<FlatList/);
   assert.doesNotMatch(swipe, /<ScrollView/);
@@ -34,6 +37,14 @@ test("Overview date page swipe lives outside chart plots", () => {
   assert.match(home, /createOverviewPeriodPan/);
   assert.match(home, /OverviewPeriodSwipeProvider/);
   assert.match(home, /Swipe a day on the chart/);
+});
+
+test("widget terminal states use a compact, accessible status lane", () => {
+  assert.match(swipe, /overview-widget-status-\$\{kind\}/);
+  assert.match(swipe, /minHeight: 44/);
+  assert.match(swipe, /wifi\.slash/);
+  assert.match(swipe, /exclamationmark\.triangle/);
+  assert.match(swipe, /arrow\.triangle\.2\.circlepath/);
 });
 
 test("Overview campaigns query keeps a wide fill pool and longer timeout", () => {

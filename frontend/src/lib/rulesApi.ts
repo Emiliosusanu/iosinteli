@@ -300,7 +300,13 @@ export async function parseNestError(res: Response, fallback: string): Promise<N
     const m = body?.message ?? body?.error;
     if (Array.isArray(m)) message = m.join("\n");
     else if (typeof m === "string" && m.trim()) message = m;
+    if (typeof body?.code === "string") errorCode = body.code;
     if (typeof body?.errorCode === "string") errorCode = body.errorCode;
+    if (m && typeof m === "object" && !Array.isArray(m)) {
+      const nested = m as { message?: unknown; code?: unknown };
+      if (typeof nested.message === "string" && nested.message.trim()) message = nested.message;
+      if (typeof nested.code === "string") errorCode = nested.code;
+    }
   } catch {
     // keep fallback
   }

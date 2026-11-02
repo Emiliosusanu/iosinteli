@@ -26,7 +26,6 @@ import { preferEditionTitle } from "@/src/lib/booksListActivity";
 import {
   formatBreakEvenAcos,
   hasAuthoritativeBreakEven,
-  isOverBreakEven,
 } from "@/src/lib/kdpTitlePresentation";
 import { useApp } from "@/src/contexts/AppContext";
 import { useTheme, acosTone, toneColor, useReduceMotion, dashboard } from "@/src/lib/theme";
@@ -38,7 +37,8 @@ import { NET_ROYALTIES_LABEL, netRoyaltiesVoiceOver, resolveBookNet, bookNetIsKn
 import { buildBookColorMap, bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { TopBar } from "@/src/components/TopBar";
 import { EmptyState, RetryState, MetricStrip, FilterChrome, ScreenSpinner, ListCard } from "@/src/components/Primitives";
-import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
+import { IOSSearchBar, IOSSegmentedControl } from "@/src/components/ios/Native";
+import { TERMINAL_READ_TIMEOUT_SUBTITLE } from "@/src/lib/loadErrorCopy";
 import { isHomeQueryTimeout, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialReadVersion";
 import { LIST_PERIOD_QUERY_CACHE, sameScopeWarmPlaceholder, sortedProfileIds } from "@/src/lib/periodQuery";
@@ -127,7 +127,7 @@ function bookA11yLabel(item: TopBookRow, status: { label: string }, currency: st
       adsSales,
     }),
     `Amazon Ads ACoS ${acos}`,
-    `${orders} ads orders`,
+    `${orders} ${item.orders_source === "kdp" ? "KDP units" : "ads orders"}`,
   ];
   parts.push(`Break-even ACoS ${formatBreakEvenAcos(item.breakeven_acos)}`);
   return parts.join(". ");
@@ -140,7 +140,7 @@ function bookRowKey(item: TopBookRow, index: number) {
 export default function ProductsScreen() {
   const t = useTheme();
   const router = useRouter();
-  const { profiles, selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource } = useApp();
+  const { profiles, selectedProfileIds, selectedProfiles, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, kdpRoyaltySource, profilesLoading, profilesFetching, profilesError, refetchProfiles } = useApp();
   const { guestMode, user } = useAuth();
   const yesterdayYmd = useMemo(() => {
     const today = parseDateOnly(toDateString(new Date()));
@@ -170,24 +170,34 @@ export default function ProductsScreen() {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<Sort>("acos");
   const [refreshing, setRefreshing] = useState(false);
+  const memoryScope = `${user?.id ?? "guest"}:${adminFilterUserId ?? "self"}`;
+  const [hydratedScope, setHydratedScope] = useState("");
 
   useEffect(() => {
+    let active = true;
+    setSearch("");
+    setSort("acos");
     const qa = takePendingQaFilters();
     if (qa?.booksSort) {
       setSort(qa.booksSort);
       console.log(`[inteliads:qa] books filters sort=${qa.booksSort}`);
+      setHydratedScope(memoryScope);
       return;
     }
-    void loadBooksFilterMemory().then((mem) => {
+    void loadBooksFilterMemory(memoryScope).then((mem) => {
+      if (!active) return;
       if (mem.sort === "net" || mem.sort === "spend" || mem.sort === "acos" || mem.sort === "orders") {
         setSort(mem.sort);
       }
+      setHydratedScope(memoryScope);
     });
-  }, []);
+    return () => { active = false; };
+  }, [memoryScope]);
 
   useEffect(() => {
-    void saveBooksFilterMemory({ sort });
-  }, [sort]);
+    if (hydratedScope !== memoryScope) return;
+    void saveBooksFilterMemory({ sort }, memoryScope);
+  }, [hydratedScope, memoryScope, sort]);
 
   const royaltyProfiles = useMemo(
     () => sortedProfileIds(royaltyScope.profileIds),
@@ -389,6 +399,18 @@ export default function ProductsScreen() {
   const showSearchCount = search.trim().length > 0 && !showBlockingSpinner;
 
 
+  if (enabledSelectedIds.length === 0 && !kdpOnlyBooks && (profilesLoading || profilesFetching || profilesError)) {
+    return (
+      <AppScreen>
+        <TopBar />
+        {profilesError ? (
+          <RetryState title="Couldn't load accounts" subtitle="Account availability couldn't be verified."
+            onRetry={() => void refetchProfiles()} retrying={profilesFetching} />
+        ) : <ScreenSpinner />}
+      </AppScreen>
+    );
+  }
+
   if (enabledSelectedIds.length === 0 && !kdpOnlyBooks) {
     return (
       <AppScreen>
@@ -487,7 +509,7 @@ export default function ProductsScreen() {
           ListEmptyComponent={
             showBlockingSpinner ? <ScreenSpinner /> : isError && books.length === 0 ? (
               <RetryState title="Couldn't load books" subtitle={isHomeQueryTimeout(error)
-                ? "This is taking longer than usual. Pull to retry."
+                ? TERMINAL_READ_TIMEOUT_SUBTITLE
                 : error instanceof BooksReadError ? "Something went wrong loading your books. Pull to retry."
                 : "Check your connection and try again."}
                 onRetry={() => void refetch()} retrying={isRefetching} />
@@ -564,9 +586,6 @@ const ProductCard = React.memo(function ProductCard({
   const resolvedNet = resolveBookNet(item);
   const amazonCover = fallbackAsinCoverUrl(item.asin || item.sku);
   const status = bookStatus(item, hasBreakEven);
-  const statusChipTone =
-    status.tone === "good" ? t.statusChip.good : status.tone === "warning" ? t.statusChip.warning : t.statusChip.danger;
-  const acosOver = isOverBreakEven(item.acos, item.breakeven_acos);
   const rowKey = item.asin || item.sku || item.book_key;
 
   return (
@@ -583,7 +602,9 @@ const ProductCard = React.memo(function ProductCard({
               marketplaceFlagsA11y(countriesForSponsoredBook(marketplaceIndex, item)),
             ),
             retailEdition
-              ? `${retailEdition.format} ${retailEdition.snapshot.asin}. Rating ${reviews?.rating?.toFixed(1) ?? "unavailable"}; reviews ${reviews?.reviewCount ?? "unavailable"}${reviews?.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}. Stock ${retailEdition.snapshot.stockStatus ? bookRetailStockLabel(retailEdition.snapshot.stockStatus) : "unknown"}${retailEdition.snapshot.marketplaceCode ? ` in ${retailEdition.snapshot.marketplaceCode}` : ""}${retailEdition.snapshot.checkedAt ? `, last checked ${retailEdition.snapshot.checkedAt.slice(0, 10)}` : ""}.`
+              ? `${retailEdition.format} ${retailEdition.snapshot.asin}. ${reviews?.rating != null || reviews?.reviewCount != null
+                ? `Rating ${reviews.rating?.toFixed(1) ?? "not listed"}; reviews ${reviews.reviewCount ?? "not listed"}`
+                : reviews?.reviewsCheckedAt ? "No reviews yet" : retailLoading ? "Reviews updating" : "Reviews not listed"}${reviews?.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}. Stock ${retailEdition.snapshot.stockStatus ? bookRetailStockLabel(retailEdition.snapshot.stockStatus) : retailLoading ? "updating" : "not listed"}${retailEdition.snapshot.marketplaceCode ? ` in ${retailEdition.snapshot.marketplaceCode}` : ""}${retailEdition.snapshot.checkedAt ? `, last checked ${retailEdition.snapshot.checkedAt.slice(0, 10)}` : ""}.`
               : null,
           ].filter(Boolean).join(" ")}
           accessibilityHint="Opens book details"
@@ -617,7 +638,7 @@ const ProductCard = React.memo(function ProductCard({
                       flex: 1,
                       minWidth: 0,
                       fontWeight: "700",
-                      letterSpacing: -0.25,
+                      letterSpacing: 0,
                       lineHeight: 22,
                     },
                   ]}
@@ -634,26 +655,6 @@ const ProductCard = React.memo(function ProductCard({
               {retailEdition ? (
                 <BookRetailInfo edition={retailEdition.format} snapshot={retailEdition.snapshot} activeMarketplaceCodes={activeReviewMarkets} loading={retailLoading} compact />
               ) : null}
-              <View
-                accessible={false}
-                importantForAccessibility="no"
-                style={[
-                  styles.statusPill,
-                  {
-                    backgroundColor: statusChipTone.bg,
-                    borderColor: statusChipTone.fg + "55",
-                  },
-                ]}
-              >
-                <SFSymbol
-                  name={status.tone === "good" ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"}
-                  size={12}
-                  color={statusChipTone.fg}
-                />
-                <Text style={[t.typography.caption2, { fontWeight: "700", color: statusChipTone.fg, letterSpacing: 0.1 }]} numberOfLines={1}>
-                  {status.label}
-                </Text>
-              </View>
             </View>
 
             <View style={styles.profitBlock} accessible={false} importantForAccessibility="no">
@@ -664,7 +665,7 @@ const ProductCard = React.memo(function ProductCard({
                     fontSize: 22,
                     lineHeight: 26,
                     fontWeight: "800",
-                    letterSpacing: -0.45,
+                    letterSpacing: 0,
                     color: resolvedNet == null ? t.colors.text_tertiary : netPos ? t.colors.tone_good : t.colors.tone_danger,
                     textAlign: "right",
                     fontVariant: ["tabular-nums"],
@@ -698,38 +699,9 @@ const ProductCard = React.memo(function ProductCard({
             <View style={styles.breakEven} accessible={false} importantForAccessibility="no">
               <View style={styles.breakEvenLabels}>
                 <Text style={[t.typography.caption1, { color: t.colors.text_secondary, flex: 1, flexShrink: 1 }]}>
-                  ACoS {formatPercent(item.acos, 0)}
-                  <Text style={{ color: t.colors.text_tertiary }}> · BE {formatBreakEvenAcos(item.breakeven_acos)}</Text>
+                  {hasBreakEven ? `Break-even ACoS ${formatBreakEvenAcos(item.breakeven_acos)}` : "Break-even unavailable"}
                 </Text>
-                {hasBreakEven ? (
-                  <View
-                    style={[
-                      styles.efficiencyBadge,
-                      {
-                        backgroundColor: toneColor(tone, t.colors) + "1F",
-                        borderColor: toneColor(tone, t.colors) + "55",
-                      },
-                    ]}
-                  >
-                    <Text style={[t.typography.caption2, { color: toneColor(tone, t.colors), fontWeight: "800", letterSpacing: 0.5 }]}>
-                      {acosOver ? "OVER" : "SAFE"}
-                    </Text>
-                  </View>
-                ) : null}
               </View>
-              {hasBreakEven ? (
-                <View style={[styles.breakEvenTrack, { backgroundColor: t.colors.background_tertiary }]}>
-                  <View
-                    style={{
-                      height: 5,
-                      borderRadius: 3,
-                      borderCurve: "continuous",
-                      width: `${Math.min(100, (item.acos / item.breakeven_acos) * 100)}%`,
-                      backgroundColor: toneColor(tone, t.colors),
-                    }}
-                  />
-                </View>
-              ) : null}
             </View>
           ) : null}
 
@@ -739,7 +711,7 @@ const ProductCard = React.memo(function ProductCard({
               items={[
                 { label: "Royalties", value: kdpAvailable ? formatCurrency(item.royalties!, currency, { compact: true }) : "—", color: kdpAvailable ? t.colors.tone_good : t.colors.text_tertiary },
                 { label: "Spend", value: adsReady ? formatCurrency(item.spend, currency, { compact: true }) : "—" },
-                { label: "Orders", value: formatInt(item.orders) },
+                { label: item.orders_source === "kdp" ? "KDP units" : "Ad orders", value: formatInt(item.orders) },
                 {
                   label: "ACoS",
                   value: adsReady && item.sales > 0 ? formatPercent(item.acos) : "—",
@@ -776,18 +748,6 @@ const styles = StyleSheet.create({
     width: 96,
     flexShrink: 0,
   },
-  statusPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    alignSelf: "flex-start",
-    marginTop: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: dashboard.statusChipRadius,
-    borderCurve: "continuous",
-    borderWidth: StyleSheet.hairlineWidth,
-  },
   breakEven: {
     marginTop: 10,
   },
@@ -797,19 +757,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
     marginBottom: 5,
-  },
-  efficiencyBadge: {
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 6,
-    borderCurve: "continuous",
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  breakEvenTrack: {
-    height: 5,
-    borderRadius: 3,
-    borderCurve: "continuous",
-    overflow: "hidden",
   },
   metricsRow: {
     marginTop: 12,

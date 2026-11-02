@@ -62,6 +62,7 @@ const PERSISTED_QUERY_KEYS = new Set([
   FINANCIAL_QUERY_ROOTS.kdpRoyaltiesDaybefore,
   "top-campaigns-range-v2",
   "campaigns-list-range-v3",
+  "mobile-targeting-page-v1",
   "targeting-placements-v2",
   "targeting-keywords",
   "targeting-products",
@@ -90,11 +91,16 @@ export function shouldPersistQuery(q: PersistableQuery): boolean {
   const key = q.queryKey[0];
   if (isObsoleteFinancialQueryRoot(key)) return false;
   if (isCompleteFinancialQueryRoot(key) && !canPersistFinancialQuery(q)) return false;
+  const age = Date.now() - q.state.dataUpdatedAt;
+  const maxAge = key === "mobile-targeting-page-v1" ? 15 * 60_000 : MAX_QUERY_AGE_MS;
+  // Only the bounded head is restored; a server snapshot is revalidated on visit.
+  if (key === "mobile-targeting-page-v1" &&
+      (!q.queryKey.includes("page-size-100") || !q.queryKey.includes("catalog-head"))) return false;
   return (
     q.state.status === "success" &&
     typeof key === "string" &&
     PERSISTED_QUERY_KEYS.has(key) &&
-    Date.now() - q.state.dataUpdatedAt <= MAX_QUERY_AGE_MS
+    Number.isFinite(age) && age >= 0 && age <= maxAge
   );
 }
 
@@ -129,14 +135,14 @@ export async function hydrateQueryClient(client: QueryClient): Promise<void> {
       return;
     }
     const stripped = stripObsoleteFinancialQueries(saved.state) as {
-      queries?: Array<{ queryKey: readonly unknown[]; state?: { dataUpdatedAt?: number } }>;
+      queries?: PersistableQuery[];
     };
     if (Array.isArray(stripped.queries)) {
       stripped.queries = stripped.queries.filter((query) => {
-        if (!query?.queryKey) return false;
+        if (!query?.queryKey || !shouldPersistQuery(query)) return false;
         const current = client.getQueryState(query.queryKey as unknown[]);
         if (!current || current.dataUpdatedAt == null || current.dataUpdatedAt === 0) return true;
-        const incoming = query.state?.dataUpdatedAt ?? 0;
+        const incoming = query.state.dataUpdatedAt;
         return incoming > current.dataUpdatedAt;
       });
     }
@@ -172,8 +178,18 @@ export function startQueryPersistence(client: QueryClient): () => void {
         const state = dehydrate(client, {
           shouldDehydrateQuery: shouldPersistQuery,
         });
-        const payload = JSON.stringify({ timestamp: Date.now(), state });
-        if (payload.length > MAX_CACHE_BYTES) return;
+        // Keep newest scoped reads when the cache is full instead of retaining
+        // an older disk snapshot indefinitely by skipping every subsequent save.
+        state.queries.sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt);
+        const timestamp = Date.now();
+        let size = JSON.stringify({ timestamp, state: { ...state, queries: [] } }).length;
+        state.queries = state.queries.filter((query) => {
+          const length = JSON.stringify(query).length + 1;
+          if (size + length > MAX_CACHE_BYTES) return false;
+          size += length;
+          return true;
+        });
+        const payload = JSON.stringify({ timestamp, state });
         await AsyncStorage.setItem(CACHE_KEY, payload);
       } catch {
         // Storage full or serialization issue — ignore, cache is best-effort.

@@ -85,15 +85,15 @@ function coerceAdvanced(raw: unknown): TargetingAdvancedFilters {
   });
 }
 
-export async function loadTargetingFilterMemory(): Promise<TargetingFilterMemory> {
-  const v2 = await readJson<TargetingFilterMemory>(TARGETING_KEY_V2);
+export async function loadTargetingFilterMemory(scope?: string): Promise<TargetingFilterMemory> {
+  const v2 = await readJson<TargetingFilterMemory>(scopedKey(TARGETING_KEY_V2, scope));
   if (Object.keys(v2).length) {
     return {
       ...v2,
       advanced: coerceAdvanced(v2.advanced),
     };
   }
-  const v1 = await readJson<TargetingFilterMemory>(TARGETING_KEY_V1);
+  const v1: Partial<TargetingFilterMemory> = scope ? {} : await readJson<TargetingFilterMemory>(TARGETING_KEY_V1);
   if (!Object.keys(v1).length) return {};
   return {
     ...v1,
@@ -101,29 +101,33 @@ export async function loadTargetingFilterMemory(): Promise<TargetingFilterMemory
   };
 }
 
-export async function saveTargetingFilterMemory(next: TargetingFilterMemory): Promise<void> {
+function scopedKey(key: string, scope?: string): string {
+  return scope ? `${key}:${encodeURIComponent(scope)}` : key;
+}
+
+export async function saveTargetingFilterMemory(next: TargetingFilterMemory, scope?: string): Promise<void> {
   const payload: TargetingFilterMemory = {
     ...next,
     advanced: next.advanced
       ? normalizeTargetingAdvancedFilters(next.advanced)
       : { ...EMPTY_TARGETING_ADVANCED_FILTERS },
   };
-  await writeJson(TARGETING_KEY_V2, payload);
+  await writeJson(scopedKey(TARGETING_KEY_V2, scope), payload);
 }
 
-export async function loadCampaignsFilterMemory(): Promise<CampaignsFilterMemory> {
-  const mem = await readJson<CampaignsFilterMemory>(CAMPAIGNS_KEY);
+export async function loadCampaignsFilterMemory(scope?: string): Promise<CampaignsFilterMemory> {
+  const mem = await readJson<CampaignsFilterMemory>(scopedKey(CAMPAIGNS_KEY, scope));
   return { ...mem, bookAsins: normalizeBookAsinList(mem.bookAsins) };
 }
 
-export async function saveCampaignsFilterMemory(next: CampaignsFilterMemory): Promise<void> {
-  await writeJson(CAMPAIGNS_KEY, { ...next, bookAsins: normalizeBookAsinList(next.bookAsins) });
+export async function saveCampaignsFilterMemory(next: CampaignsFilterMemory, scope?: string): Promise<void> {
+  await writeJson(scopedKey(CAMPAIGNS_KEY, scope), { ...next, bookAsins: normalizeBookAsinList(next.bookAsins) });
 }
 
-export async function loadBooksFilterMemory(): Promise<BooksFilterMemory> {
-  return readJson<BooksFilterMemory>(BOOKS_KEY);
+export async function loadBooksFilterMemory(scope?: string): Promise<BooksFilterMemory> {
+  return readJson<BooksFilterMemory>(scopedKey(BOOKS_KEY, scope));
 }
 
-export async function saveBooksFilterMemory(next: BooksFilterMemory): Promise<void> {
-  await writeJson(BOOKS_KEY, next);
+export async function saveBooksFilterMemory(next: BooksFilterMemory, scope?: string): Promise<void> {
+  await writeJson(scopedKey(BOOKS_KEY, scope), next);
 }

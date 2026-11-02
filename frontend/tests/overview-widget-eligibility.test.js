@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { activeOverviewRows } from '../src/lib/overviewWidgetEligibility.ts';
 import { searchTermsSpendNoOrders } from '../src/lib/overviewWidgets.ts';
+import { withAbortableQueryTimeout } from '../src/lib/queryTimeout.ts';
 
 test('widget keywords require their own state and both active parents, including uppercase aliases', () => {
   const live = { id: 'live', status: 'ENABLED', campaign_state: 'active', ad_group_state: 'enabled' };
@@ -21,49 +22,81 @@ test('campaign and ad-group widgets exclude archived, paused and missing parent 
   assert.deepEqual(activeOverviewRows(rows, 'adGroup').map(r => r.id), ['live']);
   assert.deepEqual(activeOverviewRows(rows, 'campaign').map(r => r.id), ['live', 'campaign-paused', 'unknown']);
 });
-test('historical search terms remain eligible even under inactive campaigns or groups', () => {
+test('Home search terms require live campaign and ad group even for historical observations', () => {
   const rows = ['enabled', 'paused', 'archived'].map((state, i) => ({ id: state,
     campaign_state: state, ad_group_state: state, total_spend: i + 1, total_orders: 0 }));
-  assert.deepEqual(searchTermsSpendNoOrders(rows).map(r => r.id), ['archived', 'paused', 'enabled']);
+  assert.deepEqual(searchTermsSpendNoOrders(activeOverviewRows(rows, 'searchTerm')).map(r => r.id), ['enabled']);
 });
 
 const require = createRequire(import.meta.url), ts = require('typescript');
 const source = readFileSync(new URL('../src/lib/queries.ts', import.meta.url), 'utf8');
-const begin = source.indexOf('async function fetchOverviewActiveGroupScope(');
+const begin = source.indexOf('async function overviewReadOwner(');
 const end = source.indexOf('// ---------- Keywords ----------', begin);
 const compiled = ts.transpileModule(source.slice(begin, end), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-function harness() {
-  const campaigns = [{ id: 'live', state: 'enabled', amazon_profile_id: 'p' }, { id: 'off', state: 'paused', amazon_profile_id: 'p' }];
-  const groups = [
-    ...Array.from({ length: 100 }, (_, i) => ({ id: `bad-${i}`, campaign_id: 'off', state: 'enabled', amazon_profile_id: 'p', total_spend: 10000 })),
-    { id: 'paused-group', campaign_id: 'live', state: 'paused', amazon_profile_id: 'p', total_spend: 20000 },
-    { id: 'good', campaign_id: 'live', state: 'enabled', amazon_profile_id: 'p', total_spend: 1 },
-    { id: 'foreign', campaign_id: 'live', state: 'enabled', amazon_profile_id: 'other', total_spend: 1 },
-  ];
+function harness({ hold = false, afterOwner } = {}) {
   const calls = [];
-  const supabase = { from: table => {
-    let rows = [...(table === 'campaigns' ? campaigns : groups)];
-    const q = { select: () => q, in: (column, ids) => { rows = rows.filter(r => ids.includes(r[column])); return q; },
-      order: () => q, range: async (from, to) => ({ data: rows.slice(from, to + 1), error: null }) };
-    return q;
-  } };
-  const context = { exports: {}, supabase, fetchAllPages: async build => (await build(0, 999)).data,
-    chunkArray: (xs, n) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, (i + 1) * n)),
-    mapPoolLimited: async (xs, limit, fn) => { assert.equal(limit, 3); return Promise.all(xs.map(fn)); },
-    fetchKeywords: async (profiles, opts) => { calls.push({ profiles, opts }); return opts.adGroupIds.map(id => ({ id: 'kw-' + id, campaign_id: 'live', ad_group_id: id, status: 'enabled', campaign_state: 'enabled', ad_group_state: 'enabled', total_spend: 5 })); },
-    fetchMetricTotalsByEntity: async () => new Map(), emptyTotals: () => ({}), applyMetricTotals: row => row };
+  const supabase = { auth: { getSession: async () => { afterOwner?.(); return { data: { session: { user: { id: 'owner' } } } }; } },
+    from: () => { throw Error('Widget must not download the parent catalog'); },
+    rpc: (name, payload) => {
+      calls.push({ name, payload });
+      let signal;
+      const q = { in: (column, ids) => { calls.push({ column, ids }); return q; },
+        order: (column, options) => { calls.push({ column, options }); return q; },
+        limit: limit => { calls.push({ limit }); return q; },
+        abortSignal: value => { signal = value; calls.push({ signal }); return q; },
+        then: (resolve, reject) => hold
+          ? new Promise((_, fail) => { signal.addEventListener('abort', () => fail(Object.assign(new Error('aborted transport'), { name: 'AbortError' })), { once: true }); }).then(resolve, reject)
+          : Promise.resolve({ data: [{ id: 'group', state: 'enabled', total_spend: 1 }], error: null }).then(resolve, reject) };
+      return q;
+    } };
+  const context = { exports: {}, supabase,
+    fetchMobileTargetingPage: async payload => { calls.push({ payload }); return { rows: [{ id: 'keyword' }] }; } };
   vm.runInNewContext(compiled, context);
   return { api: context.exports, calls };
 }
-test('actual widget query resolves active parents before top-N; 100 paused-parent groups cannot crowd out live rows', async () => {
+test('widget reads use server period ranking and enabled parent predicates without a client catalog scan', async () => {
   const h = harness();
   const keywords = await h.api.fetchOverviewActiveKeywords(['p'], { start: '2026-10-01', end: '2026-10-16', limit: 1 });
-  assert.deepEqual(Array.from(keywords, r => r.id), ['kw-good']);
-  assert.equal(h.calls[0].opts.status, 'enabled');
-  assert.deepEqual(Array.from(h.calls[0].opts.adGroupIds), ['good']);
+  assert.deepEqual(Array.from(keywords, r => r.id), ['keyword']);
+  assert.equal(h.calls[0].payload.state, 'enabled');
+  assert.equal(h.calls[0].payload.ownerId, 'owner');
+  assert.equal(h.calls[0].payload.start, '2026-10-01');
+  assert.equal(h.calls[0].payload.end, '2026-10-16');
+  assert.equal(h.calls[0].payload.sort, 'spend');
+  assert.equal(h.calls[0].payload.pageSize, 1);
   const groups = await h.api.fetchOverviewActiveAdGroups(['p'], { start: '2026-10-01', end: '2026-10-16', limit: 1 });
-  assert.deepEqual(Array.from(groups, r => r.id), ['good']);
+  assert.deepEqual(Array.from(groups, r => r.id), ['group']);
   assert.equal(groups[0].campaign_state, 'enabled');
+  assert.equal(h.calls[1].name, 'get_ad_groups_with_metrics');
+  assert.equal(h.calls[1].payload.p_user_id, 'owner');
+  assert.equal(h.calls[1].payload.p_state, 'enabled');
+  assert.equal(h.calls[1].payload.p_campaign_status, 'enabled');
+  assert.equal(h.calls[1].payload.p_start_date, '2026-10-01');
+  assert.equal(h.calls[2].column, 'amazon_profile_id');
+  assert.deepEqual(Array.from(h.calls[2].ids), ['p']);
+  assert.equal(h.calls[3].column, 'total_spend');
+  assert.equal(h.calls.at(-1).limit, 1);
+});
+
+test('active ad-group request receives cancellation and a deadline aborts the mock transport', async () => {
+  const h = harness({ hold: true });
+  await assert.rejects(withAbortableQueryTimeout(signal => h.api.fetchOverviewActiveAdGroups(['p'], {
+    start: '2026-10-01', end: '2026-10-18', limit: 500, signal,
+  }), 10), /HOME_QUERY_TIMEOUT/);
+  assert.equal(h.calls.find(c => c.signal).signal.aborted, true);
+  assert.equal(h.calls.filter(c => c.name === 'get_ad_groups_with_metrics').length, 1);
+});
+
+test('abandoned active ad-group reads never start an RPC, even when abandoned during session lookup', async () => {
+  for (const abortEarly of [true, false]) {
+    const controller = new AbortController();
+    const h = harness({ afterOwner: () => controller.abort() });
+    if (abortEarly) controller.abort();
+    await assert.rejects(h.api.fetchOverviewActiveAdGroups(['p'], {
+      start: '2026-10-01', end: '2026-10-18', signal: controller.signal,
+    }), e => e.name === 'AbortError');
+    assert.equal(h.calls.length, 0);
+  }
 });
 
 test('entity mutations invalidate active widget caches and customer campaign keys cannot collide', () => {
