@@ -10,6 +10,47 @@ const parse = name => {
 };
 const nodes = tree => tree == null ? [] : Array.isArray(tree) ? tree.flatMap(nodes)
   : typeof tree === 'object' ? [tree, ...tree.children.flatMap(nodes)] : [];
+
+test('profile header distinguishes unavailable/loading accounts from a verified empty selection', () => {
+  const source = readFileSync(new URL('../src/components/TopBar.tsx', import.meta.url), 'utf8');
+  const ast = ts.createSourceFile('TopBar.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let label;
+  const find = node => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'selectedLabel') label = node.initializer.getText(ast);
+    ts.forEachChild(node, find);
+  };
+  find(ast);
+  assert.ok(label);
+  const resolve = flags => vm.runInNewContext(label, {
+    profiles: [], selectedProfileIds: [], enabledProfiles: [],
+    profilesLoading: false, profilesFetching: false, profilesError: null, ...flags,
+  });
+  assert.equal(resolve({ profilesError: new Error('read failed') }), 'Unavailable');
+  assert.equal(resolve({ profilesLoading: true }), 'Loading...');
+  assert.equal(resolve({ profilesFetching: true }), 'Loading...');
+  assert.equal(resolve({}), 'No profiles');
+  assert.equal(resolve({ selectedProfileIds: ['p'], profiles: [{ id: 'p', account_name: 'Selected' }] }), 'Selected');
+});
+
+test('Books cannot infer a KDP-only session from an unavailable Ads-profile read', () => {
+  const ast = parse('products');
+  let expression;
+  const find = node => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'kdpOnlyBooks') expression = node.initializer.getText(ast);
+    ts.forEachChild(node, find);
+  };
+  find(ast);
+  assert.ok(expression);
+  const resolve = flags => vm.runInNewContext(expression, {
+    isAdminViewer: false, guestMode: false, royaltyScope: {},
+    profilesLoading: false, profilesError: null, isKdpOnlySessionScope: () => true, ...flags,
+  });
+  assert.equal(resolve({ profilesError: new Error('accounts unavailable') }), false);
+  assert.equal(resolve({ profilesLoading: true }), false);
+  assert.equal(resolve({}), true, 'A confirmed KDP-only account is still supported');
+  assert.equal(resolve({ isAdminViewer: true }), false);
+});
+
 function runGate(name, flags = {}) {
   const ast = parse(name);
   const screen = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.DefaultKeyword));

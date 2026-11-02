@@ -206,7 +206,7 @@ export default function ProductsScreen() {
   // Same Gross widen as Overview when every enabled Ads profile is selected —
   // otherwise Books hides owned KDP shelves that still have royalties in range.
   const kdpQueryScope = overviewKdpQueryScope(profiles, selectedProfileIds, royaltyScope);
-  const kdpOnlyBooks = !isAdminViewer && !guestMode && isKdpOnlySessionScope(royaltyScope);
+  const kdpOnlyBooks = !isAdminViewer && !guestMode && !profilesLoading && !profilesError && isKdpOnlySessionScope(royaltyScope);
   const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, 0] as const;
   const overviewBooksKey = [
     FINANCIAL_QUERY_ROOTS.topBooks,

@@ -361,6 +361,9 @@ export function TopBar({
   const router = useRouter();
   const {
     profiles,
+    profilesLoading,
+    profilesFetching,
+    profilesError,
     selectedProfileIds,
     primaryCurrency,
     toggleProfile,
@@ -413,7 +416,11 @@ export function TopBar({
   const hasMarketPill = marketCountries.length > 0;
 
   const selectedLabel =
-    selectedProfileIds.length === 0
+    profilesError
+      ? "Unavailable"
+      : profilesLoading || (profilesFetching && profiles.length === 0)
+      ? "Loading..."
+      : selectedProfileIds.length === 0
       ? "No profiles"
       : enabledProfiles.length > 0 && selectedProfileIds.length === enabledProfiles.length
       ? `All active (${enabledProfiles.length})`
