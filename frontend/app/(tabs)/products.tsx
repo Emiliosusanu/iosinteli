@@ -91,17 +91,17 @@ function bookStatus(item: TopBookRow, hasBreakEven: boolean): { label: string; t
   if (!bookKdpAvailable(item)) return { label: "Royalties unavailable", tone: "warning" };
   if (item.kdp_state === "partial") return { label: "Royalties partial", tone: "warning" };
   const spend = Number(item.spend) || 0;
-  const orders = Number(item.orders) || 0;
+  const noAdsSales = item.sales != null && Number(item.sales) === 0;
   // Verdict follows the SAME resolved net as the displayed profit. KDP royalties
   // can make a book net-positive even with zero ads orders, so the net sign wins
   // first; "Spending without sales" only applies when net is negative/unknown.
   const resolved = resolveBookNet(item);
   if (resolved != null) {
     if (resolved >= 0) return { label: "Net positive", tone: "good" };
-    if (spend > 0 && orders === 0) return { label: "Spending without sales", tone: "danger" };
+    if (spend > 0 && noAdsSales) return { label: "Spending without sales", tone: "danger" };
     return { label: "Net negative", tone: "danger" };
   }
-  if (spend > 0 && orders === 0) return { label: "Spending without sales", tone: "danger" };
+  if (spend > 0 && noAdsSales) return { label: "Spending without sales", tone: "danger" };
   if (hasBreakEven && item.acos > item.breakeven_acos) return { label: "Over break-even", tone: "warning" };
   return { label: "Net negative", tone: "danger" };
 }
@@ -570,6 +570,7 @@ const ProductCard = React.memo(function ProductCard({
 
   const activeReviewMarkets = countriesForActiveSponsoredBook(marketplaceIndex, item);
   const reviews = retailEdition?.snapshot;
+  const retailPending = reviews?.retailPending ?? retailLoading;
   const adsReady = bookAdsReady(item);
   const kdpAvailable = bookKdpAvailable(item);
   const kdpReady = bookKdpReady(item);
@@ -604,7 +605,7 @@ const ProductCard = React.memo(function ProductCard({
             retailEdition
               ? `${retailEdition.format} ${retailEdition.snapshot.asin}. ${reviews?.rating != null || reviews?.reviewCount != null
                 ? `Rating ${reviews.rating?.toFixed(1) ?? "not listed"}; reviews ${reviews.reviewCount ?? "not listed"}`
-                : reviews?.reviewsCheckedAt ? "No reviews yet" : retailLoading ? "Reviews updating" : "Reviews not listed"}${reviews?.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}. Stock ${retailEdition.snapshot.stockStatus ? bookRetailStockLabel(retailEdition.snapshot.stockStatus) : retailLoading ? "updating" : "not listed"}${retailEdition.snapshot.marketplaceCode ? ` in ${retailEdition.snapshot.marketplaceCode}` : ""}${retailEdition.snapshot.checkedAt ? `, last checked ${retailEdition.snapshot.checkedAt.slice(0, 10)}` : ""}.`
+                : retailPending ? "Reviews updating" : "Reviews not listed"}${reviews?.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}. Stock ${retailEdition.snapshot.stockStatus ? bookRetailStockLabel(retailEdition.snapshot.stockStatus) : retailPending ? "updating" : "not listed"}${retailEdition.snapshot.marketplaceCode ? ` in ${retailEdition.snapshot.marketplaceCode}` : ""}${retailEdition.snapshot.checkedAt ? `, last checked ${retailEdition.snapshot.checkedAt.slice(0, 10)}` : ""}.`
               : null,
           ].filter(Boolean).join(" ")}
           accessibilityHint="Opens book details"
