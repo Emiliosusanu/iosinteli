@@ -121,7 +121,13 @@ type TokenRow = {
   invalidated_at?: string | null;
 };
 
-async function loadTokens(admin: ReturnType<typeof createClient>): Promise<{
+function createAdminClient() {
+  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+async function loadTokens(admin: ReturnType<typeof createAdminClient>): Promise<{
   tokens: TokenRow[];
   scanned: number;
   skippedDisabled: number;
@@ -215,9 +221,7 @@ Deno.serve(async (req) => {
     return json({ error: "unauthorized" }, 401);
   }
 
-  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  const admin = createAdminClient();
 
   // Rate-limit fleet wakes (~15m) via single-row lease table.
   const { data: claim, error: claimError } = await admin.rpc("claim_kdp_wake_dispatch", {
@@ -326,23 +330,23 @@ Deno.serve(async (req) => {
         const sample = `${res.status}:${reason || "unknown"}:${env}`;
         if (failureSamples.length < 5) failureSamples.push(sample);
         if (res.status === 410 || reason === "Unregistered" || reason === "BadDeviceToken") {
-          dead.push(row.token);
+          // The alternate host cannot disprove a token registered on the
+          // primary host, which rejected the provider key rather than the device.
+          if (env === tryEnvs[0]) dead.push(row.token);
           break;
         }
         if (reason !== "BadEnvironmentKeyInToken") {
           // other permanent/transient errors — stop trying alternate env
-          failed += 1;
           break;
         }
         // else try next environment
       } catch (e) {
         if (failureSamples.length < 5) failureSamples.push(`0:${String(e).slice(0, 80)}`);
-        failed += 1;
         break;
       }
     }
     if (!delivered && !dead.includes(row.token)) {
-      // exhausted env retries after BadEnvironmentKeyInToken
+      // Count a failed device once, independently of attempted environments.
       failed += 1;
     }
   });
