@@ -14,6 +14,7 @@ import {
   buildNotificationPayload,
   notificationIdentifier,
   parseNotificationPayload,
+  notificationDataFromRequest,
   shouldRefreshForNotification,
   shouldPresentNotification,
   preferenceAllowsEvent,
@@ -641,7 +642,7 @@ export function installBackgroundSyncWakeHandlers(): void {
 
   Notifications.addNotificationReceivedListener((notification) => {
     const identityRevision = notificationIdentityRevision;
-    const data = (notification.request.content.data ?? {}) as Record<string, unknown>;
+    const data = notificationDataFromRequest(notification.request);
     const payload = parseNotificationPayload(data);
     // Test / transport-test carries no new financial data — don't churn the app.
     if (payload?.event === NOTIFICATION_EVENTS.test) return;
@@ -714,7 +715,7 @@ export async function refreshHomeCacheOpportunistic(): Promise<void> {
 try {
   Notifications.setNotificationHandler({
     handleNotification: async (notification) => {
-      const data = (notification.request.content.data ?? {}) as Record<string, unknown>;
+      const data = notificationDataFromRequest(notification.request);
       const silent =
         data.silent === true ||
         data.event === "kdp-wake" ||

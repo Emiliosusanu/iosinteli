@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { NOTIFICATION_EVENTS, parseNotificationPayload, shouldRefreshForNotification,
-  shouldPresentNotification, rollAlertState } from '../src/lib/notificationContract.ts';
+  shouldPresentNotification, rollAlertState, notificationDataFromRequest } from '../src/lib/notificationContract.ts';
 
 const source = readFileSync(new URL('../src/lib/notifications.ts', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('notifications.ts', source, ts.ScriptTarget.Latest, true);
@@ -17,7 +17,7 @@ function harness() {
     withPushTokenQueue: async run => run(), pendingPushToken: null,
     pendingPushRefresh: false, pendingSilentRefresh: false,
     Platform: { OS: 'ios' }, AppState: { currentState: 'active' },
-    NOTIFICATION_EVENTS, parseNotificationPayload, shouldRefreshForNotification, shouldPresentNotification, rollAlertState,
+    NOTIFICATION_EVENTS, parseNotificationPayload, shouldRefreshForNotification, shouldPresentNotification, rollAlertState, notificationDataFromRequest,
     ALERT_STATE_KEY: 'state', ALERT_CHECK_LAST_RUN_KEY: 'cooldown', DEVICE_PUSH_TOKEN_KEY: 'token', PREFS_KEY: 'prefs',
     toDateString: () => '2026-11-03', buildNotificationPayload: (event, userId) => ({event, userId}),
     devWarn: () => {}, resetSyncedTimeZone: () => {},
