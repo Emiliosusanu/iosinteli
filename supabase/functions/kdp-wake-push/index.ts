@@ -121,7 +121,13 @@ type TokenRow = {
   invalidated_at?: string | null;
 };
 
-async function loadTokens(admin: ReturnType<typeof createClient>): Promise<{
+function createAdminClient() {
+  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+async function loadTokens(admin: ReturnType<typeof createAdminClient>): Promise<{
   tokens: TokenRow[];
   scanned: number;
   skippedDisabled: number;
@@ -215,9 +221,7 @@ Deno.serve(async (req) => {
     return json({ error: "unauthorized" }, 401);
   }
 
-  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  const admin = createAdminClient();
 
   // Rate-limit fleet wakes (~15m) via single-row lease table.
   const { data: claim, error: claimError } = await admin.rpc("claim_kdp_wake_dispatch", {
