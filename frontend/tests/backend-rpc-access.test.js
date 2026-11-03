@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
 test('backend-resolved user RPCs cannot be called with a client-supplied foreign scope', () => {
-  const sql = readFileSync(new URL('../../supabase/migrations/20261103125949_restrict_backend_owned_rpc_execute.sql', import.meta.url), 'utf8');
+  const sql = readFileSync(new URL('../../supabase/migrations/20261103130527_restrict_backend_owned_rpc_execute.sql', import.meta.url), 'utf8');
   const statements = sql.replace(/--[^\n]*/g, '').split(';').map(value => value.trim().replace(/\s+/g, ' ')).filter(Boolean);
   assert.equal(statements.length,2);
   assert.ok(statements[0].startsWith('revoke all on function '));
