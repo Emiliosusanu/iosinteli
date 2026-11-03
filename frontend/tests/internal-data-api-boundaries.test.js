@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
-const sql = readFileSync(new URL('../../supabase/migrations/20261103124945_harden_internal_data_api_boundaries.sql', import.meta.url), 'utf8');
+const sql = readFileSync(new URL('../../supabase/migrations/20261103125447_harden_internal_data_api_boundaries.sql', import.meta.url), 'utf8');
 test('internal table security patch enables RLS and removes client privileges without data writes', () => {
   const statements = sql.replace(/--[^\n]*/g, '').split(';').map(value => value.trim().replace(/\s+/g, ' ')).filter(Boolean);
   const tables = ['_mwa_kdp_accounts','_mwa_purge_pids','_mwa_control_snap','seo_workflow_lease','seo_publication_counter','founding_reservations','founding_memberships','plan_limit_overrides'];
