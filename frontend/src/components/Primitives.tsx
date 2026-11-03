@@ -901,26 +901,29 @@ function estimateMetricWidth(value: string, fontScale: number) {
   return value.length * typography.headline.fontSize * 0.65 * Math.max(1, fontScale);
 }
 
-/** Same ladder on every screen: N if it fits, else 4→2→1 / 3→1 / 2→1. Widest value wins. */
-function metricStripColumns(items: { value: string }[], width: number, fontScale: number) {
+/** Reflow dense metrics instead of squeezing more columns into narrow cards. */
+function metricStripColumns(items: { value: string }[], width: number, fontScale: number, maxColumns = items.length) {
   const count = items.length;
   if (count <= 1 || width <= 0) return 1;
   const scale = Math.max(1, fontScale);
   const gap = dashboard.metricGap;
   const minCell = Math.max(56 * scale, ...items.map((item) => estimateMetricWidth(item.value, fontScale)));
   const fits = (cols: number) => (width - gap * (cols - 1)) / cols >= minCell;
-  if (fits(count)) return count;
-  if (count === 4 && fits(2)) return 2;
+  const preferred = Math.max(1, Math.min(count, Math.floor(maxColumns)));
+  if (fits(preferred)) return preferred;
+  if (preferred >= 3 && fits(2)) return 2;
   return 1;
 }
 
 export function MetricStrip({
   items,
   variant = "default",
+  maxColumns,
 }: {
   items: { label: string; value: string; color?: string }[];
   /** `book` quietens labels and strengthens values for Books list/detail hierarchy. */
   variant?: "default" | "book";
+  maxColumns?: number;
 }) {
   const t = useTheme();
   const fontScale = PixelRatio.getFontScale();
@@ -930,7 +933,7 @@ export function MetricStrip({
     setStripWidth(0);
   }, [fontScale, windowWidth]);
   const width = stripWidth || Math.max(0, windowWidth - dashboard.cardPadding * 2 - dashboard.pageInset * 2);
-  const columns = metricStripColumns(items, width, fontScale);
+  const columns = metricStripColumns(items, width, fontScale, maxColumns);
   const wraps = columns < items.length;
   const gap = dashboard.metricGap;
   const cellWidth = wraps ? (width - gap * (columns - 1)) / columns : undefined;

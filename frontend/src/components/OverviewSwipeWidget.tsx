@@ -137,6 +137,7 @@ export function OverviewSwipeWidget({
       contentStyle={{ padding: dashboard.cardPadding }}
     >
       <OverviewCardHeader
+        wrapTitle
         title={headerTitle}
         icon={icon}
         actionLabel={page.actionLabel ?? actionLabel}

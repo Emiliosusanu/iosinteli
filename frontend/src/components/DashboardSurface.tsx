@@ -62,6 +62,7 @@ export function OverviewCardHeader({
   subtitle,
   meta,
   trailing,
+  wrapTitle = false,
 }: {
   title: string;
   icon?: InteliAdsIconName;
@@ -75,6 +76,7 @@ export function OverviewCardHeader({
   meta?: string;
   /** One-line metrics (or other content) top-right, before the action. */
   trailing?: React.ReactNode;
+  wrapTitle?: boolean;
 }) {
   const t = useTheme();
   const caption = meta ?? subtitle;
@@ -97,7 +99,7 @@ export function OverviewCardHeader({
       <View style={styles.titleBlock}>
         <Text
           style={[t.typography.sectionTitle, { color: t.colors.text_primary }]}
-          numberOfLines={1}
+          numberOfLines={wrapTitle ? 0 : 1}
           accessibilityRole="header"
         >
           {title}

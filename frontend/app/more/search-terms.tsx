@@ -549,6 +549,7 @@ const TermRow = React.memo(function TermRow({
         </Text>
         <View style={[styles.metricsRow, { borderTopColor: t.colors.separator }]} accessible={false} importantForAccessibility="no">
           <MetricStrip
+            maxColumns={3}
             items={[
               {
                 label: "ACoS",
