@@ -93,3 +93,16 @@ test('logout invalidates a local alert while permission-independent preference r
   await assert.rejects(pending);
   assert.equal(h.shown.length, 0);
 });
+
+test('local scheduling refuses expired data even if it expires while preferences are being read', async () => {
+  const h = harness(); let release;
+  let now = Date.now();
+  h.env.Date = class extends Date { static now() { return now; } };
+  h.env.readJson = () => new Promise(resolve => { release = resolve; });
+  const pending = h.env.scheduleLocalAlert({ identifier: 'expired', event: 'period-compare', userId: 'current',
+    title: 'old totals', body: 'old totals', expiresAtMs: now + 1000 });
+  now += 1001;
+  release({ dailyDigest: true });
+  await assert.rejects(pending);
+  assert.equal(h.shown.length, 0);
+});

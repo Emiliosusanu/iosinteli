@@ -121,6 +121,7 @@ async function scheduleLocalAlert(input: {
   event: (typeof NOTIFICATION_EVENTS)[keyof typeof NOTIFICATION_EVENTS];
   userId: string;
   asin?: string;
+  expiresAtMs?: number;
 }): Promise<void> {
   const identityRevision = notificationIdentityRevision;
   const [{ data: { session } }, prefs] = await Promise.all([
@@ -128,6 +129,7 @@ async function scheduleLocalAlert(input: {
   ]);
   const data = { ...buildNotificationPayload(input.event, input.userId, input.asin), origin: "local" };
   if (identityRevision !== notificationIdentityRevision ||
+      (input.expiresAtMs != null && Date.now() >= input.expiresAtMs) ||
       !shouldPresentNotification(data, session?.user.id ?? null, prefs)) {
     throw new Error("Notification account or preference changed");
   }
@@ -237,6 +239,10 @@ async function evaluateLocalAlerts(_source: "background" | "foreground" = "backg
     const includeKdpNet = !!prefs.includeKdpNet;
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const localHour = new Date().getHours();
+    const localDayEnd = new Date();
+    localDayEnd.setHours(24, 0, 0, 0);
+    const digestHourEnd = new Date();
+    digestHourEnd.setHours(localHour + 1, 0, 0, 0);
     const morningDigest = isMorningDigestHour(localHour);
     const displayCurrency = String(scope.currency || "USD").toUpperCase() || "USD";
 
@@ -372,6 +378,8 @@ async function evaluateLocalAlerts(_source: "background" | "foreground" = "backg
     }
 
     if (!todayLines.length) return 0;
+    // Do not deliver yesterday's totals after a long read crosses midnight.
+    if (toDateString(new Date()) !== today) return 0;
 
     let coverageLine: string | null = null;
     try {
@@ -411,12 +419,14 @@ async function evaluateLocalAlerts(_source: "background" | "foreground" = "backg
     if (
       prefs.dailyDigest &&
       preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.periodCompare) &&
+      new Date().getHours() === localHour &&
       shouldSendDigestHour(localHour, alertState.lastDigestHour, today, alertState.digestDay)
     ) {
       await scheduleLocalAlert({
         identifier: notificationIdentifier(NOTIFICATION_EVENTS.periodCompare, today, String(localHour)),
         event: NOTIFICATION_EVENTS.periodCompare,
         userId,
+        expiresAtMs: Math.min(localDayEnd.getTime(), digestHourEnd.getTime()),
         title: digestTitleForHour(localHour),
         body: `All enabled profiles\n${formatDigestBody({
           lines: digestLines,
@@ -427,6 +437,7 @@ async function evaluateLocalAlerts(_source: "background" | "foreground" = "backg
       });
       alertState = { ...alertState, digestDay: today, lastDigestHour: localHour };
       sent += 1;
+      if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
     }
 
     // Orders are dimensionless — sum known counts across currency groups.
@@ -455,11 +466,13 @@ async function evaluateLocalAlerts(_source: "background" | "foreground" = "backg
           identifier: notificationIdentifier(NOTIFICATION_EVENTS.newOrders, today, String(ordersTotal)),
           event: NOTIFICATION_EVENTS.newOrders,
           userId,
+          expiresAtMs: localDayEnd.getTime(),
           title: delta === 1 ? "1 new ad order" : `${delta} new ad orders`,
           body: totalsBody(`Today so far · ${ordersTotal} orders total.`, todayLines),
         });
         alertState = { ...alertState, ordersNotified: ordersTotal };
         sent += 1;
+        if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
       }
     }
 
@@ -482,6 +495,7 @@ async function evaluateLocalAlerts(_source: "background" | "foreground" = "backg
             identifier: notificationIdentifier(NOTIFICATION_EVENTS.campaignOverspend, today),
             event: NOTIFICATION_EVENTS.campaignOverspend,
             userId,
+            expiresAtMs: localDayEnd.getTime(),
             title: "Campaign overspending",
             body: totalsBody(
               "Today's ad spend is above your daily budget threshold.",
@@ -494,6 +508,7 @@ async function evaluateLocalAlerts(_source: "background" | "foreground" = "backg
             spendAlertDays: { ...(alertState.spendAlertDays ?? {}), [today]: true },
           };
           sent += 1;
+          if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
         }
       }
     }
@@ -516,12 +531,14 @@ async function evaluateLocalAlerts(_source: "background" | "foreground" = "backg
           identifier: notificationIdentifier(NOTIFICATION_EVENTS.bookAttention, today, key),
           event: NOTIFICATION_EVENTS.bookAttention,
           userId,
+          expiresAtMs: localDayEnd.getTime(),
           asin: book.asin ?? undefined,
           title: "Book needs attention",
           body: totalsBody(`${book.title || key} ACoS is above break-even.`, todayLines),
         });
         alertState = markBookNotified(alertState, key);
         sent += 1;
+        if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
       }
     }
 
@@ -542,11 +559,13 @@ async function evaluateLocalAlerts(_source: "background" | "foreground" = "backg
           identifier: notificationIdentifier(NOTIFICATION_EVENTS.kdpDataStale, today, row.accountId),
           event: NOTIFICATION_EVENTS.kdpDataStale,
           userId,
+          expiresAtMs: localDayEnd.getTime(),
           title: copy.title,
           body: totalsBody(copy.body, todayLines),
         });
         alertState = markKdpStallNotified(alertState, row.accountId, now);
         sent += 1;
+        if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
       }
     }
 
@@ -1078,46 +1097,18 @@ export async function persistNotificationPreferences(prefs: {
   }
 }
 
-export async function requestServerTestPush(userId?: string | null): Promise<boolean> {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    const owner = userId ?? session?.user?.id ?? null;
-    if (!owner) return false;
+type LocalTestResult = "local" | "blocked" | "failed";
+let localTestInFlight: { key: string; promise: Promise<LocalTestResult> } | null = null;
 
-    // Primary: Supabase Edge Function "send-push" delivers a real APNs push.
-    // The user's session token identifies the recipient (RLS-safe).
-    try {
-      const { data, error } = await supabase.functions.invoke("send-push", {
-        body: { test: true },
-      });
-      const sent = (data as { sent?: number } | null)?.sent ?? 0;
-      if (!error && sent > 0) return true;
-    } catch (e) {
-      devWarn("supabase send-push skipped", e);
-    }
-
-    // Fallback: legacy Nest sender, if it is ever deployed.
-    await notificationNestJson("/notifications/test-push", {
-      method: "POST",
-      body: JSON.stringify({ userId: owner }),
-    });
-    return true;
-  } catch (e) {
-    devWarn("requestServerTestPush skipped", e);
-    return false;
-  }
-}
-
-export async function sendTestNotification(userId?: string | null): Promise<"server" | "local" | false> {
+async function sendLocalTest(userId: string, revision: number): Promise<LocalTestResult> {
   try {
     const granted = await ensureNotificationPermission();
-    if (!granted) return false;
+    if (!granted) return "blocked";
     const { data: { session } } = await supabase.auth.getSession();
     const owner = userId ?? session?.user?.id ?? null;
-    if (!owner) return false;
+    if (!owner || owner !== session?.user.id || revision !== notificationIdentityRevision) return "failed";
 
-    // Local first: Nest POST /notifications/test-push is not deployed on production
-    // (404). Still probe the server afterward so a future sender lights up Settings.
+    // A local test must not also broadcast a second alert to every account device.
     const today = toDateString(new Date());
     await scheduleLocalAlert({
       identifier: notificationIdentifier(NOTIFICATION_EVENTS.test, today),
@@ -1127,10 +1118,31 @@ export async function sendTestNotification(userId?: string | null): Promise<"ser
       body: TEST_NOTIFICATION_BODY,
     });
 
-    const serverOk = await requestServerTestPush(owner);
-    return serverOk ? "server" : "local";
+    return "local";
   } catch (e) {
     devWarn("sendTestNotification failed", e);
-    return false;
+    return "failed";
+  }
+}
+
+export async function sendTestNotification(userId?: string | null): Promise<LocalTestResult> {
+  const revision = notificationIdentityRevision;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const owner = userId ?? session?.user.id;
+    if (!owner || owner !== session?.user.id || revision !== notificationIdentityRevision) return "failed";
+    const key = `${revision}:${owner}`;
+    if (!localTestInFlight || localTestInFlight.key !== key) {
+      const promise = sendLocalTest(owner, revision);
+      localTestInFlight = { key, promise };
+      void promise.finally(() => {
+        if (localTestInFlight?.promise === promise) localTestInFlight = null;
+      });
+    }
+    const result = await localTestInFlight.promise;
+    return revision === notificationIdentityRevision ? result : "failed";
+  } catch (error) {
+    devWarn("sendTestNotification unavailable", error);
+    return "failed";
   }
 }

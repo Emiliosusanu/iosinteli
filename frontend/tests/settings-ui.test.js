@@ -79,9 +79,10 @@ test("test notification is local and does not claim server push", () => {
   assert.match(TEST_NOTIFICATION_BODY, /Local test/);
   assert.doesNotMatch(TEST_NOTIFICATION_BODY, /Notifications are working/);
   assert.equal(TEST_NOTIFICATION_HINT, "");
-  assert.match(notifications, /requestServerTestPush/);
+  assert.doesNotMatch(notifications, /requestServerTestPush|functions\.invoke\("send-push"/);
+  assert.equal(testNotificationLabel("failed"), "Test unavailable. Try again");
   assert.match(notifications, /scheduleLocalAlert/);
-  assert.match(notifications, /Local first/);
+  assert.match(notifications, /localTestInFlight\.key !== key/);
   assert.match(notifications, /scheduleNotificationAsync/);
   assert.doesNotMatch(notifications, /Notifications are working/);
   assert.equal(testNotificationLabel("idle"), TEST_NOTIFICATION_LABEL);
