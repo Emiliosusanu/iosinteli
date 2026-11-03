@@ -14,6 +14,7 @@ function harness() {
   const env = {
     exports: {},
     notificationIdentityRevision: 0, backgroundWakeInstalled: false,
+    withPushTokenQueue: async run => run(), pendingPushToken: null,
     pendingPushRefresh: false, pendingSilentRefresh: false,
     Platform: { OS: 'ios' }, AppState: { currentState: 'active' },
     NOTIFICATION_EVENTS, parseNotificationPayload, shouldRefreshForNotification, shouldPresentNotification, rollAlertState,
@@ -33,7 +34,7 @@ function harness() {
     },
   };
   const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) &&
-    ['installBackgroundSyncWakeHandlers', 'clearNotificationIdentity', 'scheduleLocalAlert'].includes(node.name?.text));
+    ['installBackgroundSyncWakeHandlers', 'clearNotificationIdentity', 'clearSavedNotificationIdentity', 'scheduleLocalAlert'].includes(node.name?.text));
   vm.runInNewContext(ts.transpileModule(functions.map(node => node.getText(ast)).join('\n'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText, env);

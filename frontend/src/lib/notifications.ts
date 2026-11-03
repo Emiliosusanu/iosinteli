@@ -65,6 +65,17 @@ const ALERT_STATE_KEY = "inteliads.alertState";
 const ALERT_CHECK_LAST_RUN_KEY = "inteliads.alertCheckLastRun";
 const DEVICE_PUSH_TOKEN_KEY = "inteliads.devicePushToken";
 let notificationIdentityRevision = 0;
+const PUSH_TOKEN_REQUEST_BUDGET_MS = 10_000;
+type PushRegistrationResult = { token: string | null; type: string | null };
+let pushTokenQueue: Promise<void> = Promise.resolve();
+const pushRegistrationFlights = new Map<string, Promise<PushRegistrationResult>>();
+let pendingPushToken: StoredPushToken | null = null;
+
+function withPushTokenQueue<T>(run: () => Promise<T>): Promise<T> {
+  const next = pushTokenQueue.then(run);
+  pushTokenQueue = next.then(() => {}, () => {});
+  return next;
+}
 
 /** Minimum gap between local alert evaluations (AppState resume can fire often). */
 export const ALERT_CHECK_COOLDOWN_MS = 15 * 60_000;
@@ -91,6 +102,7 @@ type StoredPushToken = {
   userId?: string;
   platform?: string;
   updatedAt?: string;
+  retiringToken?: { token: string; userId: string };
 };
 
 const IOS_ALERT_PERMISSIONS = {
@@ -780,13 +792,62 @@ defineLaunchSafeTask(INTELIADS_NOTIFICATION_TASK, () => runBudgetedKdpTask("push
 
 export async function registerForPushAsync(opts?: {
   requestPermission?: boolean;
-}): Promise<{ token: string | null; type: string | null }> {
+}): Promise<PushRegistrationResult> {
   if (Platform.OS === "web") return { token: null, type: null };
+  const revision = notificationIdentityRevision;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const owner = session?.user.id;
+    if (!owner || revision !== notificationIdentityRevision) return { token: null, type: null };
+    const key = `${revision}:${owner}:${!!opts?.requestPermission}`;
+    let pending = pushRegistrationFlights.get(key);
+    if (!pending) {
+      pending = registerCurrentPushToken(owner, revision, opts);
+      pushRegistrationFlights.set(key, pending);
+      void pending.finally(() => {
+        if (pushRegistrationFlights.get(key) === pending) pushRegistrationFlights.delete(key);
+      });
+    }
+    return await pending;
+  } catch (error) {
+    devWarn("push registration unavailable", error);
+    return { token: null, type: null };
+  }
+}
+
+async function retirePushToken(stored: StoredPushToken): Promise<boolean> {
+  if (!stored.token || !stored.userId) return true;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PUSH_TOKEN_REQUEST_BUDGET_MS);
+  try {
+    const { error } = await supabase.from("device_push_tokens")
+      .update({ disabled_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("token", stored.token).eq("user_id", stored.userId).abortSignal(controller.signal);
+    if (!error) return true;
+    const { data: { session } } = await supabase.auth.getSession();
+    // Nest derives ownership from its current bearer; never detach an old
+    // account's token using the new account's identity.
+    if (session?.user.id !== stored.userId || controller.signal.aborted) return false;
+    const result = await notificationNestJson<{ success?: boolean }>("/notifications/device-token", {
+      method: "DELETE", body: JSON.stringify({ token: stored.token }), signal: controller.signal,
+    });
+    return result?.success === true;
+  } catch (error) {
+    devWarn("push token detach deferred", error);
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function registerCurrentPushToken(owner: string, revision: number, opts?: {
+  requestPermission?: boolean;
+}): Promise<PushRegistrationResult> {
   try {
     const granted = opts?.requestPermission
       ? await ensureNotificationPermission()
       : await currentPermissionGranted();
-    if (!granted) return { token: null, type: null };
+    if (!granted || revision !== notificationIdentityRevision) return { token: null, type: null };
 
     const device = await Notifications.getDevicePushTokenAsync();
     const token = (device?.data as string) ?? null;
@@ -795,18 +856,7 @@ export async function registerForPushAsync(opts?: {
 
     const { data: { user } } = await supabase.auth.getUser();
     const userId = user?.id ?? null;
-    const previous = await readJson<StoredPushToken>(DEVICE_PUSH_TOKEN_KEY, {});
-
-    await storage.setItem(
-      DEVICE_PUSH_TOKEN_KEY,
-      JSON.stringify({
-        token,
-        type,
-        platform: Platform.OS,
-        userId,
-        updatedAt: new Date().toISOString(),
-      }),
-    );
+    if (!userId || userId !== owner || revision !== notificationIdentityRevision) return { token: null, type: null };
 
     // Prefer explicit env, then the environment in the signed iOS provisioning
     // profile. A locally archived Release build can still be development-signed,
@@ -819,27 +869,29 @@ export async function registerForPushAsync(opts?: {
       isDevelopment: __DEV__,
     });
 
-    if (userId) {
+    return await withPushTokenQueue(async () => {
+      const empty = { token: null, type: null };
+      if (revision !== notificationIdentityRevision) return empty;
+      const previous = await readJson<StoredPushToken>(DEVICE_PUSH_TOKEN_KEY, {});
+      if (revision !== notificationIdentityRevision) return empty;
+      if (previous.retiringToken?.userId === owner) {
+        if (!(await retirePushToken(previous.retiringToken))) return empty;
+      }
+      if (pendingPushToken?.userId === owner && pendingPushToken.token !== token) {
+        if (!(await retirePushToken(pendingPushToken))) return empty;
+        pendingPushToken = null;
+      }
+      if (revision !== notificationIdentityRevision) return empty;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PUSH_TOKEN_REQUEST_BUDGET_MS);
+      const candidate = { token, type, userId, platform: Platform.OS, updatedAt: new Date().toISOString() };
+      const rotating = previous.token && previous.token !== token && previous.userId === owner
+        ? { token: previous.token, userId: owner } : null;
+      pendingPushToken = candidate;
       try {
-        if (previous.token && previous.userId && previous.userId !== userId) {
-          await supabase
-            .from("device_push_tokens")
-            .update({
-              disabled_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            })
-            .eq("token", previous.token)
-            .eq("user_id", previous.userId);
-          try {
-            await notificationNestJson("/notifications/device-token", {
-              method: "DELETE",
-              body: JSON.stringify({ token: previous.token }),
-            });
-          } catch {}
-        }
-        await supabase
-          .from("device_push_tokens")
-          .upsert(
+        let persisted = false;
+        try {
+          const { error } = await supabase.from("device_push_tokens").upsert(
             {
               user_id: userId,
               token,
@@ -848,17 +900,17 @@ export async function registerForPushAsync(opts?: {
               environment,
               bundle_id: "io.inteliads.app",
               last_seen_at: new Date().toISOString(),
-              // A live device re-registering proves the token is deliverable —
-              // clear any prior disable/invalidate so the sender stops skipping it,
-              // even when the Nest PUT below is unreachable.
+              // Registration reactivates this token; it is not proof of APNs receipt.
               disabled_at: null,
               invalidated_at: null,
               updated_at: new Date().toISOString(),
             },
             { onConflict: "token" },
-          );
-        try {
-          await notificationNestJson("/notifications/device-token", {
+          ).abortSignal(controller.signal);
+          persisted = !error;
+        } catch (error) { devWarn("direct push registration deferred", error); }
+        if (!persisted && revision === notificationIdentityRevision && !controller.signal.aborted) {
+          const result = await notificationNestJson<{ success?: boolean }>("/notifications/device-token", {
             method: "PUT",
             body: JSON.stringify({
               token,
@@ -867,16 +919,30 @@ export async function registerForPushAsync(opts?: {
               environment,
               bundleId: "io.inteliads.app",
             }),
+            signal: controller.signal,
           });
-        } catch (e) {
-          devWarn("nest device token persist skipped", e);
+          persisted = result?.success === true;
         }
-      } catch (e) {
-        devWarn("push token persist skipped (table/RLS not set up?)", e);
+        if (!persisted || controller.signal.aborted || revision !== notificationIdentityRevision) return empty;
+        const saved = await storage.setItem(DEVICE_PUSH_TOKEN_KEY, JSON.stringify({
+          ...candidate, ...(rotating ? { retiringToken: rotating } : {}),
+        }));
+        if (!saved || revision !== notificationIdentityRevision) return empty;
+        pendingPushToken = null;
+        // A rotated token belongs to this installation's stored record, not
+        // every device on the account. Keep the old record if replacement fails.
+        if (rotating) {
+          if (!(await retirePushToken(rotating))) {
+            pendingPushToken = rotating;
+            return empty;
+          }
+          if (!(await storage.setItem(DEVICE_PUSH_TOKEN_KEY, JSON.stringify(candidate)))) return empty;
+        }
+        return revision === notificationIdentityRevision ? { token, type } : empty;
+      } finally {
+        clearTimeout(timer);
       }
-    }
-
-    return { token, type };
+    });
   } catch (e) {
     devWarn("registerForPushAsync failed", e);
     return { token: null, type: null };
@@ -888,6 +954,10 @@ export async function clearNotificationIdentity(): Promise<void> {
   pendingPushRefresh = false;
   pendingSilentRefresh = false;
   resetSyncedTimeZone();
+  await withPushTokenQueue(clearSavedNotificationIdentity);
+}
+
+async function clearSavedNotificationIdentity(): Promise<void> {
   const stored = await readJson<StoredPushToken>(DEVICE_PUSH_TOKEN_KEY, {});
   try {
     await Notifications.cancelAllScheduledNotificationsAsync();
@@ -898,26 +968,13 @@ export async function clearNotificationIdentity(): Promise<void> {
   try {
     await Notifications.clearLastNotificationResponseAsync();
   } catch {}
-  if (stored.token && stored.userId) {
-    // Soft-disable (Nest parity): keep the row so senders skip it; do not hard-delete.
-    try {
-      await supabase
-        .from("device_push_tokens")
-        .update({
-          disabled_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("token", stored.token)
-        .eq("user_id", stored.userId);
-    } catch (e) {
-      devWarn("push token detach skipped", e);
-    }
-    try {
-      await notificationNestJson("/notifications/device-token", {
-        method: "DELETE",
-        body: JSON.stringify({ token: stored.token }),
-      });
-    } catch {}
+  const pending = pendingPushToken;
+  if (pending && await retirePushToken(pending)) pendingPushToken = null;
+  if (stored.retiringToken && (stored.retiringToken.token !== pending?.token || stored.retiringToken.userId !== pending?.userId)) {
+    await retirePushToken(stored.retiringToken);
+  }
+  if (stored.token && stored.userId && (stored.token !== pending?.token || stored.userId !== pending?.userId)) {
+    await retirePushToken(stored);
   }
   await storage.removeItem(DEVICE_PUSH_TOKEN_KEY);
   await storage.removeItem(ALERT_STATE_KEY);

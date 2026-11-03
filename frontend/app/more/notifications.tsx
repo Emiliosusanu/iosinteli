@@ -57,11 +57,12 @@ export default function NotificationsScreen() {
   const testRevision = useRef(0);
   const testTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    testRevision.current++;
+    const revision = testRevision.current + 1;
+    testRevision.current = revision;
     testInFlight.current = false;
     setTestStatus("idle");
     return () => {
-      testRevision.current++;
+      testRevision.current = revision + 1;
       if (testTimer.current) clearTimeout(testTimer.current);
     };
   }, [user?.id, guestMode]);
