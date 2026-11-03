@@ -64,6 +64,7 @@ const PREFS_KEY = "inteliads.notifications";
 const ALERT_STATE_KEY = "inteliads.alertState";
 const ALERT_CHECK_LAST_RUN_KEY = "inteliads.alertCheckLastRun";
 const DEVICE_PUSH_TOKEN_KEY = "inteliads.devicePushToken";
+let notificationIdentityRevision = 0;
 
 /** Minimum gap between local alert evaluations (AppState resume can fire often). */
 export const ALERT_CHECK_COOLDOWN_MS = 15 * 60_000;
@@ -121,13 +122,22 @@ async function scheduleLocalAlert(input: {
   userId: string;
   asin?: string;
 }): Promise<void> {
+  const identityRevision = notificationIdentityRevision;
+  const [{ data: { session } }, prefs] = await Promise.all([
+    supabase.auth.getSession(), readJson<NotificationPrefs>(PREFS_KEY, {} as NotificationPrefs),
+  ]);
+  const data = { ...buildNotificationPayload(input.event, input.userId, input.asin), origin: "local" };
+  if (identityRevision !== notificationIdentityRevision ||
+      !shouldPresentNotification(data, session?.user.id ?? null, prefs)) {
+    throw new Error("Notification account or preference changed");
+  }
   await Notifications.scheduleNotificationAsync({
     identifier: input.identifier,
     content: {
       title: input.title,
       body: input.body,
       sound: "default",
-      data: { ...buildNotificationPayload(input.event, input.userId, input.asin), origin: "local" },
+      data,
     },
     trigger: null,
   });
@@ -151,6 +161,7 @@ export async function runAlertCheck(source: "background" | "foreground" = "backg
 
 async function evaluateLocalAlerts(_source: "background" | "foreground" = "background"): Promise<number> {
   let sent = 0;
+  const identityRevision = notificationIdentityRevision;
   try {
     if (!(await currentPermissionGranted())) return 0;
 
@@ -220,6 +231,7 @@ async function evaluateLocalAlerts(_source: "background" | "foreground" = "backg
     if (!queryIds.length) return 0;
 
     // Commit cooldown only once we know we will evaluate (not on view-as / empty authority).
+    if (identityRevision !== notificationIdentityRevision) return 0;
     await storage.setItem(ALERT_CHECK_LAST_RUN_KEY, String(now));
 
     const includeKdpNet = !!prefs.includeKdpNet;
@@ -538,7 +550,7 @@ async function evaluateLocalAlerts(_source: "background" | "foreground" = "backg
       }
     }
 
-    await writeAlertState(alertState);
+    if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
   } catch (error) {
     devWarn("runAlertCheck skipped", error);
   }
@@ -597,6 +609,7 @@ export function installBackgroundSyncWakeHandlers(): void {
   backgroundWakeInstalled = true;
 
   Notifications.addNotificationReceivedListener((notification) => {
+    const identityRevision = notificationIdentityRevision;
     const data = (notification.request.content.data ?? {}) as Record<string, unknown>;
     const payload = parseNotificationPayload(data);
     // Test / transport-test carries no new financial data — don't churn the app.
@@ -606,16 +619,19 @@ export function installBackgroundSyncWakeHandlers(): void {
       data.event === "kdp-wake" ||
       data["content-available"] === 1;
     void (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (identityRevision !== notificationIdentityRevision ||
+          !shouldRefreshForNotification(data, session?.user.id ?? null)) return;
       if (payload?.event === NOTIFICATION_EVENTS.periodCompare && data.origin !== "local") {
         const today = toDateString(new Date());
         const hour = new Date().getHours();
         const state = rollAlertState(await readJson<AlertState>(ALERT_STATE_KEY, {}), today);
+        if (identityRevision !== notificationIdentityRevision) return;
         if (state.digestDay !== today || state.lastDigestHour !== hour) {
           await writeAlertState({ ...state, digestDay: today, lastDigestHour: hour });
         }
       }
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!shouldRefreshForNotification(data, session?.user.id ?? null)) return;
+      if (identityRevision !== notificationIdentityRevision) return;
       // Revalidate visible reads now, not after KDP replay and alert evaluation.
       emitNotificationRefresh(silent ? "push-silent" : "push-visible");
       if (silent && AppState.currentState !== "active") {
@@ -849,6 +865,9 @@ export async function registerForPushAsync(opts?: {
 }
 
 export async function clearNotificationIdentity(): Promise<void> {
+  notificationIdentityRevision++;
+  pendingPushRefresh = false;
+  pendingSilentRefresh = false;
   resetSyncedTimeZone();
   const stored = await readJson<StoredPushToken>(DEVICE_PUSH_TOKEN_KEY, {});
   try {
@@ -883,6 +902,7 @@ export async function clearNotificationIdentity(): Promise<void> {
   }
   await storage.removeItem(DEVICE_PUSH_TOKEN_KEY);
   await storage.removeItem(ALERT_STATE_KEY);
+  await storage.removeItem(ALERT_CHECK_LAST_RUN_KEY);
 }
 
 export async function ensureBackgroundRefreshRegistered(): Promise<boolean> {
