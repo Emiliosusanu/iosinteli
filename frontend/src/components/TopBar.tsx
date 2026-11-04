@@ -11,6 +11,7 @@ import {
   Switch,
   Platform,
   Alert,
+  ActivityIndicator,
   useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -31,6 +32,7 @@ import { GlassPanel } from "./GlassPanel";
 import { MarketPill } from "./MarketPill";
 import { InteliAdsIcon } from "./InteliAdsIcon";
 import { PressableScale } from "./Motion";
+import { RetryState } from "./Primitives";
 import {
   NEST_DISABLED_VIEW_MESSAGE,
   NEST_DISABLED_VIEW_TITLE,
@@ -364,6 +366,7 @@ export function TopBar({
     profilesLoading,
     profilesFetching,
     profilesError,
+    refetchProfiles,
     selectedProfileIds,
     primaryCurrency,
     toggleProfile,
@@ -373,6 +376,8 @@ export function TopBar({
     adminFilterUserId,
     setAdminFilterUserId,
   } = useApp();
+  const profilesUnavailable = !!profilesError || profilesLoading ||
+    (profilesFetching && profiles.length === 0);
   const viewingUser = adminUsers.find((user) => user.id === adminFilterUserId);
   const [profileOpen, setProfileOpen] = useState(false);
   const [listMode, setListMode] = useState<ProfileSheetMode>("ready");
@@ -578,6 +583,28 @@ export function TopBar({
     });
   }
 
+  function renderProfileContent() {
+    if (profilesError) {
+      return (
+        <View testID="profiles-sheet-error">
+          <RetryState
+            title="Couldn't load accounts"
+            subtitle="Account availability couldn't be verified."
+            onRetry={() => refetchProfiles()}
+          />
+        </View>
+      );
+    }
+    if (profilesLoading || (profilesFetching && profiles.length === 0)) {
+      return (
+        <View style={{ padding: 24 }}>
+          <ActivityIndicator testID="profiles-sheet-loading" accessibilityLabel="Loading Amazon profiles" />
+        </View>
+      );
+    }
+    return listMode === "kdp_ads" ? renderKdpGroups() : renderProfileRows();
+  }
+
   function renderProfileRows() {
     if (profiles.length === 0) {
       return (
@@ -713,7 +740,7 @@ export function TopBar({
         {Platform.OS === "ios" ? (
           <View style={[styles.sheetFill, { backgroundColor: t.colors.background_secondary }]}>
             <View style={styles.sheetHeader}>
-              <TouchableOpacity onPress={selectAllProfiles} testID="select-all-profiles">
+              <TouchableOpacity onPress={selectAllProfiles} testID="select-all-profiles" disabled={profilesUnavailable} accessibilityState={{ disabled: profilesUnavailable }}>
                 <Text style={[t.typography.callout, { color: t.colors.tone_primary }]}>Select all</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={() => setProfileOpen(false)} hitSlop={10}>
@@ -727,6 +754,7 @@ export function TopBar({
               {[null, ...multiCountryCodes(profiles, { onlyEnabled: true })].map((country) => (
                 <TouchableOpacity key={country ?? "all"} testID={`shared-market-${country ?? "all"}`}
                   accessibilityRole="button" accessibilityLabel={country ? `Market ${country}` : "All markets"}
+                  disabled={profilesUnavailable} accessibilityState={{ disabled: profilesUnavailable }}
                   style={{ paddingVertical: 12 }} onPress={() => { selectMarket(country); setProfileOpen(false); }}>
                   <Text style={[t.typography.callout, { color: t.colors.tone_primary }]}>{country ?? "All markets"}</Text>
                 </TouchableOpacity>
@@ -753,7 +781,7 @@ export function TopBar({
                   ]}
                 >
                   {PROFILE_LIST_READY_LABEL}
-                  {readyCount ? ` (${readyCount})` : ""}
+                  {!profilesUnavailable && readyCount ? ` (${readyCount})` : ""}
                 </Text>
               </TouchableOpacity>
               {showKdpAccountGroups ? (
@@ -776,7 +804,7 @@ export function TopBar({
                       },
                     ]}
                   >
-                    {PROFILE_LIST_KDP_ADS_LABEL} ({kdpAdsCount})
+                    {PROFILE_LIST_KDP_ADS_LABEL}{!profilesUnavailable ? ` (${kdpAdsCount})` : ""}
                   </Text>
                 </TouchableOpacity>
               ) : null}
@@ -799,7 +827,7 @@ export function TopBar({
                     },
                   ]}
                 >
-                  {PROFILE_LIST_ADS_ONLY_LABEL} ({adsOnlyCount})
+                  {PROFILE_LIST_ADS_ONLY_LABEL}{!profilesUnavailable ? ` (${adsOnlyCount})` : ""}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -852,7 +880,7 @@ export function TopBar({
                   })}
                 </View>
               ) : null}
-              {listMode === "kdp_ads" ? renderKdpGroups() : renderProfileRows()}
+              {renderProfileContent()}
             </ScrollView>
           </View>
         ) : (
@@ -864,7 +892,7 @@ export function TopBar({
               <View style={[styles.handle, { backgroundColor: t.colors.separator }]} />
               <View style={styles.sheetHeader}>
                 <Text style={[t.typography.title3, { color: t.colors.text_primary }]}>Amazon Profiles</Text>
-                <TouchableOpacity onPress={selectAllProfiles} testID="select-all-profiles">
+                <TouchableOpacity onPress={selectAllProfiles} testID="select-all-profiles" disabled={profilesUnavailable} accessibilityState={{ disabled: profilesUnavailable }}>
                   <Text style={[t.typography.callout, { color: t.colors.tone_primary }]}>Select all</Text>
                 </TouchableOpacity>
               </View>
@@ -877,13 +905,13 @@ export function TopBar({
                 {showKdpAccountGroups ? (
                   <TouchableOpacity testID="profiles-filter-kdp-ads" onPress={() => setListMode("kdp_ads")}>
                     <Text style={{ color: listMode === "kdp_ads" ? t.colors.tone_primary : t.colors.text_secondary }}>
-                      {PROFILE_LIST_KDP_ADS_LABEL} ({kdpAdsCount})
+                      {PROFILE_LIST_KDP_ADS_LABEL}{!profilesUnavailable ? ` (${kdpAdsCount})` : ""}
                     </Text>
                   </TouchableOpacity>
                 ) : null}
                 <TouchableOpacity testID="profiles-filter-ads-only" onPress={() => setListMode("ads_only")}>
                   <Text style={{ color: listMode === "ads_only" ? t.colors.tone_primary : t.colors.text_secondary }}>
-                    {PROFILE_LIST_ADS_ONLY_LABEL} ({adsOnlyCount})
+                    {PROFILE_LIST_ADS_ONLY_LABEL}{!profilesUnavailable ? ` (${adsOnlyCount})` : ""}
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity testID="profiles-filter-all" onPress={() => setListMode("all")}>
@@ -892,7 +920,7 @@ export function TopBar({
                   </Text>
                 </TouchableOpacity>
               </View>
-              <ScrollView style={{ maxHeight: 480 }}>{listMode === "kdp_ads" ? renderKdpGroups() : renderProfileRows()}</ScrollView>
+              <ScrollView style={{ maxHeight: 480 }}>{renderProfileContent()}</ScrollView>
             </Pressable>
           </Pressable>
         )}

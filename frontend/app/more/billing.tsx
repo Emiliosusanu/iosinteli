@@ -480,11 +480,13 @@ function PlanRow({
       ? "Opening…"
       : planUnavailable
         ? "Unavailable"
-        : storeLoading || !planConfirmed
+        : storeLoading
         ? "Checking…"
-        : price
-        ? "Continue"
-        : "Unavailable";
+        : !price
+        ? "Unavailable"
+        : !planConfirmed
+        ? "Checking…"
+        : "Continue";
 
   return (
     <Pressable
