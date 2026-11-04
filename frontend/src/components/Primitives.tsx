@@ -274,15 +274,17 @@ export function RetryState({
   subtitle,
   onRetry,
   retrying,
+  systemImage = "wifi.slash",
 }: {
   title?: string;
   subtitle?: string;
   onRetry: () => void;
   retrying?: boolean;
+  systemImage?: React.ComponentProps<typeof IOSUnavailable>["systemImage"];
 }) {
   return (
     <View style={{ alignItems: "center", padding: 24 }}>
-      <IOSUnavailable title={title} description={subtitle} systemImage="wifi.slash" />
+      <IOSUnavailable title={title} description={subtitle} systemImage={systemImage} />
       <View style={{ marginTop: 12 }}>
         <PrimaryButton label={retrying ? "Retrying…" : "Retry"} onPress={onRetry} disabled={retrying} />
       </View>

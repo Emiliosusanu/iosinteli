@@ -82,7 +82,7 @@ test("book filter: campaign-activity books + searchable cover rows", () => {
   assert.match(targeting, /targeting-book-search/);
   assert.match(targeting, /filterTargetingBookOptions/);
   assert.match(targeting, /fetchTargetingBookOptions\(scopeProfiles/);
-  assert.match(targeting, /Don't apply book filter until options are fetched/);
+  assert.match(targeting, /booksQ\.isSuccess && bookCampaignIdList\.length > 0/);
   assert.match(targeting, /bookCampaignIdList/);
   assert.doesNotMatch(targeting, /No advertised books on these profiles yet\./);
   assert.match(targeting, /No books with active campaigns on these profiles yet\./);

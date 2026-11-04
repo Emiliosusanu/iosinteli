@@ -28,7 +28,7 @@ test('card uses one primary market for both reviews AND stock, never CA stock al
  const tree=render({compact:true,activeMarketplaceCodes:['US','CA']});
  assert.match(text(tree),/100/);assert.match(text(tree),/In stock/);assert.doesNotMatch(text(tree),/400|Out of stock|CA|Paperback|B0ABCDEFGH/);
  assert.match(tree.props.accessibilityLabel,/100 reviews in US/);assert.match(tree.props.accessibilityLabel,/Stock In stock in US/);
- assert.equal(find(tree,n=>n.type==='SFSymbol'&&n.props.name.startsWith('star')).length,5);
+ assert.equal(find(tree,n=>n.type==='SFSymbol'&&n.props.name.startsWith('star')).length,1);
 });
 test('detail uses the same single-market summary and keeps actual separate observation dates',()=>{
  const tree=render({activeMarketplaceCodes:['US'],snapshot:{...snapshot,marketplaceSnapshots:[{...us,reviewsCheckedAt:'2026-10-10T00:00:00Z',checkedAt:'2026-10-11T00:00:00Z'}]}});

@@ -145,8 +145,10 @@ test("Overview wires Ads Engine + KDP Royalties swipe widgets", () => {
   assert.match(widgets, /Paperback/);
   assert.match(widgets, /onImportRoyalties/);
   assert.match(overview, /royaltySetup\.openCollection/);
-  assert.match(overview, /ads-engine-keywords-daily/);
-  assert.match(overview, /ads-engine-search-terms-daily/);
+  assert.doesNotMatch(overview, /ads-engine-keywords-daily/);
+  assert.doesNotMatch(overview, /ads-engine-search-terms-daily/);
+  assert.match(widgets, /ads-engine-keywords-daily/);
+  assert.match(widgets, /ads-engine-search-terms-daily/);
   assert.match(charts, /Swipe a day to inspect/);
   assert.match(charts, /blocksExternalGesture/);
   assert.match(charts, /periodTotals/);
@@ -193,8 +195,8 @@ test("Ads Engine readout keeps Impr / Clicks / Orders / ACoS tags", () => {
 
 test("Compact widget rows keep spend, orders, clicks and ACoS labels", () => {
   const rows = readFileSync(new URL("../src/components/OverviewWidgetRows.tsx", import.meta.url), "utf8");
-  assert.match(rows, /formatInt\(campaign\.orders\)\} orders · \{formatInt\(campaign\.clicks\)\} clicks/);
-  assert.match(rows, /formatInt\(Number\(row\.total_orders\)\)\} orders · \{formatInt\(Number\(row\.total_clicks\)\)\} clicks/);
+  assert.match(rows, /observedCount\(campaign\.orders\)\} orders · \{observedCount\(campaign\.clicks\)\} clicks/);
+  assert.match(rows, /observedCount\(row\.total_orders\)\} orders · \{observedCount\(row\.total_clicks\)\} clicks/);
   assert.match(rows, /minHeight: 40/);
   assert.match(rows, />ACoS</);
 });

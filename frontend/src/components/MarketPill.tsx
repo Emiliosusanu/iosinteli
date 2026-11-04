@@ -20,11 +20,13 @@ export function MarketFlagStack({
   rimColor,
   fillColor,
   textColor,
+  compact = false,
 }: {
   countries: string[];
   rimColor: string;
   fillColor: string;
   textColor: string;
+  compact?: boolean;
 }) {
   const visibleCountries = countries.slice(0, MAX_VISIBLE_MARKET_FLAGS);
   const hiddenCount = Math.max(0, countries.length - visibleCountries.length);
@@ -41,12 +43,14 @@ export function MarketFlagStack({
           key={code}
           style={[
             styles.marketFlagDisc,
+            compact && styles.compactFlagDisc,
             {
               marginLeft: index > 0 ? MARKET_FLAG_GAP : 0,
               zIndex: index + 1,
               borderColor: rimColor,
               backgroundColor: fillColor,
             },
+            compact && index > 0 ? { marginLeft: -6 } : null,
           ]}
         >
           <Text style={styles.marketFlagDiscText} allowFontScaling={false} numberOfLines={1}>
@@ -54,7 +58,7 @@ export function MarketFlagStack({
           </Text>
         </View>
       ))}
-      {hiddenCount > 0 ? (
+      {hiddenCount > 0 && !compact ? (
         <View
           testID="multi-country-overflow"
           style={[
@@ -83,6 +87,8 @@ type MarketPillProps = {
   accessibilityLabel?: string;
   /** Grow/shrink like Overview header trailing (default true). */
   flex?: boolean;
+  compact?: boolean;
+  flagsOnly?: boolean;
 };
 
 /**
@@ -97,11 +103,14 @@ export function MarketPill({
   testID,
   accessibilityLabel,
   flex = true,
+  compact = false,
+  flagsOnly = false,
 }: MarketPillProps) {
   const t = useTheme();
   const resolvedCountries = sortMarketCountryCodes(countries);
   const fullLabel = formatMarketPillLabel(resolvedCountries, currency);
-  const label = resolvedCountries.length > MAX_VISIBLE_MARKET_FLAGS
+  const compactMulti = compact && resolvedCountries.length > 1;
+  const label = compactMulti ? `${resolvedCountries.length} markets\n${currency}` : resolvedCountries.length > MAX_VISIBLE_MARKET_FLAGS
     ? `${resolvedCountries.length} markets${currency ? ` • ${currency}` : ""}`
     : fullLabel;
   const a11y = accessibilityLabel ?? `Profiles, ${fullLabel}`;
@@ -124,13 +133,14 @@ export function MarketPill({
   );
 
   return (
+    <View style={flex ? styles.marketPillHit : undefined}>
     <PressableScale
       testID={testID}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={a11y}
       hitSlop={4}
-      style={flex ? styles.marketPillHit : undefined}
+      style={flex ? { width: "100%" } : undefined}
     >
       <View
         style={[
@@ -155,21 +165,25 @@ export function MarketPill({
         <View style={styles.marketPillInner}>
           <MarketFlagStack
             countries={resolvedCountries}
+            compact={compactMulti}
             rimColor={chrome.flagRim}
             fillColor={chrome.flagFill}
             textColor={chrome.chevron}
           />
-          <Text
-            style={[t.typography.footnote, styles.marketPillText, { color: chrome.label }]}
-            numberOfLines={1}
+          {!flagsOnly ? <Text
+            style={[t.typography.footnote, styles.marketPillText, { color: chrome.label }, compactMulti ? { fontSize: 12, lineHeight: 14 } : undefined]}
+            numberOfLines={compactMulti ? 2 : 1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
             ellipsizeMode="tail"
           >
             {label}
-          </Text>
+          </Text> : null}
           <SFSymbol name="chevron.down" size={10} color={chrome.chevron} />
         </View>
       </View>
     </PressableScale>
+    </View>
   );
 }
 
@@ -204,7 +218,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minWidth: 0,
     fontWeight: "600",
-    letterSpacing: -0.1,
+    letterSpacing: 0,
   },
   marketFlagStack: {
     flexDirection: "row",
@@ -229,6 +243,12 @@ const styles = StyleSheet.create({
     textAlign: "center",
     includeFontPadding: false,
     transform: [{ scale: 1.05 }],
+  },
+  compactFlagDisc: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1,
   },
   marketOverflowBadge: {
     minWidth: 28,
