@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useLocalSearchParams } from "expo-router";
 import {
   View,
   Text,
@@ -57,7 +58,7 @@ import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
 import { CAMPAIGNS_LIST_TIMEOUT_MS, isHomeQueryTimeout, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
-import { compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
+import { compareByAcosAscending, compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
 import { loadCampaignsFilterMemory, normalizeBookAsinList, saveCampaignsFilterMemory } from "@/src/lib/filterMemory";
 import {
   LIST_PERIOD_QUERY_CACHE,
@@ -111,13 +112,14 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 type StateFilter = "all" | "enabled" | "paused";
-type SortKey = "top" | "spend" | "orders" | "acos";
+type SortKey = "top" | "spend" | "orders" | "acos" | "acos-low";
 
 const SORT_CONFIG: { key: SortKey; label: string }[] = [
   { key: "top", label: "ROAS" },
   { key: "spend", label: "Spend" },
   { key: "orders", label: "Orders" },
   { key: "acos", label: "ACoS" },
+  { key: "acos-low", label: "Low ACoS" },
 ];
 
 function CampaignsListSeparator() {
@@ -130,7 +132,7 @@ export default function CampaignsScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const reduceMotion = useReduceMotion();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles } = useApp();
+  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId, isAdminViewer, entityCooldownHours, profiles, profilesLoading, profilesFetching, profilesError, refetchProfiles } = useApp();
   const marketplaceIndex = useSponsoredMarketplaceIndex();
   const { user, guestMode } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
@@ -140,12 +142,15 @@ export default function CampaignsScreen() {
   const [stateFilter, setStateFilter] = useState<StateFilter>("enabled");
   const [sortKey, setSortKey] = useState<SortKey>("acos");
   const [bookAsins, setBookAsins] = useState<string[]>([]);
-  const [filterMemoryReady, setFilterMemoryReady] = useState(false);
+  const memoryScope = `${user?.id ?? "guest"}:${adminFilterUserId ?? "self"}`;
+  const params = useLocalSearchParams<{ flow?: string; sort?: string }>();
+  const hydrationKey = `${memoryScope}:${params.flow ?? ""}`;
+  const [hydratedScope, setHydratedScope] = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [topChromeVisible, setTopChromeVisible] = useState(true);
   const topChromeVisibleRef = useRef(true);
-  const [budgetEdit, setBudgetEdit] = useState<{ id: string; value: number } | null>(null);
+  const [budgetEdit, setBudgetEdit] = useState<{ id: string; value: number; currency: string } | null>(null);
   const [placementAdj, setPlacementAdj] = useState<Record<string, PlacementAdjustments>>({});
   const [placementEdit, setPlacementEdit] = useState<{
     id: string;
@@ -161,6 +166,12 @@ export default function CampaignsScreen() {
 
   useEffect(() => {
     let active = true;
+    setSearch(""); setStateFilter("enabled"); setSortKey("acos"); setBookAsins([]);
+    if (params.flow) {
+      if (SORT_CONFIG.some((s) => s.key === params.sort)) setSortKey(params.sort as SortKey);
+      setHydratedScope(hydrationKey);
+      return;
+    }
     const qa = takePendingQaFilters();
     if (qa) {
       if (qa.campaignsState) setStateFilter(qa.campaignsState);
@@ -172,10 +183,10 @@ export default function CampaignsScreen() {
           `[inteliads:qa] campaigns filters state=${qa.campaignsState ?? "-"} sort=${qa.campaignsSort ?? "-"}`,
         );
       }
-      setFilterMemoryReady(true);
+      setHydratedScope(hydrationKey);
       return;
     }
-    void loadCampaignsFilterMemory()
+    void loadCampaignsFilterMemory(memoryScope)
       .then((mem) => {
         if (!active) return;
         if (mem.stateFilter === "all" || mem.stateFilter === "enabled" || mem.stateFilter === "paused") {
@@ -187,17 +198,17 @@ export default function CampaignsScreen() {
         setBookAsins(normalizeBookAsinList(mem.bookAsins));
       })
       .finally(() => {
-        if (active) setFilterMemoryReady(true);
+        if (active) setHydratedScope(hydrationKey);
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [hydrationKey, memoryScope, params.flow, params.sort]);
 
   useEffect(() => {
-    if (!filterMemoryReady) return;
-    void saveCampaignsFilterMemory({ sortKey, stateFilter, bookAsins });
-  }, [filterMemoryReady, sortKey, stateFilter, bookAsins]);
+    if (hydratedScope !== hydrationKey) return;
+    void saveCampaignsFilterMemory({ sortKey, stateFilter, bookAsins }, memoryScope);
+  }, [hydratedScope, hydrationKey, memoryScope, sortKey, stateFilter, bookAsins]);
 
   const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
   const campaignsListKey = [
@@ -282,9 +293,10 @@ export default function CampaignsScreen() {
           return b.orders - a.orders;
         case "top":
           return (b.roas ?? 0) - (a.roas ?? 0);
+        case "acos-low":
         case "acos":
         default:
-          return compareByAcosSpendImpressionsSync(
+          return (sortKey === "acos-low" ? compareByAcosAscending : compareByAcosSpendImpressionsSync)(
             {
               total_acos: a.acos,
               total_spend: a.spend,
@@ -389,6 +401,18 @@ export default function CampaignsScreen() {
   const filtersActive = sortActive || bookFilterActive;
   const empty = emptyCopy(search, stateFilter, bookFilterActive);
   const showCount = search.trim().length > 0 || stateFilter !== "enabled" || filtersActive;
+
+  if (selectedProfileIds.length === 0 && (profilesLoading || profilesFetching || profilesError)) {
+    return (
+      <AppScreen>
+        <TopBar />
+        {profilesError ? (
+          <RetryState title="Couldn't load accounts" subtitle="Account availability couldn't be verified."
+            onRetry={() => void refetchProfiles()} retrying={profilesFetching} />
+        ) : <ScreenSpinner />}
+      </AppScreen>
+    );
+  }
 
   if (selectedProfileIds.length === 0) {
     return (
@@ -516,37 +540,28 @@ export default function CampaignsScreen() {
             const placementCooldown = getPlacementAdjCooldown(item, entityCooldownHours);
             const marketplaceCountries = countriesForSponsoredCampaign(marketplaceIndex, item);
             const rowCurrency = rowCurrencyOfProfile(profiles, item.amazon_profile_id, primaryCurrency);
+            const openDetails = () => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              router.push({ pathname: "/campaign/[id]", params: { id: item.id, childState: "enabled" } });
+            };
+            const openStrategy = () => {
+              if (blockIfCannotWriteAmazon(writeGuard)) return;
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+              setStrategyEdit({ id: item.id, name: item.name, strategy: item.bidding_strategy });
+            };
             return (
               <AnimatedCard
                 key={item.id}
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  router.push({ pathname: "/campaign/[id]", params: { id: item.id, childState: "enabled" } });
-                }}
-                onLongPress={() => {
-                  if (blockIfCannotWriteAmazon(writeGuard)) return;
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-                  setStrategyEdit({
-                    id: item.id,
-                    name: item.name,
-                    strategy: item.bidding_strategy,
-                  });
-                }}
+                onPress={openDetails}
+                onLongPress={openStrategy}
                 delayLongPress={380}
-                testID={`campaign-row-${item.id}`}
-                accessibilityLabel={campaignA11yLabel(
-                  item,
-                  verdict,
-                  rowCurrency,
-                  marketplaceFlagsA11y(marketplaceCountries),
-                )}
-                accessibilityHint="Long press to change bidding strategy"
               >
                 <ListCard compact>
                   <View style={styles.leadRow}>
                     <View onStartShouldSetResponder={() => true} style={styles.switchWell}>
                       <EntityStateSwitch
                         enabled={item.state === "enabled"}
+                        compact={false}
                         noun="campaign"
                         testID={`campaign-state-${item.id}`}
                         onChange={async (next) => {
@@ -564,12 +579,23 @@ export default function CampaignsScreen() {
                     </View>
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <View style={styles.titleRow}>
+                        <TouchableOpacity
+                          testID={`campaign-row-${item.id}`}
+                          accessibilityRole="button"
+                          accessibilityLabel={campaignA11yLabel(item, verdict, rowCurrency, marketplaceFlagsA11y(marketplaceCountries))}
+                          accessibilityHint="Opens campaign details. Long press to change bidding strategy."
+                          onPress={openDetails}
+                          onLongPress={openStrategy}
+                          delayLongPress={380}
+                          style={{ flex: 1, minWidth: 0, minHeight: 44, justifyContent: "center" }}
+                        >
                         <Text
-                          style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600", flex: 1, minWidth: 0 }]}
+                          style={[t.typography.callout, { color: t.colors.text_primary, fontWeight: "600", minWidth: 0 }]}
                           numberOfLines={1}
                         >
                           {item.name}
                         </Text>
+                        </TouchableOpacity>
                         <CampaignMarketplaceFlags
                           index={marketplaceIndex}
                           profiles={profiles}
@@ -590,7 +616,7 @@ export default function CampaignsScreen() {
                             onPress={() => {
                               if (blockIfCannotWriteAmazon(writeGuard)) return;
                               Haptics.selectionAsync();
-                              setBudgetEdit({ id: item.id, value: Number(item.budget) || 0 });
+                              setBudgetEdit({ id: item.id, value: Number(item.budget) || 0, currency: rowCurrency });
                             }}
                             style={[
                               styles.budgetChip,
@@ -613,6 +639,11 @@ export default function CampaignsScreen() {
                         <CampaignVerdictBadge verdict={verdict} t={t} />
                         <TouchableOpacity
                           testID={`campaign-strategy-${item.id}`}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Bidding strategy: ${strategy}${settingsCooldown.isInCooldown ? ", cooldown" : ""}`}
+                          accessibilityHint="Opens bidding strategy options. Selecting an option writes Amazon Ads."
+                          activeOpacity={0.7}
+                          style={styles.strategyButton}
                           onPress={() => {
                             if (blockIfCannotWriteAmazon(writeGuard)) return;
                             Haptics.selectionAsync();
@@ -622,7 +653,6 @@ export default function CampaignsScreen() {
                               strategy: item.bidding_strategy,
                             });
                           }}
-                          hitSlop={6}
                         >
                           <Text
                             style={[
@@ -634,12 +664,14 @@ export default function CampaignsScreen() {
                                     ? t.colors.tone_primary
                                     : t.colors.text_secondary,
                                 fontWeight: "600",
+                                flexShrink: 1,
                               },
                             ]}
                           >
                             {strategy}
                             {settingsCooldown.isInCooldown ? " · Cooldown" : ""}
                           </Text>
+                          <SFSymbol name="chevron.right" size={10} color={t.colors.text_tertiary} />
                         </TouchableOpacity>
                       </View>
                       <DenseMetricLine
@@ -675,7 +707,7 @@ export default function CampaignsScreen() {
         visible={budgetEdit != null}
         title="Daily budget"
         value={budgetEdit?.value ?? 0}
-        currency={primaryCurrency}
+        currency={budgetEdit?.currency ?? primaryCurrency}
         kind="money"
         testID={budgetEdit ? `campaign-budget-editor-${budgetEdit.id}` : undefined}
         onClose={() => setBudgetEdit(null)}
@@ -959,17 +991,11 @@ function AnimatedCard({
   onPress,
   onLongPress,
   delayLongPress,
-  testID,
-  accessibilityLabel,
-  accessibilityHint,
 }: {
   children: React.ReactNode;
   onPress: () => void;
   onLongPress?: () => void;
   delayLongPress?: number;
-  testID?: string;
-  accessibilityLabel?: string;
-  accessibilityHint?: string;
 }) {
   const reduceMotion = useReduceMotion();
   const scale = useRef(new Animated.Value(1)).current;
@@ -977,10 +1003,7 @@ function AnimatedCard({
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
       <TouchableOpacity
-        testID={testID}
-        accessibilityRole="button"
-        accessibilityLabel={accessibilityLabel}
-        accessibilityHint={accessibilityHint}
+        accessible={false}
         activeOpacity={1}
         delayLongPress={delayLongPress}
         onPressIn={() => {
@@ -1053,13 +1076,18 @@ function PlacementSharePills({
           key={field.key}
           testID={`campaign-placement-${field.key}-${item.id}`}
           label={field.label}
+          accessibilityLabel={`${field.title} placement bid, ${adjustments ? (
+            adjustments[field.key] == null || !Number.isFinite(Number(adjustments[field.key]))
+              ? "unavailable"
+              : formatPercent(Number(adjustments[field.key]), 0)
+          ) : "not loaded"}`}
           compact
           value={
             adjustments
               ? adjustments[field.key] == null || !Number.isFinite(Number(adjustments[field.key]))
                 ? "—"
                 : formatPercent(Number(adjustments[field.key]), 0)
-              : "…"
+              : "Load"
           }
           cooldown={
             // Per-slot stamp with settings hours — never default hours via undefined.
@@ -1113,7 +1141,7 @@ const styles = StyleSheet.create({
   },
   cardHeader: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
   leadRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  switchWell: { minWidth: 42, alignItems: "flex-start", justifyContent: "center" },
+  switchWell: { minWidth: 64, minHeight: layout.minTap, alignItems: "center", justifyContent: "center" },
   titleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   metaRow: {
     flexDirection: "row",
@@ -1123,6 +1151,8 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   budgetChip: {
+    minHeight: layout.minTap,
+    minWidth: layout.minTap,
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
@@ -1130,6 +1160,16 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 4,
+  },
+  strategyButton: {
+    minHeight: layout.minTap,
+    minWidth: layout.minTap,
+    maxWidth: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: spacing.xs,
+    flexShrink: 1,
   },
   placementTaps: {
     flexDirection: "row",

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  AppState,
   Modal,
   Platform,
   Pressable,
@@ -34,7 +35,8 @@ import { PressableScale } from "@/src/components/Motion";
 import { countryFlagEmoji, marketPillCountryLabel, sortMarketCountryCodes } from "@/src/lib/accountsUi";
 import { formatDateRangeLabel, rangePresets } from "@/src/lib/format";
 import { playHaptic } from "@/src/lib/hapticPolicy";
-import { motion } from "@/src/lib/motion";
+import { motion, type SyncChromeState } from "@/src/lib/motion";
+import { nextSyncFeedback, type SyncFeedbackState, type SyncReadEvidence } from "@/src/lib/syncFeedback";
 import {
   dashboard,
   layout,
@@ -115,6 +117,7 @@ export type OverviewHeaderV3Props = {
    * the overlapping-flag market pill. Prefer this over `marketFlags`.
    */
   marketCountries?: string[];
+  selectedMarketCountries?: string[];
   /** null means every enabled marketplace. */
   selectedMarketCountry?: string | null;
   onMarketSelectionChange?: (country: string | null) => void;
@@ -125,6 +128,10 @@ export type OverviewHeaderV3Props = {
   onCurrencyPress?: () => void;
   syncColor: string;
   syncCompact: string;
+  syncState?: SyncChromeState;
+  syncRead?: SyncReadEvidence;
+  syncReadContextKey?: string;
+  syncVisible?: boolean;
   syncA11y: string;
   onSyncPress: () => void;
   periodLabel: string;
@@ -172,34 +179,6 @@ export function useOverviewHeaderScroll() {
     },
   });
   return { scrollY, onScroll, scrollEventThrottle: 16 as const };
-}
-
-function SyncDot({ color, active }: { color: string; active: boolean }) {
-  const reduceMotion = useReduceMotion();
-  const pulse = useSharedValue(1);
-  const style = useAnimatedStyle(() => ({
-    opacity: pulse.get(),
-    transform: [{ scale: 0.92 + pulse.get() * 0.08 }],
-  }));
-
-  useEffect(() => {
-    if (!active || reduceMotion) {
-      cancelAnimation(pulse);
-      pulse.set(1);
-      return;
-    }
-    pulse.set(1);
-    pulse.set(
-      withRepeat(withTiming(0.55, { duration: motion.fastState, easing: EASE }), -1, true),
-    );
-    return () => {
-      cancelAnimation(pulse);
-    };
-  }, [active, pulse, reduceMotion]);
-
-  return (
-    <Animated.View style={[styles.syncDot, { backgroundColor: color }, style]} />
-  );
 }
 
 const EASE_GLOW = Easing.inOut(Easing.ease);
@@ -322,6 +301,10 @@ function StadiumLateralGlow({
         style={[StyleSheet.absoluteFill, edgeStyle]}
         testID={ready ? "home-header-glow-ready" : "home-header-glow-primary"}
       >
+        <View style={[StyleSheet.absoluteFill, { borderWidth: 1.5, borderRadius: 28,
+          borderColor: ready ? successColor : color,
+          shadowColor: ready ? successColor : color, shadowOpacity: 0.3, shadowRadius: 12,
+          shadowOffset: { width: 0, height: 0 } }]} />
         <StadiumSideGlow color={ready ? successColor : color} side="left" bloomStyle={bloomStyle} />
         <StadiumSideGlow color={ready ? successColor : color} side="right" bloomStyle={bloomStyle} />
       </Animated.View>
@@ -427,7 +410,7 @@ function PeriodToggle({
         style={[
           styles.periodPill,
           {
-            backgroundColor: chrome.colors.chrome_selected,
+            backgroundColor: t.colors.control_selected,
             borderColor: "transparent",
             borderWidth: 0,
           },
@@ -478,7 +461,7 @@ function PeriodToggle({
                 name={option.symbol}
                 size={iconSize}
                 color={
-                  active ? chrome.colors.chrome_selected_fg : chrome.colors.text_secondary
+                  active ? "#FFFFFF" : chrome.colors.text_secondary
                 }
               />
               {active ? (
@@ -490,7 +473,7 @@ function PeriodToggle({
                     styles.periodLabel,
                     compact && styles.periodLabelCompact,
                     {
-                      color: chrome.colors.chrome_selected_fg,
+                      color: "#FFFFFF",
                       fontSize: labelSize,
                     },
                   ]}
@@ -541,7 +524,13 @@ function CustomRangeSheet({
     <>
       <View style={styles.sheetHeader}>
         <Text style={[t.typography.title3, { color: t.colors.text_primary }]}>Custom range</Text>
-        <TouchableOpacity onPress={onClose} hitSlop={10} accessibilityRole="button" accessibilityLabel="Done">
+        <TouchableOpacity
+          testID="home-custom-done"
+          onPress={onClose}
+          style={styles.dateSheetDone}
+          accessibilityRole="button"
+          accessibilityLabel="Done"
+        >
           <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Done</Text>
         </TouchableOpacity>
       </View>
@@ -552,6 +541,9 @@ function CustomRangeSheet({
             <TouchableOpacity
               key={preset.key}
               testID={`home-custom-preset-${preset.key}`}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              accessibilityLabel={`${preset.range.label}, ${preset.range.start} to ${preset.range.end}`}
               style={[styles.presetRow, { borderBottomColor: t.colors.separator }]}
               onPress={() => onPick(preset.range)}
               activeOpacity={0.6}
@@ -578,6 +570,8 @@ function CustomRangeSheet({
           </View>
           <TouchableOpacity
             testID="home-custom-apply"
+            accessibilityRole="button"
+            accessibilityLabel="Apply custom date range"
             onPress={() => {
               if (!/^\d{4}-\d{2}-\d{2}$/.test(customStart) || !/^\d{4}-\d{2}-\d{2}$/.test(customEnd)) return;
               if (customStart > customEnd) return;
@@ -970,6 +964,7 @@ export function OverviewHeaderCompactSticky({
 export function OverviewHeaderV3({
   profileLabel,
   marketCountries,
+  selectedMarketCountries,
   marketFlags = [],
   selectedMarketCountry = null,
   onMarketSelectionChange,
@@ -978,6 +973,10 @@ export function OverviewHeaderV3({
   onCurrencyPress,
   syncColor,
   syncCompact,
+  syncState,
+  syncRead,
+  syncReadContextKey = "",
+  syncVisible = true,
   syncA11y,
   onSyncPress,
   periodLabel,
@@ -1008,12 +1007,12 @@ export function OverviewHeaderV3({
   const periodShift = useSharedValue(0);
 
   const resolvedCountries = sortMarketCountryCodes(marketCountries ?? []);
-  const displayedCountries = selectedMarketCountry
+  const displayedCountries = selectedMarketCountries ?? (selectedMarketCountry
     ? resolvedCountries.filter((country) => country === selectedMarketCountry.toUpperCase())
-    : resolvedCountries;
-  const hasMarketPill = resolvedCountries.length > 0;
+    : resolvedCountries);
+  const hasMarketPill = displayedCountries.length > 0;
   // Back-compat: emoji-only callers still get a flag cue without the glass pill.
-  const legacyFlags = !hasMarketPill && marketFlags.length > 0 ? marketFlags : [];
+  const legacyFlags = marketCountries == null && !hasMarketPill && marketFlags.length > 0 ? marketFlags : [];
 
   const periodMotion = useAnimatedStyle(() => ({
     opacity: periodOpacity.get(),
@@ -1086,32 +1085,32 @@ export function OverviewHeaderV3({
   });
 
   const syncBusy = syncCompact === "Refreshing" || syncCompact === "Syncing";
-  /** Busy refresh uses lateral stadium glow — not the wide orange "Refreshing" pill. */
-  const showRefreshGlow = syncBusy || periodRefreshing;
-  const syncFailedOrStale =
-    syncCompact === "Failed" || syncCompact.toLocaleLowerCase().includes("stale");
-  const [syncReadyVisible, setSyncReadyVisible] = useState(false);
-  const wasRefreshBusy = useRef(false);
-  const readyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [foreground, setForeground] = useState(AppState.currentState === "active");
   useEffect(() => {
-    if (readyTimer.current) clearTimeout(readyTimer.current);
-    if (showRefreshGlow) {
-      wasRefreshBusy.current = true;
-      setSyncReadyVisible(false);
-      return;
-    }
-    if (wasRefreshBusy.current && !syncFailedOrStale) {
-      wasRefreshBusy.current = false;
-      setSyncReadyVisible(true);
-      readyTimer.current = setTimeout(() => setSyncReadyVisible(false), reduceMotion ? 700 : 1150);
-    } else {
-      wasRefreshBusy.current = false;
-      setSyncReadyVisible(false);
-    }
-    return () => {
-      if (readyTimer.current) clearTimeout(readyTimer.current);
-    };
-  }, [showRefreshGlow, syncFailedOrStale, reduceMotion]);
+    const subscription = AppState.addEventListener("change", state => setForeground(state === "active"));
+    return () => subscription.remove();
+  }, []);
+  /** Busy refresh uses lateral stadium glow — not the wide orange "Refreshing" pill. */
+  const showRefreshGlow = syncVisible && foreground && (syncRead?.fetching ?? (syncBusy || periodRefreshing));
+  const syncFailedOrStale =
+    syncState === "failed" || syncState === "stale" ||
+    syncCompact === "Failed" || syncCompact === "Refresh failed" ||
+    syncCompact.toLocaleLowerCase().includes("stale");
+  const [syncReadyVisible, setSyncReadyVisible] = useState(false);
+  const previousRead = useRef<SyncFeedbackState | null>(null);
+  const readFailed = syncFailedOrStale || (syncRead?.failed ?? false);
+  const readUpdatedAt = syncRead?.updatedAt ?? 0;
+  const readReceived = syncRead?.received;
+  useEffect(() => {
+    const next = nextSyncFeedback(previousRead.current, syncReadContextKey, {
+      fetching: showRefreshGlow, failed: readFailed, updatedAt: readUpdatedAt, received: readReceived,
+    }, syncVisible && foreground && expandedInteractive);
+    previousRead.current = next;
+    setSyncReadyVisible(next.phase === "success");
+    if (next.phase !== "success") return;
+    const timer = setTimeout(() => setSyncReadyVisible(false), reduceMotion ? 250 : 700);
+    return () => clearTimeout(timer);
+  }, [expandedInteractive, foreground, readFailed, readReceived, readUpdatedAt, reduceMotion, showRefreshGlow, syncReadContextKey, syncVisible]);
   const syncNeedsLabel =
     !syncBusy &&
     (syncFailedOrStale ||
@@ -1123,7 +1122,7 @@ export function OverviewHeaderV3({
   const ownsSheet = onCustomOpenChange == null;
 
   return (
-    <View style={{ paddingTop: Math.max(insets.top - 4, 0) }} testID="home-header-expanded">
+    <View style={{ paddingTop: Math.max(insets.top, 0) }} testID="home-header-expanded">
       <View style={styles.shellWrap}>
         <GlassPanel
           testID="home-header-v3"
@@ -1150,7 +1149,7 @@ export function OverviewHeaderV3({
             {hasMarketPill ? (
               <MarketPill
                 testID="home-market-pill"
-                countries={displayedCountries.length ? displayedCountries : resolvedCountries}
+                countries={displayedCountries}
                 currency={currency}
                 onPress={onMarketSelectionChange ? () => setMarketOpen(true) : onProfilePress}
               />
@@ -1225,36 +1224,12 @@ export function OverviewHeaderV3({
               </>
             )}
 
-            {showRefreshGlow || syncReadyVisible ? (
+            {syncNeedsLabel ? (
               <PressableScale
                 onPress={onSyncPress}
                 accessibilityRole="button"
                 accessibilityLabel={syncA11y}
-                accessibilityValue={{ text: syncReadyVisible ? "Ready" : "Updating" }}
-                hitSlop={6}
-                style={[
-                  styles.syncChip,
-                  styles.syncChipDot,
-                  {
-                    borderColor: (syncReadyVisible ? t.colors.tone_good : t.colors.tone_primary) + "44",
-                    backgroundColor: (syncReadyVisible ? t.colors.tone_good : t.colors.tone_primary) + "16",
-                    marginLeft: "auto",
-                    ...chrome.shadow.stadium,
-                  },
-                ]}
-                testID={syncReadyVisible ? "home-sync-ready" : "home-sync-loading"}
-              >
-                {syncReadyVisible ? (
-                  <SFSymbol name="checkmark" size={15} color={t.colors.tone_good} />
-                ) : (
-                  <SyncDot color={t.colors.tone_primary} active />
-                )}
-              </PressableScale>
-            ) : syncNeedsLabel ? (
-              <PressableScale
-                onPress={onSyncPress}
-                accessibilityRole="button"
-                accessibilityLabel={syncA11y}
+                containerStyle={{ minHeight: 46, flexShrink: 1, minWidth: 0, marginLeft: "auto" }}
                 hitSlop={6}
                 style={[
                   styles.syncChip,
@@ -1262,12 +1237,11 @@ export function OverviewHeaderV3({
                   {
                     borderColor: syncColor + "33",
                     backgroundColor: syncColor + "18",
-                    marginLeft: "auto",
                     ...chrome.shadow.stadium,
                   },
                 ]}
               >
-                <SyncDot color={syncColor} active={false} />
+                <SFSymbol name="exclamationmark.triangle" size={13} color={syncColor} />
                 <Text style={[t.typography.caption2, styles.syncText, { color: syncColor }]} numberOfLines={1}>
                   {syncCompact}
                 </Text>
@@ -1294,7 +1268,7 @@ export function OverviewHeaderV3({
             canCustom={canCustom}
             onCustomPress={() => setCustomOpen(true)}
             periodMotion={periodMotion}
-            suppressRefreshingCaption={showRefreshGlow}
+            suppressRefreshingCaption
           />
 
           <PeriodToggle
@@ -1305,8 +1279,8 @@ export function OverviewHeaderV3({
         </Animated.View>
         </GlassPanel>
         <StadiumLateralGlow
-          busy={showRefreshGlow}
-          ready={syncReadyVisible}
+          busy={showRefreshGlow && expandedInteractive}
+          ready={syncReadyVisible && expandedInteractive}
           failedOrStale={syncFailedOrStale}
           color={t.colors.tone_primary}
           successColor={t.colors.tone_good}
@@ -1527,7 +1501,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
   },
   syncChipWide: {
-    maxWidth: 120,
+    maxWidth: 140,
     paddingHorizontal: 12,
   },
   syncDot: {
@@ -1782,7 +1756,15 @@ const styles = StyleSheet.create({
     borderRadius: dashboard.chipRadius,
     borderCurve: "continuous",
     minHeight: layout.minTap,
+    minWidth: layout.minTap,
     alignItems: "center",
     justifyContent: "center",
+  },
+  dateSheetDone: {
+    minWidth: layout.minTap,
+    minHeight: layout.minTap,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 8,
   },
 });

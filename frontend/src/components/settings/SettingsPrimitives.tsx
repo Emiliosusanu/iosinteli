@@ -4,6 +4,7 @@ import {
   StyleSheet,
   Switch,
   Text,
+  useWindowDimensions,
   View,
   type AccessibilityRole,
 } from "react-native";
@@ -140,6 +141,8 @@ export function SettingsRow({
 }: RowBase & { onPress?: () => void }) {
   const t = useTheme();
   const spoken = accessibilityLabel ?? [label, subtitle, value].filter(Boolean).join(". ");
+  const { fontScale } = useWindowDimensions();
+  const stackedValue = Boolean(value && (value.length > 14 || fontScale >= 1.4));
   const labelColor = destructive ? t.colors.tone_danger : t.colors.text_primary;
   const role: AccessibilityRole = onPress ? "button" : "text";
 
@@ -174,8 +177,13 @@ export function SettingsRow({
             {subtitle}
           </Text>
         ) : null}
+        {value && stackedValue ? (
+          <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}>
+            {value}
+          </Text>
+        ) : null}
       </View>
-      {value ? (
+      {value && !stackedValue ? (
         <Text
           numberOfLines={2}
           ellipsizeMode="tail"

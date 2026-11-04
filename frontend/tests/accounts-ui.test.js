@@ -25,6 +25,7 @@ import {
   isReadyToEnable,
   matchesReadyDefaultFilter,
   multiCountryCodes,
+  selectedMarketCountryCodes,
   multiCountryFlagIcons,
   formatMarketPillLabel,
   marketPillCountryLabel,
@@ -488,7 +489,7 @@ test("formatMarketPillLabel builds Overview market pill copy", () => {
 test("TopBar uses shared MarketPill for multi-country trailing", () => {
   assert.match(topBar, /from "\.\/MarketPill"/);
   assert.match(topBar, /<MarketPill/);
-  assert.match(topBar, /multiCountryCodes/);
+  assert.match(topBar, /selectedMarketCountryCodes\(profiles, selectedProfileIds\)/);
   assert.match(topBar, /formatMarketPillLabel/);
   assert.match(topBar, /hasMarketPill/);
   assert.match(topBar, /testID="profile-selector-btn"/);

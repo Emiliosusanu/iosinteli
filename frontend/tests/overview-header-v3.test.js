@@ -43,9 +43,9 @@ test("OverviewHeaderV3 uses lateral stadium glow instead of wide Refreshing pill
   assert.match(header, /StadiumLateralGlow/);
   assert.match(header, /home-header-refresh-glow/);
   assert.match(header, /showRefreshGlow/);
-  assert.match(header, /home-sync-loading/);
-  assert.match(header, /home-sync-ready/);
+  assert.doesNotMatch(header, /<SyncDot|function SyncDot/);
   assert.match(header, /suppressRefreshingCaption/);
+  assert.match(header, /suppressRefreshingCaption\s*\n/);
   assert.match(header, /expo-linear-gradient/);
   // Quiet primary edge shadow, not neon wash / warning-success animation.
   assert.match(header, /duration: 2100/);
@@ -61,11 +61,9 @@ test("OverviewHeaderV3 uses lateral stadium glow instead of wide Refreshing pill
   assert.doesNotMatch(header, /\$\{mid\}E6/);
   assert.doesNotMatch(header, /shadowOpacity:\s*0\.85/);
   // Busy sync must not paint the orange "Refreshing"/"Syncing" label chip.
-  assert.match(header, /showRefreshGlow \|\| syncReadyVisible \? \(/);
-  assert.doesNotMatch(
-    header.slice(header.indexOf("showRefreshGlow || syncReadyVisible ? ("), header.indexOf(") : (", header.indexOf("showRefreshGlow || syncReadyVisible ? (")) + 40),
-    /\{syncCompact\}/,
-  );
+  assert.match(header, /busy=\{showRefreshGlow && expandedInteractive\}/);
+  assert.doesNotMatch(header, /home-sync-loading|home-sync-ready|<SyncDot/);
+  assert.match(header, /\{syncNeedsLabel \? \(/);
 });
 
 test("OverviewHeaderV3 moves from primary loading glow to brief green ready state", () => {
@@ -74,14 +72,17 @@ test("OverviewHeaderV3 moves from primary loading glow to brief green ready stat
   assert.match(header, /failedOrStale/);
   assert.match(header, /home-header-glow-primary/);
   assert.match(header, /home-header-glow-ready/);
-  assert.match(header, /setTimeout\(\(\) => setSyncReadyVisible\(false\), reduceMotion \? 700 : 1150\)/);
+  assert.match(header, /setTimeout\(\(\) => setSyncReadyVisible\(false\), reduceMotion \? 250 : 700\)/);
+  assert.match(header, /nextSyncFeedback\(previousRead.current, syncReadContextKey/);
+  assert.match(header, /syncVisible && foreground && expandedInteractive/);
+  assert.doesNotMatch(header, /wasRefreshBusy/);
   assert.match(header, /StadiumSideGlow/);
   assert.match(header, /EASE_GLOW/);
   assert.doesNotMatch(header, /warningColor|greenMix|home-header-glow-amber/);
   assert.match(header, /hexWithAlpha\(color, 0\.48\)/);
   assert.doesNotMatch(header, /hexWithAlpha\(color, 1\)/);
   // A healthy idle state is visually quiet after the transient ready check.
-  assert.match(header, /\) : syncNeedsLabel \? \(/);
+  assert.match(header, /\{syncNeedsLabel \? \(/);
   assert.match(header, /\) : null\}/);
 });
 
@@ -106,15 +107,15 @@ test("OverviewHeaderV3 expanded shell matches build 209 stadium chrome", () => {
   assert.match(header, /maxWidth:\s*"100%"/);
   assert.match(header, /fontSize: compact \? 14 : 17/);
   assert.match(header, /Updating…/);
-  assert.match(header, /chrome_selected/);
+  assert.match(header, /backgroundColor: t\.colors\.tone_primary/);
   assert.match(header, /sun\.max/);
   assert.match(header, /calendar\.badge\.clock/);
-  // Scheme-synced shell + stadium rail tokens (black Month pill retained).
+  // Scheme-synced shell + stadium rail tokens.
   assert.match(header, /chrome\.colors\.chrome_rail/);
   assert.match(header, /chrome\.colors\.background_secondary/);
 });
 
-test("OverviewHeaderV3 market pill uses separated circular flag discs", () => {
+test("OverviewHeaderV3 market pill uses separated unclipped flag tiles", () => {
   assert.match(header, /from "@\/src\/components\/MarketPill"/);
   assert.match(header, /<MarketPill/);
   assert.match(header, /home-market-pill/);
@@ -127,7 +128,7 @@ test("OverviewHeaderV3 market pill uses separated circular flag discs", () => {
   assert.match(marketPill, /MARKET_FLAG_GAP/);
   assert.match(marketPill, /marginLeft: index > 0 \? MARKET_FLAG_GAP/);
   assert.match(marketPill, /zIndex: index \+ 1/);
-  assert.match(marketPill, /borderRadius: MARKET_FLAG_SIZE \/ 2/);
+  assert.match(marketPill, /borderRadius: 6/);
   assert.match(marketPill, /market_pill_flag_rim/);
   assert.match(marketPill, /overflow:\s*"hidden"/);
   assert.match(marketPill, /formatMarketPillLabel/);
@@ -138,11 +139,14 @@ test("OverviewHeaderV3 market pill uses separated circular flag discs", () => {
   assert.match(marketPill, /market_pill_stroke/);
   assert.doesNotMatch(marketPill, /tint="dark"/);
   assert.match(marketPill, /chevron\.down/);
-  assert.match(marketPill, /MAX_VISIBLE_MARKET_FLAGS = 2/);
-  assert.match(marketPill, /countries\.slice\(0, MAX_VISIBLE_MARKET_FLAGS\)/);
+  assert.match(marketPill, /MAX_VISIBLE_MARKET_FLAGS = 4/);
+  assert.match(marketPill, /resolvedCountries\.slice\(0, visibleLimit\)/);
   assert.match(marketPill, /multi-country-overflow/);
   assert.match(marketPill, /\+\{hiddenCount\}/);
-  assert.match(marketPill, /\$\{resolvedCountries\.length\} markets/);
+  assert.match(marketPill, /resolvedCountries\.length > 1 \? currency : fullLabel/);
+  assert.match(header, /const hasMarketPill = displayedCountries\.length > 0/);
+  assert.doesNotMatch(header, /countries=\{displayedCountries\.length \? displayedCountries : resolvedCountries\}/);
+  assert.doesNotMatch(marketPill, /marginLeft: -6|hiddenCount > 0 && !compact/);
   // Currency merged into pill — no separate currency chip when markets present.
   const marketStart = header.indexOf("hasMarketPill ? (");
   const marketElse = header.indexOf(") : (", marketStart);
@@ -156,15 +160,20 @@ test("OverviewHeaderV3 market pill uses separated circular flag discs", () => {
   assert.match(home, /multiCountryCodes/);
 });
 
-test("Gross updating status breathes inside a fixed lane without moving widgets", () => {
+test("Gross reserves a compact caption lane without an updating label or dot", () => {
   assert.match(home, /function GrossStatusSlot/);
   assert.match(home, /testID="home-gross-status"/);
-  assert.match(home, /testID="home-gross-status-glow"/);
-  assert.match(home, /height:\s*34/);
-  assert.match(home, /withRepeat/);
-  assert.match(home, /transform:\s*\[\{ scale:/);
+  assert.doesNotMatch(home, /testID="home-gross-status-glow"|grossStatusDot/);
+  assert.match(home, /minHeight:\s*18/);
   assert.match(home, /caption=\{financeCaption\}/);
-  assert.match(home, /updating=\{periodRefreshing\}/);
+  assert.doesNotMatch(home, /updating=\{periodRefreshing\}/);
+});
+
+test("Gross uses border feedback instead of an Updating layout label", () => {
+  assert.match(home, /SyncGlowFrame/);
+  assert.match(home, /contextKey=\{homeReadContextKey\}/);
+  assert.match(home, /failed: viewingAsAdmin \? bootstrapQ.isError/);
+  assert.doesNotMatch(home, /periodRefreshing\s*\? "Updating…"/);
 });
 
 test("OverviewHeaderV3 lets users select all markets or one detected marketplace", () => {
@@ -191,7 +200,7 @@ test("Overview collapsing header uses Reanimated scroll shared value", () => {
   assert.match(header, /HANDOFF_END/);
   assert.doesNotMatch(header, /useState\(.*scrollY/);
   assert.match(home, /Animated\.ScrollView/);
-  assert.match(home, /OverviewHeaderCompactSticky/);
+  assert.doesNotMatch(home, /OverviewHeaderCompactSticky/);
   assert.match(home, /useOverviewHeaderScroll/);
   assert.doesNotMatch(home, /stickyHeaderIndices/);
 });
@@ -222,12 +231,12 @@ test("Compact sticky chrome is full-bleed under the status bar", () => {
   assert.doesNotMatch(header, /compactRoot:\s*\{[^}]*bottom:\s*0/);
 });
 
-test("Compact sticky mounts outside GestureDetector on Overview", () => {
-  assert.match(home, /OverviewHeaderCompactSticky/);
+test("Home header scrolls away without mounting compact sticky chrome", () => {
+  assert.doesNotMatch(home, /OverviewHeaderCompactSticky/);
   assert.match(home, /GestureDetector/);
   const stickyAt = home.indexOf("<OverviewHeaderCompactSticky");
   const gestureAt = home.indexOf("<GestureDetector gesture={periodSwipe}>");
-  assert.ok(stickyAt >= 0 && gestureAt >= 0 && stickyAt < gestureAt);
+  assert.ok(stickyAt === -1 && gestureAt >= 0);
 });
 
 test("theme exposes header V3 tokens", () => {

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
   Pressable,
 } from "react-native";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SubScreen } from "@/src/components/SubScreen";
 import { EntityStateSwitch, assertNotViewingAsOtherUser } from "@/src/components/Mutations";
@@ -22,11 +22,15 @@ import { useAuth } from "@/src/contexts/AuthContext";
 import { useTheme, acosTone, dashboard, toneColor, useReduceMotion, layout, spacing } from "@/src/lib/theme";
 import { applyOptimisticEntityState, invalidateEntityStateQueries, revertOptimisticEntityState } from "@/src/lib/invalidateAds";
 import { updateAdGroupState } from "@/src/lib/mutations";
-import { AD_GROUPS_LIST_LIMIT, fetchAdGroups } from "@/src/lib/queries";
-import { statusLabel } from "@/src/lib/campaigns";
+import { AD_GROUPS_LIST_LIMIT, fetchAdGroups, fetchOverviewActiveAdGroups } from "@/src/lib/queries";
+import { matchesEntityStateFilter, statusLabel } from "@/src/lib/campaigns";
+import { optionalMetric } from "@/src/lib/metricEvidence";
+import { enabledSelectedProfileIds } from "@/src/lib/booksProfileScope";
+import { compareByAcosAscending, compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
+import { overviewReadLabel } from "@/src/lib/overviewReadEvidence";
 import { formatCurrency, formatInt, formatPercent, safeDivide } from "@/src/lib/format";
-import { LIST_PERIOD_QUERY_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
-import { HOME_QUERY_TIMEOUT_MS, isHomeQueryTimeout, withQueryTimeout } from "@/src/lib/queryTimeout";
+import { LIST_PERIOD_QUERY_CACHE } from "@/src/lib/periodQuery";
+import { HOME_QUERY_TIMEOUT_MS, isHomeQueryTimeout, withAbortableQueryTimeout, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { EmptyState, ToneDot, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard, RetryState } from "@/src/components/Primitives";
 import { IOSSearchBar, IOSSegmentedControl } from "@/src/components/ios/Native";
 
@@ -35,12 +39,13 @@ if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 type StateFilter = "all" | "enabled" | "paused";
-type SortKey = "spend" | "orders" | "acos" | "ctr";
+type SortKey = "spend" | "orders" | "acos" | "acos-high" | "ctr";
 
 const SORT_CONFIG: { key: SortKey; label: string }[] = [
   { key: "spend", label: "Spend" },
   { key: "orders", label: "Orders" },
   { key: "acos", label: "ACoS" },
+  { key: "acos-high", label: "High ACoS" },
   { key: "ctr", label: "CTR" },
 ];
 
@@ -57,14 +62,16 @@ function adGroupContentLabel(item: any): { label: string; tone: "primary" | "goo
 }
 
 function adGroupVerdict(item: any): { label: string; tone: "good" | "warning" | "danger" | "inactive" } {
-  const spend = Number(item.total_spend) || 0;
-  const orders = Number(item.total_orders) || 0;
-  const sales = Number(item.total_sales) || 0;
-  const acos = Number(item.total_acos) || 0;
-  if (spend > 0 && orders === 0) return { label: "Wasting spend", tone: "danger" };
-  if (sales > 0 && acos > 35) return { label: "High ACoS", tone: "warning" };
-  if (sales > 0) return { label: "Profitable", tone: "good" };
-  return { label: "No spend yet", tone: "inactive" };
+  const spend = optionalMetric(item.total_spend);
+  const orders = optionalMetric(item.total_orders);
+  const sales = optionalMetric(item.total_sales);
+  const acos = optionalMetric(item.total_acos);
+  if (spend != null && spend > 0 && orders === 0) return { label: "Spend without orders", tone: "danger" };
+  if (sales != null && sales > 0 && acos != null) {
+    return acos > 35 ? { label: "ACoS >35%", tone: "warning" } : { label: "ACoS ≤35%", tone: "good" };
+  }
+  if (spend === 0) return { label: "No spend in period", tone: "inactive" };
+  return { label: "Metrics incomplete", tone: "inactive" };
 }
 
 function emptyCopy(search: string, stateFilter: StateFilter, rawCount: number) {
@@ -88,20 +95,37 @@ export default function AdGroupsScreen() {
   const router = useRouter();
   const reduceMotion = useReduceMotion();
   const queryClient = useQueryClient();
-  const { selectedProfileIds, primaryCurrency, dateRange, adminFilterUserId } = useApp();
+  const { selectedProfileIds, profiles, primaryCurrency, dateRange, adminFilterUserId } = useApp();
   const { user } = useAuth();
   const viewAsOtherUser = Boolean(adminFilterUserId && adminFilterUserId !== user?.id);
-  const scopeProfiles = useMemo(() => sortedProfileIds(selectedProfileIds), [selectedProfileIds]);
+  const scopeProfiles = useMemo(() => enabledSelectedProfileIds(profiles, selectedProfileIds).sort(), [profiles, selectedProfileIds]);
+  const params = useLocalSearchParams<{ flow?: string; enabledParents?: string; sort?: string }>();
+  const contextKey = `${user?.id ?? "guest"}:${adminFilterUserId ?? "self"}:${params.flow ?? ""}:${params.enabledParents ?? ""}:${params.sort ?? ""}`;
+  const [readyContext, setReadyContext] = useState(contextKey);
+  const [enabledParents, setEnabledParents] = useState(params.enabledParents === "1");
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<StateFilter>("enabled");
-  const [sortKey, setSortKey] = useState<SortKey>("spend");
+  const [sortKey, setSortKey] = useState<SortKey>(params.sort === "acos-high" ? "acos-high" : "spend");
   const [filterOpen, setFilterOpen] = useState(false);
 
-  const { data = [], isLoading, isError, isRefetching, error, refetch } = useQuery({
-    queryKey: ["ad-groups-list", scopeProfiles, dateRange.start, dateRange.end],
-    queryFn: ({ signal }) =>
-      withQueryTimeout(
+  useEffect(() => {
+    setSearch(""); setStateFilter("enabled");
+    setSortKey(params.sort === "acos-high" ? "acos-high" : "spend");
+    setEnabledParents(params.enabledParents === "1");
+    setReadyContext(contextKey);
+  }, [contextKey, params.enabledParents, params.sort]);
+
+  const { data = [], dataUpdatedAt, isFetching, isLoading, isError, isRefetching, error, refetch } = useQuery({
+    queryKey: ["ad-groups-list-v2", user?.id, adminFilterUserId ?? "self", scopeProfiles, dateRange.start, dateRange.end, primaryCurrency, enabledParents],
+    queryFn: ({ signal }) => {
+      if (enabledParents) return withAbortableQueryTimeout(readSignal => fetchOverviewActiveAdGroups(scopeProfiles, {
+        start: dateRange.start, end: dateRange.end, limit: AD_GROUPS_LIST_LIMIT,
+        filterUserId: adminFilterUserId, signal: readSignal,
+      }), HOME_QUERY_TIMEOUT_MS * 2, signal);
+      // Customer preview must not fall back to the administrator's own RLS catalog.
+      if (viewAsOtherUser) throw new Error("Customer ad groups require the enabled-parents view");
+      return withQueryTimeout(
         fetchAdGroups(scopeProfiles, undefined, {
           start: dateRange.start,
           end: dateRange.end,
@@ -110,25 +134,25 @@ export default function AdGroupsScreen() {
         }),
         HOME_QUERY_TIMEOUT_MS * 2,
         signal,
-      ),
-    enabled: scopeProfiles.length > 0,
+      );
+    },
+    enabled: !!user?.id && readyContext === contextKey && scopeProfiles.length > 0,
     ...LIST_PERIOD_QUERY_CACHE,
     retry: false,
   });
   const listTruncated = !isError && data.length >= AD_GROUPS_LIST_LIMIT;
 
   const filtered = useMemo(() => {
+    if (readyContext !== contextKey) return [];
     const needle = search.trim().toLowerCase();
-    let arr = (data as any[]).filter((item) => {
-      if (stateFilter === "enabled") return item.state === "enabled";
-      if (stateFilter === "paused") return item.state === "paused";
-      return true;
-    });
+    let arr = (isError ? [] : data as any[]).filter((item) => matchesEntityStateFilter(item.state, stateFilter));
     if (needle) {
       arr = arr.filter((item) => String(item.name || "").toLowerCase().includes(needle));
     }
 
     return arr.sort((a, b) => {
+      if (sortKey === "acos") return compareByAcosAscending(a, b);
+      if (sortKey === "acos-high") return compareByAcosSpendImpressionsSync(a, b);
       // Always put items with data on top
       const aHasData = a.total_spend > 0 || a.total_orders > 0;
       const bHasData = b.total_spend > 0 || b.total_orders > 0;
@@ -137,12 +161,11 @@ export default function AdGroupsScreen() {
 
       switch (sortKey) {
         case "orders": return b.total_orders - a.total_orders;
-        case "acos":   return (a.total_acos || Infinity) - (b.total_acos || Infinity);
         case "ctr":    return b.total_ctr - a.total_ctr;
         default:       return b.total_spend - a.total_spend;
       }
     });
-  }, [data, stateFilter, sortKey, search]);
+  }, [data, isError, stateFilter, sortKey, search, readyContext, contextKey]);
 
   function animateList() {
     if (reduceMotion) return;
@@ -157,6 +180,7 @@ export default function AdGroupsScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     animateList();
     setStateFilter(f);
+    if (f !== "enabled") setEnabledParents(false);
   }
 
   function applySort(s: SortKey) {
@@ -180,13 +204,13 @@ export default function AdGroupsScreen() {
 
   const sortLabel = SORT_CONFIG.find((entry) => entry.key === sortKey)?.label ?? "Spend";
   const sortActive = sortKey !== "spend";
-  const showCount = search.trim().length > 0 || stateFilter !== "enabled" || sortActive;
+  const showCount = search.trim().length > 0 || stateFilter !== "enabled" || sortActive || enabledParents || listTruncated;
   const empty = emptyCopy(search, stateFilter, data.length);
 
   if (scopeProfiles.length === 0) {
     return (
       <SubScreen title="Ad Groups" showDateRange>
-        <EmptyState icon="business-outline" title="No account connected" subtitle="Connect an Amazon account to see ad groups." />
+        <EmptyState icon="business-outline" title="No enabled profile selected" />
       </SubScreen>
     );
   }
@@ -221,27 +245,40 @@ export default function AdGroupsScreen() {
             { key: "paused", label: "Paused", testID: "filter-state-paused" },
           ]}
         />
-        {sortActive ? (
+        {sortActive || enabledParents ? (
           <ActiveFilterRow>
+            {enabledParents ? <ActiveFilterChip
+              testID="ad-groups-filter-chip-parents"
+              label="Enabled parents"
+              accessibilityLabel="Clear enabled campaign and ad group filter"
+              onPress={() => setEnabledParents(false)}
+            /> : null}
+            {sortActive ? (
             <ActiveFilterChip
               testID="ad-groups-filter-chip-sort"
               label={`Sort: ${sortLabel}`}
               accessibilityLabel={`Clear sort. Currently ${sortLabel}`}
               onPress={() => applySort("spend")}
             />
+            ) : null}
           </ActiveFilterRow>
         ) : null}
-        {showCount && !isLoading && !(isError && data.length === 0) ? (
+        <Text style={[t.typography.caption2, { color: t.colors.text_secondary }]}>
+          {overviewReadLabel({ updatedAt: dataUpdatedAt, fetching: isFetching, failed: isError })}
+        </Text>
+        {showCount && readyContext === contextKey && !isLoading && !isError ? (
           <Text style={[t.typography.caption1, { color: t.colors.text_tertiary }]}>
             {filtered.length === 1 ? "1 ad group" : `${filtered.length} ad groups`}
-            {listTruncated ? ` · top ${AD_GROUPS_LIST_LIMIT} by spend` : ""}
+            {listTruncated ? enabledParents ? ` · top ${AD_GROUPS_LIST_LIMIT} by period spend` : " · limited catalog" : ""}
           </Text>
         ) : null}
       </FilterChrome>
 
-      {isLoading && data.length === 0 ? (
+      {readyContext !== contextKey || (isLoading && data.length === 0) ? (
         <ScreenSpinner />
-      ) : isError && data.length === 0 ? (
+      ) : viewAsOtherUser && !enabledParents ? (
+        <EmptyState icon="layers-outline" title="Enabled-parent context required" action={{ label: "Enabled parents", onPress: () => { setStateFilter("enabled"); setEnabledParents(true); } }} />
+      ) : isError ? (
         <RetryState
           title={isHomeQueryTimeout(error) ? "Ad groups took too long" : "Couldn't load ad groups"}
           subtitle={

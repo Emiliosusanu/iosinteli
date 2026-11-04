@@ -11,6 +11,7 @@ import {
   Switch,
   Platform,
   Alert,
+  useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -28,6 +29,7 @@ import { DateRange } from "../lib/types";
 import { IOSDateField, SFSymbol, sfFromIonicon } from "./ios/Native";
 import { GlassPanel } from "./GlassPanel";
 import { MarketPill } from "./MarketPill";
+import { InteliAdsIcon } from "./InteliAdsIcon";
 import { PressableScale } from "./Motion";
 import {
   NEST_DISABLED_VIEW_MESSAGE,
@@ -46,6 +48,7 @@ import {
   groupProfilesByAdsAccount,
   isReadyToEnable,
   multiCountryCodes,
+  selectedMarketCountryCodes,
   profileAssociationHint,
   profileDisplayName,
   profileEnabled,
@@ -55,6 +58,7 @@ import {
 } from "../lib/accountsUi";
 
 interface TopBarProps {
+  condensedMarket?: boolean;
   title?: string;
   showProfileSelector?: boolean;
   showDateRange?: boolean;
@@ -118,6 +122,8 @@ function DatePresetList({
         </View>
         <TouchableOpacity
           testID="date-preset-custom"
+          accessibilityRole="button"
+          accessibilityLabel="Apply custom date range"
           onPress={() => {
             if (!/^\d{4}-\d{2}-\d{2}$/.test(customStart) || !/^\d{4}-\d{2}-\d{2}$/.test(customEnd)) return;
             if (customStart > customEnd) return;
@@ -162,15 +168,17 @@ function HeaderPill({
 }) {
   const t = useTheme();
   return (
+    <View style={[
+      flex && { flex: 1, minWidth: 0 },
+      fullWidth && { alignSelf: "stretch", width: "100%" },
+      maxWidth != null && !fullWidth ? { width: maxWidth, maxWidth, flexShrink: 1 } : null,
+    ]}>
     <PressableScale
       testID={testID}
       onPress={onPress}
       accessibilityLabel={accessibilityLabel}
-      style={[
-        flex && { flex: 1, minWidth: 0 },
-        fullWidth && { alignSelf: "stretch" },
-        maxWidth != null && !fullWidth ? { maxWidth } : null,
-      ]}
+      containerStyle={{ minHeight: 44, justifyContent: "center" }}
+      style={{ width: "100%" }}
     >
       <GlassPanel
         strength="chip"
@@ -191,11 +199,11 @@ function HeaderPill({
                 },
           ]}
         >
-          <SFSymbol
+          {icon === "calendar" ? <InteliAdsIcon name="dateRange" size={20} color={t.colors.tone_primary} /> : <SFSymbol
             name={icon}
             size={caption ? 15 : 14}
             color={caption ? t.colors.tone_primary : t.colors.text_secondary}
-          />
+          />}
         </View>
         <View style={styles.pillLabel}>
           {caption ? (
@@ -218,6 +226,7 @@ function HeaderPill({
         <SFSymbol name="chevron.down" size={11} color={t.colors.text_tertiary} />
       </GlassPanel>
     </PressableScale>
+    </View>
   );
 }
 
@@ -272,7 +281,13 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
           <View style={[styles.sheetFill, { backgroundColor: t.colors.background_secondary }]}>
             <View style={styles.sheetHeader}>
               <Text style={[t.typography.title3, { color: t.colors.text_primary }]}>Date Range</Text>
-              <TouchableOpacity onPress={() => setDateOpen(false)} hitSlop={10}>
+              <TouchableOpacity
+                testID="date-range-done"
+                accessibilityRole="button"
+                accessibilityLabel="Done"
+                onPress={() => setDateOpen(false)}
+                style={styles.dateSheetDone}
+              >
                 <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Done</Text>
               </TouchableOpacity>
             </View>
@@ -300,7 +315,13 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
               <View style={[styles.handle, { backgroundColor: t.colors.separator }]} />
               <View style={styles.sheetHeader}>
                 <Text style={[t.typography.title3, { color: t.colors.text_primary }]}>Date Range</Text>
-                <TouchableOpacity onPress={() => setDateOpen(false)} hitSlop={10}>
+                <TouchableOpacity
+                  testID="date-range-done"
+                  accessibilityRole="button"
+                  accessibilityLabel="Done"
+                  onPress={() => setDateOpen(false)}
+                  style={styles.dateSheetDone}
+                >
                   <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Done</Text>
                 </TouchableOpacity>
               </View>
@@ -327,12 +348,14 @@ export function DateRangeControl({ fullWidth = false }: { fullWidth?: boolean })
 }
 
 export function TopBar({
+  condensedMarket = false,
   title,
   showProfileSelector = true,
   showDateRange = true,
   showKdpAccountGroups = true,
   rightAction,
 }: TopBarProps) {
+  const { width } = useWindowDimensions();
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -342,6 +365,7 @@ export function TopBar({
     primaryCurrency,
     toggleProfile,
     selectAllProfiles,
+    selectMarket,
     adminUsers,
     adminFilterUserId,
     setAdminFilterUserId,
@@ -382,19 +406,10 @@ export function TopBar({
     () => profiles.filter((p) => profileEnabled(p)),
     [profiles],
   );
-  const selectedProfiles = useMemo(
-    () =>
-      profiles.filter(
-        (p) => selectedProfileIds.includes(p.id) || selectedProfileIds.includes(p.profile_id),
-      ),
+  const marketCountries = useMemo(
+    () => selectedMarketCountryCodes(profiles, selectedProfileIds),
     [profiles, selectedProfileIds],
   );
-  const marketCountries = useMemo(() => {
-    if (selectedProfiles.length > 0) {
-      return multiCountryCodes(selectedProfiles, { onlyEnabled: false });
-    }
-    return multiCountryCodes(profiles, { onlyEnabled: true });
-  }, [profiles, selectedProfiles]);
   const hasMarketPill = marketCountries.length > 0;
 
   const selectedLabel =
@@ -599,7 +614,7 @@ export function TopBar({
 
   return (
     <>
-      <View style={[styles.bar, { borderBottomColor: t.colors.border, paddingTop: Math.max(insets.top - 4, 4) }]}>
+      <View style={[styles.bar, { borderBottomColor: t.colors.border, paddingTop: Math.max(insets.top, 4) }]}>
         {title ? (
           <View style={styles.headerRow}>
             <Text style={[t.typography.title2, styles.title, { color: t.colors.text_primary }]} numberOfLines={1}>
@@ -631,6 +646,8 @@ export function TopBar({
               (hasMarketPill ? (
                 <MarketPill
                   testID="profile-selector-btn"
+                  compact
+                  flagsOnly={condensedMarket && width < 400}
                   countries={marketCountries}
                   currency={primaryCurrency}
                   onPress={() => setProfileOpen(true)}
@@ -699,6 +716,15 @@ export function TopBar({
             <Text style={[t.typography.title3, { color: t.colors.text_primary, paddingHorizontal: 16, paddingBottom: 8 }]}>
               Amazon Profiles
             </Text>
+            <ScrollView horizontal style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: 16, gap: 16 }}>
+              {[null, ...multiCountryCodes(profiles, { onlyEnabled: true })].map((country) => (
+                <TouchableOpacity key={country ?? "all"} testID={`shared-market-${country ?? "all"}`}
+                  accessibilityRole="button" accessibilityLabel={country ? `Market ${country}` : "All markets"}
+                  style={{ paddingVertical: 12 }} onPress={() => { selectMarket(country); setProfileOpen(false); }}>
+                  <Text style={[t.typography.callout, { color: t.colors.tone_primary }]}>{country ?? "All markets"}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
             <View style={styles.filterRow}>
               <TouchableOpacity
                 testID="profiles-filter-ready"
@@ -1046,9 +1072,20 @@ const styles = StyleSheet.create({
   },
   applyCustom: {
     alignSelf: "flex-start",
+    minWidth: layout.minTap,
+    minHeight: layout.minTap,
+    justifyContent: "center",
+    alignItems: "center",
     borderRadius: dashboard.chipRadius,
     borderCurve: "continuous",
     paddingHorizontal: 12,
     paddingVertical: 8,
+  },
+  dateSheetDone: {
+    minWidth: layout.minTap,
+    minHeight: layout.minTap,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 8,
   },
 });

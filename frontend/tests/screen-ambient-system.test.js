@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import ts from "typescript";
 
 const ambient = readFileSync(new URL("../src/components/ScreenAmbient.tsx", import.meta.url), "utf8");
 const primitives = readFileSync(new URL("../src/components/Primitives.tsx", import.meta.url), "utf8");
@@ -54,7 +56,7 @@ test("filters and buttons share the Overview glass chip chrome", () => {
   assert.match(native, /tone_primary \+ "55"/);
   assert.match(topBar, /glass_background/);
   assert.match(topBar, /MarketPill/);
-  assert.match(topBar, /multiCountryCodes/);
+  assert.match(topBar, /selectedMarketCountryCodes/);
   assert.match(topBar, /formatMarketPillLabel/);
   assert.match(topBar, /profile-selector-btn/);
   assert.match(topBar, /countryFlagEmoji/);
@@ -69,4 +71,56 @@ test("shared cards and grouped lists use the 20pt elevated chrome", () => {
   assert.match(more, /elevatedCardStyle\(t\)/);
   assert.match(topBar, /dashboard\.cardRadius/);
   assert.match(topBar, /dashboard\.chipRadius/);
+});
+
+test("iOS status-bar shield tracks insets without padding, input interception or accessible decoration", () => {
+  let top = 59;
+  let os = "ios";
+  let color = "#FFFFFF";
+  const exports = {};
+  vm.runInNewContext(ts.transpileModule(ambient, {
+    compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.CommonJS },
+  }).outputText, {
+    exports,
+    require: (name) => {
+      if (name === "react") return { default: { createElement: (type, props, ...children) => ({ type, props, children }) } };
+      if (name === "react-native") return { Platform: { get OS() { return os; } }, View: "View", StyleSheet: { absoluteFill: {} } };
+      if (name === "react-native-safe-area-context") return { useSafeAreaInsets: () => ({ top }) };
+      if (name.endsWith("/theme")) return { useTheme: () => ({ colors: { ambient_top: "#0000FF", background_primary: color } }) };
+      return {};
+    },
+  });
+  for (color of ["#FFFFFF", "#000000"]) {
+    for (top of [0, 20, 59]) {
+      const child = { type: "List" };
+      const tree = exports.AppScreen({ children: child, testID: "screen" });
+      assert.equal(tree.props.testID, "screen");
+      assert.equal(tree.props.style.paddingTop, undefined);
+      assert.equal(tree.children[1], child);
+      const shield = tree.children[2];
+      if (top === 0) { assert.equal(shield, null); continue; }
+      assert.equal(shield.props.testID, "screen-status-bar-shield");
+      assert.equal(shield.props.style.height, top);
+      assert.equal(shield.props.style.backgroundColor, color);
+      assert.equal(shield.props.style.backgroundColor, tree.props.style.backgroundColor, "No contrasting blue status strip");
+      assert.equal(shield.props.style.position, "absolute");
+      assert.ok(shield.props.style.zIndex > 0);
+      assert.equal(shield.props.style.top, 0);
+      assert.equal(shield.props.pointerEvents, "none");
+      assert.equal(shield.props.accessible, false);
+      assert.equal(shield.props.accessibilityElementsHidden, true);
+      assert.equal(shield.props.importantForAccessibility, "no-hide-descendants");
+    }
+  }
+  os = "android"; top = 24;
+  assert.equal(exports.AppScreen({ children: "content" }).children[2], null);
+});
+
+test("expanded headers clear the complete safe inset without creating a sticky navigation rail", () => {
+  assert.match(topBar, /paddingTop: Math.max\(insets.top, 4\)/);
+  const overview = readFileSync(new URL("../src/components/OverviewHeaderV3.tsx", import.meta.url), "utf8");
+  assert.match(overview, /paddingTop: Math.max\(insets.top, 0\)/);
+  assert.doesNotMatch(topBar + overview, /insets.top - 4/);
+  assert.match(campaigns, /topChromeVisible \? <TopBar/);
+  assert.match(targeting, /topChromeVisible \? <TopBar/);
 });

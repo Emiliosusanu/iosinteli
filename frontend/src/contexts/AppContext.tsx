@@ -6,7 +6,9 @@ import { ADMIN_FILTER_KEY, fetchAmazonProfiles, fetchUserSettings, saveUserSetti
 import { fetchNestUsers, type NestUser } from "../lib/mutations";
 import { hasNestToken, NestApiError } from "../lib/rulesApi";
 import { AmazonProfile, DateRange } from "../lib/types";
+import { sharedMarketProfileIds } from "../lib/overviewMarketplace";
 import { normalizeDateRange, rangePresets } from "../lib/format";
+import { useDateRangeRollover } from "../hooks/useDateRangeRollover";
 import { useAuth } from "./AuthContext";
 import { configureNotifications, registerForPushAsync, clearNotificationIdentity, installBackgroundSyncWakeHandlers, runAlertCheck, subscribeNotificationRefresh } from "../lib/notifications";
 import { anyNotificationPrefEnabled } from "../lib/notificationContract";
@@ -98,6 +100,7 @@ interface AppContextType {
   setAdminFilterUserId: (id: string | null) => void;
   selectedProfileIds: string[];
   setSelectedProfileIds: (ids: string[]) => void;
+  selectMarket: (country: string | null) => void;
   toggleProfile: (id: string) => void;
   selectAllProfiles: () => void;
   selectedProfiles: AmazonProfile[];
@@ -140,10 +143,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   });
   const [hydrated, setHydrated] = useState(false);
   const prevUserIdRef = useRef<string | null | undefined>(undefined);
+  const dateRangeRevisionRef = useRef(0);
 
   // Hydrate persisted values
   useEffect(() => {
     (async () => {
+      const dateRangeRevision = dateRangeRevisionRef.current;
       const [ids, dr, nf, filterUser, kdpSource, exactBidRaw] = await Promise.all([
         storage.getItem(STORAGE_KEYS.selectedProfiles, ""),
         storage.getItem(STORAGE_KEYS.dateRange, ""),
@@ -162,7 +167,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (Array.isArray(parsed)) setSelectedProfileIdsState(parsed);
         } catch {}
       }
-      if (dr && typeof dr === "string") {
+      if (dr && typeof dr === "string" && dateRangeRevisionRef.current === dateRangeRevision) {
         try {
           const parsed = JSON.parse(dr);
           if (parsed?.start && parsed?.end) {
@@ -344,6 +349,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           "campaign-metrics",
           "top-books",
           "products-range",
+          "bleeding-keywords",
+          "overview-ad-groups",
+          "search-terms",
+          "ads-engine-",
         ];
         void queryClient.invalidateQueries({
           predicate: (query) => {
@@ -709,11 +718,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedProfileIds(next);
   }, [profiles, selectedProfileIds, setSelectedProfileIds]);
 
+  const selectMarket = useCallback((country: string | null) => {
+    const ids = sharedMarketProfileIds(profiles, country);
+    if (ids.length > 0) setSelectedProfileIds(ids);
+  }, [profiles, setSelectedProfileIds]);
+
   const setDateRange = useCallback((range: DateRange) => {
+    dateRangeRevisionRef.current += 1;
     const normalized = normalizeDateRange(range);
     setDateRangeState(normalized);
     void storage.setItem(STORAGE_KEYS.dateRange, JSON.stringify(normalized));
   }, []);
+
+  useDateRangeRollover(dateRange, hydrated, setDateRange);
 
   const setRoyaltyRate = useCallback((rate: number) => {
     setRoyaltyRateState(rate);
@@ -780,6 +797,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setAdminFilterUserId,
       selectedProfileIds,
       setSelectedProfileIds,
+      selectMarket,
       toggleProfile,
       selectAllProfiles,
       selectedProfiles,
@@ -813,6 +831,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setAdminFilterUserId,
       selectedProfileIds,
       setSelectedProfileIds,
+      selectMarket,
       toggleProfile,
       selectAllProfiles,
       selectedProfiles,

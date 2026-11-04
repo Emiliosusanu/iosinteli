@@ -43,14 +43,13 @@ export function booksMoneyProfileIds(
   );
 }
 
-/** Book detail in USD includes every enabled marketplace for an exact sponsored ASIN. */
+/** Display currency never expands the selected marketplace scope. */
 export function bookDetailProfileSelection(
   profiles: readonly AmazonProfile[],
   selectedProfileIds: readonly string[],
   displayCurrency: string,
 ): string[] {
-  if (String(displayCurrency).toUpperCase() !== "USD") return [...selectedProfileIds];
-  return profiles.filter(profileEnabled).map((profile) => profile.id).filter(Boolean);
+  return enabledSelectedProfileIds(profiles, selectedProfileIds);
 }
 
 /**

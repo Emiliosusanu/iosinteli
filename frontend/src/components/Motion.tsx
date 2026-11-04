@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import Animated, {
   Easing,
+  cancelAnimation,
   runOnJS,
   useAnimatedReaction,
   useAnimatedStyle,
@@ -45,6 +46,7 @@ export function PressableScale({
   onLongPress,
   disabled,
   style,
+  containerStyle,
   accessibilityLabel,
   accessibilityHint,
   accessibilityRole = "button",
@@ -58,6 +60,8 @@ export function PressableScale({
   onLongPress?: () => void;
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
+  /** Layout and touch bounds of the outer Pressable, separate from its visual. */
+  containerStyle?: StyleProp<ViewStyle>;
   accessibilityLabel?: string;
   accessibilityHint?: string;
   accessibilityRole?: "button" | "none" | "tab";
@@ -69,12 +73,21 @@ export function PressableScale({
   const reduceMotion = useReduceMotion();
   const pressed = useSharedValue(0);
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: 1 - pressed.get() * (1 - PRESS_SCALE) }],
+    transform: [{ scale: reduceMotion ? 1 : 1 - pressed.get() * (1 - PRESS_SCALE) }],
     opacity: 1 - pressed.get() * 0.04,
   }));
 
+  useEffect(() => {
+    if (disabled || reduceMotion) {
+      cancelAnimation(pressed);
+      pressed.set(0);
+    }
+  }, [disabled, pressed, reduceMotion]);
+
   return (
     <Pressable
+      style={containerStyle}
+      pressRetentionOffset={12}
       testID={testID}
       disabled={disabled}
       onPress={onPress}

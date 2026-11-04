@@ -9,6 +9,8 @@ import { HorizonPane, PressableScale, StaggerReveal } from "@/src/components/Mot
 import { useOverviewPeriodSwipeGesture } from "@/src/components/OverviewPeriodSwipe";
 import { OverviewWidgetPageSwipeContext } from "@/src/components/OverviewWidgetPageSwipe";
 import { SFSymbol } from "@/src/components/ios/Native";
+import { SyncGlowFrame } from "@/src/components/SyncGlowFrame";
+import type { OverviewReadFeedback } from "@/src/lib/overviewReadEvidence";
 import { motion } from "@/src/lib/motion";
 import { dashboard, useReduceMotion, useTheme, type Theme } from "@/src/lib/theme";
 
@@ -21,10 +23,13 @@ export type OverviewSwipePage = {
   hint?: string;
   /** Tertiary caption under title (e.g. break-even %). */
   meta?: string;
+  freshness?: OverviewReadFeedback;
   /** One-line metrics top-right of the header. */
   summary?: React.ReactNode;
   content: React.ReactNode;
   hidden?: boolean;
+  actionLabel?: string;
+  onAction?: () => void;
 };
 
 /**
@@ -40,6 +45,9 @@ export function OverviewSwipeWidget({
   action,
   testID,
   staggerIndex = 0,
+  freshness,
+  readContextKey,
+  active = true,
 }: {
   title: string;
   icon?: InteliAdsIconName;
@@ -49,6 +57,9 @@ export function OverviewSwipeWidget({
   action?: React.ReactNode;
   testID?: string;
   staggerIndex?: number;
+  freshness?: OverviewReadFeedback;
+  readContextKey: string;
+  active?: boolean;
   /** @deprecated Page label is folded into the card title. Kept for call-site compat. */
   inlinePageLabel?: boolean;
 }) {
@@ -96,14 +107,16 @@ export function OverviewSwipeWidget({
 
   const pageLabel = page.label?.trim() ?? "";
   const headerTitle = pageLabel ? `${title} · ${pageLabel}` : title;
+  const read = page.freshness ?? freshness;
 
   return (
     <StaggerReveal index={staggerIndex}>
+    <View style={{ marginTop: dashboard.sectionGap }}>
+    <SyncGlowFrame read={read ?? { fetching: false, failed: false, updatedAt: 0 }} contextKey={`${readContextKey}:${page.key}`} visible={active} radius={dashboard.cardRadius} testID={testID ? `${testID}-sync-glow` : undefined}>
     <GlassPanel
       strength="card"
       testID={testID}
       style={{
-        marginTop: dashboard.sectionGap,
         borderRadius: dashboard.cardRadius,
         borderCurve: "continuous",
         borderColor: t.colors.glass_stroke,
@@ -113,12 +126,19 @@ export function OverviewSwipeWidget({
       <OverviewCardHeader
         title={headerTitle}
         icon={icon}
-        actionLabel={actionLabel}
-        onAction={onAction}
+        actionLabel={page.actionLabel ?? actionLabel}
+        onAction={page.onAction ?? onAction}
         action={action}
         meta={page.meta}
         trailing={page.summary}
       />
+      {read ? (
+        <View style={{ minHeight: 17, marginTop: 4 }}>
+          <Text accessibilityLiveRegion="polite" style={[t.typography.caption2, { color: t.colors.text_secondary }]}>
+            {read.label || " "}
+          </Text>
+        </View>
+      ) : null}
       {page.hint ? (
         <Text
           style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 2 }]}
@@ -178,6 +198,8 @@ export function OverviewSwipeWidget({
         </View>
       ) : null}
     </GlassPanel>
+    </SyncGlowFrame>
+    </View>
     </StaggerReveal>
   );
 }
@@ -260,11 +282,35 @@ function AnimatedDot({
   );
 }
 
-export function SwipeEmpty({ message, t }: { message: string; t: Theme }) {
+export function SwipeEmpty({ message, t, kind = "info" }: {
+  message: string;
+  t: Theme;
+  kind?: "info" | "loading" | "error" | "timeout" | "offline";
+}) {
+  const isError = kind === "error" || kind === "timeout" || kind === "offline";
+  const icon = kind === "loading"
+    ? "arrow.triangle.2.circlepath"
+    : kind === "offline"
+      ? "wifi.slash"
+      : kind === "timeout"
+        ? "clock"
+        : isError
+          ? "exclamationmark.triangle"
+          : "info.circle";
+  const color = isError ? t.colors.tone_warning : t.colors.text_tertiary;
   return (
-    <Text style={[t.typography.meta, { color: t.colors.text_secondary, paddingVertical: t.spacing.sm }]}>
-      {message}
-    </Text>
+    <View
+      testID={`overview-widget-status-${kind}`}
+      style={styles.statusRow}
+      accessibilityLiveRegion={kind === "loading" || isError ? "polite" : "none"}
+    >
+      <View style={[styles.statusIcon, { backgroundColor: color + "18" }]}>
+        <SFSymbol name={icon} size={15} color={color} />
+      </View>
+      <Text style={[t.typography.meta, styles.statusText, { color: t.colors.text_secondary }]}>
+        {message}
+      </Text>
+    </View>
   );
 }
 
@@ -278,8 +324,8 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   pageChevronHit: {
-    width: 28,
-    height: 28,
+    width: 44,
+    height: 44,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -292,11 +338,31 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   dotHit: {
-    paddingVertical: 8,
-    paddingHorizontal: 4,
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
   },
   dot: {
     height: 7,
     borderRadius: 3.5,
+  },
+  statusRow: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+  },
+  statusIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  statusText: {
+    flex: 1,
+    lineHeight: 18,
   },
 });

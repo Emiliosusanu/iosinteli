@@ -1,9 +1,21 @@
 import type { AmazonProfile } from "./types";
+import { normalizeFlagCountryCode } from "./accountsUi.ts";
 
 export type OverviewMarketplaceSelection = string | null;
 
+/** Choose only enabled profiles already returned for the current customer. */
+export function sharedMarketProfileIds(
+  profiles: readonly Pick<AmazonProfile, "id" | "country_code" | "is_enabled">[],
+  country: OverviewMarketplaceSelection,
+): string[] {
+  const market = normalizedCountry(country);
+  return profiles.filter((p) => p.is_enabled === true &&
+    (!market || normalizedCountry(p.country_code) === market)).map((p) => p.id);
+}
+
 function normalizedCountry(value: unknown): string {
-  return String(value ?? "").trim().toUpperCase();
+  const raw = String(value ?? "").trim().toUpperCase();
+  return normalizeFlagCountryCode(raw) ?? raw;
 }
 
 function profileAliases(profile: Pick<AmazonProfile, "id" | "profile_id">): string[] {
