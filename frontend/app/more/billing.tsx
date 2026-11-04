@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -27,10 +27,8 @@ import {
   BILLING_SCREEN_FOOTER,
   BILLING_SCREEN_TITLE,
   ACCOUNT_GUEST_NOTE,
-  formatNestPricingPlanPrice,
   groupNestPricingPlans,
   isNestPricingPlanCurrent,
-  nestPricingPlanCycle,
   pickNestPricingPlanForCycle,
   type BillingCyclePreference,
   type NestPricingPlan,
@@ -68,8 +66,12 @@ export default function BillingScreen() {
   const currentPlanQ = useCurrentUserPlan();
   const [cycle, setCycle] = useState<BillingCyclePreference>("month");
   const [busySlug, setBusySlug] = useState<string | null>(null);
+  const accountRef = useRef(user?.id);
+  accountRef.current = user?.id;
 
   const enabled = authState === "authenticated" && !!user?.id && !guestMode;
+  const planConfirmed = currentPlanQ.nestStatus === "success" &&
+    !currentPlanQ.isFetching && !currentPlanQ.isError;
 
   const plansQ = useQuery({
     queryKey: ["pricing-plans", "catalog", user?.id ?? "none"],
@@ -139,10 +141,14 @@ export default function BillingScreen() {
       Alert.alert("Plan unavailable", "This subscription is not available from the App Store yet.");
       return;
     }
-    if (busySlug) return;
+    if (busySlug || !planConfirmed || storeProductsQ.isFetching || storeProductsQ.isError) return;
+    const owner = user.id;
     setBusySlug(plan.slug);
     try {
-      if (currentPlanQ.nestPlan?.stripeSubscriptionId) {
+      const confirmed = await currentPlanQ.refetch();
+      if (accountRef.current !== owner) return;
+      if (confirmed.isError) throw new Error("Couldn't verify your current subscription. Try again.");
+      if (confirmed.data?.stripeSubscriptionId) {
         Alert.alert(
           "Web subscription active",
           "Manage the existing subscription first to avoid being charged twice.",
@@ -153,7 +159,8 @@ export default function BillingScreen() {
         );
         return;
       }
-      const purchase = await purchaseStoreProduct(productId, user.id);
+      const purchase = await purchaseStoreProduct(productId, owner);
+      if (accountRef.current !== owner) return;
       if (purchase.status === "cancelled") return;
       if (purchase.status === "pending") {
         Alert.alert("Purchase pending", "Apple will activate the plan when the purchase is approved.");
@@ -164,6 +171,7 @@ export default function BillingScreen() {
       }
       await verifyAppleTransaction(purchase.signedTransaction);
       await finishStoreTransaction(purchase.transactionId);
+      if (accountRef.current !== owner) return;
       await queryClient.invalidateQueries({ queryKey: ["pricing-plans"] });
       Alert.alert("Subscription active", `${product.displayName} is now active.`);
     } catch (error) {
@@ -237,7 +245,9 @@ export default function BillingScreen() {
   const subscriptionLabel =
     currentPlanQ.nestStatus === "loading" || currentPlanQ.nestStatus === "idle"
       ? "Checking…"
-      : currentPlanQ.nestPlan
+      : currentPlanQ.nestStatus === "error"
+        ? "Unavailable"
+        : currentPlanQ.nestPlan
         ? currentPlanQ.nestPlan.effectivePlanName || currentPlanQ.nestPlan.planName
         : "No plan";
 
@@ -251,9 +261,9 @@ export default function BillingScreen() {
         <SettingsSection
           title="Current"
           footer={
-            currentPlanQ.nestPlan
-              ? undefined
-              : "Pick a plan below to subscribe with your Apple ID."
+            currentPlanQ.nestStatus === "error"
+              ? "Couldn't verify your current subscription."
+              : undefined
           }
         >
           <View
@@ -275,6 +285,18 @@ export default function BillingScreen() {
               </Text>
             ) : null}
           </View>
+          {currentPlanQ.isError ? (
+            <Pressable
+              testID="billing-current-retry"
+              onPress={() => void currentPlanQ.refetch()}
+              accessibilityRole="button"
+              accessibilityLabel="Retry current subscription"
+              style={styles.actionRow}
+            >
+              <Text style={[t.typography.body, { color: t.colors.tone_primary }]}>Retry</Text>
+              <SFSymbol name="arrow.clockwise" size={18} color={t.colors.tone_primary} />
+            </Pressable>
+          ) : null}
           {currentPlanQ.nestPlan?.billingProvider === "apple" ? (
             <Pressable
               testID="billing-manage-apple"
@@ -356,6 +378,21 @@ export default function BillingScreen() {
           })}
         </View>
 
+        {storeProductsQ.isError ? (
+          <View testID="billing-store-error" style={styles.storeStatus}>
+            <Text style={[t.typography.footnote, { color: t.colors.text_secondary, flex: 1 }]}>{"Couldn't load App Store subscriptions."}</Text>
+            <Pressable onPress={() => void storeProductsQ.refetch()} accessibilityRole="button" accessibilityLabel="Retry App Store subscriptions" style={styles.storeRetry}>
+              <SFSymbol name="arrow.clockwise" size={20} color={t.colors.tone_primary} />
+            </Pressable>
+          </View>
+        ) : storeProductsQ.isPending || storeProductsQ.isFetching ? (
+          <View testID="billing-store-loading" style={styles.storeStatus} accessibilityLabel="Checking App Store subscriptions">
+            <ActivityIndicator />
+          </View>
+        ) : storeProductsQ.isSuccess && storeProductsQ.data.length === 0 ? (
+          <SettingsNote testID="billing-store-empty">App Store subscriptions are not available yet.</SettingsNote>
+        ) : null}
+
         <SettingsSection title="Plans" footer={BILLING_SCREEN_FOOTER}>
           {plansQ.isPending ? (
             <View style={styles.loading} testID="billing-plans-loading">
@@ -386,7 +423,10 @@ export default function BillingScreen() {
                 cycle={cycle}
                 current={currentPlanQ.nestPlan}
                 busySlug={busySlug}
-                storeProduct={storeProductsQ.data?.find(
+                planConfirmed={planConfirmed}
+                planUnavailable={currentPlanQ.isError}
+                storeLoading={storeProductsQ.isPending || storeProductsQ.isFetching}
+                storeProduct={storeProductsQ.isError ? undefined : storeProductsQ.data?.find(
                   (item) =>
                     item.id ===
                     appleProductIdForPlanSlug(
@@ -409,6 +449,9 @@ function PlanRow({
   cycle,
   current,
   busySlug,
+  planConfirmed,
+  planUnavailable,
+  storeLoading,
   storeProduct,
   last,
   onSelect,
@@ -417,6 +460,9 @@ function PlanRow({
   cycle: BillingCyclePreference;
   current: ReturnType<typeof useCurrentUserPlan>["nestPlan"];
   busySlug: string | null;
+  planConfirmed: boolean;
+  planUnavailable: boolean;
+  storeLoading: boolean;
   storeProduct?: StoreProduct;
   last: boolean;
   onSelect: (plan: NestPricingPlan) => void;
@@ -425,15 +471,18 @@ function PlanRow({
   const plan = pickNestPricingPlanForCycle(group, cycle);
   if (!plan) return null;
   const isCurrent = isNestPricingPlanCurrent(plan, current);
-  const price =
-    storeProduct?.displayPrice ??
-    formatNestPricingPlanPrice(plan, nestPricingPlanCycle(plan) ?? cycle);
+  const price = storeProduct?.displayPrice?.trim();
+  const canPurchase = !!price && planConfirmed && !storeLoading && !busySlug && !isCurrent;
   const busy = busySlug === plan.slug;
   const cta = isCurrent
     ? BILLING_CURRENT_PLAN_BADGE
     : busy
       ? "Opening…"
-      : storeProduct
+      : planUnavailable
+        ? "Unavailable"
+        : storeLoading || !planConfirmed
+        ? "Checking…"
+        : price
         ? "Continue"
         : "Unavailable";
 
@@ -441,13 +490,13 @@ function PlanRow({
     <Pressable
       testID={`billing-plan-${plan.slug}`}
       onPress={() => {
-        if (isCurrent || !storeProduct || busy) return;
+        if (!canPurchase) return;
         onSelect(plan);
       }}
-      disabled={isCurrent || !storeProduct || !!busySlug}
+      disabled={!canPurchase}
       accessibilityRole="button"
-      accessibilityState={{ disabled: isCurrent || !storeProduct }}
-      accessibilityLabel={`${group.name}. ${price}. ${cta}`}
+      accessibilityState={{ disabled: !canPurchase }}
+      accessibilityLabel={[group.name, price, cta].filter(Boolean).join(". ")}
       style={({ pressed }) => [
         styles.planRow,
         {
@@ -466,22 +515,17 @@ function PlanRow({
             <Text style={[t.typography.footnote, { color: t.colors.tone_primary }]}>Popular</Text>
           ) : null}
         </View>
-        {group.description ? (
+        {storeProduct?.description ? (
           <Text
             style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}
             numberOfLines={2}
           >
-            {group.description}
-          </Text>
-        ) : null}
-        {group.trialDays > 0 && !isCurrent ? (
-          <Text style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 2 }]}>
-            {group.trialDays}-day trial when eligible
+            {storeProduct.description}
           </Text>
         ) : null}
       </View>
       <View style={styles.planMeta}>
-        <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{price}</Text>
+        {price ? <Text style={[t.typography.body, { color: t.colors.text_primary }]}>{price}/{cycle === "year" ? "yr" : "mo"}</Text> : null}
         <Text
           style={[
             t.typography.footnote,
@@ -500,6 +544,15 @@ function PlanRow({
 }
 
 const styles = StyleSheet.create({
+  storeStatus: {
+    minHeight: 44,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  storeRetry: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   scroll: {
     paddingBottom: 48,
   },
