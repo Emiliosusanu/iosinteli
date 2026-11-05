@@ -28,6 +28,7 @@ import {
   TARGETING_PAGE_DISPLAY_ENRICH_MS,
   TARGETING_PAGE_METRICS_BUDGET_MS,
   isHomeQueryTimeout,
+  withAbortableQueryTimeout,
   withQueryTimeout,
 } from "./queryTimeout";
 import { createReadQueue } from "./readRequest";
@@ -1758,14 +1759,57 @@ export async function fetchLinkedAmazonProfileIds(userId: string): Promise<strin
 export async function fetchAmazonProfiles(
   userId?: string | null,
   filterUserId?: string | null,
+  signal?: AbortSignal,
 ): Promise<AmazonProfile[]> {
   if (!userId) return [];
 
-  // Nest resolves direct, account-bridge, and campaign ownership together.
-  // Keep the customer scope explicit for admin viewing; a failed read must
-  // surface as a failed read rather than presenting an empty account list.
-  const profiles = await fetchNestAmazonProfiles(filterUserId);
-  const withKdpCounts = await attachKdpAccountCountsFromBridge(profiles);
+  // The self-only RPC delegates the same three-path ownership resolver as
+  // fetchNestAmazonProfiles, including disabled links. A raw amazon_profiles
+  // read cannot preserve that contract: user_id/is_enabled live on the bridge.
+  let profiles: AmazonProfile[];
+  let includesKdpCounts = false;
+  if (!filterUserId) {
+    try {
+      const rows = await withAbortableQueryTimeout(async (requestSignal) =>
+        fetchAllPages<{ profile: Record<string, unknown> }>((from, to) =>
+          supabase.rpc("mobile_amazon_profiles_v1")
+            .range(from, to).abortSignal(requestSignal),
+          POSTGREST_PAGE_SIZE,
+          { signal: requestSignal },
+        ), 3_000, signal);
+      profiles = rows.map(({ profile: p }) => ({
+        id: String(p.profile_id ?? p.id ?? ""),
+        profile_id: String(p.profile_id ?? p.id ?? ""),
+        country_code: (p.country_code as string | null | undefined) ?? null,
+        currency_code: (p.currency_code as string | null | undefined) ?? null,
+        marketplace_id: (p.marketplace_id as string | null | undefined) ?? null,
+        account_type: (p.account_type as string | null | undefined) ?? null,
+        account_name: (p.account_name as string | null | undefined) ?? null,
+        account_id: (p.account_id as string | null | undefined) ?? null,
+        nickname: (p.nickname as string | null | undefined) ?? null,
+        is_enabled: p.is_enabled === true,
+        campaign_count: (Number(p.campaigns_enabled_count ?? 0) || 0) +
+          (Number(p.campaigns_paused_count ?? 0) || 0),
+        campaigns_enabled_count: Number(p.campaigns_enabled_count ?? 0) || 0,
+        campaigns_paused_count: Number(p.campaigns_paused_count ?? 0) || 0,
+        kdp_account_count: Number(p.kdp_account_count ?? 0) || 0,
+        created_at: String(p.created_at ?? ""),
+        updated_at: String(p.updated_at ?? ""),
+      })).filter(p => p.id);
+      includesKdpCounts = true;
+    } catch (error) {
+      // Deploy compatibility only. A timeout, denial or overloaded pool must
+      // never trigger a second request or be disguised as an empty account.
+      const code = (error as { code?: string })?.code;
+      if (signal?.aborted || (code !== "PGRST202" && code !== "42883")) throw error;
+      profiles = await withAbortableQueryTimeout(
+        requestSignal => fetchNestAmazonProfiles(null, requestSignal), 3_000, signal,
+      );
+    }
+  } else {
+    profiles = await fetchNestAmazonProfiles(filterUserId, signal);
+  }
+  const withKdpCounts = includesKdpCounts ? profiles : await attachKdpAccountCountsFromBridge(profiles);
   return withKdpCounts.sort((a, b) => {
     const enabledDelta = Number(b.is_enabled === true) - Number(a.is_enabled === true);
     if (enabledDelta !== 0) return enabledDelta;

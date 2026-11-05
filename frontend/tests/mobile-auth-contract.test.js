@@ -113,7 +113,7 @@ test("hasNestToken stays Nest-JWT-only so seller Overview stays on RLS", () => {
   const hasNest = rulesApi.slice(rulesApi.indexOf("export async function hasNestToken"));
   assert.match(hasNest, /ACCESS_KEY/);
   assert.doesNotMatch(hasNest.slice(0, 280), /getSession/);
-  assert.match(app, /queryFn: hasNestToken/);
+  assert.match(app, /queryFn: \(\) => withQueryTimeout\(hasNestToken\(\), 3_000\)/);
 });
 
 test("seller session cannot inject admin view-as", () => {
@@ -150,7 +150,7 @@ test("Accounts Nest profile read uses Nest JWT path; books RPC still unions loca
   assert.match(queries, /\.\.\.campaignBooks/);
   assert.match(queries, /\.\.\.kdpBooks/);
   assert.doesNotMatch(queries, /return finish\(nestBooks\);/);
-  assert.match(queries, /fetchNestAmazonProfiles\(filterUserId\)/);
+  assert.match(queries, /fetchNestAmazonProfiles\(filterUserId, signal\)/);
   const fetchAmazon = queries.slice(queries.indexOf("export async function fetchAmazonProfiles"));
   assert.match(fetchAmazon.slice(0, 600), /fetchNestAmazonProfiles/);
   assert.doesNotMatch(fetchAmazon.slice(0, 600), /\.catch\(\(\) => \[\]\)/);

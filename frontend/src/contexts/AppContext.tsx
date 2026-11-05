@@ -7,6 +7,9 @@ import { fetchNestUsers, type NestUser } from "../lib/mutations";
 import { hasNestToken, NestApiError } from "../lib/rulesApi";
 import { AmazonProfile, DateRange } from "../lib/types";
 import { sharedMarketProfileIds } from "../lib/overviewMarketplace";
+import { profileSelectionMustReset } from "../lib/profileSelectionIdentity";
+import { withQueryTimeout } from "../lib/queryTimeout";
+import { markPerf } from "../lib/perf";
 import { normalizeDateRange, rangePresets } from "../lib/format";
 import { useDateRangeRollover } from "../hooks/useDateRangeRollover";
 import { useAuth } from "./AuthContext";
@@ -32,6 +35,7 @@ import {
 
 const STORAGE_KEYS = {
   selectedProfiles: "inteliads.selectedProfiles",
+  lastUserId: "inteliads.lastUserId",
   dateRange: "inteliads.dateRange",
   royaltyRate: "inteliads.royaltyRate",
   notifications: "inteliads.notifications",
@@ -149,16 +153,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       const dateRangeRevision = dateRangeRevisionRef.current;
-      const [ids, dr, nf, filterUser, kdpSource, exactBidRaw] = await Promise.all([
+      const [ids, dr, nf, filterUser, kdpSource, exactBidRaw, lastUserId] = await Promise.all([
         storage.getItem(STORAGE_KEYS.selectedProfiles, ""),
         storage.getItem(STORAGE_KEYS.dateRange, ""),
         storage.getItem(STORAGE_KEYS.notifications, ""),
         storage.getItem(ADMIN_FILTER_KEY, ""),
         getKdpRoyaltySource(),
         storage.getItem(STORAGE_KEYS.exactHarvestBid, ""),
+        storage.getItem(STORAGE_KEYS.lastUserId, ""),
       ]);
       setKdpRoyaltySourceState(normalizeKdpRoyaltySource(kdpSource));
-      if (typeof filterUser === "string" && filterUser.length > 0) {
+      if (typeof lastUserId === "string" && lastUserId && typeof filterUser === "string" && filterUser.length > 0) {
         setAdminFilterUserIdState(filterUser);
       }
       if (ids && typeof ids === "string") {
@@ -166,6 +171,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const parsed = JSON.parse(ids);
           if (Array.isArray(parsed)) setSelectedProfileIdsState(parsed);
         } catch {}
+      }
+      if (typeof lastUserId === "string" && lastUserId.length > 0) {
+        prevUserIdRef.current = lastUserId;
       }
       if (dr && typeof dr === "string" && dateRangeRevisionRef.current === dateRangeRevision) {
         try {
@@ -202,13 +210,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  // Clear persisted profile selection when the signed-in user changes so one
-  // account never sees data scoped to a different account's profile IDs.
+  // Do not treat the normal cold-start null -> authenticated transition as an
+  // account switch. Only a real user-to-user change or explicit sign-out clears
+  // the persisted scope.
   useEffect(() => {
     if (!hydrated) return;
     const prevId = prevUserIdRef.current;
     const currId = user?.id ?? null;
-    if (prevId !== undefined && prevId !== currId) {
+    if (authState === "loading") return;
+    const clearUserScopedState = () => {
       setSelectedProfileIdsState([]);
       setAdminFilterUserIdState(null);
       setNotificationsState(DEFAULT_NOTIFICATIONS);
@@ -216,16 +226,32 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       void storage.setItem(STORAGE_KEYS.notifications, JSON.stringify(DEFAULT_NOTIFICATIONS));
       void storage.removeItem(ADMIN_FILTER_KEY);
       void clearNotificationIdentity();
+    };
+    if (profileSelectionMustReset(prevId, currId, authState)) clearUserScopedState();
+    if (authState === "unauthenticated") {
+      prevUserIdRef.current = null;
+      void storage.removeItem(STORAGE_KEYS.lastUserId);
+      return;
     }
-    prevUserIdRef.current = currId;
-  }, [user?.id, hydrated]);
+    if (currId) {
+      prevUserIdRef.current = currId;
+      void storage.setItem(STORAGE_KEYS.lastUserId, currId);
+    }
+  }, [authState, user?.id, hydrated]);
 
   const { data: nestReady = false, isFetched: nestTokenFetched } = useQuery({
     queryKey: ["nest-token", user?.id ?? "guest"],
-    queryFn: hasNestToken,
+    queryFn: () => withQueryTimeout(hasNestToken(), 3_000),
     enabled: !!user?.id && authState === "authenticated" && !guestMode,
     staleTime: 15_000,
+    retry: false,
   });
+
+  useEffect(() => {
+    if (!hydrated || !nestTokenFetched || nestReady || !adminFilterUserId) return;
+    setAdminFilterUserIdState(null);
+    void storage.removeItem(ADMIN_FILTER_KEY);
+  }, [hydrated, nestTokenFetched, nestReady, adminFilterUserId]);
 
   const adminUsersQuery = useQuery({
     queryKey: ["admin-users", user?.id],
@@ -258,12 +284,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     void storage.removeItem(ADMIN_FILTER_KEY);
   }, [adminUsersQuery.error, adminFilterUserId]);
 
+  // Seller profile reads are independent of the optional admin customer list.
+  // Only an explicit admin customer view waits for the admin query/token.
   const waitingForCustomer =
-    !!user?.id &&
+    !!adminFilterUserId &&
     !guestMode &&
-    nestReady &&
-    !adminFilterUserId &&
-    !adminUsersQuery.isFetched;
+    (!nestTokenFetched || (nestReady && !adminUsersQuery.isFetched));
 
   const {
     data: profiles = [],
@@ -271,13 +297,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isFetching: profilesFetching,
     isError: profilesError,
     refetch: refetchProfiles,
+    isFetchedAfterMount: profilesFetchedAfterMount,
+    isSuccess: profilesSuccess,
+    dataUpdatedAt: profilesUpdatedAt,
   } = useQuery({
     queryKey: ["amazon-profiles", user?.id ?? "guest", adminFilterUserId ?? "self"],
-    queryFn: () => fetchAmazonProfiles(user?.id, isAdminViewer ? adminFilterUserId : null),
-    enabled: authState === "authenticated" && hydrated && !waitingForCustomer && (guestMode || nestTokenFetched),
+    queryFn: ({ signal }) => fetchAmazonProfiles(user?.id, isAdminViewer ? adminFilterUserId : null, signal),
+    enabled: authState === "authenticated" && hydrated && !waitingForCustomer &&
+      (guestMode || !adminFilterUserId || nestTokenFetched),
     staleTime: 60_000,
     refetchOnMount: "always",
+    retry: false,
   });
+
+  const profileReadMarkRef = useRef("");
+  useEffect(() => {
+    if (!hydrated || authState !== "authenticated" || !profilesSuccess || profilesError) return;
+    const source = profilesFetchedAfterMount ? "server" : "cache";
+    const key = `${user?.id}:${adminFilterUserId}:${profilesUpdatedAt}:${source}`;
+    if (profileReadMarkRef.current === key) return;
+    profileReadMarkRef.current = key;
+    markPerf(`profiles.${source}`);
+  }, [hydrated, authState, profilesSuccess, profilesError, profilesFetchedAfterMount,
+    profilesUpdatedAt, user?.id, adminFilterUserId]);
 
   // Load persisted settings from user_settings table (read-only, cross-device)
   const { data: remoteSettings } = useQuery({
@@ -777,7 +819,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [remoteSettings],
   );
 
-  const scopeLoading = profilesLoading || waitingForCustomer || (!!user && !guestMode && !nestTokenFetched);
+  const scopeLoading = authState === "loading" || !hydrated || profilesLoading || waitingForCustomer;
 
   const value = useMemo(
     () => ({

@@ -259,6 +259,12 @@ export async function nestApiFetch(path: string, init: NestRequestInit = {}): Pr
     });
   let res = await send(picked?.token);
   if (res.status !== 401) return res;
+  // Only the explicit seller denial is terminal. A genuinely expired admin
+  // token must still follow the ordinary credential recovery path.
+  if (path === "/auth/users" || path.startsWith("/auth/users?")) {
+    const denial = await res.clone().json().catch(() => null);
+    if (denial?.message === "Only admins can view all users") return res;
+  }
   if (shouldRefreshNestToken(picked?.source)) {
     const freshNest = await refreshNestToken(picked?.token);
     if (freshNest) {

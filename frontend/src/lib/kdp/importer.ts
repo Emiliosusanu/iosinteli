@@ -436,7 +436,12 @@ async function runKdpIosHelperTickOnce(
       return { ok: true, skipped: true, reason: "source_off" };
     }
     userId = await withKdpPreparationBudget(deadlineAtMs, currentUserId);
-    if (!userId) return { ok: false, skipped: true, reason: "signed_out" };
+    if (!userId) {
+      // Keep background activity truthful: a signed-out helper did not sync,
+      // and the next wake can retry after the user restores the session.
+      void appendKdpActivity("15 min sync skipped · sign in required", "info");
+      return { ok: false, skipped: true, reason: "signed_out" };
+    }
     let live = await withKdpPreparationBudget(deadlineAtMs, () => supabase.auth.getSession());
     // Background may reuse a saved session; account setup/authentication stays
     // in the foreground. SDK auth completion cannot launch detached KDP writes.

@@ -1259,13 +1259,13 @@ export async function fetchNestUsers(): Promise<NestUser[]> {
   return Array.isArray(data) ? data : data.users ?? [];
 }
 
-export async function fetchNestAmazonProfiles(filterUserId?: string | null): Promise<AmazonProfile[]> {
+export async function fetchNestAmazonProfiles(filterUserId?: string | null, signal?: AbortSignal): Promise<AmazonProfile[]> {
   const path = filterUserId
     ? `/amazon/profiles?filterUserId=${encodeURIComponent(filterUserId)}`
     : "/amazon/profiles";
   const data = await nestApiJson<{ profiles?: NestAmazonProfile[] }>(
     path,
-    { method: "GET" },
+    { method: "GET", signal },
     "Couldn't load Amazon profiles.",
   );
   return (data.profiles ?? []).map((p) => {

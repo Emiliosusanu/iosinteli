@@ -39,7 +39,7 @@ audit() {
 audit "usableCachedHomeSnapshot guard" "usableCachedHomeSnapshot" "app/(tabs)/index.tsx"
 audit "snapshot max age" "SNAPSHOT_MAX_AGE_MS" "src/lib/mobileHomeSnapshot.ts"
 audit "background sync wake" "installBackgroundSyncWakeHandlers" "src/lib/notifications.ts"
-audit "server test push" "requestServerTestPush" "src/lib/notifications.ts"
+audit "notification test stays local" "requestServerTestPush" "src/lib/notifications.ts" "forbid"
 audit "home net uses nullable KDP royalties contract" "kdpRoyalties: heroRoyalties, adsSpend: heroSpend" "app/(tabs)/index.tsx"
 audit "home never coerces missing KDP royalties to zero" "heroRoyalties[[:space:]]*\\?\\?[[:space:]]*0" "app/(tabs)/index.tsx" "forbid"
 audit "no hardcoded demo totals" "1234\\.56|9999\\.99" "app/(tabs)/index.tsx" "forbid"
