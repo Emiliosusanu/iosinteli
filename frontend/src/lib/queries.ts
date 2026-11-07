@@ -12,9 +12,11 @@ import {
   fetchNestCampaignById,
   fetchNestKeywordById,
   fetchNestKeywords,
+  fetchNestSearchTermsPage,
   fetchNestProductTargetById,
   fetchNestProductTargets,
   fetchNestTopBooks,
+  fetchNestBookAdsMetrics,
   isNestKeywordSortAvailable,
   noteNestKeywordSortFailure,
 } from "./dashboardApi";
@@ -26,9 +28,12 @@ import {
   TARGETING_PAGE_DISPLAY_ENRICH_MS,
   TARGETING_PAGE_METRICS_BUDGET_MS,
   isHomeQueryTimeout,
+  withAbortableQueryTimeout,
   withQueryTimeout,
 } from "./queryTimeout";
 import { createReadQueue } from "./readRequest";
+import { isAllTimeProductTargetWindow } from "./productTargetLifetime";
+import { activeOverviewRows } from "./overviewWidgetEligibility";
 import {
   campaignPlacementSharesFromBuckets,
   emptyCampaignPlacementShares,
@@ -201,6 +206,11 @@ export function isMobileTargetingSnapshotChanged(error: unknown): boolean {
           String((error as { message?: unknown }).message ?? ""),
         )))
   );
+}
+
+function rethrowTerminalRead(error: unknown): void {
+  const name = (error as { name?: string } | null)?.name;
+  if (name === "AbortError" || isHomeQueryTimeout(error)) throw error;
 }
 
 /**
@@ -1749,14 +1759,57 @@ export async function fetchLinkedAmazonProfileIds(userId: string): Promise<strin
 export async function fetchAmazonProfiles(
   userId?: string | null,
   filterUserId?: string | null,
+  signal?: AbortSignal,
 ): Promise<AmazonProfile[]> {
   if (!userId) return [];
 
-  // Nest resolves direct, account-bridge, and campaign ownership together.
-  // Keep the customer scope explicit for admin viewing; a failed read must
-  // surface as a failed read rather than presenting an empty account list.
-  const profiles = await fetchNestAmazonProfiles(filterUserId);
-  const withKdpCounts = await attachKdpAccountCountsFromBridge(profiles);
+  // The self-only RPC delegates the same three-path ownership resolver as
+  // fetchNestAmazonProfiles, including disabled links. A raw amazon_profiles
+  // read cannot preserve that contract: user_id/is_enabled live on the bridge.
+  let profiles: AmazonProfile[];
+  let includesKdpCounts = false;
+  if (!filterUserId) {
+    try {
+      const rows = await withAbortableQueryTimeout(async (requestSignal) =>
+        fetchAllPages<{ profile: Record<string, unknown> }>((from, to) =>
+          supabase.rpc("mobile_amazon_profiles_v1")
+            .range(from, to).abortSignal(requestSignal),
+          POSTGREST_PAGE_SIZE,
+          { signal: requestSignal },
+        ), 3_000, signal);
+      profiles = rows.map(({ profile: p }) => ({
+        id: String(p.profile_id ?? p.id ?? ""),
+        profile_id: String(p.profile_id ?? p.id ?? ""),
+        country_code: (p.country_code as string | null | undefined) ?? null,
+        currency_code: (p.currency_code as string | null | undefined) ?? null,
+        marketplace_id: (p.marketplace_id as string | null | undefined) ?? null,
+        account_type: (p.account_type as string | null | undefined) ?? null,
+        account_name: (p.account_name as string | null | undefined) ?? null,
+        account_id: (p.account_id as string | null | undefined) ?? null,
+        nickname: (p.nickname as string | null | undefined) ?? null,
+        is_enabled: p.is_enabled === true,
+        campaign_count: (Number(p.campaigns_enabled_count ?? 0) || 0) +
+          (Number(p.campaigns_paused_count ?? 0) || 0),
+        campaigns_enabled_count: Number(p.campaigns_enabled_count ?? 0) || 0,
+        campaigns_paused_count: Number(p.campaigns_paused_count ?? 0) || 0,
+        kdp_account_count: Number(p.kdp_account_count ?? 0) || 0,
+        created_at: String(p.created_at ?? ""),
+        updated_at: String(p.updated_at ?? ""),
+      })).filter(p => p.id);
+      includesKdpCounts = true;
+    } catch (error) {
+      // Deploy compatibility only. A timeout, denial or overloaded pool must
+      // never trigger a second request or be disguised as an empty account.
+      const code = (error as { code?: string })?.code;
+      if (signal?.aborted || (code !== "PGRST202" && code !== "42883")) throw error;
+      profiles = await withAbortableQueryTimeout(
+        requestSignal => fetchNestAmazonProfiles(null, requestSignal), 3_000, signal,
+      );
+    }
+  } else {
+    profiles = await fetchNestAmazonProfiles(filterUserId, signal);
+  }
+  const withKdpCounts = includesKdpCounts ? profiles : await attachKdpAccountCountsFromBridge(profiles);
   return withKdpCounts.sort((a, b) => {
     const enabledDelta = Number(b.is_enabled === true) - Number(a.is_enabled === true);
     if (enabledDelta !== 0) return enabledDelta;
@@ -2225,42 +2278,48 @@ export async function fetchAdGroups(
   });
 }
 
-/** Active parent scope is resolved BEFORE a widget's top-N cap. Paused
- * campaigns cannot crowd active ad groups/keywords out of the result pool. */
-async function fetchOverviewActiveGroupScope(profileIds: string[]): Promise<AdGroup[]> {
-  if (!profileIds.length) return [];
-  const campaigns = await fetchAllPages<{ id: string; state: string | null }>((from, to) =>
-    supabase.from("campaigns").select("id,state").in("amazon_profile_id", profileIds)
-      .in("state", ["enabled", "active", "ENABLED", "ACTIVE"]).order("id", { ascending: true }).range(from, to));
-  const chunks = chunkArray(campaigns.map(row => row.id), 100);
-  const batches = await mapPoolLimited(chunks, 3, ids => fetchAllPages<AdGroup>((from, to) =>
-    supabase.from("ad_groups").select("*").in("amazon_profile_id", profileIds).in("campaign_id", ids)
-      .in("state", ["enabled", "active", "ENABLED", "ACTIVE"]).order("id", { ascending: true }).range(from, to)));
-  return batches.flat();
+async function overviewReadOwner(): Promise<string> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user.id) throw new Error("Sign in to load active entities");
+  return session.user.id;
 }
 
 export async function fetchOverviewActiveKeywords(
-  profileIds: string[], opts: { start: string; end: string; limit?: number; filterUserId?: string | null },
+  profileIds: string[], opts: { start: string; end: string; limit?: number; filterUserId?: string | null; signal?: AbortSignal },
 ): Promise<Array<Keyword & ParentEntityState>> {
   if (!profileIds.length) return [];
+  if (opts.signal?.aborted) throw Object.assign(new Error("Aborted"), { name: "AbortError" });
   if (opts.filterUserId) return fetchAdminOverviewActiveKeywords(profileIds, { ...opts, filterUserId: opts.filterUserId });
-  const groups = await fetchOverviewActiveGroupScope(profileIds);
-  const groupById = new Map(groups.map(group => [group.id, group]));
-  const batches = await mapPoolLimited(chunkArray(groups.map(group => group.id), 60), 3, ids =>
-    fetchKeywords(profileIds, { ...opts, adGroupIds: ids, status: "enabled", limit: opts.limit ?? 80 }));
-  return batches.flat().filter(row => groupById.get(row.ad_group_id ?? "")?.campaign_id === row.campaign_id)
-    .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0)).slice(0, opts.limit ?? 80);
+  const page = await fetchMobileTargetingPage({
+    segment: "keywords", sort: "spend", page: 1, pageSize: opts.limit ?? 80,
+    start: opts.start, end: opts.end, profiles: profileIds,
+    ownerId: await overviewReadOwner(), state: "enabled", skipDisplayEnrich: true,
+    signal: opts.signal,
+  });
+  return page.rows as Array<Keyword & ParentEntityState>;
 }
 
 export async function fetchOverviewActiveAdGroups(
-  profileIds: string[], opts: { start: string; end: string; limit?: number; filterUserId?: string | null },
+  profileIds: string[], opts: { start: string; end: string; limit?: number; filterUserId?: string | null; signal?: AbortSignal },
 ): Promise<Array<AdGroupEnriched & ParentEntityState>> {
   if (!profileIds.length) return [];
+  if (opts.signal?.aborted) throw Object.assign(new Error("Aborted"), { name: "AbortError" });
   if (opts.filterUserId) return fetchAdminOverviewActiveAdGroups(profileIds, { ...opts, filterUserId: opts.filterUserId });
-  const groups = (await fetchOverviewActiveGroupScope(profileIds))
-    .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0)).slice(0, opts.limit ?? 80);
-  const totals = await fetchMetricTotalsByEntity("ad_group_metrics", "ad_group_id", groups.map(row => row.id), opts.start, opts.end);
-  return groups.map(group => ({ ...applyMetricTotals(group, totals.get(group.id) ?? emptyTotals()),
+  // Aggregate the exact period and apply live-parent predicates on the server
+  // before ranking/limiting. Never choose candidates by lifetime spend.
+  const ownerId = await overviewReadOwner();
+  if (opts.signal?.aborted) throw Object.assign(new Error("Aborted"), { name: "AbortError" });
+  let request = supabase.rpc("get_ad_groups_with_metrics", {
+    p_user_id: ownerId, p_campaign_id: null, p_campaign_ids: null,
+    p_state: "enabled", p_campaign_status: "enabled", p_search: null,
+    p_start_date: opts.start, p_end_date: opts.end,
+  }).in("amazon_profile_id", profileIds)
+    .order("total_spend", { ascending: false }).order("id", { ascending: true }).limit(opts.limit ?? 80);
+  if (opts.signal) request = request.abortSignal(opts.signal);
+  const { data, error } = await request;
+  if (error) throw error;
+  if (!Array.isArray(data)) throw new Error("Active ad group response unavailable");
+  return (data as AdGroup[]).map(group => ({ ...group,
     campaign_state: "enabled", keyword_count: 0, product_target_count: 0, auto_target_count: 0,
     is_auto: String(group.targeting_type ?? "").toLowerCase() === "auto" }));
 }
@@ -2432,6 +2491,7 @@ export async function fetchKeywords(
       return await attachParentEntityStates(nestRows);
     } catch (error) {
       if (opts.filterUserId) throw error;
+      rethrowTerminalRead(error);
       noteNestKeywordSortFailure(error);
       // eslint-disable-next-line no-console
       console.warn("[inteliads:targeting] Nest keywords failed; falling back to Supabase", error);
@@ -2615,7 +2675,7 @@ export type ParentEntityState = {
 /** Batch-attach parent campaign/ad-group state for Active-parent filtering. */
 export async function attachParentEntityStates<
   T extends { campaign_id?: string | null; ad_group_id?: string | null },
->(rows: T[]): Promise<Array<T & ParentEntityState>> {
+>(rows: T[], options?: { strict?: boolean; signal?: AbortSignal }): Promise<Array<T & ParentEntityState>> {
   if (!rows.length) return rows as Array<T & ParentEntityState>;
   const campaignIds = uniqueStrings(rows.map((row) => String(row.campaign_id || "")).filter(Boolean));
   const adGroupIds = uniqueStrings(rows.map((row) => String(row.ad_group_id || "")).filter(Boolean));
@@ -2625,14 +2685,18 @@ export async function attachParentEntityStates<
   try {
     await Promise.all([
       ...chunkArray(campaignIds, 200).map(async (chunk) => {
-        const { data, error } = await supabase.from("campaigns").select("id, state").in("id", chunk);
+        let request = supabase.from("campaigns").select("id, state").in("id", chunk);
+        if (options?.signal) request = request.abortSignal(options.signal);
+        const { data, error } = await request;
         if (error) throw error;
         for (const row of data ?? []) {
           campaignState.set(String((row as any).id), ((row as any).state as string | null) ?? null);
         }
       }),
       ...chunkArray(adGroupIds, 200).map(async (chunk) => {
-        const { data, error } = await supabase.from("ad_groups").select("id, state").in("id", chunk);
+        let request = supabase.from("ad_groups").select("id, state").in("id", chunk);
+        if (options?.signal) request = request.abortSignal(options.signal);
+        const { data, error } = await request;
         if (error) throw error;
         for (const row of data ?? []) {
           adGroupState.set(String((row as any).id), ((row as any).state as string | null) ?? null);
@@ -2640,6 +2704,7 @@ export async function attachParentEntityStates<
       }),
     ]);
   } catch (error) {
+    if (options?.strict) throw error;
     // Soft-degrade: parent state is filter polish — never blank Keywords/Targets.
     // eslint-disable-next-line no-console
     console.warn("[inteliads:targeting] attachParentEntityStates failed", error);
@@ -2967,7 +3032,7 @@ export async function fetchProductTargets(
         merged = await restrictRowsToOwnedCampaigns(merged, opts.ownerUserId);
       }
       let totals = new Map<string, MetricsTotals>();
-      if (opts.start && opts.end) {
+      if (opts.start && opts.end && !isAllTimeProductTargetWindow(opts.start, opts.end)) {
         try {
           totals = await withQueryTimeout(
             fetchMetricTotalsByEntity(
@@ -3064,6 +3129,7 @@ export async function fetchProductTargets(
       return await attachParentEntityStates(enriched);
     } catch (error) {
       if (opts.filterUserId) throw error;
+      rethrowTerminalRead(error);
       // eslint-disable-next-line no-console
       console.warn("[inteliads:targeting] Nest product targets failed; falling back to Supabase", error);
     }
@@ -3118,7 +3184,7 @@ export async function fetchProductTargets(
   }
 
   let totals = new Map<string, MetricsTotals>();
-  if (opts.start && opts.end) {
+  if (opts.start && opts.end && !isAllTimeProductTargetWindow(opts.start, opts.end)) {
     try {
       const enrich = () =>
         fetchMetricTotalsByEntity(
@@ -3260,11 +3326,12 @@ export async function enrichProductTargetDisplay(
       rowsNeedingAsinData.map((row) => productTargetDisplayAsin(row)).filter(Boolean),
     );
     if (extractedAsins.length) {
-      const { data: adImages } = await supabase
+      const { data: adImages, error: adImagesError } = await supabase
         .from("product_ads")
         .select("asin, image_url, title")
         .in("amazon_profile_id", profileIds)
         .in("asin", extractedAsins);
+      if (isHomeQueryTimeout(adImagesError)) return enriched;
       if (adImages) {
         const imageByAsin = new Map(
           (adImages as any[]).map((a) => [
@@ -3433,11 +3500,12 @@ export async function enrichProductTargetDisplay(
       stillNeedCampaignCover.map((row) => row.campaign_id).filter(Boolean) as string[],
     );
     if (campaignIds.length) {
-      const { data: campaignAds } = await supabase
+      const { data: campaignAds, error: campaignAdsError } = await supabase
         .from("product_ads")
         .select("campaign_id, asin, image_url, title")
         .in("amazon_profile_id", profileIds)
         .in("campaign_id", campaignIds);
+      if (isHomeQueryTimeout(campaignAdsError)) return enriched;
       if (campaignAds?.length) {
         const byCampaign = new Map<
           string,
@@ -3958,10 +4026,11 @@ async function fetchEnabledSponsoredBooksForProfiles(
     data = await fetchAllPages<any>((from, to) =>
       supabase
         .from("product_ads")
-        .select("asin, sku, title, campaign_id, image_url, status, campaigns!inner(state)")
+        .select("asin, sku, title, campaign_id, ad_group_id, image_url, status, campaigns!inner(state), ad_groups!inner(state, campaign_id)")
         .in("amazon_profile_id", profileIds)
         .in("status", ["enabled"])
         .in("campaigns.state", ["enabled"])
+        .in("ad_groups.state", ["enabled"])
         .order("id", { ascending: true })
         .range(from, to),
     );
@@ -3970,7 +4039,7 @@ async function fetchEnabledSponsoredBooksForProfiles(
     const ads = await fetchAllPages<any>((from, to) =>
       supabase
         .from("product_ads")
-        .select("asin, sku, title, campaign_id, image_url, status")
+        .select("asin, sku, title, campaign_id, ad_group_id, image_url, status")
         .in("amazon_profile_id", profileIds)
         .in("status", ["enabled"])
         .order("id", { ascending: true })
@@ -3992,7 +4061,16 @@ async function fetchEnabledSponsoredBooksForProfiles(
         liveCampaignIds.add(String((row as any).id));
       }
     }
-    data = ads.filter((row) => liveCampaignIds.has(String(row.campaign_id || "").trim()));
+    const groupIds = [...new Set(ads.map(row => String(row.ad_group_id || '').trim()).filter(Boolean))];
+    const liveGroups = new Map<string, string>();
+    for (let offset = 0; offset < groupIds.length; offset += 200) {
+      const groups = await fetchAllPages<any>((from, to) => supabase.from('ad_groups')
+        .select('id, campaign_id, state').in('id', groupIds.slice(offset, offset + 200))
+        .in('state', ['enabled']).order('id', { ascending: true }).range(from, to));
+      for (const group of groups) liveGroups.set(String(group.id), String(group.campaign_id));
+    }
+    data = ads.filter(row => liveCampaignIds.has(String(row.campaign_id || '').trim())
+      && liveGroups.get(String(row.ad_group_id || '').trim()) === String(row.campaign_id || '').trim());
   }
 
   const byAsin = new Map<
@@ -4009,6 +4087,8 @@ async function fetchEnabledSponsoredBooksForProfiles(
     const imageUrl = String((row as any).image_url || "").trim() || null;
     const campaignState = String((row as any).campaigns?.state || "").toLowerCase();
     if (campaignState && !liveCampaignStates.has(campaignState)) continue;
+    if (row.ad_groups && (String(row.ad_groups.state).toLowerCase() !== 'enabled'
+      || String(row.ad_groups.campaign_id) !== campaignId)) continue;
     const cur = byAsin.get(asin) ?? {
       title,
       image_url: null as string | null,
@@ -4154,8 +4234,9 @@ export async function fetchCampaignAdvertisedAsin(
     if (fromProfiles) return fromProfiles;
   }
 
-  // 2) Retry product_ads by campaign_id alone (no profile filter) — covers
+  // 2) product_ads by campaign_id alone (no profile filter) — covers
   // null amazon_profile_id rows and profile-selection mismatches.
+  // A timeout here must not start the asin-link read.
   {
     const { data, error } = await supabase
       .from("product_ads")
@@ -4168,7 +4249,7 @@ export async function fetchCampaignAdvertisedAsin(
     if (fromCampaign) return fromCampaign;
   }
 
-  // 3) campaign_asin_links (explicit link; Nest resolveCampaignAsin fallback)
+  // 3) campaign_asin_links only after product_ads finished without a timeout.
   {
     const { data, error } = await supabase
       .from("campaign_asin_links")
@@ -4253,6 +4334,42 @@ export async function fetchProductAds(
 }
 
 // ---------- Search Terms ----------
+/** Server-ranked pages, with a bounded live-parent check. Unknown is an error,
+ * never an empty successful widget. The cursor skips fully ineligible pages. */
+const activeSearchTermRead = createReadQueue(2);
+
+export async function fetchEnabledSearchTermsPage(input: Parameters<typeof fetchNestSearchTermsPage>[0]) {
+  return activeSearchTermRead(signal => readEnabledSearchTermsPage({ ...input, signal }), input.signal, 18_000);
+}
+
+async function readEnabledSearchTermsPage(input: Parameters<typeof fetchNestSearchTermsPage>[0]) {
+  if (input.filterUserId) throw new Error("Enabled-parent search terms unavailable in customer preview");
+  for (let page = input.page; page < input.page + 20; page++) {
+    assertSearchTermsNotAborted(input.signal);
+    const result = await fetchNestSearchTermsPage({ ...input, page });
+    assertSearchTermsNotAborted(input.signal);
+    const rows = await attachParentEntityStates(result.data, { strict: true, signal: input.signal });
+    const data = activeOverviewRows(rows, "searchTerm");
+    if (data.length || !result.hasNextPage) return { ...result, data };
+  }
+  throw new Error("Live-parent search exceeded the read budget; narrow the filters");
+}
+
+export async function fetchOverviewActiveSearchTerms(profileIds: string[], opts: { start: string; end: string; limit?: number; signal?: AbortSignal }) {
+  return activeSearchTermRead(async signal => {
+    const limit = opts.limit ?? 80;
+    const rows: SearchTerm[] = [];
+    for (let page = 1, reads = 0; reads < 20; reads++) {
+      const result = await readEnabledSearchTermsPage({ profileIds, startDate: opts.start, endDate: opts.end,
+        page, perPage: 100, sortBy: "total_spend", signal });
+      rows.push(...result.data);
+      if (rows.length >= limit || !result.hasNextPage) return rows.slice(0, limit);
+      page = result.page + 1;
+    }
+    throw new Error("Active search term catalog is incomplete");
+  }, opts.signal, 18_000);
+}
+
 function assertSearchTermsNotAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
     throw new IncompleteReadError("PostgREST read aborted");
@@ -4790,6 +4907,8 @@ interface RangeOpts {
 
 /** A book/campaign association is valid only when Amazon Ads exposes its advertised ASIN/SKU. */
 export type BookCampaignMatchSource = "product_ad";
+export type BookCampaignMetricState = "ready" | "unavailable";
+export type BookCampaignPlacementState = "ready" | "unavailable";
 
 export interface TopCampaignRow {
   id: string;
@@ -4837,6 +4956,8 @@ export interface TopCampaignRow {
   book_title?: string | null;
   book_image_url?: string | null;
   book_match_source?: BookCampaignMatchSource | null;
+  metrics_state?: BookCampaignMetricState;
+  placement_state?: BookCampaignPlacementState;
 }
 
 async function enrichTopCampaignsWithSettingsCooldown(
@@ -5040,6 +5161,7 @@ export async function fetchTopCampaignsRange(
       return enrichTopCampaignsWithSettingsCooldown(await attachPlacement(limited));
     }
   } catch (error) {
+    rethrowTerminalRead(error);
     console.warn("[inteliads] Nest campaign aggregation failed; falling back to Supabase", error);
   }
   const effectiveRoyaltyRate = royaltyRate > 0 ? royaltyRate : 0;
@@ -5237,6 +5359,7 @@ export async function fetchTopCampaignsRange(
 
 export interface BookCampaignRow extends TopCampaignRow {
   match_source: BookCampaignMatchSource;
+  matched_book_asins: string[];
 }
 
 export async function fetchBookCampaignsRange(
@@ -5261,9 +5384,16 @@ export async function fetchBookCampaignsRange(
   if (!asinFilterValues.length) return [];
 
   const matchSourceByCampaignId = new Map<string, BookCampaignMatchSource>();
+  const matchedAsinsByCampaignId = new Map<string, Set<string>>();
   const setMatch = (campaignId: string | null | undefined) => {
     if (!campaignId) return;
     matchSourceByCampaignId.set(campaignId, "product_ad");
+  };
+  const addMatchedAsin = (campaignId: string | null | undefined, value: string) => {
+    if (!campaignId || !value) return;
+    const asins = matchedAsinsByCampaignId.get(campaignId) ?? new Set<string>();
+    asins.add(value);
+    matchedAsinsByCampaignId.set(campaignId, asins);
   };
 
   // Ownership-scoped: only product ads for this logical book's ASINs/SKUs —
@@ -5282,9 +5412,11 @@ export async function fetchBookCampaignsRange(
   for (const ad of productAds) {
     const adAsin = String((ad as any).asin ?? "").toUpperCase();
     const adSku = String((ad as any).sku ?? "").toUpperCase();
-    if (asinBelongsToLogicalBook(adAsin, bookAsins) || asinBelongsToLogicalBook(adSku, bookAsins)) {
-      setMatch((ad as any).campaign_id);
-    }
+    const campaignId = (ad as any).campaign_id;
+    const matched = [adAsin, adSku].filter((value) => asinBelongsToLogicalBook(value, bookAsins));
+    if (!matched.length) continue;
+    setMatch(campaignId);
+    matched.forEach((value) => addMatchedAsin(campaignId, value));
   }
 
   const matchedCampaignIds = Array.from(matchSourceByCampaignId.keys());
@@ -5326,13 +5458,17 @@ export async function fetchBookCampaignsRange(
     : new Map<string, number>();
 
   const campaignById = new Map((campaigns as any[]).map((campaign) => [campaign.id, campaign]));
-  // Placement + metrics are soft — never let either hold the book Campaigns
-  // spinner open until the outer 45s abort. Rows paint with zeros if metrics lag.
+  // Placement + metrics are soft — keep campaign identity visible within the
+  // local budget, but carry availability state so zeros are never mistaken for
+  // a completed metric read.
+  let placementState: BookCampaignPlacementState = "ready";
+  let metricsState: BookCampaignMetricState = "ready";
   const [placementShares, metricRows] = await Promise.all([
     withQueryTimeout(
       fetchCampaignPlacementShares(matchedCampaignIds, start, end),
       BOOK_CAMPAIGN_PLACEMENT_BUDGET_MS,
     ).catch((error) => {
+      placementState = "unavailable";
       // eslint-disable-next-line no-console
       console.warn("[inteliads:book-campaigns] placement shares skipped", error);
       return new Map<string, CampaignPlacementShares>();
@@ -5341,6 +5477,7 @@ export async function fetchBookCampaignsRange(
       fetchCampaignMetricRows(matchedCampaignIds, start, end),
       BOOK_CAMPAIGN_METRICS_BUDGET_MS,
     ).catch((error) => {
+      metricsState = "unavailable";
       // eslint-disable-next-line no-console
       console.warn("[inteliads:book-campaigns] metrics soft-timed out", error);
       return [] as Awaited<ReturnType<typeof fetchCampaignMetricRows>>;
@@ -5368,6 +5505,8 @@ export async function fetchBookCampaignsRange(
       acos: 0,
       roas: 0,
       net: 0,
+      metrics_state: metricsState,
+      placement_state: placementState,
     });
   }
 
@@ -5393,6 +5532,7 @@ export async function fetchBookCampaignsRange(
   return Array.from(totals.values())
     .map((row) => ({
       ...row,
+      matched_book_asins: [...(matchedAsinsByCampaignId.get(row.id) ?? [])].sort(),
       acos: row.sales > 0 ? (row.spend / row.sales) * 100 : 0,
       roas: row.spend > 0 ? row.sales / row.spend : 0,
       // Ads-attributed sales minus spend. Not publisher Net Royalties.
@@ -5502,6 +5642,8 @@ export async function fetchTopKeywordsRange(opts: RangeOpts): Promise<TopKeyword
 }
 
 export interface TopBookRow {
+  orders_source?: "kdp" | "ads";
+  orders_state?: "ready" | "missing";
   book_key: string;
   asin: string;
   sku: string | null;
@@ -5509,8 +5651,8 @@ export interface TopBookRow {
   format_asins?: string[];
   title: string | null;
   image_url: string | null;
-  impressions: number;
-  clicks: number;
+  impressions: number | null;
+  clicks: number | null;
   orders: number;
   /** KDP store units; separate from Amazon Ads attributed orders. */
   kdp_orders?: number;
@@ -5787,8 +5929,8 @@ async function nestShelfCatalogRows(): Promise<TopBookRow[]> {
         sku: fromCandidates?.sku ?? selectedMeta?.sku ?? null,
         title: fromCandidates?.title || selectedMeta?.title || null,
         image_url: fromCandidates?.coverUrl ?? selectedMeta?.coverUrl ?? null,
-        impressions: 0,
-        clicks: 0,
+        impressions: null,
+        clicks: null,
         orders: 0,
         kdp_orders: 0,
         spend: 0,
@@ -5832,8 +5974,8 @@ async function nestShelfCatalogRows(): Promise<TopBookRow[]> {
         sku: meta.sku ?? null,
         title: meta.title || null,
         image_url: meta.coverUrl ?? null,
-        impressions: 0,
-        clicks: 0,
+        impressions: null,
+        clicks: null,
         orders: 0,
         kdp_orders: 0,
         spend: 0,
@@ -5861,8 +6003,8 @@ async function nestShelfCatalogRows(): Promise<TopBookRow[]> {
           sku: row.sku,
           title: row.title,
           image_url: row.image_url,
-          impressions: 0,
-          clicks: 0,
+          impressions: null,
+          clicks: null,
           orders: 0,
           kdp_orders: 0,
           spend: 0,
@@ -5894,6 +6036,8 @@ async function finalizeCatalogBooksList(
   kdpAccountIds: string[],
   limit: number,
   preloadedShelf?: TopBookRow[] | null,
+  startDate?: string,
+  endDate?: string,
 ): Promise<TopBookRow[]> {
   const shelf = preloadedShelf ?? (await nestShelfCatalogRows());
   const sponsorableAsins = new Set<string>();
@@ -5953,8 +6097,8 @@ async function finalizeCatalogBooksList(
           sku: null,
           title: book.title || null,
           image_url: book.image_url ?? null,
-          impressions: 0,
-          clicks: 0,
+          impressions: null,
+          clicks: null,
           orders: 0,
           kdp_orders: 0,
           spend: 0,
@@ -5964,7 +6108,9 @@ async function finalizeCatalogBooksList(
           roas: null,
           net: null,
           breakeven_acos: 0,
-          ads_state: "ready",
+          ads_state: "missing",
+          orders_state: "missing",
+          orders_source: "ads",
           kdp_state: "missing",
           sponsorable: true,
           has_campaign: true,
@@ -5972,8 +6118,29 @@ async function finalizeCatalogBooksList(
           has_format_activity: false,
         });
       }
-    } catch {
-      // Soft-fail — periodRows has_campaign stamps still apply.
+    } catch (error) {
+      // A failed inventory read cannot certify complete campaign membership.
+      throw error;
+    }
+  }
+  if (campaignOnlyShelf.length && startDate && endDate) {
+    for (let offset = 0; offset < campaignOnlyShelf.length; offset += 200) {
+      const batch = campaignOnlyShelf.slice(offset, offset + 200);
+      try {
+        const metrics = await fetchNestBookAdsMetrics({ profileIds, startDate, endDate, asins: batch.map(row => row.asin) });
+        const byAsin = new Map(metrics.map(row => [row.asin, row]));
+        for (const row of batch) {
+          const measured = byAsin.get(row.asin);
+          if (!measured) continue;
+          Object.assign(row, { spend: measured.spend, sales: measured.sales, clicks: measured.clicks,
+            impressions: measured.impressions, orders: measured.orders ?? 0,
+            orders_state: measured.orders == null ? "missing" : "ready", ads_state: "ready",
+            acos: measured.sales > 0 ? measured.spend / measured.sales * 100 : 0,
+            roas: measured.spend > 0 ? measured.sales / measured.spend : null });
+        }
+      } catch {
+        // Keep advertised identities visible, but never present missing reads as measured zero.
+      }
     }
   }
   const merged = mergeTopBookCatalogRows([...shelf, ...campaignOnlyShelf], periodRows);
@@ -6073,7 +6240,7 @@ export async function fetchTopBooksRange(
         // minutes. Books visibility needs period evidence or an enabled campaign,
         // not eligibility to create another campaign. The finalizer already
         // unions verified enabled campaign identities without that discovery.
-        return finalizeCatalogBooksList(nestRows, profileIds, kdpAccountIds, limit, []);
+        return finalizeCatalogBooksList(nestRows, profileIds, kdpAccountIds, limit, [], start, end);
       }
     } catch (error) {
       // A catalog error after a valid server financial read must not start a
@@ -6459,6 +6626,8 @@ export async function fetchTopBooksRange(
           kdpAccountIds,
           limit,
           await (nestShelfPromise ?? Promise.resolve([])),
+          start,
+          end,
         );
       }
       return finalizeTopBooksList(assembled, profileIds, kdpAccountIds, limit, activityDays);
@@ -6474,6 +6643,8 @@ export async function fetchTopBooksRange(
       kdpAccountIds,
       limit,
       await (nestShelfPromise ?? Promise.resolve([])),
+      start,
+      end,
     );
   }
 

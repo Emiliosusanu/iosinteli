@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { shouldRetryBooksRead, bookRetailRefetchInterval } from '../src/lib/booksReadRecovery.ts';
-test('a timed-out read recovers with two bounded retries', () => {
- for (const error of [new Error('HOME_QUERY_TIMEOUT'), new Error('Network request failed'), {status:503}, {code:'57014'}]) {
+test('a transport blip recovers with two bounded retries', () => {
+ for (const error of [new Error('Network request failed'), {status:503}]) {
   assert.equal(shouldRetryBooksRead(0,error),true); assert.equal(shouldRetryBooksRead(1,error),true); assert.equal(shouldRetryBooksRead(2,error),false);
+ }
+});
+test('statement timeouts and HTTP 408 are not retried', () => {
+ for (const error of [new Error('HOME_QUERY_TIMEOUT'), {code:'57014'}, {status:408}, {message:'canceling statement due to statement timeout'}]) {
+  assert.equal(shouldRetryBooksRead(0,error),false);
  }
 });
 test('access denial, missing ownership, cancellation and unknown failures never auto-retry', () => {

@@ -72,6 +72,7 @@ test("mutation-sensitive details keep identity grouped and switches independent"
 test("shared decorative tone and bid tap stay labeled without swallowing siblings", () => {
   assert.match(primitives, /export function ToneDot/);
   assert.match(primitives, /accessibilityElementsHidden/);
-  assert.match(mutations, /\$\{label\} \$\{value\}\$\{locked \? ", cooldown" : ""\}/);
+  assert.match(mutations, /accessibilityLabel \?\? `\$\{label\} \$\{value\}`/);
+  assert.match(mutations, /\$\{locked \? ", cooldown" : ""\}/);
   assert.match(mutations, /\$\{noun\} \$\{shown \? "active" : "paused"\}/);
 });

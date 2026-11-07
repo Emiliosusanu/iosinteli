@@ -115,6 +115,10 @@ import {
   workFamilyKey,
   type LiveAsinStock,
 } from "@/src/lib/campaignCreationStock";
+import {
+  buildCampaignCreationBody,
+  placementPercentsFromText,
+} from "@/src/lib/campaignCreationPayload";
 import { formatCurrency } from "@/src/lib/format";
 import {
   keywordDedupeKey,
@@ -137,6 +141,12 @@ import {
 } from "@/src/lib/mutations";
 import { fetchActiveCampaignsForBookProfile, fetchTargetingBookOptions } from "@/src/lib/queries";
 import { sortedProfileIds } from "@/src/lib/periodQuery";
+import { TERMINAL_READ_TIMEOUT_SUBTITLE } from "@/src/lib/loadErrorCopy";
+import {
+  failureFromUnknown,
+  productTargetResubmitBlocked,
+  unconfirmedCreateNotice,
+} from "@/src/lib/productTargetCreateOutcome";
 import { CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS, CAMPAIGN_CREATION_MARKETPLACES_TIMEOUT_MS, isHomeQueryTimeout, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { targetingBookHasCampaigns } from "@/src/lib/targetingBookFilter";
 import { appQueryClient } from "@/src/lib/queryClient";
@@ -229,7 +239,7 @@ function amount(value: string, min: number, max: number) {
 
 function catalogErrorSubtitle(error: unknown) {
   if (isHomeQueryTimeout(error)) {
-    return "Book catalog is taking longer than usual. Try again.";
+    return TERMINAL_READ_TIMEOUT_SUBTITLE;
   }
   if (error instanceof NestApiError) {
     if (error.status === 429)
@@ -312,22 +322,29 @@ function Choice({
   selected,
   onPress,
   disabled = false,
+  testID,
+  full = false,
 }: {
   label: string;
   selected: boolean;
   onPress: () => void;
   disabled?: boolean;
+  testID?: string;
+  full?: boolean;
 }) {
   const t = useTheme();
   return (
     <CreateScalePressable
+      testID={testID}
       accessibilityRole="button"
+      accessibilityLabel={label}
       accessibilityState={{ selected, disabled }}
       disabled={disabled}
       hapticSelect
       onPress={onPress}
       style={[
         styles.choice,
+        full && styles.choiceFull,
         {
           borderColor: selected ? t.colors.tone_primary : t.colors.separator,
           backgroundColor: selected
@@ -365,6 +382,9 @@ function Field({
   placeholder,
   numeric = false,
   suffix,
+  testID,
+  accessibilityLabel,
+  block = false,
 }: {
   label: string;
   value: string;
@@ -372,10 +392,13 @@ function Field({
   placeholder?: string;
   numeric?: boolean;
   suffix?: string;
+  testID?: string;
+  accessibilityLabel?: string;
+  block?: boolean;
 }) {
   const t = useTheme();
   return (
-    <View style={{ flex: 1, minWidth: 125 }}>
+    <View style={block ? styles.fieldBlock : { flex: 1, minWidth: 125 }}>
       <Text
         style={[
           t.typography.caption1,
@@ -394,11 +417,14 @@ function Field({
         ]}
       >
         <TextInput
+          testID={testID}
+          accessibilityLabel={accessibilityLabel ?? label}
           value={value}
           onChangeText={onChangeText}
           placeholder={placeholder}
           placeholderTextColor={t.colors.text_tertiary}
           keyboardType={numeric ? "decimal-pad" : "default"}
+          selectTextOnFocus={numeric}
           autoCorrect={!numeric}
           style={[
             t.typography.body,
@@ -514,6 +540,8 @@ export default function CreateCampaignScreen() {
   );
   const [prefillApplied, setPrefillApplied] = useState(false);
   const [preview, setPreview] = useState<CampaignCreationPreview | null>(null);
+  const [unconfirmedCreate, setUnconfirmedCreate] = useState<string | null>(null);
+  const unconfirmedCreateRef = useRef(false);
   // Stable entity identities prevent an AI/meta re-rank from moving a checkmark
   // onto a different keyword or ASIN before Create is pressed.
   const [selectedKeywords, setSelectedKeywords] = useState<Set<string>>(
@@ -578,15 +606,14 @@ export default function CreateCampaignScreen() {
   const [topPlacement, setTopPlacement] = useState("0");
   const [productPlacement, setProductPlacement] = useState("0");
   const [restPlacement, setRestPlacement] = useState("0");
+  // Creation is reversible; activation must be an explicit user choice.
   const [enableAfterCreate, setEnableAfterCreate] = useState(false);
 
   const booksQ = useQuery({
     queryKey: CAMPAIGN_CREATION_BOOKS_QUERY_KEY,
     queryFn: ({ signal }) =>
       withQueryTimeout(fetchCampaignCreationBooks(), CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS, signal),
-    // One soft retry on timeout — kill/relaunch stress often races Nest cold start.
-    retry: (count, error) => count < 1 && isHomeQueryTimeout(error),
-    retryDelay: 1_500,
+    retry: false,
     staleTime: 60_000,
     refetchOnMount: "always",
   });
@@ -980,10 +1007,21 @@ export default function CreateCampaignScreen() {
 
   const createM = useMutation({
     mutationFn: async () => {
+      if (unconfirmedCreateRef.current) {
+        throw new Error("Amazon did not confirm this. It was not submitted again.");
+      }
       const dailyBudget = amount(budget, 1, 1_000_000)!;
       const bid = amount(defaultBid, 0.02, 1000)!;
       const customAsins = parseCustomAsins(customAsinText);
-      return createCampaign({
+      const placements = placementPercentsFromText({
+        topOfSearch: topPlacement,
+        productPages: productPlacement,
+        restOfSearch: restPlacement,
+      });
+      if (!placements) {
+        throw new Error("Placement bid adjustment must be between 0 and 900.");
+      }
+      return createCampaign(buildCampaignCreationBody({
         profileId: adsProfileId || profileId,
         advertisedAsin: book!.asin,
         targeting,
@@ -992,11 +1030,7 @@ export default function CreateCampaignScreen() {
         dailyBudget,
         defaultBid: bid,
         biddingStrategy: strategy,
-        placements: {
-          topOfSearch: amount(topPlacement, 0, 900)!,
-          productPages: amount(productPlacement, 0, 900)!,
-          restOfSearch: amount(restPlacement, 0, 900)!,
-        },
+        placements,
         enableAfterCreate,
         requestId: requestId(),
         keywords:
@@ -1059,7 +1093,7 @@ export default function CreateCampaignScreen() {
                 })),
               ]).productTargets
             : undefined,
-      });
+      }));
     },
     onSuccess: (result) => {
       void playHaptic("success", reduceMotion);
@@ -1083,6 +1117,14 @@ export default function CreateCampaignScreen() {
     },
     onError: (error) => {
       void playHaptic("error", reduceMotion);
+      const failure = failureFromUnknown(error);
+      if (productTargetResubmitBlocked(failure)) {
+        const notice = unconfirmedCreateNotice(failure);
+        unconfirmedCreateRef.current = true;
+        setUnconfirmedCreate(notice);
+        Alert.alert("Amazon didn't confirm this", notice);
+        return;
+      }
       alertMutationError(
         error,
         "Amazon didn't confirm the complete setup. Nothing is presented as active.",
@@ -1097,6 +1139,8 @@ export default function CreateCampaignScreen() {
     setProfileId(next.id);
     setAdsProfileId(resolveCreationProfileId(next));
     setPreview(null);
+    unconfirmedCreateRef.current = false;
+    setUnconfirmedCreate(null);
     setSuggestionsError(null);
     setSuggestionMetaByAsin({});
     setSuggestionTitlesLoading(false);
@@ -1204,6 +1248,8 @@ export default function CreateCampaignScreen() {
     }
     previewRequestGenRef.current += 1;
     setPreview(null);
+    unconfirmedCreateRef.current = false;
+    setUnconfirmedCreate(null);
     setSuggestionMetaByAsin({});
     setSuggestionTitlesLoading(false);
     // Fresh book — do not keep prior ASINs' in/out-of-stock captions.
@@ -1308,9 +1354,11 @@ export default function CreateCampaignScreen() {
     adGroupName.trim() &&
     amount(budget, 1, 1_000_000) != null &&
     amount(defaultBid, 0.02, 1000) != null &&
-    amount(topPlacement, 0, 900) != null &&
-    amount(productPlacement, 0, 900) != null &&
-    amount(restPlacement, 0, 900) != null,
+    placementPercentsFromText({
+      topOfSearch: topPlacement,
+      productPages: productPlacement,
+      restOfSearch: restPlacement,
+    }),
   );
   const customKeywords = useMemo(
     () => parseCustomKeywords(customKeywordText),
@@ -1949,7 +1997,8 @@ export default function CreateCampaignScreen() {
       hasTargets &&
       !aiFilterPending &&
       !aiFilterNeedsConfirm &&
-      !previewM.isPending,
+      !previewM.isPending &&
+      !unconfirmedCreate,
   );
   const acceptAmazonUnfiltered = useCallback(() => {
     setPreview((prev) => {
@@ -4090,21 +4139,39 @@ export default function CreateCampaignScreen() {
             </ListCard>
 
             <ListCard compact style={{ overflow: "visible" }}>
-              <StepHeader step={5} title="Bidding" />
-              <View style={{ marginTop: 10, minHeight: 44 }}>
-                <IOSSegmentedControl
-                  forceFallback
-                  options={[
-                    { key: "LEGACY_FOR_SALES", label: "Down only" },
-                    { key: "AUTO_FOR_SALES", label: "Up & down" },
-                    { key: "MANUAL", label: "Fixed" },
-                  ]}
-                  value={strategy}
-                  onChange={setStrategy}
+              <StepHeader
+                step={5}
+                title="Bidding"
+                hint="Strategy and placement percents are sent with the campaign."
+              />
+              <View testID="campaign-create-strategy" style={{ marginTop: 10, gap: 8 }}>
+                <Choice
+                  testID="campaign-create-strategy-down"
+                  full
+                  label="Down only"
+                  selected={strategy === "LEGACY_FOR_SALES"}
+                  onPress={() => setStrategy("LEGACY_FOR_SALES")}
+                />
+                <Choice
+                  testID="campaign-create-strategy-up-down"
+                  full
+                  label="Up & down"
+                  selected={strategy === "AUTO_FOR_SALES"}
+                  onPress={() => setStrategy("AUTO_FOR_SALES")}
+                />
+                <Choice
+                  testID="campaign-create-strategy-fixed"
+                  full
+                  label="Fixed"
+                  selected={strategy === "MANUAL"}
+                  onPress={() => setStrategy("MANUAL")}
                 />
               </View>
-              <View style={[styles.fields, { marginTop: 10 }]}>
+              <View testID="campaign-create-placements" style={{ marginTop: 12, gap: 12 }}>
                 <Field
+                  block
+                  testID="campaign-create-placement-top"
+                  accessibilityLabel="Top of search placement bid percent"
                   label="Top of search"
                   value={topPlacement}
                   onChangeText={setTopPlacement}
@@ -4112,6 +4179,9 @@ export default function CreateCampaignScreen() {
                   suffix="%"
                 />
                 <Field
+                  block
+                  testID="campaign-create-placement-product"
+                  accessibilityLabel="Product pages placement bid percent"
                   label="Product pages"
                   value={productPlacement}
                   onChangeText={setProductPlacement}
@@ -4119,6 +4189,9 @@ export default function CreateCampaignScreen() {
                   suffix="%"
                 />
                 <Field
+                  block
+                  testID="campaign-create-placement-rest"
+                  accessibilityLabel="Rest of search placement bid percent"
                   label="Rest of search"
                   value={restPlacement}
                   onChangeText={setRestPlacement}
@@ -4147,10 +4220,14 @@ export default function CreateCampaignScreen() {
                       { color: t.colors.text_secondary, marginTop: 2 },
                     ]}
                   >
-                    Starts paused.
+                    {enableAfterCreate
+                      ? "Campaign and ad group start active."
+                      : "Starts paused."}
                   </Text>
                 </View>
                 <Switch
+                  testID="campaign-create-activate"
+                  accessibilityLabel="Activate campaign and ad group when created"
                   value={enableAfterCreate}
                   onValueChange={setEnableAfterCreate}
                   trackColor={{ true: t.colors.tone_good }}
@@ -4247,6 +4324,11 @@ export default function CreateCampaignScreen() {
               },
             ]}
           >
+            {unconfirmedCreate ? (
+              <Text style={[t.typography.footnote, { color: t.colors.tone_danger, marginBottom: 8 }]}>
+                {unconfirmedCreate}
+              </Text>
+            ) : null}
             <PrimaryButton
               testID="campaign-create-submit"
               label={
@@ -4267,14 +4349,17 @@ export default function CreateCampaignScreen() {
                   return;
                 Alert.alert(
                   enableAfterCreate ? "Create & activate?" : "Create paused?",
-                  `${name}\n${formatCurrency(Number(budget) || 0, currency || "USD")}/day · ${strategy === "AUTO_FOR_SALES" ? "Up & down" : strategy === "MANUAL" ? "Fixed" : "Down only"}`,
+                  `${name}\n${formatCurrency(Number(budget) || 0, currency || "USD")}/day · ${strategy === "AUTO_FOR_SALES" ? "Up & down" : strategy === "MANUAL" ? "Fixed" : "Down only"}\nTop of search ${topPlacement}% · Product pages ${productPlacement}% · Rest of search ${restPlacement}%`,
                   [
                     { text: "Cancel", style: "cancel" },
                     {
                       text: enableAfterCreate
                         ? "Create & activate"
                         : "Create paused",
-                      onPress: () => createM.mutate(),
+                      onPress: () => {
+                        if (unconfirmedCreateRef.current) return;
+                        createM.mutate();
+                      },
                     },
                   ],
                 );
@@ -4499,6 +4584,13 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     borderCurve: "continuous",
     borderWidth: StyleSheet.hairlineWidth,
+  },
+  choiceFull: {
+    alignSelf: "stretch",
+    minHeight: 44,
+  },
+  fieldBlock: {
+    alignSelf: "stretch",
   },
   bookGroup: {
     gap: 8,

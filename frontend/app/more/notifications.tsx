@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, ScrollView, Linking, type TextStyle } from "react-native";
 import Slider from "@react-native-community/slider";
 import { type Href, useRouter } from "expo-router";
@@ -52,7 +52,20 @@ export default function NotificationsScreen() {
   const router = useRouter();
   const { guestMode, user } = useAuth();
   const { notifications, setNotifications, notificationRuntime, adminFilterUserId, selectedProfileIds } = useApp();
-  const [testStatus, setTestStatus] = useState<"idle" | "sending" | "sent" | "server" | "blocked">("idle");
+  const [testStatus, setTestStatus] = useState<"idle" | "sending" | "sent" | "blocked" | "failed">("idle");
+  const testInFlight = useRef(false);
+  const testRevision = useRef(0);
+  const testTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const revision = testRevision.current + 1;
+    testRevision.current = revision;
+    testInFlight.current = false;
+    setTestStatus("idle");
+    return () => {
+      testRevision.current = revision + 1;
+      if (testTimer.current) clearTimeout(testTimer.current);
+    };
+  }, [user?.id, guestMode]);
 
   const viewingCustomer = !!adminFilterUserId;
   const alertsLocked = guestMode;
@@ -62,7 +75,7 @@ export default function NotificationsScreen() {
   const nowMs = Date.now();
 
   const ingestQ = useQuery({
-    queryKey: ["kdp-ingest-freshness", selectedProfileIds],
+    queryKey: ["kdp-ingest-freshness", user?.id ?? "guest", adminFilterUserId ?? "self", selectedProfileIds],
     queryFn: () => loadScopedKdpFreshness(selectedProfileIds),
     enabled: !guestMode && !viewingCustomer && selectedProfileIds.length > 0,
     staleTime: 60_000,
@@ -77,15 +90,20 @@ export default function NotificationsScreen() {
   }, [guestMode, viewingCustomer, ingestQ.isError, ingestQ.isSuccess, ingestRows.length]);
 
   const handleTestNotification = async () => {
-    if (guestMode) return;
+    if (guestMode || testInFlight.current) return;
     if (testStatus === "blocked" || permissionDenied) {
       void Linking.openSettings();
       return;
     }
+    testInFlight.current = true;
+    const revision = testRevision.current;
+    if (testTimer.current) clearTimeout(testTimer.current);
     setTestStatus("sending");
     const result = await sendTestNotification(user?.id);
-    setTestStatus(result === "server" ? "server" : result === "local" ? "sent" : "blocked");
-    setTimeout(() => setTestStatus("idle"), 4000);
+    if (revision !== testRevision.current) return;
+    testInFlight.current = false;
+    setTestStatus(result === "local" ? "sent" : result);
+    testTimer.current = setTimeout(() => setTestStatus("idle"), 4000);
   };
 
   return (
@@ -102,7 +120,7 @@ export default function NotificationsScreen() {
 
         <SettingsSection
           testID="notification-settings-card"
-          title="Alerts"
+          title="Alerts · all enabled profiles"
           footer={
             notificationFooter({
               guestMode,
@@ -215,16 +233,16 @@ export default function NotificationsScreen() {
             testID="notif-send-test"
             label={testNotificationLabel(testRowStatus)}
             symbol={
-              testStatus === "sent" || testStatus === "server"
+              testStatus === "sent"
                 ? "checkmark.circle.fill"
-                : testStatus === "blocked" || permissionDenied
+                : testStatus === "blocked" || testStatus === "failed" || permissionDenied
                   ? "exclamationmark.triangle.fill"
                   : "bell"
             }
             symbolColor={
-              testStatus === "sent" || testStatus === "server"
+              testStatus === "sent"
                 ? t.colors.tone_good
-                : testStatus === "blocked" || permissionDenied
+                : testStatus === "blocked" || testStatus === "failed" || permissionDenied
                   ? t.colors.tone_danger
                   : t.colors.tone_primary
             }

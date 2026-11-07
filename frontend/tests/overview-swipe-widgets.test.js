@@ -36,12 +36,11 @@ function eightCampaigns() {
   ];
 }
 
-test("matrix: Campaigns High ACoS keeps converting + spend/impressions, never zero-metric pads", () => {
+test("matrix: Campaigns High ACoS contains only measured ratios", () => {
   const high = campaignsHighAcos(eightCampaigns());
-  // acos rows + impression pads (no spenders without sales in this set beyond acos)
   assert.deepEqual(
     high.map((row) => row.id),
-    ["acos-hi", "acos-lo", "imp-1", "imp-2", "click-1", "click-2"],
+    ["acos-hi", "acos-lo"],
   );
   assert.ok(!high.some((row) => row.id === "sync-new"));
 });
@@ -55,7 +54,7 @@ test("matrix: Campaigns Low ACoS differs order of converting rows", () => {
   assert.equal(overviewLowAcosDiffersFromHigh(high, low), false);
 });
 
-test("matrix: Campaigns Top spend pads impressions only — never zero-metric sync fillers", () => {
+test("matrix: Campaigns Top spend never pads with impression-only rows", () => {
   const padded = campaignsTopSpend([
     { id: "s1", spend: 50, sales: 0, acos: 0, clicks: 0, impressions: 1, updated_at: "2026-08-01T00:00:00Z" },
     { id: "i1", spend: 0, sales: 0, acos: 0, clicks: 0, impressions: 400, updated_at: "2026-08-01T00:00:00Z" },
@@ -65,18 +64,18 @@ test("matrix: Campaigns Top spend pads impressions only — never zero-metric sy
   ]);
   assert.deepEqual(
     padded.map((row) => row.id),
-    ["s1", "i1", "i2"],
+    ["s1"],
   );
 });
 
-test("matrix: Ad groups High ACoS cascade without zero-metric sync pad", () => {
+test("matrix: Ad groups High ACoS excludes undefined ratios", () => {
   const groups = [
     { id: "g1", name: "hi", total_sales: 20, total_acos: 60, total_spend: 8, total_impressions: 10, updated_at: "2026-08-01T00:00:00Z" },
     { id: "g2", name: "spend", total_sales: 0, total_acos: 0, total_spend: 50, total_impressions: 10, updated_at: "2026-08-01T00:00:00Z" },
     { id: "g3", name: "imp", total_sales: 0, total_acos: 0, total_spend: 0, total_impressions: 900, updated_at: "2026-08-01T00:00:00Z" },
     { id: "g4", name: "sync", total_sales: 0, total_acos: 0, total_spend: 0, total_impressions: 0, updated_at: "2026-09-02T00:00:00Z" },
   ];
-  assert.deepEqual(adGroupsHighAcos(groups).map((row) => row.id), ["g1", "g2", "g3"]);
+  assert.deepEqual(adGroupsHighAcos(groups).map((row) => row.id), ["g1"]);
 });
 
 test("matrix: Keywords/Search no-orders pages never include converters", () => {
@@ -86,7 +85,7 @@ test("matrix: Keywords/Search no-orders pages never include converters", () => {
     { id: "u1", keyword_text: "sync", total_spend: 0, total_orders: 0, total_impressions: 0, updated_at: "2026-09-01T00:00:00Z" },
     { id: "a1", keyword_text: "acos", total_spend: 8, total_orders: 1, total_sales: 20, total_acos: 45, total_impressions: 2, updated_at: "2026-08-01T00:00:00Z" },
   ];
-  assert.deepEqual(keywordsSpendingNoOrders(keywords).map((row) => row.id), ["s1", "i1"]);
+  assert.deepEqual(keywordsSpendingNoOrders(keywords).map((row) => row.id), ["s1"]);
   assert.equal(keywordsHighAcos(keywords)[0].id, "a1");
 
   const terms = [
@@ -95,7 +94,7 @@ test("matrix: Keywords/Search no-orders pages never include converters", () => {
     { id: "t3", search_term: "c", total_spend: 0, total_orders: 0, total_impressions: 0, updated_at: "2026-09-01T00:00:00Z" },
     { id: "t4", search_term: "d", total_spend: 2, total_orders: 1, total_sales: 10, total_acos: 12, total_impressions: 3, updated_at: "2026-08-01T00:00:00Z" },
   ];
-  assert.deepEqual(searchTermsSpendNoOrders(terms).map((row) => row.id), ["t1", "t2"]);
+  assert.deepEqual(searchTermsSpendNoOrders(terms).map((row) => row.id), ["t1"]);
   assert.equal(searchTermsLowAcos(terms)[0].id, "t4");
 });
 
@@ -108,9 +107,9 @@ test("matrix: Books Top royalties stays royalty-only; Ad spend page excludes con
     { asin: "E", book_key: "E", sales: 0, acos: 0, spend: 0, royalties: null, impressions: 0, clicks: 40, kdp_state: "missing", updated_at: "2026-08-10T00:00:00Z" },
   ];
   assert.deepEqual(booksTopRoyalties(books).map((row) => row.asin), ["C", "A", "B"]);
-  assert.deepEqual(booksHighAcos(books).map((row) => row.asin), ["A", "B", "C", "D"]);
-  assert.deepEqual(booksLowAcos(books).map((row) => row.asin), ["B", "A", "C", "D"]);
-  assert.deepEqual(booksSpendingNoAdSales(books).map((row) => row.asin), ["C", "D"]);
+  assert.deepEqual(booksHighAcos(books).map((row) => row.asin), ["A", "B"]);
+  assert.deepEqual(booksLowAcos(books).map((row) => row.asin), ["B", "A"]);
+  assert.deepEqual(booksSpendingNoAdSales(books).map((row) => row.asin), ["C"]);
   assert.ok(booksWorstProfit(books).length >= 3);
 });
 
@@ -212,8 +211,8 @@ test("Campaigns widget ranks exclude paused before top-N (High ACoS / Low ACoS /
     { id: "paused-spend", name: "ps", state: "PAUSED", sales: 0, acos: 0, spend: 200, impressions: 10, updated_at: "2026-08-01T00:00:00Z" },
     { id: "enabled-spend", name: "es", state: "enabled", sales: 0, acos: 0, spend: 40, impressions: 5, updated_at: "2026-08-01T00:00:00Z" },
   ];
-  assert.deepEqual(campaignsHighAcos(rows).map((row) => row.id), ["enabled-mid", "active-lo", "enabled-spend"]);
-  assert.deepEqual(campaignsLowAcos(rows).map((row) => row.id), ["active-lo", "enabled-mid", "enabled-spend"]);
+  assert.deepEqual(campaignsHighAcos(rows).map((row) => row.id), ["enabled-mid", "active-lo"]);
+  assert.deepEqual(campaignsLowAcos(rows).map((row) => row.id), ["active-lo", "enabled-mid"]);
   assert.deepEqual(campaignsTopSpend(rows).map((row) => row.id), ["enabled-spend", "enabled-mid", "active-lo"]);
   assert.ok(!campaignsHighAcos(rows).some((row) => String(row.state || "").toLowerCase() === "paused"));
 });
@@ -224,5 +223,5 @@ test("Ad groups High ACoS excludes paused ad groups before ranking", () => {
     { id: "g-enabled", name: "hi", state: "enabled", total_sales: 18, total_acos: 60, total_spend: 10, total_impressions: 10, updated_at: "2026-08-01T00:00:00Z" },
     { id: "g-active", name: "spend", state: "active", total_sales: 0, total_acos: 0, total_spend: 50, total_impressions: 10, updated_at: "2026-08-01T00:00:00Z" },
   ];
-  assert.deepEqual(adGroupsHighAcos(groups).map((row) => row.id), ["g-enabled", "g-active"]);
+  assert.deepEqual(adGroupsHighAcos(groups).map((row) => row.id), ["g-enabled"]);
 });

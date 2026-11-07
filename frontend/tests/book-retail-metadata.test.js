@@ -9,6 +9,7 @@ import {
   indexProfileBookRetailSnapshots,
   primaryBookRetailEdition,
   highestBookRetailReviewSnapshot,
+  mergeBookRetailObservation,
 } from "../src/lib/bookRetailMetadata.ts";
 
 const book = {
@@ -16,6 +17,19 @@ const book = {
   asin: "B0ABCDEFGH",
   format_asins: ["B0ABCDEFGH", "1803014466"],
 };
+
+test('a completed exact-market listing clears pending without erasing known observations', () => {
+  const prior = { asin: 'B0ABCDEFGH', marketplaceCode: 'US', rating: 4.4, reviewCount: 17,
+    stockStatus: 'IN_STOCK', checkedAt: '2026-10-30T10:00:00Z', retailPending: true };
+  const incoming = { ...prior, rating: null, reviewCount: null, stockStatus: null, retailPending: false };
+  const merged = mergeBookRetailObservation(prior, incoming);
+  assert.equal(merged.retailPending, false);
+  assert.equal(merged.reviewCount, 17);
+  assert.equal(merged.stockStatus, 'IN_STOCK');
+  assert.equal(mergeBookRetailObservation(merged, { ...incoming, retailPending: true }).retailPending, true);
+  const { retailPending, ...unspecified } = incoming;
+  assert.equal(mergeBookRetailObservation(prior, unspecified).retailPending, true);
+});
 
 test("retail metadata stays on the exact format ASIN", () => {
   const snapshots = indexBookRetailSnapshots([
@@ -72,6 +86,16 @@ test("latest timestamp wins for duplicate owned records; missing is not zero", (
     stockStatus: null,
     checkedAt: null,
   });
+});
+
+test("a later stock-only row keeps the earlier review count for the same book", () => {
+  const snapshots = indexBookRetailSnapshots([
+    { asin: "B0DLJ1D8NG", amazon_rating: 4.4, amazon_review_count: 117, amazon_stock_status: "IN_STOCK", amazon_meta_updated_at: "2026-10-20T10:00:00Z", marketplace_code: "US" },
+    { asin: "B0DLJ1D8NG", amazon_rating: null, amazon_review_count: null, amazon_stock_status: "IN_STOCK", amazon_meta_updated_at: "2026-10-24T10:00:00Z", marketplace_code: "US" },
+  ]);
+  assert.equal(snapshots.B0DLJ1D8NG.reviewCount, 117);
+  assert.equal(snapshots.B0DLJ1D8NG.rating, 4.4);
+  assert.equal(snapshots.B0DLJ1D8NG.stockStatus, "IN_STOCK");
 });
 
 test("stock tone recognizes explicit negative status without treating it as available", () => {

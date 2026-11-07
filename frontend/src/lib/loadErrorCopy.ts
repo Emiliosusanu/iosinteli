@@ -7,3 +7,6 @@ export function couldntLoad(entity: string): string {
 }
 
 export const LOAD_RETRY_SUBTITLE = "Try again in a moment.";
+
+/** Shown with an explicit Retry control. The failed read is not sent again on its own. */
+export const TERMINAL_READ_TIMEOUT_SUBTITLE = "This read timed out and was not sent again.";

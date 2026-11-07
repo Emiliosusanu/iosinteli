@@ -88,7 +88,7 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
     const nested = root?.nestedHistogram?.histogramList;
     const rows = Array.isArray(nested) ? histogramListRowsForDay(nested, String(ymd)) : root?.histogram?.data;
     const metricKeys = ['TotalRoyalties', 'TotalMarketplaceRoyalties', 'PaperbackRoyalties',
-      'MarketplacePaperbackRoyalties', 'HardcoverRoyalties', 'MarketplaceHardcoverRoyalties',
+      'MarketplacePaperbackRoyalties', 'TandemRoyalties', 'MarketplaceTandemRoyalties', 'HardcoverRoyalties', 'MarketplaceHardcoverRoyalties',
       'DigitalRoyalties', 'MarketplaceDigitalRoyalties', 'PagesReadRoyalties', 'MarketplacePagesReadRoyalties',
       'AudiobookRoyalties', 'AudibleRoyalties', 'MarketplaceAudiobookRoyalties', 'MarketplaceAudibleRoyalties'];
     for (const row of (Array.isArray(rows) ? rows : [])) {
@@ -192,7 +192,8 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
     const vals = r?.values || {};
     const has = (k) => Object.prototype.hasOwnProperty.call(vals, k);
     row.hardcoverRoyaltiesPresent = has('HardcoverRoyalties') || has('MarketplaceHardcoverRoyalties');
-    row.paperbackRoyaltiesPresent = has('PaperbackRoyalties') || has('MarketplacePaperbackRoyalties');
+    row.paperbackRoyaltiesPresent = has('PaperbackRoyalties') || has('MarketplacePaperbackRoyalties')
+      || has('TandemRoyalties') || has('MarketplaceTandemRoyalties');
     const audioKeys = preferMarketplaceFields
       ? ['MarketplaceAudiobookRoyalties', 'AudiobookRoyalties', 'MarketplaceAudibleRoyalties', 'AudibleRoyalties']
       : ['AudiobookRoyalties', 'MarketplaceAudiobookRoyalties', 'AudibleRoyalties', 'MarketplaceAudibleRoyalties'];
@@ -214,6 +215,14 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
       row.digitalRoyalties = Number((has('DigitalRoyalties') ? vals.DigitalRoyalties : vals.MarketplaceDigitalRoyalties) || 0);
       row.digitalRoyaltiesPresent = has('DigitalRoyalties') || has('MarketplaceDigitalRoyalties');
     }
+    // Amazon reports Tandem amounts separately, matching the separate
+    // TandemOrders already retained in paperback units. Keep the selected
+    // currency scope and signed value; never derive this amount from a total.
+    const tandemKeys = preferMarketplaceFields
+      ? ['MarketplaceTandemRoyalties', 'TandemRoyalties']
+      : ['TandemRoyalties', 'MarketplaceTandemRoyalties'];
+    const tandemKey = tandemKeys.find(has);
+    if (tandemKey) row.paperbackRoyalties += Number(vals[tandemKey]);
   }
 
   if (ordersJson) {

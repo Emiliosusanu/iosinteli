@@ -1351,7 +1351,7 @@ export function formatKeywordSuggestionCountLabel(
   } else if (outcome === "failed_unfiltered") {
     parts.push("Amazon suggestions");
   } else if (outcome === "restored_empty") {
-    parts.push("Amazon restored (AI empty)");
+    parts.push("Amazon restored");
   } else if (outcome === "user_accepted_unfiltered") {
     parts.push("Using Amazon unfiltered");
   } else if (
@@ -1360,8 +1360,7 @@ export function formatKeywordSuggestionCountLabel(
   ) {
     parts.push(`Kept ${stats.keptRowCount}`);
   } else if (amazonRows > 0) {
-    // Grok finished without thinning — still disclose AI ran.
-    parts.push("AI kept all");
+    parts.push("Kept all");
   }
   // amazonRows === 0: leave "Amazon · 0" alone — do not claim AI kept anything.
   if (

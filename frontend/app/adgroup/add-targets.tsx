@@ -43,6 +43,11 @@ import {
 } from "@/src/lib/mutations";
 import { parseCustomAsins } from "@/src/lib/campaignCreationStock";
 import {
+  failureFromUnknown,
+  productTargetResubmitBlocked,
+  unconfirmedCreateNotice,
+} from "@/src/lib/productTargetCreateOutcome";
+import {
   clusterKeywordSuggestionsByPhrase,
   clusterProductSuggestionsByAsin,
   expandProductSuggestionsWithMatchTypes,
@@ -187,6 +192,8 @@ export default function AddAdGroupTargetsScreen() {
     Partial<Record<string, string>>
   >({});
   const [submitting, setSubmitting] = useState(false);
+  const [unconfirmedCreate, setUnconfirmedCreate] = useState<string | null>(null);
+  const unconfirmedCreateRef = useRef(false);
   const [suggestionQuery, setSuggestionQuery] = useState("");
   const [suggestionMatch, setSuggestionMatch] = useState("all");
   const [visibleSuggestionCount, setVisibleSuggestionCount] = useState(50);
@@ -626,7 +633,9 @@ export default function AddAdGroupTargetsScreen() {
       selectedCount === 0 ||
       submitting ||
       aiFilterPending ||
-      aiFilterNeedsConfirm
+      aiFilterNeedsConfirm ||
+      unconfirmedCreate ||
+      unconfirmedCreateRef.current
     )
       return;
     setSubmitting(true);
@@ -747,6 +756,14 @@ export default function AddAdGroupTargetsScreen() {
         );
       }
     } catch (error) {
+      const failure = failureFromUnknown(error);
+      if (productTargetResubmitBlocked(failure)) {
+        const notice = unconfirmedCreateNotice(failure);
+        unconfirmedCreateRef.current = true;
+        setUnconfirmedCreate(notice);
+        Alert.alert("Amazon didn't confirm this", notice);
+        return;
+      }
       alertMutationError(error, "Couldn't add targets");
     } finally {
       setSubmitting(false);
@@ -1183,6 +1200,9 @@ export default function AddAdGroupTargetsScreen() {
           )}
         </SectionCard>
 
+        {unconfirmedCreate ? (
+          <Text style={[t.typography.footnote, { color: t.colors.tone_danger }]}>{unconfirmedCreate}</Text>
+        ) : null}
         <PrimaryButton
           testID="adgroup-add-targets-submit"
           label={
@@ -1202,7 +1222,8 @@ export default function AddAdGroupTargetsScreen() {
             selectedCount === 0 ||
             submitting ||
             aiFilterPending ||
-            aiFilterNeedsConfirm
+            aiFilterNeedsConfirm ||
+            Boolean(unconfirmedCreate)
           }
           onPress={() => void onSubmit()}
         />
