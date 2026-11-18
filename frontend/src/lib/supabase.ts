@@ -2,6 +2,7 @@ import "react-native-url-polyfill/auto";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createSessionIdentityBoundary, createSessionRefresh } from "./sessionRefresh";
+import { supabaseDestination } from "./supabaseDestination";
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
@@ -12,7 +13,8 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 /** createClient throws on empty URL — never let a Release bake take down launch. */
-const SAFE_SUPABASE_URL = supabaseUrl || "https://unavailable.supabase.co";
+const destination = supabaseDestination(supabaseUrl || "https://unavailable.supabase.co");
+const SAFE_SUPABASE_URL = destination.url;
 const SAFE_SUPABASE_ANON_KEY = supabaseAnonKey || "unavailable";
 
 // Detect whether we're in SSR (no `window`, no `document`). During SSR we use a
@@ -42,6 +44,7 @@ if (typeof g.WebSocket === "undefined") {
 
 export const supabase: SupabaseClient = createClient(SAFE_SUPABASE_URL, SAFE_SUPABASE_ANON_KEY, {
   auth: {
+    ...(destination.storageKey ? { storageKey: destination.storageKey } : {}),
     storage: isSSR ? (noopStorage as unknown as Storage) : (AsyncStorage as unknown as Storage),
     autoRefreshToken: !isSSR,
     persistSession: !isSSR,
