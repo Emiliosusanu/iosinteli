@@ -41,7 +41,8 @@ Replaced by a renamed or stronger local test unless noted. None was weakened to 
 - `npx tsc --noEmit`: exit 0.
 - `npm run test:unit`: 1574 tests, 1574 pass, 0 fail (canonical source re-verified the same day: 1573 pass, tsc exit 0).
 - No conflict markers anywhere in tracked files.
-- Not run: `npm run test:stress`, `npm run test:cert`, `npm run ios:release-guard` (needs the `.ios-canonical-worktree` marker of the blessed worktree), Xcode build, device or TestFlight tests.
+- `npm run test:stress`: PASSED, 111 of 111 audits and 1574 of 1574 tests. One audit (`kdp interval tick AppContext`) was stale on the canonical source too: it looked for the literal `runKdpIosHelperTick("interval"`, while the local line wires the timer as `setInterval(() => tick("interval"), 15 * 60_000)` and forwards `reason`. It now checks that wiring and the forwarding, so it still fails if the timer is removed.
+- Not run: `npm run test:cert` (needs the iPhone and tests the installed build, not this source), `npm run ios:release-guard` (needs the `.ios-canonical-worktree` marker of the blessed worktree), Xcode build, TestFlight tests.
 
 ## What a new binary candidate requires
 
