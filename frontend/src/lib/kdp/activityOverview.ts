@@ -32,6 +32,8 @@ export function buildKdpHelperOverview(args: {
   lastError?: string | null;
   running?: boolean;
   nowMs?: number;
+  /** False on a Chrome-import iPhone. Local planner flags are not account failures. */
+  collectsHere?: boolean;
 }): KdpHelperOverviewRow[] {
   const nowMs = args.nowMs ?? Date.now();
   const deferred = (args.deferredDays ?? []).filter(isYmd);
@@ -100,6 +102,13 @@ export function buildKdpHelperOverview(args: {
       title: "Onboarding: 30-day milestone done",
       detail: "Extending toward 90 days",
       tone: "warn",
+    });
+  } else if (args.collectsHere === false) {
+    rows.push({
+      id: "onboarding",
+      title: "Royalties import on Chrome",
+      detail: "This iPhone does not collect KDP",
+      tone: "neutral",
     });
   } else {
     rows.push({

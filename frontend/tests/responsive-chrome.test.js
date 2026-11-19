@@ -35,13 +35,37 @@ test("bottom navigation shows one selected inline label and five icons at phone 
   vm.runInNewContext(ts.transpileModule(tabBar, { compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.CommonJS } }).outputText, context);
   const routes = ["index", "campaigns", "targeting", "products", "more"].map(name => ({ name, key: name }));
   const labels = ["Home", "Campaigns", "Targets", "Books", "More"];
+  const compactLabels = ["Home", "Ads", "Target", "Books", "More"];
   const flatten = node => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(flatten) : [node, ...node.children.flatMap(flatten)];
   for (width of [320, 393, 430]) for (let index = 0; index < routes.length; index++) {
     const tree = flatten(exports.FloatingTabBar({ state: { index, routes }, descriptors: Object.fromEntries(routes.map(route => [route.key, { options: {} }])), navigation: {} }));
     const text = tree.filter(node => node.type === "Text");
-    assert.equal(text.length, 1); assert.equal(text[0].children[0], labels[index]);
+    assert.equal(text.length, 1); assert.equal(text[0].children[0], (width < 360 ? compactLabels : labels)[index]);
     assert.equal(tree.filter(node => node.type === "SFSymbol").length, 5);
     assert.equal(tree.filter(node => node.type === "PressableScale" && node.props.accessibilityState.selected).length, 1);
+    const slots = tree.filter(node => node.type === "View" && Array.isArray(node.props?.style)
+      && node.props.style.some(style => style?.flexBasis === 44));
+    assert.equal(slots.length, 5);
+    for (let slot = 0; slot < slots.length; slot++) {
+      const layout = Object.assign({}, ...slots[slot].props.style.filter(Boolean));
+      assert.equal(layout.flexGrow, slot === index ? 1 : 0);
+      assert.equal(layout.flexBasis, slot === index ? 0 : 44);
+    }
+  }
+});
+
+test("approved dock treatment keeps inactive icons unframed and touch targets separate", () => {
+  assert.doesNotMatch(tabBar, /idleFill|borderWidth|borderColor/);
+  assert.match(tabBar, /flexBasis: 44/);
+  assert.match(tabBar, /minWidth: 44/);
+  assert.match(tabBar, /hitSlop=\{0\}/);
+  assert.match(tabBar, /fontWeight: "600"/);
+  for (const width of [320, 375, 393, 430, 768]) {
+    const scale = dockScaleForWidth(width);
+    const rail = Math.min(width - scale.sideInset * 2, scale.maxWidth);
+    const selectedWidth = rail - scale.padH * 2 - 4 * 4 - 4 * 44;
+    assert.ok(selectedWidth >= 44, `Selected target fits at ${width}`);
+    assert.ok(scale.segmentMinHeight >= 44);
   }
 });
 

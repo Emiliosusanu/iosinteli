@@ -37,10 +37,10 @@ export function normalizeAsin(value) {
 
 export function extractAsinsFromGroupKey(groupKey) {
   const s = String(groupKey || '');
-  const digitalMatch = s.match(/(?:digitalAsin|DIGITAL)\s*[:=]\s*([A-Z0-9]{10})/i);
-  const printMatch = s.match(/(?:printAsin|PRINT)\s*[:=]\s*([A-Z0-9]{10})/i);
-  const hardcoverMatch = s.match(/(?:hardcoverAsin|HARDCOVER)\s*[:=]\s*([A-Z0-9]{10})/i);
-  const audiobookMatch = s.match(/(?:audiobookAsin|AUDIOBOOK|AUDIBLE)\s*[:=]\s*([A-Z0-9]{10})/i);
+  const digitalMatch = s.match(/(?:^|[^A-Z0-9_])(?:digitalAsin|DIGITAL)\s*[:=]\s*([A-Z0-9]{10})(?![A-Z0-9_])/i);
+  const printMatch = s.match(/(?:^|[^A-Z0-9_])(?:printAsin|PRINT)\s*[:=]\s*([A-Z0-9]{10})(?![A-Z0-9_])/i);
+  const hardcoverMatch = s.match(/(?:^|[^A-Z0-9_])(?:hardcoverAsin|HARDCOVER)\s*[:=]\s*([A-Z0-9]{10})(?![A-Z0-9_])/i);
+  const audiobookMatch = s.match(/(?:^|[^A-Z0-9_])(?:audiobookAsin|AUDIOBOOK|AUDIBLE)\s*[:=]\s*([A-Z0-9]{10})(?![A-Z0-9_])/i);
   const exactAsin = !digitalMatch && !printMatch && !hardcoverMatch && ASIN_RE.test(String(s || '').trim())
     ? String(s).trim().toUpperCase()
     : null;

@@ -24,7 +24,7 @@ import {
   fetchSearchTermDailyAggregate,
 } from "@/src/lib/queries";
 import { HOME_PERIOD_QUERY_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
-import { ADS_ENGINE_FUNNEL_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
+import { ADS_ENGINE_FUNNEL_TIMEOUT_MS, isHomeQueryTimeout, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { hasAuthoritativeBreakEven } from "@/src/lib/kdpTitlePresentation";
 import { dashboard, useTheme, type Theme } from "@/src/lib/theme";
 
@@ -309,8 +309,8 @@ export function AdsEngineKeywordsPage({
   if (q.isPending) return <SwipeEmpty kind="loading" message="Loading keyword funnel…" t={t} />;
   if (q.isError) {
     return (
-      <TouchableOpacity onPress={() => void q.refetch()} accessibilityRole="button">
-        <SwipeEmpty kind="error" message="Couldn't load keyword metrics. Tap to retry." t={t} />
+      <TouchableOpacity onPress={() => void q.refetch()} accessibilityRole="button" accessibilityLabel="Retry keyword metrics">
+        <SwipeEmpty kind="error" message={isHomeQueryTimeout(q.error) ? "Couldn't load keyword metrics. This read timed out and was not sent again. Retry" : "Couldn't load keyword metrics. Retry"} t={t} />
       </TouchableOpacity>
     );
   }
@@ -392,8 +392,8 @@ export function AdsEngineSearchTermsPage({
   if (q.isPending) return <SwipeEmpty kind="loading" message="Loading search-term funnel…" t={t} />;
   if (q.isError) {
     return (
-      <TouchableOpacity onPress={() => void q.refetch()} accessibilityRole="button">
-        <SwipeEmpty kind="error" message="Couldn't load search-term metrics. Tap to retry." t={t} />
+      <TouchableOpacity onPress={() => void q.refetch()} accessibilityRole="button" accessibilityLabel="Retry search-term metrics">
+        <SwipeEmpty kind="error" message={isHomeQueryTimeout(q.error) ? "Couldn't load search-term metrics. This read timed out and was not sent again. Retry" : "Couldn't load search-term metrics. Retry"} t={t} />
       </TouchableOpacity>
     );
   }

@@ -1,6 +1,15 @@
 export const KDP_PAGE_HOOK_JS: string;
 export const KDP_VENDOR_FUNCTIONS: string[];
 
+export type KdpReportFact = {
+  asin: string;
+  format: string;
+  marketplace: string;
+  units: number;
+  royalties: number;
+  kenp: number;
+};
+
 export function buildKdpFromJsons(input: {
   ymd: string;
   titlesJson: unknown;
@@ -14,7 +23,7 @@ export function buildKdpFromJsons(input: {
   rowsBookDaily: Record<string, unknown>[];
   rowDaily: Record<string, unknown>;
   rowEntry: Record<string, unknown>;
-  facts: unknown[];
+  facts: KdpReportFact[];
 };
 
 export function buildTitlesRows(input: {
@@ -31,6 +40,11 @@ export function pickTemplateTypeByUrl(url: string): string | null;
 export function updateUrlDates(url: string, from: string, to: string): string;
 export function updatePostData(postData: unknown, from: string, to: string): string | null;
 export function findFirstRange(obj: unknown): { startDate?: string; endDate?: string } | null;
+export function findKdpReportRoot(json: unknown): {
+  histogram?: { data?: unknown };
+  nestedHistogram?: { histogramList?: unknown };
+} | null;
+export function normalizeHistogramTitleToYmd(value: unknown): string | null;
 export function detectUsesYmdDates(input: unknown): boolean;
 export function rangeIsoPreserveCapturedOffsets(input: unknown): { from: string; to: string };
 export function tryParseJson(text: string): unknown;

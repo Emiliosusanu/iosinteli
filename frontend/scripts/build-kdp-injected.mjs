@@ -337,6 +337,8 @@ const nowIso = () => new Date().toISOString();
       "updateUrlDates",
       "updatePostData",
       "findFirstRange",
+      "findKdpReportRoot",
+      "normalizeHistogramTitleToYmd",
       "detectUsesYmdDates",
       "rangeIsoPreserveCapturedOffsets",
       "tryParseJson",
@@ -352,7 +354,7 @@ const nowIso = () => new Date().toISOString();
   // Imported pure helpers are outside sw.js's function closure. Keep their
   // modules alongside the generated parser so regeneration cannot ship
   // unresolved identity or HTML-validation calls.
-  const helperModules = ['kdp-catalog-identity.js', 'kdp-report-urls.js', 'kdp-account-match.js'];
+  const helperModules = ['kdp-catalog-identity.js', 'kdp-report-urls.js', 'kdp-account-match.js', 'kdp-complete-capture.js'];
   const helperImports = `import { applyCatalogIdentity, buildCanonicalTitlesRows } from './kdp-catalog-identity.js';
 import { looksLikeHtmlDocument } from './kdp-report-urls.js';
 import { decideKdpAccountCatalogMatch } from './kdp-account-match.js';\n`;

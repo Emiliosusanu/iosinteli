@@ -97,29 +97,18 @@ test("iOS status-bar shield tracks insets without padding, input interception or
       assert.equal(tree.props.testID, "screen");
       assert.equal(tree.props.style.paddingTop, undefined);
       assert.equal(tree.children[1], child);
-      const shield = tree.children[2];
-      if (top === 0) { assert.equal(shield, null); continue; }
-      assert.equal(shield.props.testID, "screen-status-bar-shield");
-      assert.equal(shield.props.style.height, top);
-      assert.equal(shield.props.style.backgroundColor, color);
-      assert.equal(shield.props.style.backgroundColor, tree.props.style.backgroundColor, "No contrasting blue status strip");
-      assert.equal(shield.props.style.position, "absolute");
-      assert.ok(shield.props.style.zIndex > 0);
-      assert.equal(shield.props.style.top, 0);
-      assert.equal(shield.props.pointerEvents, "none");
-      assert.equal(shield.props.accessible, false);
-      assert.equal(shield.props.accessibilityElementsHidden, true);
-      assert.equal(shield.props.importantForAccessibility, "no-hide-descendants");
+      assert.equal(tree.children.length, 2);
     }
   }
   os = "android"; top = 24;
-  assert.equal(exports.AppScreen({ children: "content" }).children[2], null);
+  assert.equal(exports.AppScreen({ children: "content" }).children.length, 2);
 });
 
 test("expanded headers clear the complete safe inset without creating a sticky navigation rail", () => {
   assert.match(topBar, /paddingTop: Math.max\(insets.top, 4\)/);
   const overview = readFileSync(new URL("../src/components/OverviewHeaderV3.tsx", import.meta.url), "utf8");
-  assert.match(overview, /paddingTop: Math.max\(insets.top, 0\)/);
+  assert.match(overview, /paddingTop: 0/);
+  assert.match(overview, /paddingTop: Math.max\(insets.top, 0\) \+ 8/);
   assert.doesNotMatch(topBar + overview, /insets.top - 4/);
   assert.match(campaigns, /topChromeVisible \? <TopBar/);
   assert.match(targeting, /topChromeVisible \? <TopBar/);

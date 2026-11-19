@@ -28,7 +28,8 @@ import { useInvalidateAds } from "@/src/lib/invalidateAds";
 import { fetchNestSearchTermsPage } from "@/src/lib/dashboardApi";
 import { fetchEnabledSearchTermsPage } from "@/src/lib/queries";
 import { enabledSelectedProfileIds } from "@/src/lib/booksProfileScope";
-import { SEARCH_TERMS_PAGE_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
+import { TERMINAL_READ_TIMEOUT_SUBTITLE } from "@/src/lib/loadErrorCopy";
+import { isHomeQueryTimeout, SEARCH_TERMS_PAGE_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { formatCurrency, formatInt, formatPercent } from "@/src/lib/format";
 import type { SearchTerm } from "@/src/lib/types";
 import { EmptyState, ListCard, MetricStrip, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, RetryState, ScreenSpinner, ToneDot } from "@/src/components/Primitives";
@@ -225,6 +226,7 @@ export default function SearchTermsScreen() {
 
   const {
     data: pageData,
+    error,
     isLoading,
     isError,
     isRefetching,
@@ -436,7 +438,7 @@ export default function SearchTermsScreen() {
       ) : listFailed ? (
         <RetryState
           title="Couldn't load search terms"
-          subtitle="Check your connection and try again."
+          subtitle={isHomeQueryTimeout(error) ? TERMINAL_READ_TIMEOUT_SUBTITLE : "Check your connection and try again."}
           onRetry={() => void refetch()}
           retrying={isRefetching}
         />
@@ -547,6 +549,7 @@ const TermRow = React.memo(function TermRow({
         </Text>
         <View style={[styles.metricsRow, { borderTopColor: t.colors.separator }]} accessible={false} importantForAccessibility="no">
           <MetricStrip
+            maxColumns={3}
             items={[
               {
                 label: "ACoS",

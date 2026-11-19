@@ -844,6 +844,33 @@ export async function fetchNestTopBooks(params: {
   return params.limit ? rows.slice(0, params.limit) : rows;
 }
 
+export async function fetchNestBookAdsMetrics(params: {
+  startDate: string;
+  endDate: string;
+  profileIds: string[];
+  asins: string[];
+}): Promise<Array<{ asin: string; spend: number; sales: number; clicks: number | null; impressions: number | null; orders: number | null }>> {
+  const response = await nestApiJson<{ data?: Array<{ asin: string; spend: number; sales: number;
+    clicks: number | null; impressions: number | null; orders: number | null }> }>(
+    `/dashboard/book-ads-metrics${qs({ startDate: params.startDate, endDate: params.endDate,
+      profileIds: params.profileIds.join(','), asins: params.asins.join(',') })}`,
+    { method: 'GET' }, "Couldn't load book Ads metrics.",
+  );
+  const wanted = new Set(params.asins), seen = new Set<string>();
+  if (!Array.isArray(response.data)) throw new NestApiError('Book Ads metric response is incomplete.', 503);
+  for (const row of response.data) {
+    if (!wanted.has(row.asin) || seen.has(row.asin)
+      || !['spend', 'sales'].every(key => typeof row[key as 'spend'] === 'number' && Number.isFinite(row[key as 'spend']))
+      || !['clicks', 'impressions', 'orders'].every(key => {
+        const value = row[key as 'clicks'];
+        return value === null || (Number.isSafeInteger(value) && Number(value) >= 0);
+      })) throw new NestApiError('Book Ads metric response is invalid.', 503);
+    seen.add(row.asin);
+  }
+  if (seen.size !== wanted.size) throw new NestApiError('Book Ads metric response is incomplete.', 503);
+  return response.data;
+}
+
 export async function fetchNestBookCampaigns(params: {
   filterUserId: string;
   asin: string;

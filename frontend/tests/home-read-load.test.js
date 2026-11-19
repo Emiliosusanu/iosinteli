@@ -13,7 +13,15 @@ import { buildFxRateMap } from '../src/lib/fxRates.ts';
 const home = readFileSync(new URL('../app/(tabs)/index.tsx', import.meta.url), 'utf8');
 const widgets = readFileSync(new URL('../src/components/OverviewChartWidgets.tsx', import.meta.url), 'utf8');
 const swipe = readFileSync(new URL('../src/components/OverviewSwipeWidget.tsx', import.meta.url), 'utf8');
-const refreshSource = home.slice(home.indexOf('const onRefresh = async () => {'), home.indexOf('\n  if (selectedProfileIds.length === 0', home.indexOf('const onRefresh = async () => {')));
+const homeAst = ts.createSourceFile('index.tsx', home, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+function findRefreshDeclaration(node) {
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'onRefresh'
+    && node.initializer && ts.isArrowFunction(node.initializer)) return node;
+  return ts.forEachChild(node, findRefreshDeclaration);
+}
+const refreshDeclaration = findRefreshDeclaration(homeAst);
+assert.ok(refreshDeclaration, 'Home refresh callback must exist');
+const refreshSource = `const ${refreshDeclaration.getText(homeAst)};`;
 
 function refreshHarness(client, opts = {}) {
   const states = [];

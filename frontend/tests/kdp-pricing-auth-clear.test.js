@@ -128,7 +128,7 @@ test("KDP helper presents pricing gate separately from report session", () => {
 });
 
 test("iOS observes the live shelf without expiring the entire price cache every metronome wake", () => {
-  assert.match(sync, /const PRICING_FRESH_MS = 7 \* 24 \* 60 \* 60 \* 1000/);
+  assert.match(sync, /Date\.now\(\) - pricingCaptureReconcileMs\(candidateCount\)/);
   assert.match(sync, /bookshelfRefreshRequest\(page, pricingRequestTimeout/);
   assert.match(sync, /bookshelfRefreshEvidence\(html, page, rows\)/);
   const bridge = readFileSync(new URL("../src/lib/kdp/bridge.ts", import.meta.url), "utf8");

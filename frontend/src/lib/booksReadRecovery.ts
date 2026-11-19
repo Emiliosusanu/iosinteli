@@ -1,11 +1,21 @@
-/** Read-only recovery is bounded. Access denials and cancellation never retry. */
+function isTerminalReadTimeout(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const row = error as { code?: unknown; status?: unknown; statusCode?: unknown; message?: unknown };
+  if (row.code === "57014") return true;
+  const status = row.status ?? row.statusCode;
+  if (status === 408) return true;
+  if (typeof row.message !== "string") return false;
+  return row.message === "HOME_QUERY_TIMEOUT" || /statement timeout|read timed out/i.test(row.message);
+}
+
+/** Read-only recovery is bounded. Timeouts, access denials, and cancellation never retry. */
 export function shouldRetryBooksRead(failures: number, error: unknown): boolean {
   if (failures >= 2 || !error || typeof error !== "object") return false;
   const row = error as { name?: string; message?: string; status?: number; statusCode?: number; code?: string };
-  if (row.name === "AbortError") return false;
+  if (row.name === "AbortError" || isTerminalReadTimeout(row)) return false;
   const status = Number(row.status ?? row.statusCode ?? 0);
-  if (status) return status === 408 || status === 429 || status >= 500;
-  return row.code === "57014" || /HOME_QUERY_TIMEOUT|timed? ?out|timeout|Network request failed|Failed to fetch|offline|NetworkError/i.test(`${row.message ?? ""} ${row.code ?? ""}`);
+  if (status) return status === 429 || status >= 500;
+  return /Network request failed|Failed to fetch|offline|NetworkError/i.test(`${row.message ?? ""} ${row.code ?? ""}`);
 }
 
 /** Do not keep hammering a deferred listing forever. Foreground only (hook).

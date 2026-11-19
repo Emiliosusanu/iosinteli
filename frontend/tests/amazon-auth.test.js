@@ -60,5 +60,5 @@ test("floating tab bar uses solid theme-synced rail with equal labeled slots", (
   assert.doesNotMatch(floating, /rgba\(16, 16, 20/);
   assert.doesNotMatch(floating, /sliding/);
   assert.match(floating, /visual\.label|visual\.shortLabel/);
-  assert.match(floating, /flex: 1/);
+  assert.match(floating, /flexGrow: 1/);
 });

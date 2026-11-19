@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { OverviewCardHeader } from "@/src/components/DashboardSurface";
@@ -64,6 +64,10 @@ export function OverviewSwipeWidget({
   inlinePageLabel?: boolean;
 }) {
   const t = useTheme();
+  const reduceMotion = useReduceMotion();
+  const { width } = useWindowDimensions();
+  const compactScreen = width < 400;
+  const pageOpacity = useSharedValue(1);
   const visiblePages = useMemo(() => pages.filter((page) => !page.hidden), [pages]);
   const visibleKey = visiblePages.map((page) => page.key).join("|");
   const [pageIndex, setPageIndex] = useState(0);
@@ -75,6 +79,15 @@ export function OverviewSwipeWidget({
   const pageCount = visiblePages.length;
   const safeIndex = pageCount === 0 ? 0 : Math.max(0, Math.min(pageIndex, pageCount - 1));
   const page = visiblePages[safeIndex];
+  const pageStyle = useAnimatedStyle(() => ({ opacity: pageOpacity.get() }));
+  useEffect(() => {
+    if (reduceMotion) {
+      pageOpacity.set(1);
+      return;
+    }
+    pageOpacity.set(0.72);
+    pageOpacity.set(withTiming(1, { duration: motion.contentChange, easing: EASE_OUT }));
+  }, [page?.key, reduceMotion, pageOpacity]);
   const canGoPrev = safeIndex > 0;
   const canGoNext = safeIndex < pageCount - 1;
 
@@ -124,6 +137,7 @@ export function OverviewSwipeWidget({
       contentStyle={{ padding: dashboard.cardPadding }}
     >
       <OverviewCardHeader
+        wrapTitle
         title={headerTitle}
         icon={icon}
         actionLabel={page.actionLabel ?? actionLabel}
@@ -133,8 +147,12 @@ export function OverviewSwipeWidget({
         trailing={page.summary}
       />
       {read ? (
-        <View style={{ minHeight: 17, marginTop: 4 }}>
-          <Text accessibilityLiveRegion="polite" style={[t.typography.caption2, { color: t.colors.text_secondary }]}>
+        <View style={{ minHeight: compactScreen ? 32 : 18, marginTop: 4 }}>
+          <Text
+            accessibilityLiveRegion="polite"
+            numberOfLines={compactScreen ? 2 : 1}
+            style={[compactScreen ? t.typography.meta : t.typography.caption2, { color: t.colors.text_secondary }]}
+          >
             {read.label || " "}
           </Text>
         </View>
@@ -148,13 +166,13 @@ export function OverviewSwipeWidget({
         </Text>
       ) : null}
       <OverviewWidgetPageSwipeContext.Provider value={pageCount > 1 ? swipe : null}>
-      <View style={{ marginTop: dashboard.compactGap }} accessibilityLabel="overview-swipe-page">
+      <Animated.View style={[{ marginTop: dashboard.compactGap }, pageStyle]} accessibilityLabel="overview-swipe-page">
         <HorizonPane watchKey={page.key}>
           <GestureDetector gesture={swipe}>
             <View>{page.content}</View>
           </GestureDetector>
         </HorizonPane>
-      </View>
+      </Animated.View>
       </OverviewWidgetPageSwipeContext.Provider>
       {pageCount > 1 ? (
         <View style={styles.bottomNav} accessibilityLabel={`Page ${safeIndex + 1} of ${pageCount}`}>

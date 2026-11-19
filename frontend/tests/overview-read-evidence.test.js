@@ -39,12 +39,13 @@ test('ACoS pages and ascending list distinguish missing ratios from a real zero 
 
 test('read evidence never claims Amazon freshness or leaves a frozen just-now label', () => {
   const input = { updatedAt: new Date('2026-10-17T12:34:00Z').getTime(), fetching: false, failed: false };
-  assert.match(overviewReadLabel(input), /^Server read · /);
+  assert.doesNotMatch(overviewReadLabel(input), /server/i);
+  assert.match(overviewReadLabel(input), /\d/);
   assert.doesNotMatch(overviewReadLabel(input), /just now|fresh|latest/i);
-  assert.equal(overviewReadLabel({ ...input, fetching: true }), 'Updating from server');
+  assert.equal(overviewReadLabel({ ...input, fetching: true }), 'Updating');
   assert.equal(overviewReadLabel({ ...input, failed: true }), 'Cached data · update failed');
   assert.equal(overviewReadLabel({ ...input, updatedAt: 0, failed: true }), 'Update unavailable');
-  for (const updatedAt of [0, -1, NaN, Infinity]) assert.equal(overviewReadLabel({ ...input, updatedAt }), 'Waiting for server');
+  for (const updatedAt of [0, -1, NaN, Infinity]) assert.equal(overviewReadLabel({ ...input, updatedAt }), 'Waiting');
 });
 
 test('failed cached recommendations disappear without mutating the retained query cache', () => {
@@ -55,11 +56,13 @@ test('failed cached recommendations disappear without mutating the retained quer
   assert.deepEqual(overviewRecommendationRows(undefined, false), []);
 });
 
-test('widget chrome never labels hydrated cache as a new server read', () => {
-  const input = { updatedAt: Date.now(), fetching: false, failed: false };
-  assert.equal(overviewReadFeedback(input).label, 'Cached data');
-  assert.equal(overviewReadFeedback({ ...input, received: false }).label, 'Cached data');
-  assert.match(overviewReadFeedback({ ...input, received: true }).label, /^Server read/);
+test('widget chrome shows the cached read time and does not call it a new server read', () => {
+  const input = { updatedAt: new Date('2026-10-17T12:34:00Z').getTime(), fetching: false, failed: false };
+  assert.match(overviewReadFeedback(input).label, /\d/);
+  assert.doesNotMatch(overviewReadFeedback(input).label, /Cached data|server/i);
+  assert.match(overviewReadFeedback({ ...input, received: false }).label, /\d/);
+  assert.doesNotMatch(overviewReadFeedback({ ...input, received: false }).label, /Cached data/);
+  assert.doesNotMatch(overviewReadFeedback({ ...input, received: true }).label, /server/i);
   assert.equal(overviewReadFeedback({ ...input, fetching: true }).label, '');
   assert.equal(overviewReadFeedback({ ...input, failed: true }).label, 'Cached data · update failed');
 });

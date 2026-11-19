@@ -56,6 +56,7 @@ import {
 import { EmptyState, RetryState, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard } from "@/src/components/Primitives";
 import { bookColorKeyFor, fallbackBookColor } from "@/src/lib/bookColors";
 import { IOSSearchBar, IOSSegmentedControl, SFSymbol } from "@/src/components/ios/Native";
+import { TERMINAL_READ_TIMEOUT_SUBTITLE } from "@/src/lib/loadErrorCopy";
 import { CAMPAIGNS_LIST_TIMEOUT_MS, isHomeQueryTimeout, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
 import { compareByAcosAscending, compareByAcosSpendImpressionsSync } from "@/src/lib/overviewWidgets";
@@ -402,7 +403,7 @@ export default function CampaignsScreen() {
   const empty = emptyCopy(search, stateFilter, bookFilterActive);
   const showCount = search.trim().length > 0 || stateFilter !== "enabled" || filtersActive;
 
-  if (selectedProfileIds.length === 0 && (profilesLoading || profilesFetching || profilesError)) {
+  if ((selectedProfileIds.length === 0 || profiles.length === 0) && (profilesLoading || profilesFetching || profilesError)) {
     return (
       <AppScreen>
         <TopBar />
@@ -507,7 +508,7 @@ export default function CampaignsScreen() {
           title="Couldn't load campaigns"
           subtitle={
             isHomeQueryTimeout(campaignsError)
-              ? "This period is taking longer than usual. Try again or shorten the date range."
+              ? TERMINAL_READ_TIMEOUT_SUBTITLE
               : "Check your connection and try again."
           }
           onRetry={() => void refetch()}

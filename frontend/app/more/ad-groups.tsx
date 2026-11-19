@@ -30,6 +30,7 @@ import { compareByAcosAscending, compareByAcosSpendImpressionsSync } from "@/src
 import { overviewReadLabel } from "@/src/lib/overviewReadEvidence";
 import { formatCurrency, formatInt, formatPercent, safeDivide } from "@/src/lib/format";
 import { LIST_PERIOD_QUERY_CACHE } from "@/src/lib/periodQuery";
+import { TERMINAL_READ_TIMEOUT_SUBTITLE } from "@/src/lib/loadErrorCopy";
 import { HOME_QUERY_TIMEOUT_MS, isHomeQueryTimeout, withAbortableQueryTimeout, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { EmptyState, ToneDot, DenseMetricLine, FilterChrome, FilterSearchRow, FilterIconButton, ActiveFilterChip, ActiveFilterRow, ScreenSpinner, ListCard, RetryState } from "@/src/components/Primitives";
 import { IOSSearchBar, IOSSegmentedControl } from "@/src/components/ios/Native";
@@ -283,7 +284,7 @@ export default function AdGroupsScreen() {
           title={isHomeQueryTimeout(error) ? "Ad groups took too long" : "Couldn't load ad groups"}
           subtitle={
             isHomeQueryTimeout(error)
-              ? "This period’s ad groups are still loading slowly. Retry, or narrow the date range."
+              ? TERMINAL_READ_TIMEOUT_SUBTITLE
               : "Check your connection and try again."
           }
           onRetry={() => void refetch()}

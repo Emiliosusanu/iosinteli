@@ -92,11 +92,9 @@ type FloatingTabBarProps = {
 
 type TabChrome = {
   fill: string;
-  stroke: string;
   selected: string;
   selectedFg: string;
   inactive: string;
-  idleFill: string;
 };
 
 type DockScale = ReturnType<typeof dockScaleForWidth>;
@@ -148,7 +146,7 @@ function TabSegment({
 
   const iconColor = focused ? chrome.selectedFg : chrome.inactive;
   const iconSize = Math.min(focused ? scale.iconActive : scale.icon, 22);
-  const labelText = visual.label;
+  const labelText = scale.tier === "sm" ? visual.shortLabel : visual.label;
   const showLabel = focused && scale.showSelectedLabel;
   const symbolName = focused ? visual.symbolFill : visual.symbol;
 
@@ -156,13 +154,6 @@ function TabSegment({
     <View style={[
       styles.segmentSlot,
       focused && styles.segmentSlotActive,
-      focused ? {
-        backgroundColor: chrome.selected,
-        shadowColor: chrome.selected,
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 3 },
-      } : null,
     ]}>
       <PressableScale
         accessibilityRole="tab"
@@ -171,10 +162,10 @@ function TabSegment({
         testID={testID}
         onPress={onPress}
         onLongPress={onLongPress}
-        hitSlop={6}
+        hitSlop={0}
         style={[
           styles.segment,
-          { minHeight: scale.segmentMinHeight, backgroundColor: focused ? undefined : chrome.idleFill },
+          { minHeight: scale.segmentMinHeight },
           focused ? styles.segmentActive : styles.segmentIdle,
         ]}
       >
@@ -217,7 +208,7 @@ function TabSegment({
 /**
  * Floating stadium dock: solid theme-synced pill (white / #141417), soft
  * floating shadow, SF Symbol tabs. The selected icon and label share one row;
- * inactive capsules display icons only, matching the Targets mode selector.
+ * Inactive tabs are unframed icons. Keep the existing five routes and theme.
  */
 export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBarProps) {
   const t = useTheme();
@@ -234,11 +225,9 @@ export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBa
   const chrome = useMemo(
     () => ({
       fill: t.colors.tabbar_background,
-      stroke: t.colors.tabbar_stroke,
       selected: t.colors.control_selected,
       selectedFg: "#FFFFFF",
       inactive: t.colors.text_secondary,
-      idleFill: t.colors.background_tertiary,
       elevation: t.shadow.floating,
     }),
     [t.colors, t.shadow.floating],
@@ -267,7 +256,6 @@ export function FloatingTabBar({ state, descriptors, navigation }: FloatingTabBa
               minHeight: scale.railMinHeight,
               paddingHorizontal: scale.padH,
               paddingVertical: scale.padV,
-              borderColor: chrome.stroke,
               backgroundColor: chrome.fill,
             },
           ]}
@@ -338,7 +326,6 @@ const styles = StyleSheet.create({
     width: "100%",
     borderRadius: 999,
     borderCurve: "continuous",
-    borderWidth: StyleSheet.hairlineWidth,
     overflow: "hidden",
   },
   railRow: {
@@ -351,13 +338,17 @@ const styles = StyleSheet.create({
   /** The active tab gets space for its inline label. */
   segmentSlot: {
     borderRadius: 999,
-    flex: 1,
-    minWidth: 0,
+    flexGrow: 0,
+    flexShrink: 0,
+    flexBasis: 44,
+    minWidth: 44,
     zIndex: 1,
     alignItems: "stretch",
   },
   segmentSlotActive: {
-    flex: 2.3,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
   },
   segment: {
     borderRadius: 999,
@@ -386,7 +377,7 @@ const styles = StyleSheet.create({
   },
   label: {
     flexShrink: 1,
-    fontWeight: "700",
+    fontWeight: "600",
     letterSpacing: 0,
     textAlign: "center",
     lineHeight: 18,

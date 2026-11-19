@@ -39,7 +39,7 @@ test('actual budget card and nested gauge do not render invented zero spend/perc
     assert.equal(result.value, '—');
     assert.doesNotMatch(result.text, /0%|\$0\.00|\$40\.00/);
     assert.ok(result.text.includes(todayFailed ? 'Spend unavailable' : 'Checking spend'));
-    assert.deepEqual(result.chips, [todayFailed ? 'Update unavailable' : 'Waiting for server']);
+    assert.deepEqual(result.chips, [todayFailed ? 'Update unavailable' : 'Waiting']);
   }
 });
 

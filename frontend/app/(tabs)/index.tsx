@@ -161,6 +161,7 @@ import {
   homeWidgetStatus,
   queryStillWaiting,
   withAbortableQueryTimeout,
+  isHomeQueryTimeout,
   withQueryTimeout,
 } from "@/src/lib/queryTimeout";
 import {
@@ -411,14 +412,14 @@ export default function OverviewScreen() {
   }, [homeVisible]);
 
   useEffect(() => {
-    const waitingForProfiles = selectedProfileIds.length === 0 && (profilesLoading || profilesFetching);
+    const waitingForProfiles = (selectedProfileIds.length === 0 || profiles.length === 0) && (profilesLoading || profilesFetching);
     if (!waitingForProfiles) {
       setProfilesWaitExpired(false);
       return;
     }
     const timer = setTimeout(() => setProfilesWaitExpired(true), HOME_QUERY_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [selectedProfileIds.length, profilesLoading, profilesFetching]);
+  }, [selectedProfileIds.length, profiles.length, profilesLoading, profilesFetching]);
 
   // period selector: Month / Week
   const [periodMode, setPeriodMode] = useState<OverviewPeriodMode>(() => inferDashboardPeriodMode(dateRange));
@@ -733,7 +734,7 @@ export default function OverviewScreen() {
           state: "enabled",
           filterUserId: adminFilterUserId,
         }),
-        TARGETING_QUERY_TIMEOUT_MS,
+        HOME_QUERY_TIMEOUT_MS,
       ),
     enabled: sellerSecondary || adminSecondary,
     ...OVERVIEW_QUERY_CACHE,
@@ -909,19 +910,31 @@ export default function OverviewScreen() {
 
   const searchTermsPulseQ = useQuery({
     queryKey: ["search-terms-pulse", user?.id, adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, "active-parents-v1"],
-    queryFn: ({ signal }) => withQueryTimeout(fetchOverviewActiveSearchTerms(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80, signal }), undefined, signal),
+    queryFn: ({ signal }) => withAbortableQueryTimeout(
+      (readSignal) => fetchOverviewActiveSearchTerms(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80, signal: readSignal }),
+      TARGETING_QUERY_TIMEOUT_MS,
+      signal,
+    ),
     enabled: sellerSecondary,
     ...OVERVIEW_QUERY_CACHE,
-    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchInterval: (query) =>
+      homeVisible && currentPeriodIncludesToday && !isHomeQueryTimeout(query.state.error) ? 60_000 : false,
     refetchIntervalInBackground: false,
   });
 
   const bleedersQ = useQuery({
     queryKey: ["bleeding-keywords", adminFilterUserId ?? "self", adsWidgetProfileIds, dateRange.start, dateRange.end, primaryCurrency, "active-v2"],
-    queryFn: () => withQueryTimeout(fetchOverviewActiveKeywords(adsWidgetProfileIds, { start: dateRange.start, end: dateRange.end, limit: 80, filterUserId: adminFilterUserId })),
+    queryFn: ({ signal }) => withAbortableQueryTimeout(
+      (readSignal) => fetchOverviewActiveKeywords(adsWidgetProfileIds, {
+        start: dateRange.start, end: dateRange.end, limit: 80, filterUserId: adminFilterUserId, signal: readSignal,
+      }),
+      TARGETING_QUERY_TIMEOUT_MS,
+      signal,
+    ),
     enabled: sellerSecondary || adminSecondary,
     ...OVERVIEW_QUERY_CACHE,
-    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchInterval: (query) =>
+      homeVisible && currentPeriodIncludesToday && !isHomeQueryTimeout(query.state.error) ? 60_000 : false,
     refetchIntervalInBackground: false,
   });
 
@@ -936,12 +949,13 @@ export default function OverviewScreen() {
           filterUserId: adminFilterUserId,
           signal: readSignal,
         }),
-        HOME_QUERY_TIMEOUT_MS,
+        TARGETING_QUERY_TIMEOUT_MS,
         signal,
       ),
     enabled: sellerSecondary || adminSecondary,
     ...OVERVIEW_QUERY_CACHE,
-    refetchInterval: homeVisible && currentPeriodIncludesToday ? 60_000 : false,
+    refetchInterval: (query) =>
+      homeVisible && currentPeriodIncludesToday && !isHomeQueryTimeout(query.state.error) ? 60_000 : false,
     refetchIntervalInBackground: false,
   });
 
@@ -1395,7 +1409,7 @@ export default function OverviewScreen() {
   );
   const monthlyBudgetForecastReady = budgetHistoryQ.isSuccess;
   const placementMix = overviewRecommendationRows(placementMixQ.data, placementMixQ.isError);
-  const searchTerms = overviewRecommendationRows(searchTermsPulseQ.data, searchTermsPulseQ.isError);
+  const searchTerms = activeOverviewRows(overviewRecommendationRows(searchTermsPulseQ.data, searchTermsPulseQ.isError), "searchTerm");
   const adGroups = activeOverviewRows(overviewRecommendationRows(adGroupsQ.data, adGroupsQ.isError), "adGroup");
 
   const [blurBooks, setBlurBooks] = useState(false);
@@ -1540,6 +1554,7 @@ export default function OverviewScreen() {
     ],
   );
   const setupHomeStep =
+    !profilesLoading && !profilesFetching && !profilesError && !adminUsersError &&
     setupSnapshot.next &&
     (setupSnapshot.next.id === "ads_connected" ||
       setupSnapshot.next.id === "profile_activated" ||
@@ -1999,7 +2014,7 @@ export default function OverviewScreen() {
     }
   };
 
-  if (selectedProfileIds.length === 0 && (profilesLoading || profilesFetching) && !profilesWaitExpired) {
+  if ((selectedProfileIds.length === 0 || profiles.length === 0) && (profilesLoading || profilesFetching) && !profilesWaitExpired) {
     return (
       <AppScreen>
         <TopBar title="Home" showProfileSelector={false} />
@@ -2010,7 +2025,7 @@ export default function OverviewScreen() {
     );
   }
 
-  if (selectedProfileIds.length === 0 && (profilesLoading || profilesFetching) && profilesWaitExpired) {
+  if ((selectedProfileIds.length === 0 || profiles.length === 0) && (profilesLoading || profilesFetching) && profilesWaitExpired) {
     return (
       <AppScreen>
         <TopBar title="Home" showProfileSelector={false} />
@@ -2028,7 +2043,7 @@ export default function OverviewScreen() {
     );
   }
 
-  if (selectedProfileIds.length === 0 && (profilesError || adminUsersError)) {
+  if ((selectedProfileIds.length === 0 || profiles.length === 0) && (profilesError || adminUsersError)) {
     return (
       <AppScreen>
         <TopBar title="Home" showProfileSelector={false} />
@@ -2113,6 +2128,7 @@ export default function OverviewScreen() {
       <GestureDetector gesture={periodSwipe}>
       <Animated.ScrollView
         style={{ flex: 1 }}
+        contentInsetAdjustmentBehavior="never"
         contentContainerStyle={{ paddingBottom: t.layout.tabClearance }}
         keyboardShouldPersistTaps="handled"
         refreshControl={
@@ -2519,8 +2535,8 @@ export default function OverviewScreen() {
                 hidden: adGroupsQ.isPending && !adGroupsQ.data,
                 content:
                   adGroupsQ.isError && groupsHighAcos.length === 0 ? (
-                    <TouchableOpacity onPress={() => void adGroupsQ.refetch()} accessibilityRole="button">
-                      <SwipeEmpty kind="error" message="Couldn't load ad groups. Tap to retry." t={t} />
+                    <TouchableOpacity onPress={() => void adGroupsQ.refetch()} accessibilityRole="button" accessibilityLabel="Retry ad groups">
+                      <SwipeEmpty kind="error" message={isHomeQueryTimeout(adGroupsQ.error) ? "Couldn't load ad groups. This read timed out and was not sent again. Retry" : "Couldn't load ad groups. Retry"} t={t} />
                     </TouchableOpacity>
                   ) : groupsHighAcos.length === 0 ? (
                     <SwipeEmpty message="No ad groups in this period." t={t} />
@@ -2625,7 +2641,7 @@ export default function OverviewScreen() {
                   hidden: !bleedersQ.isError,
                   freshness: overviewReadFeedback({ updatedAt: bleedersQ.dataUpdatedAt, received: bleedersQ.isFetchedAfterMount && bleedersQ.isSuccess, fetching: bleedersQ.isFetching, failed: bleedersQ.isError }),
                   onAction: () => router.push({ pathname: "/(tabs)/targeting", params: { flow: String(Date.now()), segment: "keywords", perf: "all" } }),
-                  content: <TouchableOpacity onPress={() => void bleedersQ.refetch()} accessibilityRole="button"><SwipeEmpty kind="error" message="Couldn't load keywords. Tap to retry." t={t} /></TouchableOpacity>,
+                  content: <TouchableOpacity onPress={() => void bleedersQ.refetch()} accessibilityRole="button" accessibilityLabel="Retry keywords"><SwipeEmpty kind="error" message={isHomeQueryTimeout(bleedersQ.error) ? "Couldn't load keywords. This read timed out and was not sent again. Retry" : "Couldn't load keywords. Retry"} t={t} /></TouchableOpacity>,
                 },
                 {
                   key: "st-unavailable",
@@ -2634,7 +2650,7 @@ export default function OverviewScreen() {
                   actionLabel: "Search terms",
                   freshness: overviewReadFeedback({ updatedAt: searchTermsPulseQ.dataUpdatedAt, received: searchTermsPulseQ.isFetchedAfterMount && searchTermsPulseQ.isSuccess, fetching: searchTermsPulseQ.isFetching, failed: searchTermsPulseQ.isError }),
                   onAction: () => router.push({ pathname: "/more/search-terms", params: { flow: String(Date.now()), perf: "all", enabledParents: "1" } }),
-                  content: <TouchableOpacity onPress={() => void searchTermsPulseQ.refetch()} accessibilityRole="button"><SwipeEmpty kind="error" message="Couldn't load search terms. Tap to retry." t={t} /></TouchableOpacity>,
+                  content: <TouchableOpacity onPress={() => void searchTermsPulseQ.refetch()} accessibilityRole="button" accessibilityLabel="Retry search terms"><SwipeEmpty kind="error" message={isHomeQueryTimeout(searchTermsPulseQ.error) ? "Couldn't load search terms. This read timed out and was not sent again. Retry" : "Couldn't load search terms. Retry"} t={t} /></TouchableOpacity>,
                 },
                 {
                   key: "kw-no-orders",
@@ -3238,7 +3254,7 @@ const styles = StyleSheet.create({
     overflow: "visible",
   },
   stickyHeader: {
-    paddingHorizontal: PAGE_PAD,
+    paddingHorizontal: 0,
     paddingTop: 0,
     paddingBottom: 2,
   },

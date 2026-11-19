@@ -38,6 +38,7 @@ import { buildBookColorMap, bookColorKeyFor, fallbackBookColor } from "@/src/lib
 import { TopBar } from "@/src/components/TopBar";
 import { EmptyState, RetryState, MetricStrip, FilterChrome, ScreenSpinner, ListCard } from "@/src/components/Primitives";
 import { IOSSearchBar, IOSSegmentedControl } from "@/src/components/ios/Native";
+import { TERMINAL_READ_TIMEOUT_SUBTITLE } from "@/src/lib/loadErrorCopy";
 import { isHomeQueryTimeout, TARGETING_QUERY_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { FINANCIAL_QUERY_ROOTS, financialQueryMeta } from "@/src/lib/financialReadVersion";
 import { LIST_PERIOD_QUERY_CACHE, sameScopeWarmPlaceholder, sortedProfileIds } from "@/src/lib/periodQuery";
@@ -86,21 +87,21 @@ function bookKdpReady(item: TopBookRow): boolean {
 }
 
 function bookStatus(item: TopBookRow, hasBreakEven: boolean): { label: string; tone: "good" | "warning" | "danger" } {
-  if (!bookAdsReady(item)) return { label: "Loading ads", tone: "warning" };
+  if (!bookAdsReady(item)) return { label: item.ads_state === "pending" ? "Loading ads" : "Ads unavailable", tone: "warning" };
   if (!bookKdpAvailable(item)) return { label: "Royalties unavailable", tone: "warning" };
   if (item.kdp_state === "partial") return { label: "Royalties partial", tone: "warning" };
   const spend = Number(item.spend) || 0;
-  const orders = Number(item.orders) || 0;
+  const noAdsSales = item.sales != null && Number(item.sales) === 0;
   // Verdict follows the SAME resolved net as the displayed profit. KDP royalties
   // can make a book net-positive even with zero ads orders, so the net sign wins
   // first; "Spending without sales" only applies when net is negative/unknown.
   const resolved = resolveBookNet(item);
   if (resolved != null) {
     if (resolved >= 0) return { label: "Net positive", tone: "good" };
-    if (spend > 0 && orders === 0) return { label: "Spending without sales", tone: "danger" };
+    if (spend > 0 && noAdsSales) return { label: "Spending without sales", tone: "danger" };
     return { label: "Net negative", tone: "danger" };
   }
-  if (spend > 0 && orders === 0) return { label: "Spending without sales", tone: "danger" };
+  if (spend > 0 && noAdsSales) return { label: "Spending without sales", tone: "danger" };
   if (hasBreakEven && item.acos > item.breakeven_acos) return { label: "Over break-even", tone: "warning" };
   return { label: "Net negative", tone: "danger" };
 }
@@ -108,13 +109,14 @@ function bookStatus(item: TopBookRow, hasBreakEven: boolean): { label: string; t
 function bookA11yLabel(item: TopBookRow, status: { label: string }, currency: string, marketplaceLabel?: string | null) {
   const title = item.title || item.asin || item.sku || "Untitled book";
   const royalties = bookKdpAvailable(item) ? formatCurrency(item.royalties!, currency) : "unavailable";
-  const spend = formatCurrency(Number(item.spend) || 0, currency);
-  const acos = Number(item.sales) > 0 ? formatPercent(Number(item.acos)) : "not available";
-  const orders = formatInt(Number(item.orders) || 0);
+  const spend = bookAdsReady(item) ? formatCurrency(Number(item.spend) || 0, currency) : "unavailable";
+  const acos = bookAdsReady(item) && Number(item.sales) > 0 ? formatPercent(Number(item.acos)) : "not available";
+  const orders = item.orders_state === "missing" || (item.orders_source !== "kdp" && !bookAdsReady(item))
+    ? "unavailable" : formatInt(Number(item.orders) || 0);
   const net = bookNetIsKnown(item)
     ? formatCurrency(resolveBookNet(item)!, currency)
     : "unavailable";
-  const adsSales = Number(item.sales) > 0 ? formatCurrency(Number(item.sales), currency) : undefined;
+  const adsSales = bookAdsReady(item) && Number(item.sales) > 0 ? formatCurrency(Number(item.sales), currency) : undefined;
   const parts = [
     title,
     marketplaceLabel,
@@ -205,7 +207,7 @@ export default function ProductsScreen() {
   // Same Gross widen as Overview when every enabled Ads profile is selected —
   // otherwise Books hides owned KDP shelves that still have royalties in range.
   const kdpQueryScope = overviewKdpQueryScope(profiles, selectedProfileIds, royaltyScope);
-  const kdpOnlyBooks = !isAdminViewer && !guestMode && isKdpOnlySessionScope(royaltyScope);
+  const kdpOnlyBooks = !isAdminViewer && !guestMode && !profilesLoading && !profilesError && isKdpOnlySessionScope(royaltyScope);
   const booksKey = [FINANCIAL_QUERY_ROOTS.products, adminFilterUserId ?? "self", moneyProfileIds, royaltyProfiles, dateRange.start, dateRange.end, primaryCurrency, kdpQueryScope, 0] as const;
   const overviewBooksKey = [
     FINANCIAL_QUERY_ROOTS.topBooks,
@@ -398,7 +400,7 @@ export default function ProductsScreen() {
   const showSearchCount = search.trim().length > 0 && !showBlockingSpinner;
 
 
-  if (enabledSelectedIds.length === 0 && !kdpOnlyBooks && (profilesLoading || profilesFetching || profilesError)) {
+  if ((enabledSelectedIds.length === 0 || profiles.length === 0) && !kdpOnlyBooks && (profilesLoading || profilesFetching || profilesError)) {
     return (
       <AppScreen>
         <TopBar />
@@ -508,7 +510,7 @@ export default function ProductsScreen() {
           ListEmptyComponent={
             showBlockingSpinner ? <ScreenSpinner /> : isError && books.length === 0 ? (
               <RetryState title="Couldn't load books" subtitle={isHomeQueryTimeout(error)
-                ? "This is taking longer than usual. Pull to retry."
+                ? TERMINAL_READ_TIMEOUT_SUBTITLE
                 : error instanceof BooksReadError ? "Something went wrong loading your books. Pull to retry."
                 : "Check your connection and try again."}
                 onRetry={() => void refetch()} retrying={isRefetching} />
@@ -569,6 +571,7 @@ const ProductCard = React.memo(function ProductCard({
 
   const activeReviewMarkets = countriesForActiveSponsoredBook(marketplaceIndex, item);
   const reviews = retailEdition?.snapshot;
+  const retailPending = reviews?.retailPending ?? retailLoading;
   const adsReady = bookAdsReady(item);
   const kdpAvailable = bookKdpAvailable(item);
   const kdpReady = bookKdpReady(item);
@@ -601,7 +604,9 @@ const ProductCard = React.memo(function ProductCard({
               marketplaceFlagsA11y(countriesForSponsoredBook(marketplaceIndex, item)),
             ),
             retailEdition
-              ? `${retailEdition.format} ${retailEdition.snapshot.asin}. Rating ${reviews?.rating?.toFixed(1) ?? "unavailable"}; reviews ${reviews?.reviewCount ?? "unavailable"}${reviews?.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}. Stock ${retailEdition.snapshot.stockStatus ? bookRetailStockLabel(retailEdition.snapshot.stockStatus) : "unknown"}${retailEdition.snapshot.marketplaceCode ? ` in ${retailEdition.snapshot.marketplaceCode}` : ""}${retailEdition.snapshot.checkedAt ? `, last checked ${retailEdition.snapshot.checkedAt.slice(0, 10)}` : ""}.`
+              ? `${retailEdition.format} ${retailEdition.snapshot.asin}. ${reviews?.rating != null || reviews?.reviewCount != null
+                ? `Rating ${reviews.rating?.toFixed(1) ?? "not listed"}; reviews ${reviews.reviewCount ?? "not listed"}`
+                : retailPending ? "Reviews updating" : "Reviews not listed"}${reviews?.marketplaceCode ? ` in ${reviews.marketplaceCode}` : ""}. Stock ${retailEdition.snapshot.stockStatus ? bookRetailStockLabel(retailEdition.snapshot.stockStatus) : retailPending ? "updating" : "not listed"}${retailEdition.snapshot.marketplaceCode ? ` in ${retailEdition.snapshot.marketplaceCode}` : ""}${retailEdition.snapshot.checkedAt ? `, last checked ${retailEdition.snapshot.checkedAt.slice(0, 10)}` : ""}.`
               : null,
           ].filter(Boolean).join(" ")}
           accessibilityHint="Opens book details"
@@ -708,7 +713,8 @@ const ProductCard = React.memo(function ProductCard({
               items={[
                 { label: "Royalties", value: kdpAvailable ? formatCurrency(item.royalties!, currency, { compact: true }) : "—", color: kdpAvailable ? t.colors.tone_good : t.colors.text_tertiary },
                 { label: "Spend", value: adsReady ? formatCurrency(item.spend, currency, { compact: true }) : "—" },
-                { label: item.orders_source === "kdp" ? "KDP units" : "Ad orders", value: formatInt(item.orders) },
+                { label: item.orders_source === "kdp" ? "KDP units" : "Ad orders",
+                  value: item.orders_state === "missing" || (item.orders_source !== "kdp" && !adsReady) ? "—" : formatInt(item.orders) },
                 {
                   label: "ACoS",
                   value: adsReady && item.sales > 0 ? formatPercent(item.acos) : "—",

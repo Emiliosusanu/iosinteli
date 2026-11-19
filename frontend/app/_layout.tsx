@@ -15,7 +15,7 @@ import { QaBootstrap } from "@/src/components/QaBootstrap";
 import { KdpHelperHost } from "@/src/components/KdpHelperHost";
 import { hydrateQueryClient, startQueryPersistence } from "@/src/lib/queryPersist";
 import { authRedirectTarget } from "@/src/lib/authContract";
-import { isSafeNotificationHref, parseNotificationPayload, routeForNotification } from "@/src/lib/notificationContract";
+import { isSafeNotificationHref, notificationDataFromRequest, parseNotificationPayload, routeForNotification } from "@/src/lib/notificationContract";
 import { resolveDeepLinkHref } from "@/src/lib/deepLinkContract";
 import { markPerf } from "@/src/lib/perf";
 import { debugIngest } from "@/src/lib/debugIngest";
@@ -113,7 +113,7 @@ function RouteGuard({ children }: { children: React.ReactNode }) {
         || String(response.notification.date ?? "");
       if (!id || handledNotificationIds.has(id)) return;
       handledNotificationIds.add(id);
-      const payload = parseNotificationPayload(response.notification.request.content.data);
+      const payload = parseNotificationPayload(notificationDataFromRequest(response.notification.request));
       const dest = routeForNotification(payload, user?.id ?? null);
       const href = isSafeNotificationHref(dest.href) ? dest.href : resolveDeepLinkHref(dest.href);
       if (href === "/(tabs)" || href === "/(tabs)/campaigns" || href === "/(tabs)/products" || href === "/more/settings") {

@@ -13,7 +13,7 @@ const valid=id=>({access_token:'fixture',refresh_token:'fixture',expires_at:Math
 const tick=async()=>{for(let i=0;i<20;i++)await Promise.resolve();};
 function harness() {
   const values=[],effects=[],pending=[],timers=new Map();let cursor=0,listener,seq=0,cleared=0,signouts=0;
-  const initial=deferred(),verified=deferred();
+  const initial=deferred(),verified=deferred();let cleanup;
   const auth={getSession:()=>initial.promise,getUser:()=>verified.promise,onAuthStateChange:fn=>{listener=fn;return {data:{listener:undefined,subscription:{unsubscribe(){}}}};},signOut:async()=>{signouts++;listener('SIGNED_OUT',null);return {};}};
   const React={createContext:()=>({Provider:'Provider'}),useContext(){},useCallback:fn=>fn,
     useState(initial){const i=cursor++;if(!(i in values))values[i]=typeof initial==='function'?initial():initial;return [values[i],v=>{values[i]=typeof v==='function'?v(values[i]):v;}];},
@@ -28,11 +28,11 @@ function harness() {
     '@/src/lib/authRestore':{userLookupProvesSessionInvalid},'@/src/lib/sessionRefresh':{isPermanentSessionError},
     '@/src/lib/supabaseSession':{supabaseSessionIsUsable},'@/src/lib/queryTimeout':{withQueryTimeout:p=>p},
     '@/src/lib/rulesApi':{nestLogin:async()=>true,nestLogout:noop},'@/src/lib/notifications':{clearNotificationIdentity:noop},
-    '@/src/lib/queryPersist':{clearPersistedQueryCache:noop},'@/src/lib/perf':{markPerf(){}},'@/src/lib/debugIngest':{debugIngest(){}}};
+    '@/src/lib/queryPersist':{clearPersistedQueryCache:()=>cleanup?.promise ?? Promise.resolve()},'@/src/lib/perf':{markPerf(){}},'@/src/lib/debugIngest':{debugIngest(){}}};
   const exports={};vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{jsx:ts.JsxEmit.React,module:ts.ModuleKind.CommonJS}}).outputText,
     {exports,require:n=>modules[n]||{},console,setTimeout:fn=>{timers.set(++seq,fn);return seq;},clearTimeout:id=>timers.delete(id)});
   return {initial,verified,render(){cursor=0;const result=exports.AuthProvider({children:null});while(pending.length)pending.shift()();return result.value;},
-    event:(event,s)=>listener(event,s),deadline(){for(const fn of [...timers.values()])fn();},get cleared(){return cleared;},get signouts(){return signouts;}};
+    event:(event,s)=>listener(event,s),deferCleanup(){cleanup=deferred();return cleanup;},deadline(){for(const fn of [...timers.values()])fn();},get cleared(){return cleared;},get signouts(){return signouts;}};
 }
 
 test('slow startup deadline never becomes a logout and late verification can recover',async()=>{
@@ -61,6 +61,32 @@ test('empty persisted session reaches sign-in without inventing authenticated ac
   assert.equal(h.render().state,'unauthenticated');
 });
 test('verified invalid user clears the session rather than bypassing authentication',async()=>{
-  const h=harness();h.render();h.initial.resolve({data:{session:valid('old')}});h.verified.resolve({data:{user:null},error:{status:401}});await tick();
-  assert.equal(h.render().state,'unauthenticated');assert.equal(h.signouts,1);assert.equal(h.cleared,1);
+  const h=harness();h.render();h.initial.resolve({data:{session:valid('old')}});h.verified.resolve({data:{user:null},error:{status:401}});await tick();await tick();await new Promise(resolve=>setTimeout(resolve,0));await tick();
+  assert.equal(h.render().state,'unauthenticated');
+  assert.equal(h.signouts,1);
+  assert.equal(h.cleared,1);
+});
+
+test('a usable local session starts reads without waiting for getUser',async()=>{
+  const h=harness();h.render();h.initial.resolve({data:{session:valid('a')}});await tick();
+  assert.equal(h.render().state,'authenticated');
+  assert.equal(h.render().user.id,'a');
+  assert.equal(h.signouts,0);
+  h.verified.resolve({data:{user:null},error:{status:503}});await tick();
+  assert.equal(h.render().state,'authenticated');assert.equal(h.cleared,0);
+});
+
+test('a rejected old user verification cannot sign out a newer account',async()=>{
+  const h=harness();h.render();h.initial.resolve({data:{session:valid('old')}});await tick();
+  h.event('SIGNED_IN',valid('new'));h.verified.resolve({data:{user:null},error:{status:401}});await tick();
+  assert.equal(h.render().user.id,'new');assert.equal(h.render().state,'authenticated');
+  assert.equal(h.signouts,0);assert.equal(h.cleared,0);
+});
+
+test('switching accounts during old cache deletion cannot sign out the new account',async()=>{
+  const h=harness();h.render();h.initial.resolve({data:{session:valid('old')}});await tick();
+  const cleanup=h.deferCleanup();h.verified.resolve({data:{user:null},error:{status:401}});await tick();
+  assert.equal(h.cleared,1);h.event('SIGNED_IN',valid('new'));cleanup.resolve();await tick();
+  assert.equal(h.signouts,0);assert.equal(h.render().user.id,'new');
+  assert.equal(h.render().state,'authenticated');
 });

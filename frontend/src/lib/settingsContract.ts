@@ -79,7 +79,7 @@ export const VERSION_ROW_LABEL = "Version";
 export const TEST_NOTIFICATION_LABEL = "Send test";
 export const TEST_NOTIFICATION_SENDING = "Sending…";
 export const TEST_NOTIFICATION_SENT = "Test sent";
-export const TEST_NOTIFICATION_SERVER_SENT = "Server test sent";
+export const TEST_NOTIFICATION_FAILED = "Test unavailable. Try again";
 export const TEST_NOTIFICATION_BLOCKED = "Allow alerts in iOS Settings";
 export const TEST_NOTIFICATION_GUEST = "Sign in to send a test";
 export const TEST_NOTIFICATION_TITLE = "Test alert";
@@ -160,9 +160,9 @@ export function notificationFooter(input: {
   return "Allow notifications to send alerts";
 }
 
-export function testNotificationLabel(status: "idle" | "sending" | "sent" | "server" | "blocked" | "guest"): string {
+export function testNotificationLabel(status: "idle" | "sending" | "sent" | "blocked" | "failed" | "guest"): string {
   if (status === "sending") return TEST_NOTIFICATION_SENDING;
-  if (status === "server") return TEST_NOTIFICATION_SERVER_SENT;
+  if (status === "failed") return TEST_NOTIFICATION_FAILED;
   if (status === "sent") return TEST_NOTIFICATION_SENT;
   if (status === "blocked") return TEST_NOTIFICATION_BLOCKED;
   if (status === "guest") return TEST_NOTIFICATION_GUEST;

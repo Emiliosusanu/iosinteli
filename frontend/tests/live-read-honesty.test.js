@@ -37,10 +37,11 @@ test('restorable Targets head is bounded and cannot be future-dated or older tha
 
 test('freshness does not equate a recent server check with a successful Amazon sync', () => {
   const base = { now: 100_000, updatedAt: 99_999, fetching: false, failed: false };
-  assert.equal(targetingFreshnessLabel(base), 'Server checked just now');
-  assert.equal(targetingFreshnessLabel({ ...base, updatedAt: 1 }), 'Cached data · awaiting update');
+  assert.equal(targetingFreshnessLabel(base).includes("Cached data"), false);
+  assert.equal(targetingFreshnessLabel({ ...base, updatedAt: 1 }).includes("Cached data"), false);
+  assert.match(targetingFreshnessLabel({ ...base, updatedAt: 1 }), /\d/);
   assert.equal(targetingFreshnessLabel({ ...base, failed: true }), 'Cached data · update failed');
-  assert.equal(targetingFreshnessLabel({ ...base, fetching: true }), 'Updating from server');
+  assert.equal(targetingFreshnessLabel({ ...base, fetching: true }), 'Updating');
   assert.match(source, /setQueryData\(mobilePageQueryKey,[\s\S]*?\{ updatedAt \}\)/);
   assert.match(source, /generation !== catalogGenerationRef\.current/);
 });

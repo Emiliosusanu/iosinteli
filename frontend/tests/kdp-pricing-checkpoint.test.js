@@ -284,6 +284,7 @@ test('fresh live prices cannot hide a retained unknown-status edition or clear i
   const result = await next.run();
   assert.equal(result.synced, 0);
   assert.equal(result.pending, 1);
+  assert.equal(result.message, 'KDP pricing: waiting for Amazon to confirm paperback status');
   assert.equal(next.probes.length, 0);
   assert.equal(next.writes.length, 0);
   assert.equal(next.auth.length, 0);
@@ -325,7 +326,7 @@ test('700 verified books skip the second gate; one detected change refreshes onl
 test('periodic audit selects an expired price while unchanged recent books remain skipped', async () => {
   const storage=storageHarness();
   storage.fresh=new Set(candidates.map(row=>row.asin));
-  storage.capturedAt=new Map(candidates.map(row=>[row.asin,new Date(Date.now()-24*60*60*1000).toISOString()]));
+  storage.capturedAt=new Map(candidates.map(row=>[row.asin,new Date(Date.now()-23*60*60*1000).toISOString()]));
   storage.capturedAt.set(candidates[4].asin,new Date(Date.now()-8*24*60*60*1000).toISOString());
   const h=harness(storage); await h.run();
   assert.deepEqual(h.probes,[candidates[4].kdpBookId]);
@@ -349,4 +350,38 @@ test('freshness database failure preserves the retry checkpoint instead of sweep
   assert.deepEqual(after.pending,before.pending);
   assert.deepEqual(after.completed,before.completed);
   assert.equal(after.needsDiscovery,true);
+});
+
+test('a blocked identity tail cannot keep stale completed book prices exempt from reconciliation', async () => {
+  const storage = storageHarness();
+  await policy.createPricingCheckpointStore(storage).save('account-a', {
+    needsDiscovery: true, pending: [candidates[4]],
+    completed: candidates.slice(0, 4).map(policy.pricingCandidateKey),
+    sweepStartedAtMs: Date.now() - 8 * 24 * 60 * 60 * 1000,
+  });
+  const next = harness(storage, { unknownAfter: 4 });
+  const result = await next.run();
+  assert.equal(result.synced, 3);
+  assert.equal(next.writes.length, 3);
+  assert.equal(next.writes.reduce((sum, write) => sum + write.marketplaceRows.length, 0), 6);
+  const saved = await next.store.load('account-a');
+  assert.ok(saved.pending.some(row => row.kdpBookId === candidates[4].kdpBookId));
+  assert.ok(saved.sweepStartedAtMs > Date.now() - 60_000);
+});
+
+test('legacy completed-only evidence reopens stale prices while retaining unresolved identities', async () => {
+  const storage = storageHarness();
+  await policy.createPricingCheckpointStore(storage).save('account-a', {
+    needsDiscovery: true, pending: [candidates[4]],
+    completed: candidates.slice(0, 4).map(policy.pricingCandidateKey),
+  });
+  const next = harness(storage, { unknownAfter: 4 });
+  assert.equal((await next.run()).synced, 3);
+  assert.ok((await next.store.load('account-a')).pending.some(row => row.kdpBookId === candidates[4].kdpBookId));
+});
+
+test('price recapture matches Chrome daily capacity and remains capped at seven days', () => {
+  for (const [count, days] of [[1,1], [160,1], [161,2], [700,5], [1000,7], [100000,7], [0,7]]) {
+    assert.equal(policy.pricingCaptureReconcileMs(count), days * 86400000);
+  }
 });

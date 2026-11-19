@@ -249,3 +249,14 @@ test('current Bookshelf digital ASIN is excluded before any format report exists
   assert.ok(candidates.some(row=>row.asin==='B0H9M11FM7'));
   assert.ok(candidates.every(row=>row.asin!=='B0H8FWKBLV'));
 });
+
+test('current Live edition prices exclude a historical ASIN sharing its setup', async () => {
+  const { selectCurrentLivePricingCandidates } = await import('../src/lib/kdp/vendor/kdpPricingCapture.js');
+  const live = { asin: '1807973808', kdpBookId: '4NGP3VCC1HB' };
+  const stale = { asin: 'B0FW468FBB', kdpBookId: live.kdpBookId };
+  const rows = [
+    { printAsin: live.asin, kdpBookId: live.kdpBookId, printStatus: 'live' },
+    { printAsin: stale.asin, kdpBookId: 'WV2DMAFASRR', printStatus: 'draft' },
+  ];
+  assert.deepEqual(selectCurrentLivePricingCandidates([live, stale], rows), [live]);
+});

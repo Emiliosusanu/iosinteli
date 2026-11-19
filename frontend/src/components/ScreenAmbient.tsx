@@ -1,7 +1,7 @@
 import React from "react";
-import { Platform, StyleSheet, View, type ViewStyle } from "react-native";
+import { StyleSheet, View, type ViewStyle } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { useSafeAreaInsets, type Edge } from "react-native-safe-area-context";
+import { type Edge } from "react-native-safe-area-context";
 import { dashboard, useTheme, type Theme } from "@/src/lib/theme";
 
 /**
@@ -22,9 +22,9 @@ export function ScreenAmbient() {
 }
 
 /**
- * Full-bleed screen shell. No top safe-area pad — chrome/headers apply
- * insets only where interactive controls need clearance under the island.
- * An opaque iOS status-bar shield keeps scrolled content behind the system chrome.
+ * Full-bleed screen shell. No top safe-area pad. The page paints under the Dynamic Island.
+ * Headers put the safe inset inside their own background so the island
+ * sits on the view instead of a solid black band.
  * `edges` kept for call-site compatibility; top is intentionally ignored.
  */
 export function AppScreen({
@@ -37,7 +37,6 @@ export function AppScreen({
   testID?: string;
 }) {
   const t = useTheme();
-  const insets = useSafeAreaInsets();
   return (
     <View
       testID={testID}
@@ -45,24 +44,6 @@ export function AppScreen({
     >
       <ScreenAmbient />
       {children}
-      {Platform.OS === "ios" && insets.top > 0 ? (
-        <View
-          testID="screen-status-bar-shield"
-          pointerEvents="none"
-          accessible={false}
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            height: insets.top,
-            backgroundColor: t.colors.background_primary,
-            zIndex: 1,
-          }}
-        />
-      ) : null}
     </View>
   );
 }

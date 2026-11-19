@@ -1538,7 +1538,13 @@ export function extractBookshelfPrintRowsFromHtml(html) {
 
   for (const link of extractPrintSetupLinksFromHtml(text)) {
     // A setup-only link must not shadow an identified row from this same page.
-    if (link.format === 'paperback' && !out.some(row => row.kdpBookId === link.kdpBookId)) add(link.kdpBookId, null);
+    if (link.format !== 'paperback' || out.some(row => row.kdpBookId === link.kdpBookId)) continue;
+    const statusId = text.match(new RegExp(
+      `(?:^|\\s)id=(["'])(?:[a-z0-9]+-)*dual-print-status-format-${link.kdpBookId}\\1`, 'i',
+    ))?.[0];
+    const status = statusId && parseBookshelfPrintStatus(bookshelfWidgetInnerText(text, statusId));
+    // Without a current print ASIN, only explicit non-live evidence can settle a retry.
+    add(link.kdpBookId, null, { printStatus: status === 'live' ? null : status });
   }
 
   return out;
@@ -1788,4 +1794,25 @@ export function expandMarketplacePricingRowsByPeerAsins({
     }
   }
   return out;
+}
+
+/** Current Bookshelf edition identity governs calculator writes for each ASIN. */
+export function selectCurrentLivePricingCandidates(candidates, rows, now = Date.now()) {
+  const currentByAsin = new Map();
+  for (const row of rows || []) {
+    const asin = String(row.printAsin || '').trim().toUpperCase();
+    const setupId = String(row.kdpBookId || '').trim().toUpperCase();
+    const observedAt = row.observedAtMs == null ? now : Number(row.observedAtMs);
+    if (!looksLikeAmazonAsin(asin) || !looksLikeKdpSetupBookId(setupId)
+      || !Number.isFinite(observedAt) || observedAt > now || now - observedAt > 86400000) continue;
+    const previous = currentByAsin.get(asin);
+    if (!previous || observedAt >= previous.observedAt) {
+      currentByAsin.set(asin, { setupId, status: parseBookshelfPrintStatus(row.printStatus), observedAt });
+    }
+  }
+  return candidates.filter(candidate => {
+    const current = currentByAsin.get(String(candidate.asin || '').trim().toUpperCase());
+    return current?.status === 'live'
+      && current.setupId === String(candidate.kdpBookId || '').trim().toUpperCase();
+  });
 }

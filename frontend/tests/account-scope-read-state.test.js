@@ -10,13 +10,54 @@ const parse = name => {
 };
 const nodes = tree => tree == null ? [] : Array.isArray(tree) ? tree.flatMap(nodes)
   : typeof tree === 'object' ? [tree, ...tree.children.flatMap(nodes)] : [];
+
+test('profile header distinguishes unavailable/loading accounts from a verified empty selection', () => {
+  const source = readFileSync(new URL('../src/components/TopBar.tsx', import.meta.url), 'utf8');
+  const ast = ts.createSourceFile('TopBar.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let label;
+  const find = node => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'selectedLabel') label = node.initializer.getText(ast);
+    ts.forEachChild(node, find);
+  };
+  find(ast);
+  assert.ok(label);
+  const resolve = flags => vm.runInNewContext(label, {
+    profiles: [], selectedProfileIds: [], enabledProfiles: [],
+    profilesLoading: false, profilesFetching: false, profilesError: null, ...flags,
+  });
+  assert.equal(resolve({ profilesError: new Error('read failed') }), 'Unavailable');
+  assert.equal(resolve({ profilesLoading: true }), 'Loading...');
+  assert.equal(resolve({ profilesFetching: true }), 'Loading...');
+  assert.equal(resolve({}), 'No profiles');
+  assert.equal(resolve({ selectedProfileIds: ['p'], profiles: [{ id: 'p', account_name: 'Selected' }] }), 'Selected');
+});
+
+test('Books cannot infer a KDP-only session from an unavailable Ads-profile read', () => {
+  const ast = parse('products');
+  let expression;
+  const find = node => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'kdpOnlyBooks') expression = node.initializer.getText(ast);
+    ts.forEachChild(node, find);
+  };
+  find(ast);
+  assert.ok(expression);
+  const resolve = flags => vm.runInNewContext(expression, {
+    isAdminViewer: false, guestMode: false, royaltyScope: {},
+    profilesLoading: false, profilesError: null, isKdpOnlySessionScope: () => true, ...flags,
+  });
+  assert.equal(resolve({ profilesError: new Error('accounts unavailable') }), false);
+  assert.equal(resolve({ profilesLoading: true }), false);
+  assert.equal(resolve({}), true, 'A confirmed KDP-only account is still supported');
+  assert.equal(resolve({ isAdminViewer: true }), false);
+});
+
 function runGate(name, flags = {}) {
   const ast = parse(name);
   const screen = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.DefaultKeyword));
   const gates = screen.body.statements.filter(node => ts.isIfStatement(node) && node.expression.getText(ast).includes('profilesError'));
   assert.equal(gates.length, 1);
   const env = { exports: {}, React: { createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }) },
-    selectedProfileIds: [], enabledSelectedIds: [], kdpOnlyBooks: false,
+    selectedProfileIds: [], enabledSelectedIds: [], profiles: [], kdpOnlyBooks: false,
     profilesLoading: false, profilesFetching: false, profilesError: false, adminUsersError: false, ...flags,
     calls: [], refetchProfiles: () => env.calls.push('profiles'),
   };
@@ -42,8 +83,22 @@ for (const screen of ['products', 'campaigns', 'targeting']) {
     assert.match(retry.props.subtitle, /couldn't be verified/);
     retry.props.onRetry(); assert.deepEqual(h.calls, ['profiles']);
     assert.equal(runGate(screen).tree, null, 'A verified empty scope still reaches the existing empty state');
-    assert.equal(runGate(screen, { profilesError: true, selectedProfileIds: ['p'], enabledSelectedIds: ['p'] }).tree, null);
+    assert.equal(runGate(screen, { profilesError: true, selectedProfileIds: ['p'], enabledSelectedIds: ['p'], profiles: [{ id: 'p' }] }).tree, null);
     if (screen === 'products') assert.equal(runGate(screen, { profilesError: true, kdpOnlyBooks: true }).tree, null);
+  });
+}
+
+for (const screen of ['index', 'products', 'campaigns', 'targeting']) {
+  test(`${screen}: persisted selection IDs are not proof of a loaded account`, () => {
+    const h = runGate(screen, { profilesError: true, selectedProfileIds: ['saved-profile'], enabledSelectedIds: ['saved-profile'] });
+    const retry = nodes(h.tree).find(node => node.type === 'RetryState');
+    assert.ok(retry, 'A failed cold profile read must not render an empty list or financial dashboard');
+    retry.props.onRetry();
+    assert.deepEqual(h.calls, ['profiles']);
+    if (screen !== 'index') {
+      const loading = runGate(screen, { profilesLoading: true, selectedProfileIds: ['saved-profile'], enabledSelectedIds: ['saved-profile'] });
+      assert.ok(nodes(loading.tree).some(node => node.type === 'ScreenSpinner'));
+    }
   });
 }
 

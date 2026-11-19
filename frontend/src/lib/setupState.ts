@@ -145,7 +145,7 @@ export function deriveSetupSnapshot(facts: SetupFacts): SetupSnapshot {
         })
       : step("ads_connected", "todo", true, {
           title: "Connect Amazon Ads",
-          body: "Link the Ads account you already use on the web, or start that connection here.",
+          body: "Link your Amazon Ads account.",
           href: "/more/accounts",
           cta: "Connect account",
         });
@@ -160,7 +160,7 @@ export function deriveSetupSnapshot(facts: SetupFacts): SetupSnapshot {
         })
       : step("profile_activated", facts.discoveredAdsProfiles > 0 ? "todo" : "blocked", facts.discoveredAdsProfiles > 0, {
           title: "Turn on a profile",
-          body: "A discovered marketplace is not enabled yet, so it is not in sync or summaries.",
+          body: "Enable a marketplace to include it in sync and summaries.",
           href: "/more/accounts",
           cta: "Turn on profile",
         });
@@ -200,8 +200,8 @@ export function deriveSetupSnapshot(facts: SetupFacts): SetupSnapshot {
           cta: "Sync",
         })
       : step("first_sync", facts.activatedAdsProfiles > 0 ? "todo" : "blocked", facts.activatedAdsProfiles > 0, {
-          title: "Wait for the first Ads sync",
-          body: "Enabled profiles still have no successful sync. Open Sync to see the last attempt.",
+          title: "First Ads sync",
+          body: "No successful sync yet. Check the latest attempt.",
           href: "/more/sync",
           cta: "Open Sync",
         });

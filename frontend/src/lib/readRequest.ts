@@ -1,6 +1,17 @@
+function isTerminalReadTimeout(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const row = error as { code?: unknown; status?: unknown; statusCode?: unknown; message?: unknown };
+  if (row.code === "57014") return true;
+  const status = row.status ?? row.statusCode;
+  if (status === 408) return true;
+  if (typeof row.message !== "string") return false;
+  return row.message === "HOME_QUERY_TIMEOUT" || /statement timeout|read timed out/i.test(row.message);
+}
+
 export function shouldRetryRead(failureCount: number, error: unknown): boolean {
   const e = error as { code?: string; status?: number; name?: string; message?: string } | null;
   if (e?.name === 'AbortError' || e?.code === 'SESSION_UNAVAILABLE') return false;
+  if (isTerminalReadTimeout(error)) return false;
   if (['57014', '42501', '42703', 'PGRST301', 'PGRST302'].includes(e?.code ?? '')) return false;
   if (e?.status && e.status >= 400 && e.status < 500) return false;
   if (/session is unavailable|read timed out|HOME_QUERY_TIMEOUT/i.test(e?.message ?? '')) return false;

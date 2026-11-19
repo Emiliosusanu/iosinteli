@@ -36,3 +36,13 @@ test('iOS retains the current Live paperback when its Edit pricing link also app
   const unknown = extractBookshelfPrintRowsFromHtml('<a href="/en_US/title-setup/paperback/OTHERSETUP123/pricing">Edit pricing</a>');
   assert.equal(unknown[0].printStatus, null);
 });
+
+test('setup-only rows accept an exact non-live print label, never a nearby or unpaired live label', () => {
+  const link = '<a href="/en_US/title-setup/paperback/MT02FVSE645/pricing">Edit pricing</a>';
+  const status = (setup, label) => `<div id="zme-indie-bookshelf-dual-print-status-format-${setup}">${label}</div>`;
+  const row = (html) => extractBookshelfPrintRowsFromHtml(link + html)[0];
+  assert.equal(row(status('MT02FVSE645', 'Unpublished')).printStatus, 'unpublished');
+  assert.equal(row(status('MT02FVSE645X', 'Draft')).printStatus, null);
+  assert.equal(row(status('MT02FVSE645', 'Live')).printStatus, null);
+  assert.equal(row(status('MT02FVSE645', 'Unpublished')).printAsin, null);
+});

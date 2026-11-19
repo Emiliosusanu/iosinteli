@@ -175,3 +175,17 @@ export function collectWidgetOnlySetupIds(
   html: string,
   setupByAsin?: Map<string, string>,
 ): string[];
+
+/** Keep candidate fields while filtering to a recently observed Live edition. */
+export function selectCurrentLivePricingCandidates<
+  T extends { asin?: string | null; kdpBookId?: string },
+>(
+  candidates: readonly T[],
+  rows: ReadonlyArray<{
+    printAsin?: string | null;
+    kdpBookId?: string;
+    printStatus?: string | null;
+    observedAtMs?: number | null;
+  }>,
+  now?: number,
+): T[];

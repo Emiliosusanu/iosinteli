@@ -14,9 +14,11 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { requireOptionalNativeModule } from "expo-modules-core";
 import { SymbolView, type SFSymbol } from "expo-symbols";
+import Animated, { cancelAnimation, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { parseDateOnly, toDateString } from "@/src/lib/format";
 import { parseBidInput } from "@/src/lib/targetingFilters";
-import { dashboard, useTheme } from "@/src/lib/theme";
+import { motion } from "@/src/lib/motion";
+import { dashboard, useReduceMotion, useTheme } from "@/src/lib/theme";
 
 // @expo/ui calls requireNativeView at import time. Loading it before a native
 // rebuild crashes the app. Only evaluate those modules when ExpoUI is linked.
@@ -523,28 +525,64 @@ export function IOSSearchBar({
   testID?: string;
 }) {
   const t = useTheme();
+  const reduceMotion = useReduceMotion();
+  const [focused, setFocused] = React.useState(false);
+  const focus = useSharedValue(0);
+  const typing = useSharedValue(1);
+  const focusStyle = useAnimatedStyle(() => ({ opacity: focus.get() * 0.08 }));
+  const typingStyle = useAnimatedStyle(() => ({ transform: [{ scale: typing.get() }] }));
+
+  React.useEffect(() => {
+    if (reduceMotion) {
+      cancelAnimation(typing);
+      typing.set(1);
+    }
+    focus.set(reduceMotion ? Number(focused) : withTiming(Number(focused), { duration: motion.fastState }));
+    return () => {
+      cancelAnimation(focus);
+      cancelAnimation(typing);
+    };
+  }, [focus, focused, reduceMotion, typing]);
+
   return (
     <View
       style={[
         styles.search,
         {
           backgroundColor: t.colors.glass_background,
-          borderWidth: StyleSheet.hairlineWidth,
-          borderColor: t.colors.glass_stroke,
         },
       ]}
     >
-      <SFSymbol name="magnifyingglass" size={15} color={t.colors.text_tertiary} />
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.searchFocus, { backgroundColor: t.colors.tone_primary }, focusStyle]}
+      />
+      <Animated.View style={typingStyle} pointerEvents="none" accessible={false}>
+        <SFSymbol name="magnifyingglass" size={15} color={focused ? t.colors.tone_primary : t.colors.text_secondary} />
+      </Animated.View>
       <TextInput
         testID={testID}
         value={value}
-        onChangeText={onChangeText}
+        onChangeText={(next) => {
+          onChangeText(next);
+          if (!reduceMotion) {
+            typing.set(0.92);
+            typing.set(withSpring(1, { damping: 16, stiffness: 320, mass: 0.35 }));
+          }
+        }}
+        onFocus={() => setFocused(true)}
+        onBlur={() => {
+          setFocused(false);
+          cancelAnimation(typing);
+          typing.set(1);
+        }}
         placeholder={placeholder}
         placeholderTextColor={t.colors.text_tertiary}
         style={[styles.searchInput, { color: t.colors.text_primary }]}
         autoCorrect={false}
         autoCapitalize="none"
         returnKeyType="search"
+        submitBehavior="blurAndSubmit"
         clearButtonMode="while-editing"
         accessibilityLabel={placeholder}
       />
@@ -816,6 +854,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "500",
     paddingVertical: 8,
+    letterSpacing: 0,
+  },
+  searchFocus: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: dashboard.chipRadius,
   },
   buttonFallback: {
     minHeight: 48,

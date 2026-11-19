@@ -62,6 +62,7 @@ export function OverviewCardHeader({
   subtitle,
   meta,
   trailing,
+  wrapTitle = false,
 }: {
   title: string;
   icon?: InteliAdsIconName;
@@ -75,35 +76,27 @@ export function OverviewCardHeader({
   meta?: string;
   /** One-line metrics (or other content) top-right, before the action. */
   trailing?: React.ReactNode;
+  wrapTitle?: boolean;
 }) {
   const t = useTheme();
   const caption = meta ?? subtitle;
   return (
     <View style={styles.header}>
       {icon ? (
-        <View
-          style={[
-            styles.headerIcon,
-            {
-              backgroundColor: t.colors.tone_primary + "14",
-              borderColor: t.colors.tone_primary + "2E",
-            },
-          ]}
-          accessible={false}
-        >
+        <View style={styles.headerIcon} accessible={false}>
           <InteliAdsIcon name={icon} size={dashboard.iconMd} color={t.colors.tone_primary} />
         </View>
       ) : null}
       <View style={styles.titleBlock}>
         <Text
           style={[t.typography.sectionTitle, { color: t.colors.text_primary }]}
-          numberOfLines={1}
+          numberOfLines={wrapTitle ? 0 : 1}
           accessibilityRole="header"
         >
           {title}
         </Text>
         {caption ? (
-          <Text style={[t.typography.caption2, { color: t.colors.text_tertiary, marginTop: 1 }]} numberOfLines={1}>
+          <Text style={[t.typography.caption2, { color: t.colors.text_secondary, marginTop: 1 }]} numberOfLines={1}>
             {caption}
           </Text>
         ) : null}
@@ -233,9 +226,6 @@ const styles = StyleSheet.create({
   headerIcon: {
     width: 28,
     height: 28,
-    borderRadius: 9,
-    borderCurve: "continuous",
-    borderWidth: StyleSheet.hairlineWidth,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -283,7 +273,7 @@ const styles = StyleSheet.create({
   currencyText: {
     fontSize: 12,
     fontWeight: "700",
-    letterSpacing: 0.3,
+    letterSpacing: 0,
   },
   syncChip: {
     minHeight: dashboard.headerRow,

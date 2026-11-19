@@ -5,6 +5,16 @@ export const SHORT_PRICING_MAX_BOOKS = 3;
 export const SHORT_WAKE_WORK_MS = 22_000;
 const WRITE_RESERVE_MS = 4_000;
 
+/** Match Chrome's catalog-sized recapture window. */
+export function pricingCaptureReconcileMs(eligiblePaperbackCount = 0): number {
+  const raw = Number(eligiblePaperbackCount);
+  const count = Number.isFinite(raw) ? Math.max(0, Math.trunc(raw)) : 0;
+  const maximum = 7 * 24 * 60 * 60 * 1000;
+  if (count === 0) return maximum;
+  const days = Math.max(1, Math.ceil(count / 160));
+  return Math.min(maximum, days * 24 * 60 * 60 * 1000);
+}
+
 export class PricingSliceExpiredError extends Error {
   constructor() { super("KDP pricing slice deferred; existing prices preserved"); }
 }
@@ -24,6 +34,8 @@ export type PricingCheckpoint = {
   /** Keep the current sweep finite even if older successful books age past 15m
    * while the phone is slowly draining its remaining books. */
   completed?: string[];
+  /** Completion belongs to one bounded sweep, including a blocked identity tail. */
+  sweepStartedAtMs?: number;
 };
 type CheckpointStorage = {
   getItem(key: string, fallback: string): Promise<string | null>;
@@ -61,6 +73,8 @@ export function createPricingCheckpointStore(storage: CheckpointStorage) {
         if (!Array.isArray(parsed.pending)) return { ...empty(), needsDiscovery: true };
         return {
           needsDiscovery: Boolean(parsed.needsDiscovery),
+          sweepStartedAtMs: Number.isFinite(parsed.sweepStartedAtMs) && parsed.sweepStartedAtMs > 0
+            ? parsed.sweepStartedAtMs : undefined,
           pending: parsed.pending.filter((row: PricingCandidate) => row && typeof row.kdpBookId === "string"),
           completed: Array.isArray(parsed.completed) ? parsed.completed.filter((key: unknown) => typeof key === "string") : [],
         };

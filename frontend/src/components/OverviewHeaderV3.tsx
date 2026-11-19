@@ -1122,7 +1122,7 @@ export function OverviewHeaderV3({
   const ownsSheet = onCustomOpenChange == null;
 
   return (
-    <View style={{ paddingTop: Math.max(insets.top, 0) }} testID="home-header-expanded">
+    <View style={{ paddingTop: 0 }} testID="home-header-expanded">
       <View style={styles.shellWrap}>
         <GlassPanel
           testID="home-header-v3"
@@ -1134,10 +1134,12 @@ export function OverviewHeaderV3({
               // Stadium period rail + black Month pill stay via chrome_* tokens.
               backgroundColor: chrome.colors.background_secondary,
               borderColor: chrome.colors.separator,
+              borderTopLeftRadius: 0,
+              borderTopRightRadius: 0,
               ...chrome.shadow.card,
             },
           ]}
-          contentStyle={styles.shellInner}
+          contentStyle={[styles.shellInner, { paddingTop: Math.max(insets.top, 0) + 8 }]}
         >
         <Animated.View
           style={contextStyle}

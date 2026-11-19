@@ -49,3 +49,19 @@ test('known stock and explicit zero reviews remain visible during refresh',()=>{
  assert.match(text(tree),/0/);assert.match(text(tree),/Limited stock/);assert.doesNotMatch(text(tree),/Loading|IN_STOCK_SCARCE/);
  assert.match(tree.props.accessibilityLabel,/0 reviews in US/);
 });
+
+test('a review observation date without values never claims that no reviews exist',()=>{
+ for(const compact of [true,false]) {
+  const tree=render({compact,activeMarketplaceCodes:['US'],snapshot:{...us,rating:null,reviewCount:null,reviewsCheckedAt:'2026-10-30T00:00:00Z',retailPending:false}});
+  assert.doesNotMatch(text(tree),/No reviews yet|0 reviews/);
+  assert.doesNotMatch(tree.props.accessibilityLabel,/No reviews yet|0 reviews/);
+  assert.match(tree.props.accessibilityLabel,/Reviews not listed in US/);
+  assert.match(tree.props.accessibilityLabel,/checked 2026-10-30/);
+ }
+});
+
+test('a dated review read in progress remains unknown, not a confirmed empty result',()=>{
+ const tree=render({compact:true,activeMarketplaceCodes:['US'],snapshot:{...us,rating:null,reviewCount:null,reviewsCheckedAt:'2026-10-30T00:00:00Z',retailPending:true}});
+ assert.match(tree.props.accessibilityLabel,/Reviews updating/);
+ assert.doesNotMatch(text(tree)+tree.props.accessibilityLabel,/No reviews yet|0 reviews/);
+});

@@ -311,7 +311,7 @@ export function OverviewBudgetTodayCard({
           </Text>
           <View style={styles.chipRow}>
             {!todaySynced ? (
-              <StatusChip label={todayFailed ? "Update unavailable" : "Waiting for server"} tone="inactive" t={t} />
+              <StatusChip label={todayFailed ? "Update unavailable" : "Waiting"} tone="inactive" t={t} />
             ) : budgetKnown && budget > 0 ? (
               <StatusChip
                 label={danger ? "Almost gone" : `${budgetUsageLabel(usedPct)} used · ${formatCurrency(remaining, currency, { compact: true })} left`}

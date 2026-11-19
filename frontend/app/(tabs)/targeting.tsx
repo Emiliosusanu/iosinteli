@@ -22,6 +22,7 @@ import { enabledSelectedProfileIds } from "@/src/lib/booksProfileScope";
 import { targetingFreshnessLabel } from "@/src/lib/targetingPageFreshness";
 import { noPeriodPlaceholder, financialPeriodQueryKey, LIST_PERIOD_QUERY_CACHE, STABLE_SCOPED_CACHE, sortedProfileIds } from "@/src/lib/periodQuery";
 import { takePendingQaFilters } from "@/src/lib/qaCommand";
+import { TERMINAL_READ_TIMEOUT_SUBTITLE } from "@/src/lib/loadErrorCopy";
 import { isHomeQueryTimeout, queryStillWaiting, TARGETING_BOOK_OPTIONS_TIMEOUT_MS, withQueryTimeout } from "@/src/lib/queryTimeout";
 import { targetingPageQueryKey, targetingPageQueryOptions, targetingCanAutoRefresh } from "@/src/lib/targetingTransport";
 import {
@@ -1762,7 +1763,7 @@ export default function TargetingScreen() {
     [segment, selectedIds, data, entityCooldownHours],
   );
 
-  if (selectedProfileIds.length === 0 && (profilesLoading || profilesFetching || profilesError)) {
+  if ((selectedProfileIds.length === 0 || profiles.length === 0) && (profilesLoading || profilesFetching || profilesError)) {
     return (
       <AppScreen>
         <TopBar showKdpAccountGroups={false} condensedMarket />
@@ -2094,7 +2095,7 @@ export default function TargetingScreen() {
           }
           subtitle={
             isHomeQueryTimeout(activeQuery.error)
-              ? "The server took too long for this period. Retry keeps your filters."
+              ? TERMINAL_READ_TIMEOUT_SUBTITLE
               : /period metrics/i.test(
                     activeQuery.error instanceof Error ? activeQuery.error.message : "",
                   )

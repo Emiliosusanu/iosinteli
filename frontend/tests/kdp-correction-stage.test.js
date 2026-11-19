@@ -4,15 +4,16 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { withKdpTaskRequest } from '../src/lib/kdp/backgroundBudget.ts';
+import * as capture from '../src/lib/kdp/vendor/kdp-complete-capture.js';
 
 const source = readFileSync(new URL('../src/lib/kdp/upsert.ts', import.meta.url), 'utf8');
 function harness(patch = {}) {
   const calls = [];
   const modules = {
     '../supabase.ts': { supabase: {} },
-    'expo-constants': { default: {} },
     './marketplaceCoverage.ts': {},
     './backgroundBudget.ts': {withKdpTaskRequest},
+    './vendor/kdp-complete-capture.js': capture,
     '../rulesApi.ts': { nestApiJson: async (url, request) => {
       const body = JSON.parse(request.body); calls.push({ url, body });
       return { ok: false, quarantined: true, staged: true, candidateId: '44444444-4444-4444-8444-444444444444',
@@ -24,8 +25,10 @@ function harness(patch = {}) {
   vm.runInNewContext(compiled, { exports, require: path => modules[path], Math });
   return { calls, write: (reviewOnly = true) => exports.writeKdpDay({
     accountId: '11111111-1111-4111-8111-111111111111', reviewOnly,
-    rowDaily: { date: '2026-10-09', royalties: 0, orders: 0, kenp: 0 },
-    rowEntry: { date: '2026-10-09', income: 0, income_currency: 'USD' }, rowsBookDaily: [], factRows: [],
+    built: {
+      rowDaily: { date: '2026-10-09', royalties: 0, orders: 0, kenp: 0 },
+      rowEntry: { date: '2026-10-09', income: 0, income_currency: 'USD' }, rowsBookDaily: [], facts: [],
+    }, factRows: [],
   }) };
 }
 test('iOS blocked corrections stage the complete capture without any table write', async () => {
@@ -33,18 +36,14 @@ test('iOS blocked corrections stage the complete capture without any table write
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].url, '/kdp-sync/stage-correction');
   assert.equal(h.calls[0].body.dailyData.account_id, h.calls[0].body.accountId);
+  assert.equal('captureEvidence' in h.calls[0].body, false);
+  assert.equal('marketplaces' in h.calls[0].body, false);
 });
 test('iOS never accepts a candidate as sync success or a mismatched stage acknowledgement', async () => {
-  await assert.rejects(harness().write(false));
+  const h = harness();
+  await assert.rejects(h.write(false), { code: 'KDP_CAPTURE_INCOMPLETE' });
+  assert.equal(h.calls.length, 0);
   for (const patch of [{ accountId: 'wrong' }, { candidateId: null }, { ok: true, factRows: 0, submittedBookDailyRows: 0 }]) {
     await assert.rejects(harness(patch).write());
   }
-});
-test('incomplete native source reports stop before staging a correction', () => {
-  const importer = readFileSync(new URL('../src/lib/kdp/importer.ts', import.meta.url), 'utf8');
-  const start = importer.indexOf('async function syncOneDay');
-  const end = importer.indexOf('async function resolveAccountId', start);
-  const flow = importer.slice(start, end);
-  assert.ok(flow.indexOf('await fetchDayPayloads(ymd, target.currency, target, deadlineAtMs)') < flow.indexOf('reviewOnly: true'));
-  assert.ok(flow.indexOf('reviewOnly: true') < flow.indexOf('throw new Error(`Protected'));
 });

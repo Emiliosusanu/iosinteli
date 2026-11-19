@@ -92,22 +92,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // Share the same guarded refresh used by API callers. A temporary
           // refresh outage keeps a still-usable access token instead of
           // destroying the persisted mobile session.
-          session = await ensureFreshSupabaseSession() ?? session;
-          if (!current()) return;
-          if (!supabaseSessionIsUsable(session)) throw new Error("Session recovery pending");
-          const { data: { user: liveUser }, error: userError } = await withQueryTimeout(
-            supabase.auth.getUser(), 4_000,
-          ).catch(error => ({ data: { user: null }, error }));
-          if (!current()) return;
-          // #region agent log
-          debugIngest("AuthContext.tsx:getUser", "auth getUser done", { ms: Date.now() - authT0, hasLiveUser: !!liveUser, userError: !!userError }, "B");
-          // #endregion
-          if (userLookupProvesSessionInvalid(userError, !!liveUser)) {
-            await supabase.auth.signOut({ scope: "local" });
-            session = null;
-            await clearStaleAuthCaches();
-          } else if (userError) {
-            console.warn("[auth] User verification is temporarily unavailable; keeping the valid local session");
+          if (!supabaseSessionIsUsable(session)) {
+            session = await ensureFreshSupabaseSession() ?? session;
+            if (!current() || !supabaseSessionIsUsable(session)) throw new Error("Session recovery pending");
           }
         }
 
@@ -124,6 +111,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // #region agent log
         debugIngest("AuthContext.tsx:restoreEnd", "auth restore end", { ms: Date.now() - authT0, authenticated: !!(session || isGuest), isGuest }, "B");
         // #endregion
+
+        // A usable persisted session is enough to start reads. Verify the user
+        // identity in the background and revoke only on an explicit invalid
+        // session signal; transient auth/network errors must not block startup.
+        if (session) {
+          void (async () => {
+            const { data: { user: liveUser }, error: userError } = await withQueryTimeout(
+              supabase.auth.getUser(session.access_token),
+              4_000,
+            ).catch(error => ({ data: { user: null }, error }));
+            if (!current()) return;
+            debugIngest("AuthContext.tsx:getUser", "auth getUser background done", {
+              ms: Date.now() - authT0,
+              hasLiveUser: !!liveUser,
+              userError: !!userError,
+            }, "B");
+            if (!userLookupProvesSessionInvalid(userError, !!liveUser)) {
+              if (userError) console.warn("[auth] Background user verification delayed; keeping local session");
+              return;
+            }
+            await clearStaleAuthCaches();
+            if (!current()) return;
+            await supabase.auth.signOut({ scope: "local" });
+            if (!current()) return;
+            setSession(null);
+            setUser(null);
+            setState("unauthenticated");
+          })().catch(error => {
+            if (current()) console.warn("[auth] Background session cleanup failed", error);
+          });
+        }
       } catch (error) {
         if (!current()) return;
         restoreSettled = true;

@@ -38,7 +38,7 @@ test("sender-parity migration adds Nest columns", () => {
   assert.match(sql, /bundle_id/);
 });
 
-function deployedWakeHandler(claimError = null) {
+function deployedWakeHandler(claimError = null, delivery = null) {
   const counters = { claims: 0, fetches: 0 };
   let handler;
   const env = {
@@ -50,16 +50,31 @@ function deployedWakeHandler(claimError = null) {
     Deno: { env: { get: (key) => env[key] }, serve: (fn) => { handler = fn; } },
     createClient: () => ({ rpc: async () => {
       counters.claims += 1;
-      return { data: false, error: claimError };
-    } }),
+      return { data: !!delivery, error: claimError };
+    }, from: () => ({ update: value => ({
+      in: async (_key, tokens) => { delivery.invalidations.push({value, tokens}); return {error: null}; },
+      eq: async (_key, token) => { delivery.environmentUpdates.push({value, token}); return {error: null}; },
+    }) }) }),
     crypto: webcrypto, TextEncoder, Uint8Array, Response, Request, atob, btoa,
     console: { warn() {} },
-    fetch: async () => { counters.fetches += 1; throw new Error("Unexpected APNs send"); },
+    fetch: async () => {
+      counters.fetches += 1;
+      if (!delivery) throw new Error("Unexpected APNs send");
+      const result = delivery.responses.shift();
+      assert.ok(result, "Unexpected additional APNs send");
+      if (result.error) throw new Error(result.error);
+      return new Response(JSON.stringify({reason: result.reason}), {status: result.status});
+    },
   });
   const executable = ts.transpileModule(wake.replace(/^import .*;$/m, ""), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
   }).outputText;
   vm.runInContext(executable, context);
+  if (delivery) vm.runInContext(`
+    loadTokens = async () => ({ tokens: [{token: 'only-this-phone', environment: 'sandbox', platform: 'ios'}],
+      scanned: 1, skippedDisabled: 0, skippedStale: 0, capped: false });
+    apnsAuthToken = async () => 'qa-provider';
+  `, context);
   return { handler, counters };
 }
 
@@ -71,6 +86,63 @@ test("public wake endpoint rejects a forged service_role payload before claiming
   }));
   assert.equal(response.status, 401);
   assert.deepEqual(counters, { claims: 0, fetches: 0 });
+});
+
+test("an alternate-environment token rejection cannot invalidate the registered environment", async () => {
+  for (const secondary of [
+    {status: 400, reason: 'BadDeviceToken'},
+    {status: 410, reason: 'Unregistered'},
+  ]) {
+    const delivery = {responses: [{status: 403, reason: 'BadEnvironmentKeyInToken'}, secondary], invalidations: [], environmentUpdates: []};
+    const {handler, counters} = deployedWakeHandler(null, delivery);
+    const response = await handler(new Request('https://example.test/wake', {
+      method: 'POST', headers: {Authorization: 'Bearer configured-service-key'},
+    }));
+    const body = await response.json();
+    assert.equal(counters.fetches, 2);
+    assert.equal(delivery.invalidations.length, 0, 'the primary environment never rejected the device token');
+    assert.equal(body.pruned, 0);
+    assert.equal(body.failed, 1);
+    assert.equal(body.sent, 0);
+  }
+});
+
+test("a primary-environment permanent rejection still retires that exact token", async () => {
+  for (const primary of [{status: 400, reason: 'BadDeviceToken'}, {status: 410, reason: 'Unregistered'}]) {
+    const delivery = {responses: [primary], invalidations: [], environmentUpdates: []};
+    const {handler, counters} = deployedWakeHandler(null, delivery);
+    const body = await (await handler(new Request('https://example.test/wake', {
+      method: 'POST', headers: {Authorization: 'Bearer configured-service-key'},
+    }))).json();
+    assert.equal(counters.fetches, 1);
+    assert.equal(body.pruned, 1);
+    assert.equal(delivery.invalidations[0].tokens[0], 'only-this-phone');
+  }
+});
+
+test("confirmed delivery in the alternate environment heals metadata without a second successful send", async () => {
+  const delivery = {responses: [{status: 403, reason: 'BadEnvironmentKeyInToken'}, {status: 200}], invalidations: [], environmentUpdates: []};
+  const {handler, counters} = deployedWakeHandler(null, delivery);
+  const body = await (await handler(new Request('https://example.test/wake', {
+    method: 'POST', headers: {Authorization: 'Bearer configured-service-key'},
+  }))).json();
+  assert.equal(body.sent, 1); assert.equal(body.pruned, 0);
+  assert.equal(counters.fetches, 2); assert.equal(delivery.invalidations.length, 0);
+  assert.equal(delivery.environmentUpdates[0].value.environment, 'production');
+});
+
+test("provider or transport failures count one failed device, not two failed attempts", async () => {
+  for (const result of [{status: 403, reason: 'ExpiredProviderToken'}, {status: 429}, {status: 503}, {error: 'offline'}]) {
+    const delivery = {responses: [result], invalidations: [], environmentUpdates: []};
+    const {handler, counters} = deployedWakeHandler(null, delivery);
+    const body = await (await handler(new Request('https://example.test/wake', {
+      method: 'POST', headers: {Authorization: 'Bearer configured-service-key'},
+    }))).json();
+    assert.equal(body.failed, 1);
+    assert.equal(body.pruned, 0);
+    assert.equal(counters.fetches, 1);
+    assert.equal(delivery.invalidations.length, 0);
+  }
 });
 
 test("configured service key and wake secret are accepted, while lease errors stop fleet sending", async () => {
