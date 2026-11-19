@@ -47,3 +47,11 @@ test('iOS never accepts a candidate as sync success or a mismatched stage acknow
     await assert.rejects(harness(patch).write());
   }
 });
+test('incomplete native source reports stop before staging a correction', () => {
+  const importer = readFileSync(new URL('../src/lib/kdp/importer.ts', import.meta.url), 'utf8');
+  const start = importer.indexOf('async function syncOneDay');
+  const end = importer.indexOf('async function resolveAccountId', start);
+  const flow = importer.slice(start, end);
+  assert.ok(flow.indexOf('await fetchDayPayloads(ymd, target.currency, target, deadlineAtMs)') < flow.indexOf('reviewOnly: true'));
+  assert.ok(flow.indexOf('reviewOnly: true') < flow.indexOf('throw new Error(`Protected'));
+});
