@@ -30,6 +30,7 @@ import {
   loadHelperTemplates,
   saveHelperAccountId,
   saveHelperDeferredDays,
+  saveHelperLastDayReceipt,
   saveHelperReplayCurrency,
   saveHelperSyncState,
   saveHelperTemplates,
@@ -70,7 +71,11 @@ import { mapKdpMarketplacesSettled } from "./vendor/kdp-report-scheduler.js";
 import { runShelfHeal } from "./runShelfHeal.ts";
 import { syncKdpPaperbackPricing } from "./pricingSync.ts";
 import { hydratePricingAuthBannerFromBootstrap } from "./pricingBootstrap.ts";
-import { buildKdpFromJsons, buildTitlesRows, extractBooksObj } from "./vendor/kdpVendor.generated.js";
+import { assertCompleteKdpReport, isExplicitEmptyKdpActivity, type KdpCompleteCapture } from "./vendor/kdp-complete-capture.js";
+import {
+  buildKdpFromJsons, buildTitlesRows, extractBooksObj, findKdpReportRoot,
+  normalizeHistogramTitleToYmd, type KdpReportFact,
+} from "./vendor/kdpVendor.generated.js";
 
 const CAPTURE_WAIT_MS = 28_000;
 const LOGIN_WAIT_MS = 8_000;
@@ -240,7 +245,7 @@ async function fetchDayPayloads(
   currency: "EUR" | "USD" | string,
   marketplace: KdpMarketplaceTarget | null,
   deadlineAtMs?: number,
-): Promise<{ royaltiesJson: unknown; ordersJson: unknown; kenpJson: unknown }> {
+) {
   const results = await Promise.allSettled([
     fetchJsonForType("royalties", ymd, currency, marketplace, deadlineAtMs),
     fetchJsonForType("orders", ymd, currency, marketplace, deadlineAtMs),
@@ -255,7 +260,41 @@ async function fetchDayPayloads(
     const scope = marketplace?.key || "ALL";
     throw new Error(`Incomplete KDP ${scope} response for ${ymd}; existing data was preserved`);
   }
-  return { royaltiesJson, ordersJson, kenpJson };
+  const scope = marketplace?.key || "ALL";
+  const royaltiesRoot = findKdpReportRoot(royaltiesJson);
+  const kenpRoot = findKdpReportRoot(kenpJson);
+  const ordersRoot = findKdpReportRoot(ordersJson);
+  const validateReport = (root: unknown, report: "royalties" | "orders" | "kenp") => {
+    try {
+      return assertCompleteKdpReport(root, ymd, normalizeHistogramTitleToYmd, report, scope);
+    } catch (error) {
+      const failure = error as { code?: string; message?: string; captureShape?: {
+        nestedBuckets?: number | null; matchingDayBuckets?: number | null; aggregateRows?: number | null;
+      } } | null;
+      if (failure?.code === "KDP_CAPTURE_INCOMPLETE" && typeof failure.message === "string") {
+        failure.message += ` [${ymd} ${scope} ${report}]`;
+        if (failure.captureShape) failure.message += ` buckets=${failure.captureShape.nestedBuckets ?? "none"} matches=${failure.captureShape.matchingDayBuckets ?? "none"} aggregateRows=${failure.captureShape.aggregateRows ?? "none"}`;
+      }
+      throw error;
+    }
+  };
+  const captureReportsComplete = validateReport(royaltiesRoot, "royalties")
+    && validateReport(ordersRoot, "orders")
+    && validateReport(kenpRoot, "kenp");
+  const royaltyBuckets = royaltiesRoot?.nestedHistogram?.histogramList;
+  const royaltyRows = Array.isArray(royaltyBuckets)
+    ? royaltyBuckets.find(row => normalizeHistogramTitleToYmd(row?.title ?? row?.label ?? row?.name ?? row?.key) === ymd)?.data
+    : royaltiesRoot?.histogram?.data;
+  return {
+    royaltiesJson, ordersJson, kenpJson, captureReportsComplete,
+    emptyOrders: isExplicitEmptyKdpActivity(ordersRoot, "orders", scope),
+    emptyKenp: isExplicitEmptyKdpActivity(kenpRoot, "kenp", scope),
+    emptyRoyalties: Array.isArray(royaltyRows) && royaltyRows.length === 0,
+  };
+}
+
+function incompleteCapture(message: string): never {
+  throw Object.assign(new Error(message), { status: 503, code: "KDP_CAPTURE_INCOMPLETE" });
 }
 
 async function syncOneDay(
@@ -267,7 +306,8 @@ async function syncOneDay(
 ): Promise<void> {
   // The authoritative All rollup is always USD. Native storefront requests
   // below populate kdp_daily_facts without changing the account/day total.
-  const { royaltiesJson, ordersJson, kenpJson } = await fetchDayPayloads(ymd, "USD", null, deadlineAtMs);
+  const { royaltiesJson, ordersJson, kenpJson, captureReportsComplete, emptyKenp, emptyOrders } =
+    await fetchDayPayloads(ymd, "USD", null, deadlineAtMs);
   const built = buildKdpFromJsons({
     ymd,
     titlesJson,
@@ -277,7 +317,9 @@ async function syncOneDay(
     adsJson: null,
     adsEntityId: null,
   });
-  built.rowEntry.income_currency = "USD";
+  if (built.rowEntry.income_currency !== "USD") {
+    incompleteCapture("KDP account report did not confirm USD; existing data preserved");
+  }
 
   const { data: previous, error: previousError } = await withKdpTaskRequest(deadlineAtMs, async signal => {
     const query = supabase.from("kdp_daily_data").select("royalties,orders,kenp")
@@ -292,101 +334,104 @@ async function syncOneDay(
   const isEstimated = ymd >= new Date().toISOString().slice(0, 10);
   const factRows: Array<Record<string, unknown>> = [];
   const appendFacts = (
-    rows: Array<Record<string, unknown>>,
+    rows: KdpReportFact[],
     marketplace: string,
     currency: string,
   ) => {
     for (const fact of rows) {
       const asin = String(fact.asin || "").trim().toUpperCase();
       const format = String(fact.format || "").trim().toLowerCase();
-      if (!asin || !format) continue;
-      const units = Number(fact.units);
-      if (!Number.isSafeInteger(units)) {
-        throw Object.assign(new Error('KDP native units missing or non-integer; existing data preserved'),
-          { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
+      if (!/^[A-Z0-9]{10}$/.test(asin) || !["ebook", "paperback", "hardcover", "audiobook", "ku"].includes(format)
+        || !Number.isSafeInteger(fact.units) || !Number.isFinite(fact.royalties)
+        || !Number.isSafeInteger(fact.kenp) || fact.kenp < 0
+        || (format === "ku" ? fact.units !== 0 : fact.kenp !== 0)) {
+        incompleteCapture("KDP fact identity or metrics invalid; existing data preserved");
       }
       factRows.push({
         asin,
         format,
         marketplace,
         currency,
-        units,
-        royalties: Number(fact.royalties || 0),
-        kenp: Math.max(0, Math.trunc(Number(fact.kenp || 0))),
+        units: fact.units,
+        royalties: fact.royalties,
+        kenp: fact.kenp,
         is_estimated: isEstimated,
       });
     }
   };
 
+  let native: KdpCompleteCapture["results"] = [];
   if (marketplaceTargets.length) {
     // Keep three stores active without a fixed-batch barrier. On failure stop
     // new work and drain active requests before deferring the whole day.
     const started = Date.now();
-    const native = await mapKdpMarketplacesSettled(marketplaceTargets,
+    const captured = await mapKdpMarketplacesSettled(marketplaceTargets,
       async (target) => {
-        const payloads = await fetchDayPayloads(ymd, target.currency, target, deadlineAtMs);
-        const result = buildKdpFromJsons({
+        const { captureReportsComplete, emptyKenp, emptyRoyalties, emptyOrders, ...payloads } =
+          await fetchDayPayloads(ymd, target.currency, target, deadlineAtMs);
+        const { rowDaily, rowEntry, facts } = buildKdpFromJsons({
           ymd,
           titlesJson,
           ...payloads,
           adsJson: null,
           adsEntityId: null,
         });
-        return { target, facts: result.facts as Array<Record<string, unknown>> };
+        const currency = rowEntry.income_currency;
+        if (currency !== target.currency && !(currency == null && emptyRoyalties)) {
+          incompleteCapture("KDP marketplace report did not confirm native currency; existing data preserved");
+        }
+        return { rowDaily, rowEntry, facts, captureReportsComplete, scopedEmptyKenp: emptyKenp, scopedEmptyOrders: emptyOrders };
       }, { concurrency: 3, pauseMs: 0, stopOnFailure: true });
     await appendKdpActivity(`Marketplace capture ${ymd} · ${marketplaceTargets.length} stores`, "info", {
       stage: "marketplaces", ymd, concurrency: 3, durationMs: Date.now() - started,
-      stores: native.map((result, index) => ({
+      stores: captured.map((result, index) => ({
         marketplace: marketplaceTargets[index].key, currency: marketplaceTargets[index].currency,
         durationMs: result.durationMs, ok: result.status === "fulfilled", skipped: result.skipped === true,
       })),
     });
-    const failed = native.find((result) => result.status === "rejected");
+    const failed = captured.find((result) => result.status === "rejected");
     if (failed?.status === "rejected") throw failed.reason;
-    for (const result of native) {
-      if (result.status === "fulfilled") appendFacts(result.value.facts, result.value.target.key, result.value.target.currency);
+    native = captured;
+    for (const [index, result] of native.entries()) {
+      const target = marketplaceTargets[index];
+      if (result.status === "fulfilled") appendFacts(result.value.facts, target.key, target.currency);
     }
   } else {
-    appendFacts(
-      built.facts as Array<Record<string, unknown>>,
-      "ALL",
-      "USD",
-    );
+    appendFacts(built.facts, "ALL", "USD");
   }
 
   const expectedTargets = allKdpMarketplaceTargets();
   const completeNativeCapture = marketplaceTargets.length === expectedTargets.length
     && new Set(marketplaceTargets.map(target => target.key)).size === expectedTargets.length
     && expectedTargets.every(expected => marketplaceTargets.some(target =>
-      target.key === expected.key && target.currency === expected.currency));
-  // All 17 authenticated reports have succeeded and their facts are retained.
-  // The server validates their internal quantities and atomically decides the
-  // correction. A legacy heuristic must not veto a verified zero or refund.
+      target.key === expected.key && target.currency === expected.currency && target.filterToken === expected.filterToken));
   if (!overwriteSafety.safe && !completeNativeCapture) {
-    // All requested source reports have succeeded. Keep the complete capture
-    // as a review candidate; this endpoint cannot replace accepted data.
+    // A limited-scope capture can be reviewed, but cannot replace accepted data.
     try {
-      await writeKdpDay({ accountId, rowDaily: built.rowDaily, rowEntry: built.rowEntry,
-        rowsBookDaily: built.rowsBookDaily, factRows, reviewOnly: true,
-        deadlineAtMs,
-        marketplaces: marketplaceTargets.map((target) => target.key) });
+      await writeKdpDay({ accountId, built, factRows, reviewOnly: true, deadlineAtMs });
       void appendKdpActivity(`Protected ${ymd}: correction saved for administrator verification`, "error");
     } catch {
       void appendKdpActivity(`Protected ${ymd}: correction pending; review upload will retry`, "error");
     }
     throw new Error(`Protected ${ymd}: existing verified royalties and activity preserved`);
   }
+  if (!completeNativeCapture) {
+    incompleteCapture("KDP capture requires all native marketplaces; existing data preserved");
+  }
 
   taskRequestTimeout(deadlineAtMs, Date.now(), 0);
-  await writeKdpDay({
+  const receipt = await writeKdpDay({
     accountId,
     deadlineAtMs,
-    rowDaily: built.rowDaily,
-    rowEntry: built.rowEntry,
-    rowsBookDaily: built.rowsBookDaily,
+    built,
     factRows,
-    marketplaces: marketplaceTargets.map((target) => target.key),
+    completeCapture: {
+      stores: marketplaceTargets, results: native,
+      unscopedComplete: captureReportsComplete, unscopedEmptyKenp: emptyKenp,
+      unscopedEmptyOrders: emptyOrders,
+    },
   });
+  if (receipt) await saveHelperLastDayReceipt(accountId, receipt).catch(() => undefined);
 }
 
 async function resolveAccountId(userId: string, profileIds: string[], deadlineAtMs?: number): Promise<string> {
@@ -436,7 +481,12 @@ async function runKdpIosHelperTickOnce(
       return { ok: true, skipped: true, reason: "source_off" };
     }
     userId = await withKdpPreparationBudget(deadlineAtMs, currentUserId);
-    if (!userId) return { ok: false, skipped: true, reason: "signed_out" };
+    if (!userId) {
+      // Keep background activity truthful: a signed-out helper did not sync,
+      // and the next wake can retry after the user restores the session.
+      void appendKdpActivity("15 min sync skipped · sign in required", "info");
+      return { ok: false, skipped: true, reason: "signed_out" };
+    }
     let live = await withKdpPreparationBudget(deadlineAtMs, () => supabase.auth.getSession());
     // Background may reuse a saved session; account setup/authentication stays
     // in the foreground. SDK auth completion cannot launch detached KDP writes.
@@ -549,6 +599,7 @@ async function runKdpIosHelperTickOnce(
     let continueSoon = true;
     let lastSoftError: string | null = null;
     let remaining = deferredDayLimitForWake(wakeMode);
+    const attemptedDays = new Set<string>();
     const steadyAtBeforeTick = state.lastSteadyAtMs;
     let steadyPlanned = false;
     let steadyOk = false;
@@ -571,9 +622,11 @@ async function runKdpIosHelperTickOnce(
       await saveHelperSyncState(state);
       if (!plan.due && !continueSoon) break;
 
-      const batch = orderDaysForWake(plannedDays, today, yesterday).slice(0, remaining);
+      const batch = orderDaysForWake(plannedDays, today, yesterday)
+        .filter(ymd => !attemptedDays.has(ymd)).slice(0, remaining);
       for (const ymd of batch) {
         if (!canStartReportDay(deadlineAtMs)) break;
+        attemptedDays.add(ymd);
         remaining -= 1;
         setKdpHelperRunning(true, `sync ${ymd}`);
         try {
@@ -601,7 +654,9 @@ async function runKdpIosHelperTickOnce(
       /* next wake retries */
     }
 
-    const queued = orderDaysForWake(deferred, today, yesterday).slice(0, Math.max(0, remaining));
+    // A failed day stays in the journal, but gets another chance on the next wake.
+    const queued = orderDaysForWake(deferred, today, yesterday)
+      .filter(ymd => !attemptedDays.has(ymd)).slice(0, Math.max(0, remaining));
     for (const ymd of queued) {
       if (!canStartReportDay(deadlineAtMs)) break;
       setKdpHelperRunning(true, `deferred: ${ymd}`);
@@ -654,7 +709,7 @@ async function runKdpIosHelperTickOnce(
 
     // Paperback list price, printing cost, royalty and BE ACoS share the same
     // account id and exact ASIN catalog as the report import above. Fresh rows
-    // are skipped for the shared seven-day verification window; pricing-page saves
+    // are skipped for the catalog-sized verification window; pricing-page saves
     // mark only that setup id dirty, so a normal Import never rewrites every
     // unchanged book.
     let pricingMessage = "";

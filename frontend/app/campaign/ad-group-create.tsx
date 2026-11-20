@@ -36,7 +36,17 @@ import {
   fetchCampaignApi,
   type AdGroupTargeting,
 } from "@/src/lib/mutations";
+import {
+  buildAdGroupCreationBody,
+  DEFAULT_AD_GROUP_CREATE_STATE,
+} from "@/src/lib/campaignCreationPayload";
 import { parseCustomAsins } from "@/src/lib/campaignCreationStock";
+import { adGroupCreationNotice } from "@/src/lib/adGroupCreationNotice";
+import {
+  failureFromUnknown,
+  productTargetResubmitBlocked,
+  unconfirmedCreateNotice,
+} from "@/src/lib/productTargetCreateOutcome";
 import {
   clusterKeywordSuggestionsByPhrase,
   clusterProductSuggestionsByAsin,
@@ -229,6 +239,8 @@ export default function CreateAdGroupScreen() {
     Partial<Record<string, string>>
   >({});
   const [submitting, setSubmitting] = useState(false);
+  const [unconfirmedCreate, setUnconfirmedCreate] = useState<string | null>(null);
+  const unconfirmedCreateRef = useRef(false);
   const [suggestionQuery, setSuggestionQuery] = useState("");
   const [suggestionMatch, setSuggestionMatch] = useState("all");
   const [visibleSuggestionCount, setVisibleSuggestionCount] = useState(50);
@@ -602,7 +614,7 @@ export default function CreateAdGroupScreen() {
 
   const onSubmit = async () => {
     if (blockIfCannotWriteAmazon(writeGuard)) return;
-    if (!canSubmit || submitting || aiFilterPending || aiFilterNeedsConfirm) return;
+    if (!canSubmit || submitting || aiFilterPending || aiFilterNeedsConfirm || unconfirmedCreate || unconfirmedCreateRef.current) return;
     setSubmitting(true);
     try {
       const keywords =
@@ -666,26 +678,23 @@ export default function CreateAdGroupScreen() {
             ]).productTargets
           : undefined;
 
-      const result = await createAdGroup({
+      const result = await createAdGroup(buildAdGroupCreationBody({
         campaignId,
         name: name.trim(),
         defaultBid: defaultBidAmount,
-        state: "enabled",
+        state: DEFAULT_AD_GROUP_CREATE_STATE,
         targeting: effectiveTargeting as AdGroupTargeting,
         advertisedAsin: primaryAsin || undefined,
         keywords,
         productTargets,
-      });
+      }));
 
       void invalidateAds();
       void queryClient.invalidateQueries({ queryKey: ["ad-groups"] });
+      const notice = adGroupCreationNotice(result, effectiveTargeting);
       Alert.alert(
-        "Ad group created",
-        effectiveTargeting === "auto"
-          ? "Automatic ad group is live on Amazon."
-          : effectiveTargeting === "keywords"
-            ? `Added ${result.keywordCount ?? keywords?.length ?? 0} keyword(s).`
-            : `Added ${result.productTargetCount ?? productTargets?.length ?? 0} product target(s).`,
+        notice.title,
+        notice.message,
         [
           {
             text: "View",
@@ -701,6 +710,14 @@ export default function CreateAdGroupScreen() {
         ],
       );
     } catch (error) {
+      const failure = failureFromUnknown(error);
+      if (productTargetResubmitBlocked(failure)) {
+        const notice = unconfirmedCreateNotice(failure);
+        unconfirmedCreateRef.current = true;
+        setUnconfirmedCreate(notice);
+        Alert.alert("Amazon didn't confirm this", notice);
+        return;
+      }
       alertMutationError(error, "Couldn't create ad group");
     } finally {
       setSubmitting(false);
@@ -747,6 +764,11 @@ export default function CreateAdGroupScreen() {
             {allowed.includes("auto")
               ? "This is an automatic campaign — new ad groups use Amazon auto targeting."
               : "Choose keyword or product targeting for this manual campaign."}
+          </Text>
+          <Text
+            style={[t.typography.footnote, { color: t.colors.text_secondary, marginTop: 6 }]}
+          >
+            This ad group starts paused. Activate it later after reviewing the targeting.
           </Text>
         </SectionCard>
 
@@ -1250,6 +1272,9 @@ export default function CreateAdGroupScreen() {
           </SectionCard>
         )}
 
+        {unconfirmedCreate ? (
+          <Text style={[t.typography.footnote, { color: t.colors.tone_danger }]}>{unconfirmedCreate}</Text>
+        ) : null}
         <PrimaryButton
           testID="adgroup-create-submit"
           label={
@@ -1264,7 +1289,7 @@ export default function CreateAdGroupScreen() {
           full
           loading={submitting}
           disabled={
-            !canSubmit || submitting || aiFilterPending || aiFilterNeedsConfirm
+            !canSubmit || submitting || aiFilterPending || aiFilterNeedsConfirm || Boolean(unconfirmedCreate)
           }
           onPress={() => void onSubmit()}
         />

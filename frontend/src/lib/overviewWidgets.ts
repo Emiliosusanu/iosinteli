@@ -2,6 +2,7 @@ import type { SearchTerm } from "@/src/lib/types";
 import type { TopBookRow, TopCampaignRow, AdGroupEnriched } from "@/src/lib/queries";
 import { normalizeEntityState } from "./campaigns.ts";
 import { resolveBookNet } from "./netRoyalties.ts";
+import { optionalMetric } from "./metricEvidence.ts";
 
 /** Overview Campaigns / Ad groups swipe: pause means action already taken — do not rank. */
 export function isPausedForOverviewWidget(state: string | null | undefined): boolean {
@@ -31,19 +32,15 @@ type MetricRow = {
 };
 
 function spendOf(row: MetricRow): number {
-  return Number(row.total_spend ?? row.spend) || 0;
-}
-
-function ordersOf(row: MetricRow): number {
-  return Number(row.total_orders ?? row.orders) || 0;
+  return optionalMetric(row.total_spend ?? row.spend) ?? 0;
 }
 
 function salesOf(row: MetricRow): number {
-  return Number(row.total_sales ?? row.sales) || 0;
+  return optionalMetric(row.total_sales ?? row.sales) ?? 0;
 }
 
 function acosOf(row: MetricRow): number {
-  return Number(row.total_acos ?? row.acos) || 0;
+  return optionalMetric(row.total_acos ?? row.acos) ?? 0;
 }
 
 function impressionsOf(row: MetricRow): number {
@@ -52,8 +49,8 @@ function impressionsOf(row: MetricRow): number {
 
 /** ACoS high→low, then spend, impressions, last sync. Used for keywords / ASIN / auto / category / placement. */
 export function compareByAcosSpendImpressionsSync(a: MetricRow, b: MetricRow): number {
-  const aAcos = salesOf(a) > 0 ? acosOf(a) : null;
-  const bAcos = salesOf(b) > 0 ? acosOf(b) : null;
+  const aAcos = salesOf(a) > 0 ? optionalMetric(a.total_acos ?? a.acos) : null;
+  const bAcos = salesOf(b) > 0 ? optionalMetric(b.total_acos ?? b.acos) : null;
   if (aAcos != null && bAcos != null && aAcos !== bAcos) return bAcos - aAcos;
   if (aAcos != null && bAcos == null) return -1;
   if (aAcos == null && bAcos != null) return 1;
@@ -62,6 +59,14 @@ export function compareByAcosSpendImpressionsSync(a: MetricRow, b: MetricRow): n
   const impressionDelta = impressionsOf(b) - impressionsOf(a);
   if (impressionDelta !== 0) return impressionDelta;
   return lastSyncedMs(b) - lastSyncedMs(a);
+}
+
+/** Ascending ACoS still puts missing ratios last and keeps the same tie-breaks. */
+export function compareByAcosAscending(a: MetricRow, b: MetricRow): number {
+  const aAcos = salesOf(a) > 0 ? optionalMetric(a.total_acos ?? a.acos) : null;
+  const bAcos = salesOf(b) > 0 ? optionalMetric(b.total_acos ?? b.acos) : null;
+  if (aAcos != null && bAcos != null && aAcos !== bAcos) return aAcos - bAcos;
+  return compareByAcosSpendImpressionsSync(a, b);
 }
 
 /** Prefer metrics_updated_at, then entity updated_at / created_at. */
@@ -81,8 +86,7 @@ type FillTier<T> = Array<{
 
 /**
  * Fill up to `limit` rows by walking tiers in order.
- * Each tier only considers rows not already picked — so ACoS pages pad with
- * clicks → impressions → last sync when the period has few converting entities.
+ * Each tier only considers rows not already picked and satisfying its predicate.
  */
 export function fillOverviewWidgetRows<T>(
   rows: readonly T[],
@@ -118,38 +122,22 @@ function acosFillTiers<T extends MetricRow>(direction: "high" | "low"): FillTier
     direction === "high"
       ? (a: T, b: T) => acosOf(b) - acosOf(a)
       : (a: T, b: T) => acosOf(a) - acosOf(b);
-  // Honest labels only: converting ACoS rows, then spenders (no ACoS), then
-  // impressions. Never pad with zero-metric entities under "High ACoS".
+  // ACoS pages must contain a measured ratio, not spend/impression fillers.
   return [
     {
-      pick: (row) => salesOf(row) > 0 && acosOf(row) > 0,
+      pick: (row) => salesOf(row) > 0 && optionalMetric(row.total_acos ?? row.acos) != null,
       compare: acosCompare,
-    },
-    {
-      pick: (row) => spendOf(row) > 0 && salesOf(row) === 0,
-      compare: (a, b) => spendOf(b) - spendOf(a),
-    },
-    {
-      pick: (row) => impressionsOf(row) > 0 && spendOf(row) === 0 && salesOf(row) === 0,
-      compare: (a, b) => impressionsOf(b) - impressionsOf(a),
     },
   ];
 }
 
 function spendFillTiers<T extends MetricRow>(opts?: { requireNoOrders?: boolean }): FillTier<T> {
   const requireNoOrders = opts?.requireNoOrders === true;
-  // Pad tiers keep the page contract: no-orders pages must not include converters.
+  // Missing orders are not evidence of zero orders; spend pages need spend.
   return [
     {
-      pick: (row) => spendOf(row) > 0 && (!requireNoOrders || ordersOf(row) === 0),
+      pick: (row) => spendOf(row) > 0 && (!requireNoOrders || optionalMetric(row.total_orders ?? row.orders) === 0),
       compare: (a, b) => spendOf(b) - spendOf(a),
-    },
-    {
-      pick: (row) =>
-        impressionsOf(row) > 0 &&
-        spendOf(row) === 0 &&
-        (!requireNoOrders || ordersOf(row) === 0),
-      compare: (a, b) => impressionsOf(b) - impressionsOf(a),
     },
   ];
 }
@@ -171,13 +159,8 @@ export function booksSpendingNoAdSales(rows: TopBookRow[], limit = OVERVIEW_SWIP
     rows,
     [
       {
-        pick: (row) => row.spend > 0 && row.sales === 0,
+        pick: (row) => spendOf(row) > 0 && optionalMetric(row.sales) === 0,
         compare: (a, b) => b.spend - a.spend,
-      },
-      {
-        pick: (row) =>
-          (Number(row.impressions) || 0) > 0 && row.spend === 0 && row.sales === 0,
-        compare: (a, b) => (Number(b.impressions) || 0) - (Number(a.impressions) || 0),
       },
     ],
     limit,

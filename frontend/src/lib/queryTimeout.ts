@@ -29,7 +29,7 @@ export const CAMPAIGNS_LIST_TIMEOUT_MS = 60_000;
 /** Placement share bars on Campaigns rows — soft budget; list paints without them. */
 export const CAMPAIGNS_PLACEMENT_BUDGET_MS = 8_000;
 /** Create → book picker. Nest /campaigns/creation/book-candidates must not hang forever.
- *  Soft-retry once on timeout in Create UI; resume also warms this cache. */
+ *  A timeout is terminal. Resume warms this cache; it does not start a second read. */
 export const CAMPAIGN_CREATION_BOOKS_TIMEOUT_MS = 45_000;
 /** Create → marketplace chips after book select. */
 export const CAMPAIGN_CREATION_MARKETPLACES_TIMEOUT_MS = 30_000;
@@ -44,8 +44,16 @@ export const BOOK_CAMPAIGN_PLACEMENT_BUDGET_MS = 8_000;
 export const BOOK_CAMPAIGN_METRICS_BUDGET_MS = 25_000;
 export const HOME_QUERY_TIMEOUT_MESSAGE = "HOME_QUERY_TIMEOUT";
 
+/** Statement timeout and HTTP 408 are terminal. They must not start another heavy read. */
 export function isHomeQueryTimeout(error: unknown): boolean {
-  return error instanceof Error && error.message === HOME_QUERY_TIMEOUT_MESSAGE;
+  if (!error || typeof error !== "object") return false;
+  const row = error as { code?: unknown; status?: unknown; statusCode?: unknown; message?: unknown };
+  if (row.code === "57014") return true;
+  const status = row.status ?? row.statusCode;
+  if (status === 408) return true;
+  if (typeof row.message !== "string") return false;
+  if (row.message === HOME_QUERY_TIMEOUT_MESSAGE) return true;
+  return /statement timeout|read timed out/i.test(row.message);
 }
 
 function abortError(): Error {
@@ -77,6 +85,27 @@ export async function withQueryTimeout<T>(
   } finally {
     if (timer) clearTimeout(timer);
     if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/** Task form for cancellable transports: the deadline also aborts network I/O. */
+export async function withAbortableQueryTimeout<T>(
+  task: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  upstream?: AbortSignal,
+): Promise<T> {
+  if (upstream?.aborted) throw abortError();
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  upstream?.addEventListener("abort", abort, { once: true });
+  try {
+    return await withQueryTimeout(Promise.resolve().then(() => {
+      if (controller.signal.aborted) throw abortError();
+      return task(controller.signal);
+    }), ms, upstream);
+  } finally {
+    upstream?.removeEventListener("abort", abort);
+    controller.abort();
   }
 }
 

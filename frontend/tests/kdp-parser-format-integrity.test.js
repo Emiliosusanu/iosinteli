@@ -8,6 +8,16 @@ function capture(royalties,orders={TotalOrders:4,DigitalOrders:0,PaperbackOrders
  return buildKdpFromJsons({ymd:'2026-10-14',titlesJson:{reportsMetadata:{books:{[group]:{asins}}}},royaltiesJson:report(royalties),ordersJson:report(orders),kenpJson:report({TotalKENP:0})});
 }
 const base={PaperbackRoyalties:12,DigitalRoyalties:0,HardcoverRoyalties:0,AudiobookRoyalties:0,TotalRoyalties:12};
+test('Chrome 176 Tandem royalties retain signed paperback amounts without counting aliases twice',()=>{
+ for(const tandem of [3,0,-2]) {
+  const r=capture({...base,TandemRoyalties:tandem,MarketplaceTandemRoyalties:tandem,TotalRoyalties:12+tandem});
+  assert.equal(r.rowDaily.royalties,12+tandem);
+  assert.equal(r.facts.find(f=>f.format==='paperback').royalties,12+tandem);
+ }
+});
+test('inconsistent Tandem aliases cannot manufacture a reconciled native marketplace capture',()=>{
+ assert.throws(()=>capture({...base,TandemRoyalties:3,MarketplaceTandemRoyalties:2,TotalRoyalties:15}),e=>e.code==='KDP_CAPTURE_INCOMPLETE');
+});
 test('iOS preserves explicit zero and negative format royalties instead of reallocating paperback income',()=>{
  for(const hardcover of [0,-5]) {
   const r=capture({...base,HardcoverRoyalties:hardcover,TotalRoyalties:12+hardcover});

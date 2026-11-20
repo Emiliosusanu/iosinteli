@@ -2,6 +2,7 @@
 // Admin JWTs cannot see another user's rows in Supabase RLS.
 
 import { NestApiError, nestApiJson } from "./rulesApi";
+import { optionalMetric } from "./metricEvidence";
 import type { Campaign, CampaignMetric, Keyword, MetricsTotals, ProductTarget, SearchTerm } from "./types";
 import type { BookCampaignRow, KdpRoyaltyRange, TopBookRow, TopCampaignRow } from "./queries";
 import type { MobileHomeSnapshot } from "./mobileHomeSnapshot";
@@ -99,6 +100,8 @@ export type KdpBreakEvenBookRow = {
   calculatorBreakEvenAcos?: number | null;
   pricingSynced?: boolean;
   listPrice?: number | null;
+  clicks?: number | null;
+  impressions?: number | null;
 };
 
 export type BookProfitabilityDetail = {
@@ -226,11 +229,13 @@ export async function fetchAggregatedCampaigns(params: {
   profileIds: string[];
   filterUserId?: string | null;
   state?: string;
+  signal?: AbortSignal;
 }): Promise<TopCampaignRow[]> {
   const data = await nestApiJson<AggregatedEntityMetricsResponse>(
     "/dashboard/aggregated-entity-metrics",
     {
       method: "POST",
+      signal: params.signal,
       body: JSON.stringify({
         entityType: "campaigns",
         metrics: ["impressions", "clicks", "orders", "sales", "spend"],
@@ -371,7 +376,7 @@ export function bootstrapToTopBooks(boot: DashboardBootstrapResponse | undefined
     };
     const spend = n(raw.adSpend ?? raw.ad_spend);
     const sales = n(raw.adSales ?? raw.ad_sales);
-    const royalties = n(raw.royalties);
+    const royalties = raw.royalties == null ? null : n(raw.royalties);
     const normalized = {
       ...raw,
       breakEvenAcos: raw.breakEvenAcos ?? raw.break_even_acos ?? null,
@@ -386,18 +391,20 @@ export function bootstrapToTopBooks(boot: DashboardBootstrapResponse | undefined
       sku: null,
       title: raw.title,
       image_url: raw.coverUrl ?? raw.cover_url ?? null,
-      impressions: 0,
-      clicks: 0,
+      impressions: optionalMetric(raw.impressions),
+      clicks: optionalMetric(raw.clicks),
       orders: n(raw.orders),
+      orders_source: "kdp" as const,
+      kdp_orders: n(raw.orders),
       spend,
       sales,
       royalties,
       acos: sales > 0 ? (spend / sales) * 100 : n(raw.currentAcos ?? raw.current_acos),
       roas: spend > 0 ? sales / spend : null,
-      net: netRoyaltiesKnown(royalties, spend),
+      net: royalties == null ? null : netRoyaltiesKnown(royalties, spend),
       breakeven_acos: resolveAuthoritativeBreakEvenAcos(normalized) ?? 0,
       ads_state: "ready" as const,
-      kdp_state: "ready" as const,
+      kdp_state: royalties == null ? "missing" as const : "ready" as const,
     };
   });
 }
@@ -652,6 +659,7 @@ export async function fetchNestSearchTermsPage(params: {
   search?: string;
   performanceFilter?: "converting" | "wasted";
   sortBy: "total_orders" | "total_acos" | "total_spend" | "total_clicks" | "total_impressions";
+  sortOrder?: "asc" | "desc";
   page: number;
   perPage?: number;
   signal?: AbortSignal;
@@ -672,7 +680,7 @@ export async function fetchNestSearchTermsPage(params: {
       search: params.search?.trim() || undefined,
       performanceFilter: params.performanceFilter,
       sortBy: params.sortBy,
-      sortOrder: "desc",
+      sortOrder: params.sortOrder ?? "desc",
       page: params.page,
       per_page: params.perPage ?? 100,
     })}`,
@@ -836,6 +844,33 @@ export async function fetchNestTopBooks(params: {
   return params.limit ? rows.slice(0, params.limit) : rows;
 }
 
+export async function fetchNestBookAdsMetrics(params: {
+  startDate: string;
+  endDate: string;
+  profileIds: string[];
+  asins: string[];
+}): Promise<Array<{ asin: string; spend: number; sales: number; clicks: number | null; impressions: number | null; orders: number | null }>> {
+  const response = await nestApiJson<{ data?: Array<{ asin: string; spend: number; sales: number;
+    clicks: number | null; impressions: number | null; orders: number | null }> }>(
+    `/dashboard/book-ads-metrics${qs({ startDate: params.startDate, endDate: params.endDate,
+      profileIds: params.profileIds.join(','), asins: params.asins.join(',') })}`,
+    { method: 'GET' }, "Couldn't load book Ads metrics.",
+  );
+  const wanted = new Set(params.asins), seen = new Set<string>();
+  if (!Array.isArray(response.data)) throw new NestApiError('Book Ads metric response is incomplete.', 503);
+  for (const row of response.data) {
+    if (!wanted.has(row.asin) || seen.has(row.asin)
+      || !['spend', 'sales'].every(key => typeof row[key as 'spend'] === 'number' && Number.isFinite(row[key as 'spend']))
+      || !['clicks', 'impressions', 'orders'].every(key => {
+        const value = row[key as 'clicks'];
+        return value === null || (Number.isSafeInteger(value) && Number(value) >= 0);
+      })) throw new NestApiError('Book Ads metric response is invalid.', 503);
+    seen.add(row.asin);
+  }
+  if (seen.size !== wanted.size) throw new NestApiError('Book Ads metric response is incomplete.', 503);
+  return response.data;
+}
+
 export async function fetchNestBookCampaigns(params: {
   filterUserId: string;
   asin: string;
@@ -888,6 +923,9 @@ export async function fetchNestBookCampaigns(params: {
       roas: spend > 0 ? sales / spend : null,
       net: null,
       match_source: "product_ad" as const,
+      matched_book_asins: [params.asin.toUpperCase()],
+      metrics_state: "ready" as const,
+      placement_state: "unavailable" as const,
     };
   });
 }

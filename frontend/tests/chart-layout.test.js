@@ -7,6 +7,7 @@ import {
   dayBarStep,
   dayLabelTextAnchor,
   dayXLayout,
+  valueAxisTicks,
 } from "../src/lib/chartLayout.ts";
 
 const charts = readFileSync(new URL("../src/components/Charts.tsx", import.meta.url), "utf8");
@@ -56,4 +57,31 @@ test("Charts use dayXLayout for series and selection", () => {
   assert.match(charts, /dayBarStep\(/);
   assert.doesNotMatch(charts, /inset \+ \(i \/ denom\) \* plot/);
   assert.doesNotMatch(charts, /inset \+ \(index \/ denom\) \* plot/);
+});
+
+test("near-zero extrema stay readable without removing the zero gridline", () => {
+  for (const [min, max] of [[-11.61, 241], [-241, 11.61], [-0.01, 1000], [-1000, 0.01]]) {
+    const ticks = valueAxisTicks(min, max, 128);
+    assert.deepEqual(ticks.map((tick) => tick.value), [max, 0, min]);
+    assert.equal(ticks[0].labelVisible, true);
+    assert.equal(ticks[2].labelVisible, true);
+    assert.equal(ticks[1].labelVisible, false);
+  }
+});
+
+test("value axis uses screen spacing, preserving small values and separated zero labels", () => {
+  for (const [min, max] of [[-100, 100], [-0.001, 0.005], [-20, 30]]) {
+    const ticks = valueAxisTicks(min, max, 128);
+    assert.equal(ticks.length, 3);
+    assert.ok(ticks.every((tick) => tick.labelVisible));
+    for (let index = 1; index < ticks.length; index++) {
+      assert.ok(ticks[index].y - ticks[index - 1].y >= 16);
+    }
+  }
+  assert.deepEqual(valueAxisTicks(0, 10, 128).map((tick) => tick.value), [10, 0]);
+  assert.deepEqual(valueAxisTicks(-10, 0, 128).map((tick) => tick.value), [0, -10]);
+  assert.equal(valueAxisTicks(0, 0, 128).length, 1);
+  assert.match(charts, /valueAxisTicks\(min, max, height, inset\)/);
+  assert.match(charts, /tick\.labelVisible \? <SvgText/);
+  assert.match(charts, /const leftGutter = 44/);
 });

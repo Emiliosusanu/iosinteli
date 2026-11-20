@@ -29,7 +29,7 @@ export default function MoreScreen() {
   return (
     <AppScreen>
       <ScrollView
-        contentContainerStyle={[styles.scroll, { paddingTop: Math.max(insets.top, 8) }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: 0 }]}
         contentInsetAdjustmentBehavior="never"
       >        <TouchableOpacity
           testID="menu-account-banner"
@@ -37,7 +37,7 @@ export default function MoreScreen() {
           activeOpacity={0.55}
           accessibilityRole="button"
           accessibilityLabel={bannerLabel}
-          style={[styles.banner, elevatedCardStyle(t)]}
+          style={[styles.banner, elevatedCardStyle(t), { marginTop: 0, paddingTop: Math.max(insets.top, 8), borderTopLeftRadius: 0, borderTopRightRadius: 0 }]}
         >
           <View
             accessibilityElementsHidden

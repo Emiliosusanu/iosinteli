@@ -67,10 +67,10 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
       const values = item?.values || {};
       const recognized = label === 'kenp'
         ? Object.prototype.hasOwnProperty.call(values, 'TotalKENP')
-        : ['TotalOrders', 'DigitalOrders', 'DigitalOrdersPlacedOrders', 'PaperbackOrders', 'HardcoverOrders', 'TandemOrders', 'AudiobookOrders', 'AudibleOrders'].some(key => Object.prototype.hasOwnProperty.call(values, key));
+        : ['TotalOrders', 'DigitalOrders', 'DigitalOrdersPlacedOrders', 'PaperbackOrders', 'HardcoverOrders', 'TandemOrders', 'AudiobookOrders', 'AudibleOrders', 'MarketplaceAudiobookOrders', 'MarketplaceAudibleOrders'].some(key => Object.prototype.hasOwnProperty.call(values, key));
       if (!recognized) throw Object.assign(new Error(`${label} payload missing book-level metrics; existing data preserved`), { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
       const keys = label === 'kenp' ? ['TotalKENP'] : ['TotalOrders', 'DigitalOrders',
-        'DigitalOrdersPlacedOrders', 'PaperbackOrders', 'HardcoverOrders', 'TandemOrders', 'AudiobookOrders', 'AudibleOrders'];
+        'DigitalOrdersPlacedOrders', 'PaperbackOrders', 'HardcoverOrders', 'TandemOrders', 'AudiobookOrders', 'AudibleOrders', 'MarketplaceAudiobookOrders', 'MarketplaceAudibleOrders'];
       if (keys.some(key => Object.prototype.hasOwnProperty.call(values, key) && (!isExplicitNumericMetric(values[key])
         || !Number.isSafeInteger(Number(values[key])) || (label === 'kenp' && Number(values[key]) < 0))))
         throw Object.assign(new Error(`${label} payload missing explicit numeric metrics; existing data preserved`), { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
@@ -88,7 +88,7 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
     const nested = root?.nestedHistogram?.histogramList;
     const rows = Array.isArray(nested) ? histogramListRowsForDay(nested, String(ymd)) : root?.histogram?.data;
     const metricKeys = ['TotalRoyalties', 'TotalMarketplaceRoyalties', 'PaperbackRoyalties',
-      'MarketplacePaperbackRoyalties', 'HardcoverRoyalties', 'MarketplaceHardcoverRoyalties',
+      'MarketplacePaperbackRoyalties', 'TandemRoyalties', 'MarketplaceTandemRoyalties', 'HardcoverRoyalties', 'MarketplaceHardcoverRoyalties',
       'DigitalRoyalties', 'MarketplaceDigitalRoyalties', 'PagesReadRoyalties', 'MarketplacePagesReadRoyalties',
       'AudiobookRoyalties', 'AudibleRoyalties', 'MarketplaceAudiobookRoyalties', 'MarketplaceAudibleRoyalties'];
     for (const row of (Array.isArray(rows) ? rows : [])) {
@@ -186,13 +186,30 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
 
   const rNested = Array.isArray(rr?.nestedHistogram?.histogramList) ? rr.nestedHistogram.histogramList : null;
   const rRows = rNested ? histogramListRowsForDay(rNested, dateStr) : (Array.isArray(rr?.histogram?.data) ? rr.histogram.data : []);
+  const royaltyRowIdentities = new Set();
   for (const r of (Array.isArray(rRows) ? rRows : [])) {
     const row = ensure(r?.bin);
-    if (!row) continue;
+    if (!row || (![row.digitalAsin, row.printAsin, row.hardcoverAsin, row.audiobookAsin]
+      .some(asin => /^[A-Z0-9]{10}$/.test(String(asin || '')))
+      && !/^[A-Z0-9]{10}$/.test(String(row.groupKey)))) {
+      throw Object.assign(new Error('royalties payload missing valid book identity; existing data preserved'),
+        { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
+    }
+    // A bare ASIN and its catalog group can resolve to the same row. Refuse
+    // repeated assignments before a later zero can erase captured money.
+    const identity = row.groupKey.toUpperCase();
+    if (royaltyRowIdentities.has(identity)) {
+      throw Object.assign(new Error('royalties repeated book identity; existing data preserved'),
+        { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
+    }
+    royaltyRowIdentities.add(identity);
+    row.royaltiesCaptured = true;
     const vals = r?.values || {};
     const has = (k) => Object.prototype.hasOwnProperty.call(vals, k);
+    row.totalRoyaltiesPresent = has('TotalRoyalties') || has('TotalMarketplaceRoyalties');
     row.hardcoverRoyaltiesPresent = has('HardcoverRoyalties') || has('MarketplaceHardcoverRoyalties');
-    row.paperbackRoyaltiesPresent = has('PaperbackRoyalties') || has('MarketplacePaperbackRoyalties');
+    row.paperbackRoyaltiesPresent = has('PaperbackRoyalties') || has('MarketplacePaperbackRoyalties')
+      || has('TandemRoyalties') || has('MarketplaceTandemRoyalties');
     const audioKeys = preferMarketplaceFields
       ? ['MarketplaceAudiobookRoyalties', 'AudiobookRoyalties', 'MarketplaceAudibleRoyalties', 'AudibleRoyalties']
       : ['AudiobookRoyalties', 'MarketplaceAudiobookRoyalties', 'AudibleRoyalties', 'MarketplaceAudibleRoyalties'];
@@ -214,6 +231,14 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
       row.digitalRoyalties = Number((has('DigitalRoyalties') ? vals.DigitalRoyalties : vals.MarketplaceDigitalRoyalties) || 0);
       row.digitalRoyaltiesPresent = has('DigitalRoyalties') || has('MarketplaceDigitalRoyalties');
     }
+    // Amazon reports Tandem amounts separately, matching the separate
+    // TandemOrders already retained in paperback units. Keep the selected
+    // currency scope and signed value; never derive this amount from a total.
+    const tandemKeys = preferMarketplaceFields
+      ? ['MarketplaceTandemRoyalties', 'TandemRoyalties']
+      : ['TandemRoyalties', 'MarketplaceTandemRoyalties'];
+    const tandemKey = tandemKeys.find(has);
+    if (tandemKey) row.paperbackRoyalties += Number(vals[tandemKey]);
   }
 
   if (ordersJson) {
@@ -251,7 +276,12 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
         if (!isRawAsin && !(u.includes('DIGITAL=') || u.includes('PRINT=') || u.includes('HARDCOVER=') || u.includes('AUDIOBOOK=') || u.includes('AUDIBLE=') || u.includes('DIGITAL:') || u.includes('PRINT:') || u.includes('HARDCOVER:') || u.includes('AUDIOBOOK:') || u.includes('AUDIBLE:'))) continue;
       }
       const row = ensure(bin);
-      if (!row) continue;
+      if (!row || (![row.digitalAsin, row.printAsin, row.hardcoverAsin, row.audiobookAsin]
+        .some(asin => /^[A-Z0-9]{10}$/.test(String(asin || '')))
+        && !/^[A-Z0-9]{10}$/.test(String(row.groupKey)))) {
+        throw Object.assign(new Error('orders payload missing valid book identity; existing data preserved'),
+          { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
+      }
       const rowIdentity = bin.toUpperCase();
       if (orderRowIdentities.has(rowIdentity)) {
         throw Object.assign(new Error('orders repeated order row identity; existing data preserved'), { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
@@ -279,8 +309,8 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
         const known = ebook + pbUnits + hcUnits + abUnits;
         // Signed format quantities are explicit net activity. A contradictory
         // total cannot invent an offsetting sale in another format.
-        if ([total, ebook, paperback, hardcover, audiobook, tandem].some(n => n < 0)
-          && Object.prototype.hasOwnProperty.call(vals, 'TotalOrders') && total !== known) {
+        if (!Number.isSafeInteger(known) || (Object.prototype.hasOwnProperty.call(vals, 'TotalOrders')
+          && (total < known || ([total, ebook, paperback, hardcover, audiobook, tandem].some(n => n < 0) && total !== known)))) {
           throw Object.assign(new Error('orders signed total disagrees with format metrics; existing data preserved'), { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
         }
         if (total > known) {
@@ -312,7 +342,11 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
         const rem = total - ebook;
         const binAsin = /^[A-Z0-9]{10}$/.test(bin.toUpperCase()) ? bin.toUpperCase() : null;
         const binIsAudiobook = Boolean(binAsin && row.audiobookAsin && String(row.audiobookAsin) === String(binAsin));
-        if (binIsAudiobook || (row.audiobookAsin && !row.printAsin && !row.hardcoverAsin)) {
+        if (row.digitalAsin && !row.printAsin && !row.hardcoverAsin && !row.audiobookAsin) {
+          retainFormatUnits(row, 'ebookUnits', rem);
+        } else if (row.hardcoverAsin && !row.digitalAsin && !row.printAsin && !row.audiobookAsin) {
+          retainFormatUnits(row, 'hardcoverUnits', rem);
+        } else if (binIsAudiobook || (row.audiobookAsin && !row.printAsin && !row.hardcoverAsin)) {
           retainFormatUnits(row, 'audiobookUnits', rem);
         } else {
           retainFormatUnits(row, 'paperbackUnits', rem);
@@ -337,7 +371,7 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
         if (g) row = ensure(g);
       }
       const vals = r?.values || {};
-      const pages = Math.max(0, parseInt(vals.TotalKENP || 0, 10));
+      const pages = Number(vals.TotalKENP || 0);
       if (!row && pages > 0 && /^[A-Z0-9]{10}$/.test(u)) {
         // The authenticated book-level KENP report itself identifies this
         // ebook. Metadata can lag a new title or omit an archived title.
@@ -362,6 +396,7 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
 
   const facts = [];
   for (const row of map.values()) {
+    const factsStart = facts.length;
     const digitalAsin = row.digitalAsin;
     const printAsin = row.printAsin;
     const hardcoverAsin = row.hardcoverAsin;
@@ -390,9 +425,9 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
 
     const ebookSales = row.digitalRoyaltiesPresent
       ? Number(row.digitalRoyalties || 0)
-      : total - pb - ku - hc - ab;
+      : (row.totalRoyaltiesPresent ? total - pb - ku - hc - ab : 0);
 
-    if (row.digitalRoyaltiesPresent) {
+    if (row.digitalRoyaltiesPresent && row.totalRoyaltiesPresent) {
       const extra = total - (pbSales + hc + ku + ebookSales + ab);
       if (extra > 0.0001) {
         if (audiobookAsin && !row.audiobookRoyaltiesPresent) ab += extra;
@@ -468,6 +503,46 @@ function buildKdpFromJsons({ ymd, titlesJson, royaltiesJson, ordersJson, kenpJso
             kenp: Number(row.kenp || 0),
           });
         }
+      }
+    }
+    // The completed report must retain all captured activity in actual
+    // book-format facts, before complementary aliases are consolidated.
+    if ((digitalAsin || printAsin || hardcoverAsin || audiobookAsin)
+      && ((Number(row.ebookUnits || 0) !== 0 && !digitalAsin)
+        || (Number(row.paperbackUnits || 0) !== 0 && !printAsin)
+        || (Number(row.hardcoverUnits || 0) !== 0 && !hardcoverAsin && !printAsin)
+        || (Number(row.audiobookUnits || 0) !== 0 && !audiobookAsin)
+        || (Number(row.kenp || 0) !== 0 && !digitalAsin))) {
+      throw Object.assign(new Error('KDP activity format missing book identity; existing data preserved'),
+        { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
+    }
+    const expectedUnits = Number(row.ebookUnits || 0) + Number(row.paperbackUnits || 0)
+      + Number(row.hardcoverUnits || 0) + Number(row.audiobookUnits || 0);
+    const emittedUnits = facts.slice(factsStart).reduce((sum, fact) => sum + fact.units, 0);
+    const emittedPages = facts.slice(factsStart).reduce((sum, fact) => sum + fact.kenp, 0);
+    if (!Number.isSafeInteger(expectedUnits) || expectedUnits !== emittedUnits || Number(row.kenp || 0) !== emittedPages) {
+      throw Object.assign(new Error('KDP captured activity missing from book-format facts; existing data preserved'),
+        { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
+    }
+    if (row.royaltiesCaptured) {
+      // A complete envelope is insufficient if parsing drops reported money
+      // (for example a print-only identity with an unallocated total).
+      // Compare per book before aliases are merged. Keep explicit signed
+      // corrections and the existing estimate-rounding allowance.
+      const hasFormatIdentity = Boolean(digitalAsin || printAsin || hardcoverAsin || audiobookAsin);
+      if (hasFormatIdentity && ((ebookSales !== 0 && !digitalAsin) || (ku !== 0 && !digitalAsin)
+        || (pbSales !== 0 && !printAsin) || (hc !== 0 && !hardcoverAsin) || (ab !== 0 && !audiobookAsin))) {
+        throw Object.assign(new Error('royalties format amount missing book identity; existing data preserved'),
+          { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
+      }
+      const expected = row.totalRoyaltiesPresent ? total
+        : Number(row.digitalRoyalties || 0) + pb + Number(row.hardcoverRoyalties || 0) + Number(row.audiobookRoyalties || 0) + ku;
+      const emitted = facts.slice(factsStart).reduce((sum, fact) => sum + fact.royalties, 0);
+      const minorUnit = incomeCurrency === 'JPY' || (!incomeCurrency && inferredSingleMarketplace === 'JP') ? 1 : 0.01;
+      const tolerance = row.digitalRoyaltiesPresent && row.totalRoyaltiesPresent ? 3 * minorUnit + 0.0001 : 0.0000001;
+      if (!Number.isFinite(emitted) || Math.abs(expected - emitted) > tolerance) {
+        throw Object.assign(new Error('royalties reported money is not represented by captured facts; existing data preserved'),
+          { status: 503, code: 'KDP_CAPTURE_INCOMPLETE' });
       }
     }
   }
@@ -1147,10 +1222,10 @@ function extractAdsTotalsMetricsDeep(root) {
 
 function extractAsinsFromGroupKey(groupKey) {
   const s = String(groupKey || '');
-  const digitalMatch = s.match(/(?:digitalAsin|DIGITAL)\s*[:=]\s*([A-Z0-9]{10})/i);
-  const printMatch = s.match(/(?:printAsin|PRINT)\s*[:=]\s*([A-Z0-9]{10})/i);
-  const hardcoverMatch = s.match(/(?:hardcoverAsin|HARDCOVER)\s*[:=]\s*([A-Z0-9]{10})/i);
-  const audiobookMatch = s.match(/(?:audiobookAsin|AUDIOBOOK|AUDIBLE)\s*[:=]\s*([A-Z0-9]{10})/i);
+  const digitalMatch = s.match(/(?:^|[^A-Z0-9_])(?:digitalAsin|DIGITAL)\s*[:=]\s*([A-Z0-9]{10})(?![A-Z0-9_])/i);
+  const printMatch = s.match(/(?:^|[^A-Z0-9_])(?:printAsin|PRINT)\s*[:=]\s*([A-Z0-9]{10})(?![A-Z0-9_])/i);
+  const hardcoverMatch = s.match(/(?:^|[^A-Z0-9_])(?:hardcoverAsin|HARDCOVER)\s*[:=]\s*([A-Z0-9]{10})(?![A-Z0-9_])/i);
+  const audiobookMatch = s.match(/(?:^|[^A-Z0-9_])(?:audiobookAsin|AUDIOBOOK|AUDIBLE)\s*[:=]\s*([A-Z0-9]{10})(?![A-Z0-9_])/i);
   const exactAsin = !digitalMatch && !printMatch && !hardcoverMatch && /^[A-Z0-9]{10}$/i.test(String(s || '').trim())
     ? String(s).trim().toUpperCase()
     : null;
@@ -1897,7 +1972,9 @@ export {
   eachYmd,
   extractBooksObj,
   findFirstRange,
+  findKdpReportRoot,
   looksLikeHtmlErrorPage,
+  normalizeHistogramTitleToYmd,
   normalizeTemplateUrlForType,
   pickTemplateTypeByUrl,
   rangeIsoPreserveCapturedOffsets,

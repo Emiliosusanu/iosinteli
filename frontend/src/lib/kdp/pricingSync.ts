@@ -10,7 +10,7 @@ import { supabase } from "../supabase.ts";
 import { storage } from "@/src/utils/storage";
 import {
   createPricingCheckpointStore, pricingCandidateKey, pricingRequestTimeout,
-  PricingSliceExpiredError, resumePricingCandidates, admitPricingCandidates,
+  PricingSliceExpiredError, resumePricingCandidates, admitPricingCandidates, pricingCaptureReconcileMs,
 } from "./pricingCheckpoint.ts";
 import { appendKdpActivity } from "./activity.ts";
 import { applyBookshelfPrimaryPriceChanges } from "./bookshelfPrimaryPricing.ts";
@@ -38,6 +38,7 @@ import { isKdpHelperScreenFocused } from "./helperUi.ts";
 import { writeKdpPricing } from "./upsert.ts";
 import { looksLikeHtmlErrorPage } from "./vendor/kdpVendor.generated.js";
 import {
+  selectCurrentLivePricingCandidates,
   buildKdpGetSetupPageUrlCandidates,
   buildPricingAuthActionTabUrl,
   diagnoseKdpSetupPageFailure,
@@ -90,7 +91,6 @@ export type PricingSyncResult = {
  * whose prices are not visible on Bookshelf. Do not reprice the catalog on
  * every report wake merely because fifteen minutes have passed.
  */
-const PRICING_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_BOOKS = 20;
 /** First-time / onboarding: price more per wake so user can leave the helper. */
 const ONBOARDING_MAX_BOOKS = 40;
@@ -302,8 +302,8 @@ function setupMapFromStoredPricing(rows: AnyRow[]): Map<string, string> {
   return map;
 }
 
-async function loadFreshPricingAsins(accountId: string, deadlineAtMs?: number): Promise<Set<string>> {
-  const since = new Date(Date.now() - PRICING_FRESH_MS).toISOString();
+async function loadFreshPricingAsins(accountId: string, candidateCount: number, deadlineAtMs?: number): Promise<Set<string>> {
+  const since = new Date(Date.now() - pricingCaptureReconcileMs(candidateCount)).toISOString();
   const data = await readAllPricingPages<AnyRow>(async (offset, size) => {
     const { data, error } = await withKdpTaskRequest(deadlineAtMs, async signal => {
       const query = supabase.from("kdp_titles")
@@ -685,14 +685,18 @@ async function syncPricingSlice(
     candidates.push({ asin, kdpBookId: entry.setupId, title: null });
   }
 
+  candidates = selectCurrentLivePricingCandidates(candidates, bookshelfRows);
+
   const pendingBefore = await countPendingPricing(accountId, paperbackAsins, opts.deadlineAtMs).catch(
     () => candidates.length,
   );
 
   if (!candidates.length) {
-    await pricingCheckpoints.save(accountId, { ...priorCheckpoint, needsDiscovery: true,
-      pending: priorCheckpoint.pending.filter(row => !inactiveSetupIds.has(normalizeSetupId(row.kdpBookId))) });
-    const msg = "KDP pricing: no setup IDs yet — background will retry";
+    const pending = priorCheckpoint.pending.filter(row => !inactiveSetupIds.has(normalizeSetupId(row.kdpBookId)));
+    await pricingCheckpoints.save(accountId, { ...priorCheckpoint, needsDiscovery: true, pending });
+    const msg = pending.length
+      ? "KDP pricing: waiting for Amazon to confirm paperback status"
+      : "KDP pricing: no eligible live paperback found";
     void appendKdpActivity(msg, "info");
     return {
       ok: true,
@@ -714,7 +718,7 @@ async function syncPricingSlice(
   const forceNewSweep = Boolean(opts.forceRefresh) && !continuingSweep;
   const freshAsins = forceNewSweep
     ? new Set<string>()
-    : await loadFreshPricingAsins(accountId, opts.deadlineAtMs);
+    : await loadFreshPricingAsins(accountId, candidates.length, opts.deadlineAtMs);
 
   let todo = candidates.filter((c) => {
     const setupId = normalizeSetupId(c.kdpBookId);
@@ -732,7 +736,14 @@ async function syncPricingSlice(
       : opts.onboarding
         ? ONBOARDING_MAX_BOOKS
         : DEFAULT_MAX_BOOKS;
-  const completed = new Set(continuingSweep ? priorCheckpoint.completed || [] : []);
+  const now = Date.now();
+  const priorSweepStartedAt = Number(priorCheckpoint.sweepStartedAtMs);
+  // A blocked/unknown edition must not keep acknowledged books fresh forever.
+  const sameSweep = continuingSweep && Number.isFinite(priorSweepStartedAt)
+    && priorSweepStartedAt > 0 && priorSweepStartedAt <= now
+    && now - priorSweepStartedAt < pricingCaptureReconcileMs(candidates.length);
+  const completed = new Set(sameSweep ? priorCheckpoint.completed || [] : []);
+  const sweepStartedAtMs = sameSweep ? priorSweepStartedAt : now;
   todo = todo.filter(c => !completed.has(pricingCandidateKey(c)) || dirtySet.has(normalizeSetupId(c.kdpBookId)) || forceNewSweep);
   todo = resumePricingCandidates(priorCheckpoint.pending, candidates, todo);
   // Dirty/new live editions preempt old retries, while stable ordering and
@@ -741,10 +752,9 @@ async function syncPricingSlice(
   todo = todo.map(row => ({ ...row, pendingSinceMs: row.pendingSinceMs || Date.now() }));
   const admission = admitPricingCandidates(todo, maxBooks, dirtySet, priorKeys);
   todo = admission.pending;
-  const checkpoint = { needsDiscovery: !catalog.complete || retainedUnknown.length > 0, pending: [...todo, ...retainedUnknown], completed: [...completed] };
+  const checkpoint = { sweepStartedAtMs, needsDiscovery: !catalog.complete || retainedUnknown.length > 0, pending: [...todo, ...retainedUnknown], completed: [...completed] };
   await pricingCheckpoints.save(accountId, checkpoint);
-  const oldestPendingMs = checkpoint.pending.length ? Math.max(0, Date.now() - Math.min(...checkpoint.pending.map(row => Number.isFinite(row.pendingSinceMs) ? row.pendingSinceMs! : Date.now()))) : 0;
-  await appendKdpActivity(`KDP pricing queue · ${liveSetups.size} live · ${checkpoint.pending.length} pending · ${completed.size} confirmed · oldest ${Math.floor(oldestPendingMs / 60_000)}m · catalog ${catalog.complete ? 'complete' : 'pending'}`, "info");
+  await appendKdpActivity(`KDP pricing queue · ${liveSetups.size} live · ${todo.length} price checks pending · ${retainedUnknown.length} paperback statuses unverified · catalog ${catalog.complete ? 'complete' : 'pending'}`, "info");
   const skippedFresh = Math.max(0, candidates.length - todo.length);
   todo = admission.selected;
 
@@ -763,10 +773,11 @@ async function syncPricingSlice(
       setKdpHelperPricingAuth({ required: false, bookId: null });
       await patchPricingBootstrap(accountId, { authBlockedAt: null });
     }
-    const msg =
-      skippedFresh > 0
-        ? `KDP pricing: skipped ${skippedFresh}/${candidates.length} (verified <7d, no detected change)`
-        : "KDP pricing: nothing to fetch";
+    const msg = retainedUnknown.length > 0
+      ? "KDP pricing: waiting for Amazon to confirm paperback status"
+      : pending > 0
+        ? "KDP pricing: verification pending"
+        : "KDP pricing: no live price checks due";
     void appendKdpActivity(msg, "info");
     return {
       ok: true,

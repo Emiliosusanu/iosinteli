@@ -33,6 +33,14 @@ test('aborts active network work at the deadline and frees a slot', async () => 
   assert.equal(await run(async () => 'next'), 'next');
 });
 
+test('a statement timeout is terminal and is not scheduled again', () => {
+  const timeout = Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' });
+  assert.equal(shouldRetryRead(0, timeout), false);
+  assert.equal(shouldRetryRead(0, { status: 408, message: 'The read timed out' }), false);
+  assert.equal(shouldRetryRead(0, new Error('canceling statement due to statement timeout')), false);
+  assert.equal(shouldRetryRead(0, new Error('HOME_QUERY_TIMEOUT')), false);
+});
+
 test('does not retry auth, schema or database timeout failures', () => {
   for (const code of ['57014', '42501', '42703', 'SESSION_UNAVAILABLE']) assert.equal(shouldRetryRead(0, { code }), false);
   for (const status of [400, 401, 403, 404]) assert.equal(shouldRetryRead(0, { status }), false);

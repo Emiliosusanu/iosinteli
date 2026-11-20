@@ -274,15 +274,17 @@ export function RetryState({
   subtitle,
   onRetry,
   retrying,
+  systemImage = "wifi.slash",
 }: {
   title?: string;
   subtitle?: string;
   onRetry: () => void;
   retrying?: boolean;
+  systemImage?: React.ComponentProps<typeof IOSUnavailable>["systemImage"];
 }) {
   return (
     <View style={{ alignItems: "center", padding: 24 }}>
-      <IOSUnavailable title={title} description={subtitle} systemImage="wifi.slash" />
+      <IOSUnavailable title={title} description={subtitle} systemImage={systemImage} />
       <View style={{ marginTop: 12 }}>
         <PrimaryButton label={retrying ? "Retrying…" : "Retry"} onPress={onRetry} disabled={retrying} />
       </View>
@@ -387,6 +389,7 @@ export function FilterIconButton({
       accessibilityLabel={accessibilityLabel}
       accessibilityHint={accessibilityHint}
       hitSlop={4}
+      containerStyle={{ minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" }}
       style={[
         glassControlStyle(t, !!active),
         {
@@ -394,6 +397,15 @@ export function FilterIconButton({
           height: dashboard.headerControl,
           alignItems: "center",
           justifyContent: "center",
+          ...(active
+            ? {
+                shadowColor: t.colors.tone_primary,
+                shadowOpacity: t.scheme === "dark" ? 0.28 : 0.16,
+                shadowRadius: 8,
+                shadowOffset: { width: 0, height: 3 },
+                elevation: 2,
+              }
+            : null),
         },
       ]}
     >
@@ -436,6 +448,7 @@ export function ActiveFilterChip({
       testID={testID}
       onPress={onPress}
       accessibilityLabel={accessibilityLabel}
+      containerStyle={{ minHeight: 44, justifyContent: "center", maxWidth: "100%" }}
       style={[
         glassControlStyle(t, true),
         {
@@ -452,7 +465,7 @@ export function ActiveFilterChip({
         style={{
           fontSize: 12,
           fontWeight: "600",
-          letterSpacing: -0.1,
+          letterSpacing: 0,
           color: t.colors.tone_primary,
         }}
       >
@@ -649,8 +662,7 @@ export function SectionHeader({
   );
 }
 
-// ─── StatBadge: compact delta / trend pill. Up and down are deliberately
-// different shapes so direction reads without relying on color alone. ─────────
+// Trend direction remains explicit without relying on color alone.
 export function StatBadge({
   delta,
   inverse = false,
@@ -674,17 +686,17 @@ export function StatBadge({
         flexDirection: "row",
         alignItems: "center",
         alignSelf: "flex-start",
-        backgroundColor: up ? col + "22" : "transparent",
-        borderWidth: up ? 0 : StyleSheet.hairlineWidth * 2,
-        borderColor: col,
-        paddingHorizontal: up ? 7 : 6,
-        paddingVertical: up ? 3 : 2,
-        borderRadius: up ? 999 : 6,
+        backgroundColor: col + "18",
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: col + "38",
+        paddingHorizontal: 7,
+        paddingVertical: 3,
+        borderRadius: 999,
         gap: 2,
       }}
     >
       <SFSymbol name={up ? "arrow.up.right" : "arrow.down.right"} size={10} color={col} />
-      <Text style={[t.typography.caption1, { color: col, fontWeight: "700", fontVariant: ["tabular-nums"] }]}>
+      <Text style={[t.typography.caption1, { color: col, fontWeight: "600", fontVariant: ["tabular-nums"] }]}>
         {Math.abs(delta).toFixed(1)}%{suffix ? ` ${suffix}` : ""}
       </Text>
     </View>
@@ -889,26 +901,29 @@ function estimateMetricWidth(value: string, fontScale: number) {
   return value.length * typography.headline.fontSize * 0.65 * Math.max(1, fontScale);
 }
 
-/** Same ladder on every screen: N if it fits, else 4→2→1 / 3→1 / 2→1. Widest value wins. */
-function metricStripColumns(items: { value: string }[], width: number, fontScale: number) {
+/** Reflow dense metrics instead of squeezing more columns into narrow cards. */
+function metricStripColumns(items: { value: string }[], width: number, fontScale: number, maxColumns = items.length) {
   const count = items.length;
   if (count <= 1 || width <= 0) return 1;
   const scale = Math.max(1, fontScale);
   const gap = dashboard.metricGap;
   const minCell = Math.max(56 * scale, ...items.map((item) => estimateMetricWidth(item.value, fontScale)));
   const fits = (cols: number) => (width - gap * (cols - 1)) / cols >= minCell;
-  if (fits(count)) return count;
-  if (count === 4 && fits(2)) return 2;
+  const preferred = Math.max(1, Math.min(count, Math.floor(maxColumns)));
+  if (fits(preferred)) return preferred;
+  if (preferred >= 3 && fits(2)) return 2;
   return 1;
 }
 
 export function MetricStrip({
   items,
   variant = "default",
+  maxColumns,
 }: {
   items: { label: string; value: string; color?: string }[];
   /** `book` quietens labels and strengthens values for Books list/detail hierarchy. */
   variant?: "default" | "book";
+  maxColumns?: number;
 }) {
   const t = useTheme();
   const fontScale = PixelRatio.getFontScale();
@@ -918,7 +933,7 @@ export function MetricStrip({
     setStripWidth(0);
   }, [fontScale, windowWidth]);
   const width = stripWidth || Math.max(0, windowWidth - dashboard.cardPadding * 2 - dashboard.pageInset * 2);
-  const columns = metricStripColumns(items, width, fontScale);
+  const columns = metricStripColumns(items, width, fontScale, maxColumns);
   const wraps = columns < items.length;
   const gap = dashboard.metricGap;
   const cellWidth = wraps ? (width - gap * (columns - 1)) / columns : undefined;

@@ -38,13 +38,21 @@ test("verified metrics do not invent a zero start", () => {
 test("sync chrome stays editorial", () => {
   assert.deepEqual(
     syncChrome({ failedRefresh: true, refreshing: false, stale: false, warning: false }),
-    { state: "failed", compact: "Failed", label: "Couldn't refresh" },
+    { state: "failed", compact: "Refresh failed", label: "Dashboard refresh failed. Retry loading dashboard data" },
   );
   assert.equal(
     syncChrome({ failedRefresh: false, refreshing: true, stale: false, warning: false }).state,
     "refreshing",
   );
   assert.match(formatUpdatedAgo("2026-08-25T17:30:00.000Z", Date.parse("2026-08-25T17:32:00.000Z")), /Updated 2m ago/);
+});
+
+test("Home refresh failure retries the dashboard instead of opening helper Sync", () => {
+  const start = home.indexOf('const onSyncChromePress = () => {');
+  const end = home.indexOf('const scrubbing', start);
+  const action = home.slice(start, end);
+  assert.match(action, /syncPresentation.state === "failed"[\s\S]*void onRefresh\(\);[\s\S]*return;/);
+  assert.match(home, /syncState=\{syncPresentation.state\}/);
 });
 
 test("sync chrome names a KDP importer stall without blaming Ads freshness", () => {
@@ -101,7 +109,7 @@ test("Home uses the motion system and does not replay entrance or haptic navigat
   assert.match(charts, /makeSmoothPath/);
   assert.match(charts, /netPosFill/);
   assert.match(charts, /netNegFill/);
-  assert.match(charts, /yAxisTicks/);
+  assert.match(charts, /valueAxisTicks\(min, max, height, inset\)/);
   assert.match(charts, /NetReadoutChip/);
   assert.doesNotMatch(charts, /Haptics\.impactAsync/);
 });

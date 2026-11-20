@@ -28,7 +28,7 @@ test('card uses one primary market for both reviews AND stock, never CA stock al
  const tree=render({compact:true,activeMarketplaceCodes:['US','CA']});
  assert.match(text(tree),/100/);assert.match(text(tree),/In stock/);assert.doesNotMatch(text(tree),/400|Out of stock|CA|Paperback|B0ABCDEFGH/);
  assert.match(tree.props.accessibilityLabel,/100 reviews in US/);assert.match(tree.props.accessibilityLabel,/Stock In stock in US/);
- assert.equal(find(tree,n=>n.type==='SFSymbol'&&n.props.name.startsWith('star')).length,5);
+ assert.equal(find(tree,n=>n.type==='SFSymbol'&&n.props.name.startsWith('star')).length,1);
 });
 test('detail uses the same single-market summary and keeps actual separate observation dates',()=>{
  const tree=render({activeMarketplaceCodes:['US'],snapshot:{...snapshot,marketplaceSnapshots:[{...us,reviewsCheckedAt:'2026-10-10T00:00:00Z',checkedAt:'2026-10-11T00:00:00Z'}]}});
@@ -48,4 +48,20 @@ test('known stock and explicit zero reviews remain visible during refresh',()=>{
  const tree=render({compact:true,activeMarketplaceCodes:['US'],snapshot:{...us,rating:null,reviewCount:0,stockStatus:'IN_STOCK_SCARCE',retailPending:true}});
  assert.match(text(tree),/0/);assert.match(text(tree),/Limited stock/);assert.doesNotMatch(text(tree),/Loading|IN_STOCK_SCARCE/);
  assert.match(tree.props.accessibilityLabel,/0 reviews in US/);
+});
+
+test('a review observation date without values never claims that no reviews exist',()=>{
+ for(const compact of [true,false]) {
+  const tree=render({compact,activeMarketplaceCodes:['US'],snapshot:{...us,rating:null,reviewCount:null,reviewsCheckedAt:'2026-10-30T00:00:00Z',retailPending:false}});
+  assert.doesNotMatch(text(tree),/No reviews yet|0 reviews/);
+  assert.doesNotMatch(tree.props.accessibilityLabel,/No reviews yet|0 reviews/);
+  assert.match(tree.props.accessibilityLabel,/Reviews not listed in US/);
+  assert.match(tree.props.accessibilityLabel,/checked 2026-10-30/);
+ }
+});
+
+test('a dated review read in progress remains unknown, not a confirmed empty result',()=>{
+ const tree=render({compact:true,activeMarketplaceCodes:['US'],snapshot:{...us,rating:null,reviewCount:null,reviewsCheckedAt:'2026-10-30T00:00:00Z',retailPending:true}});
+ assert.match(tree.props.accessibilityLabel,/Reviews updating/);
+ assert.doesNotMatch(text(tree)+tree.props.accessibilityLabel,/No reviews yet|0 reviews/);
 });

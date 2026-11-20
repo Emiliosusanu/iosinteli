@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState, View, type AppStateStatus } from "react-native";
+import { RetryState, ScreenSpinner } from "@/src/components/Primitives";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as Notifications from "expo-notifications";
 import { StatusBar } from "expo-status-bar";
@@ -14,7 +15,7 @@ import { QaBootstrap } from "@/src/components/QaBootstrap";
 import { KdpHelperHost } from "@/src/components/KdpHelperHost";
 import { hydrateQueryClient, startQueryPersistence } from "@/src/lib/queryPersist";
 import { authRedirectTarget } from "@/src/lib/authContract";
-import { isSafeNotificationHref, parseNotificationPayload, routeForNotification } from "@/src/lib/notificationContract";
+import { isSafeNotificationHref, notificationDataFromRequest, parseNotificationPayload, routeForNotification } from "@/src/lib/notificationContract";
 import { resolveDeepLinkHref } from "@/src/lib/deepLinkContract";
 import { markPerf } from "@/src/lib/perf";
 import { debugIngest } from "@/src/lib/debugIngest";
@@ -68,15 +69,37 @@ function FinancialForegroundRefetch() {
 }
 
 function RouteGuard({ children }: { children: React.ReactNode }) {
-  const { state, user } = useAuth();
+  const { state, user, restoreError, retryRestore } = useAuth();
+  const theme = useTheme();
   const router = useRouter();
   const segments = useSegments();
+  const [pendingLink, setPendingLink] = useState<string | null>(null);
 
   useEffect(() => {
     if (state === "loading") return;
     const next = authRedirectTarget(state, segments as unknown as string[]);
     if (next) router.replace(next as any);
   }, [state, segments, router]);
+
+  useEffect(() => {
+    let mounted = true;
+    const receive = (url: string | null) => {
+      if (mounted && url) setPendingLink(resolveDeepLinkHref(url));
+    };
+    void Linking.getInitialURL().then(receive).catch(() => {});
+    const sub = Linking.addEventListener("url", ({ url }) => receive(url));
+    return () => { mounted = false; sub.remove(); };
+  }, []);
+
+  useEffect(() => {
+    if (state !== "authenticated" || !pendingLink) return;
+    setPendingLink(null);
+    if (pendingLink === "/(tabs)" || pendingLink === "/(tabs)/campaigns" || pendingLink === "/(tabs)/products" || pendingLink === "/more/settings") {
+      router.replace(pendingLink as any);
+    } else {
+      router.push(pendingLink as any);
+    }
+  }, [state, pendingLink, router]);
 
   // Route once when the user taps a notification. Consume the OS last-response
   // so a later auth remount (token refresh, sign-out/in) cannot replay it.
@@ -90,7 +113,7 @@ function RouteGuard({ children }: { children: React.ReactNode }) {
         || String(response.notification.date ?? "");
       if (!id || handledNotificationIds.has(id)) return;
       handledNotificationIds.add(id);
-      const payload = parseNotificationPayload(response.notification.request.content.data);
+      const payload = parseNotificationPayload(notificationDataFromRequest(response.notification.request));
       const dest = routeForNotification(payload, user?.id ?? null);
       const href = isSafeNotificationHref(dest.href) ? dest.href : resolveDeepLinkHref(dest.href);
       if (href === "/(tabs)" || href === "/(tabs)/campaigns" || href === "/(tabs)/products" || href === "/more/settings") {
@@ -115,24 +138,21 @@ function RouteGuard({ children }: { children: React.ReactNode }) {
       navigateFor(response);
       Notifications.clearLastNotificationResponseAsync().catch(() => {});
     });
-    const linking = Linking.addEventListener("url", ({ url }) => {
-      if (cancelled) return;
-      const href = resolveDeepLinkHref(url);
-      if (href === "/(tabs)" || href === "/(tabs)/campaigns" || href === "/(tabs)/products" || href === "/more/settings") {
-        router.replace(href as any);
-      } else {
-        router.push(href as any);
-      }
-    });
 
     return () => {
       cancelled = true;
       sub.remove();
-      linking.remove();
     };
   }, [state, router, user?.id]);
 
-  return <>{children}</>;
+  return <>
+    {children}
+    {state === "loading" ? (
+      <View testID="auth-restore-pending" style={{ position: "absolute", top: 0, bottom: 0, left: 0, right: 0, justifyContent: "center", backgroundColor: theme.colors.background_primary }} accessibilityViewIsModal>
+        {restoreError ? <RetryState title="Couldn't verify your session" subtitle="Check your connection and try again." systemImage="exclamationmark.triangle" onRetry={retryRestore} /> : <ScreenSpinner />}
+      </View>
+    ) : null}
+  </>;
 }
 
 // Shows the animated logo until both: (a) auth state resolved, and
@@ -169,8 +189,7 @@ function SplashGate({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(id);
   }, []);
 
-  // Auth restore already has an 8s fallback. Splash must not cover Home if
-  // that path hangs on getSession/storage. Cached Home is already mounted.
+  // Hand slow auth recovery to its visible retry surface, not a frozen splash.
   const [forceReady, setForceReady] = useState(false);
   useEffect(() => {
     const id = setTimeout(() => setForceReady(true), 2_500);

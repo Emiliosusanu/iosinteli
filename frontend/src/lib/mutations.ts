@@ -2,6 +2,7 @@
 // on Supabase RLS; profile-book preview uses the authenticated Nest read API.
 
 import { nestApiFetch, nestApiJson, nestLogout, parseNestError, NestApiError } from "./rulesApi";
+import { isHomeQueryTimeout } from "./queryTimeout";
 import { supabase } from "./supabase";
 import {
   normalizeNestPricingPlansPayload,
@@ -477,11 +478,9 @@ export async function previewCampaignCreation(input: {
         error instanceof Error &&
         (error.name === "AbortError" || /aborted|timed out|timeout/i.test(error.message));
       const retryable =
-        aborted ||
-        status === 0 ||
-        status === 408 ||
-        status === 429 ||
-        status >= 500;
+        !aborted &&
+        !isHomeQueryTimeout(error) &&
+        (status === 0 || status === 429 || status >= 500);
       if (!retryable || attempt === 2) break;
       await new Promise((resolve) =>
         setTimeout(resolve, Math.min(8000, 1200 * 2 ** attempt)),
@@ -889,11 +888,9 @@ export async function fetchAdGroupSuggestions(input: {
         error instanceof Error &&
         (error.name === "AbortError" || /aborted|timed out|timeout/i.test(error.message));
       const retryable =
-        aborted ||
-        status === 0 ||
-        status === 408 ||
-        status === 429 ||
-        status >= 500;
+        !aborted &&
+        !isHomeQueryTimeout(error) &&
+        (status === 0 || status === 429 || status >= 500);
       if (!retryable || attempt === 2) break;
       await new Promise((resolve) =>
         setTimeout(resolve, Math.min(8000, 1200 * 2 ** attempt)),
@@ -1262,13 +1259,13 @@ export async function fetchNestUsers(): Promise<NestUser[]> {
   return Array.isArray(data) ? data : data.users ?? [];
 }
 
-export async function fetchNestAmazonProfiles(filterUserId?: string | null): Promise<AmazonProfile[]> {
+export async function fetchNestAmazonProfiles(filterUserId?: string | null, signal?: AbortSignal): Promise<AmazonProfile[]> {
   const path = filterUserId
     ? `/amazon/profiles?filterUserId=${encodeURIComponent(filterUserId)}`
     : "/amazon/profiles";
   const data = await nestApiJson<{ profiles?: NestAmazonProfile[] }>(
     path,
-    { method: "GET" },
+    { method: "GET", signal },
     "Couldn't load Amazon profiles.",
   );
   return (data.profiles ?? []).map((p) => {

@@ -171,3 +171,11 @@ test("Barndominium-style parent rollup keeps KU on the DIGITAL/PRINT card", () =
  assert.equal(bookRowMatchesOpenedAsin(row,'1807973751'),true);
  assert.equal(bookRowMatchesOpenedAsin(row,'1807973752'),false);
  });
+
+test("book campaign rows retain the matched format and unavailable metric state", () => {
+ assert.match(queriesSource, /matchedAsinsByCampaignId/);
+ assert.match(queriesSource, /matched_book_asins/);
+ assert.match(queriesSource, /metrics_state/);
+ assert.match(productSource, /formatOptionsForAsins/);
+ assert.match(productSource, /Metrics unavailable/);
+});

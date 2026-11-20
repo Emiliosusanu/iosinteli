@@ -12,6 +12,7 @@ const STATE_KEY = "inteliads.kdpHelper.syncState";
 const ACCOUNT_KEY = "inteliads.kdpHelper.accountId";
 const DEFERRED_KEY = "inteliads.kdpHelper.deferredDays";
 const REPLAY_CURRENCY_KEY = "inteliads.kdpHelper.replayCurrency";
+const LAST_RECEIPT_KEY = "inteliads.kdpHelper.lastAcceptedDay";
 
 export async function loadHelperTemplates(): Promise<
   Partial<Record<KdpTemplateType, KdpCapturedTemplate>>
@@ -49,6 +50,13 @@ export async function saveHelperSyncState(state: KdpSyncState): Promise<void> {
 
 export async function saveHelperDeferredDays(days: string[]): Promise<void> {
   await writeJson(DEFERRED_KEY, normalizeDeferredDays(days));
+}
+
+export async function saveHelperLastDayReceipt(
+  accountId: string,
+  receipt: { date: string; revisionId: string; dailyUpdatedAt: string },
+): Promise<void> {
+  await writeJson(`${LAST_RECEIPT_KEY}:${accountId}`, receipt);
 }
 
 export async function saveHelperAccountId(id: string): Promise<void> {

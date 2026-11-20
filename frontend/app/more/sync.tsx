@@ -159,16 +159,21 @@ export default function SyncScreen() {
         { loadHelperSyncState, loadHelperDeferredDays, loadHelperReplayCurrency },
         { loadKdpActivityLog, buildKdpHelperOverview },
         { getKdpHelperStatus },
+        { getKdpRoyaltySource },
+        { isIosHelperEnabled },
       ] = await Promise.all([
         import("@/src/lib/kdp/persist"),
         import("@/src/lib/kdp/activity"),
         import("@/src/lib/kdp/runtime"),
+        import("@/src/lib/kdp/sourceStore"),
+        import("@/src/lib/kdp/source"),
       ]);
-      const [state, deferredDays, currency, activity] = await Promise.all([
+      const [state, deferredDays, currency, activity, source] = await Promise.all([
         loadHelperSyncState(),
         loadHelperDeferredDays(),
         loadHelperReplayCurrency(),
         loadKdpActivityLog(),
+        getKdpRoyaltySource(),
       ]);
       const live = getKdpHelperStatus();
       return {
@@ -179,6 +184,7 @@ export default function SyncScreen() {
           lastMessage: live.lastMessage,
           lastError: live.lastError,
           running: live.running,
+          collectsHere: isIosHelperEnabled(source),
         }),
         activity,
       };

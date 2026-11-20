@@ -74,6 +74,23 @@ export type NotificationRoute = {
   reason: string;
 };
 
+/** Ignore local alerts, transport tests and pushes for a previous login. */
+export function shouldRefreshForNotification(data: Record<string, unknown>, userId: string | null): boolean {
+  if (!userId || data.origin === "local") return false;
+  if (typeof data.userId === "string" && data.userId !== userId) return false;
+  const payload = parseNotificationPayload(data);
+  if (payload?.event === NOTIFICATION_EVENTS.test) return false;
+  if (payload) return payload.userId === userId;
+  return data.silent === true || data.event === "kdp-wake" || data["content-available"] === 1;
+}
+
+export function shouldPresentNotification(data: Record<string, unknown>, userId: string | null, prefs: NotificationPrefsInput): boolean {
+  if (!userId || data.silent === true || data.event === "kdp-wake" || data["content-available"] === 1) return false;
+  const payload = parseNotificationPayload(data);
+  if (!payload || payload.userId !== userId) return false;
+  return payload.event === NOTIFICATION_EVENTS.test || preferenceAllowsEvent(prefs, payload.event);
+}
+
 const EVENT_SET = new Set<string>(Object.values(NOTIFICATION_EVENTS));
 const ASIN_RE = /^[A-Z0-9]{8,16}$/i;
 
@@ -101,6 +118,35 @@ export function normalizeNotificationEvent(raw: unknown): NotificationEvent | nu
   const value = raw.trim();
   if (EVENT_SET.has(value)) return value as NotificationEvent;
   return SERVER_EVENT_ALIASES[value] ?? null;
+}
+
+function notificationRecord(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+}
+
+/** Expo iOS exposes raw APNs custom data on the push trigger, not content.data. */
+export function notificationDataFromRequest(request: unknown): Record<string, unknown> {
+  const record = notificationRecord(request);
+  const data = notificationRecord(notificationRecord(record?.content)?.data);
+  const trigger = notificationRecord(record?.trigger);
+  const raw = trigger?.type === "push" ? notificationRecord(trigger.payload) : null;
+  if (!raw) return data ?? {};
+  const nested = notificationRecord(raw.body);
+  // Choose one complete envelope; never assemble an event and owner from
+  // different envelopes or let an inner body override a contradictory owner.
+  const selected = "event" in raw || "userId" in raw ? raw : nested ?? data ?? raw;
+  for (const other of [raw, nested, data]) {
+    if (!other) continue;
+    if ("userId" in other && "userId" in selected && other.userId !== selected.userId) return {};
+    if ("event" in other && "event" in selected &&
+        normalizeNotificationEvent(other.event) !== normalizeNotificationEvent(selected.event)) return {};
+  }
+  const aps = notificationRecord(raw.aps);
+  const silent = [raw, nested, data].some(value => value?.silent === true ||
+    value?.event === "kdp-wake" || value?.["content-available"] === 1) ||
+    (aps?.["content-available"] === 1 && !aps.alert);
+  return silent ? { ...selected, silent: true } : selected;
 }
 
 export function anyNotificationPrefEnabled(prefs: NotificationPrefsInput): boolean {

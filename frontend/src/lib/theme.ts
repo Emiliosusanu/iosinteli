@@ -82,8 +82,8 @@ export const palette = {
     background_tertiary: "#E5E5EA",
     background_elevated: "#FFFFFF",
     text_primary: "#000000",
-    text_secondary: "#3C3C4399",
-    text_tertiary: "#3C3C434D",
+    text_secondary: "#55555C",
+    text_tertiary: "#686870",
     text_inverse: "#FFFFFF",
     border: "#3C3C432E",
     separator: "#3C3C4329",
@@ -91,6 +91,7 @@ export const palette = {
     tone_warning: "#FF9500",
     tone_danger: "#FF3B30",
     tone_primary: "#007AFF",
+    control_selected: "#0066D6",
     tone_product: "#AF52DE",
     tone_placement: "#D12B6F",
     tone_inactive: "#8E8E93",
@@ -134,7 +135,7 @@ export const palette = {
     background_elevated: "#1A1A1D",
     text_primary: "#F5F5F7",
     text_secondary: "#A1A1A6",
-    text_tertiary: "#6C6C70",
+    text_tertiary: "#9999A0",
     text_inverse: "#000000",
     border: "#2A2A2E",
     separator: "#2A2A2E",
@@ -142,6 +143,7 @@ export const palette = {
     tone_warning: "#FF9F0A",
     tone_danger: "#FF453A",
     tone_primary: "#2F7CFF",
+    control_selected: "#1266D6",
     tone_product: "#8B7CFF",
     tone_placement: "#FF375F",
     tone_inactive: "#8E8E93",
@@ -192,7 +194,7 @@ const metricFontBase = appFontFamily
   : { fontVariant: tabularNums };
 
 export const typography = {
-  largeTitle: { ...fontBase, fontSize: 34, fontWeight: "600" as const, letterSpacing: 0.4, lineHeight: 41 },
+  largeTitle: { ...fontBase, fontSize: 34, fontWeight: "600" as const, letterSpacing: 0, lineHeight: 41 },
   title1: { ...fontBase, fontSize: 28, fontWeight: "600" as const, letterSpacing: 0, lineHeight: 34 },
   title2: { ...fontBase, fontSize: 22, fontWeight: "600" as const, letterSpacing: 0, lineHeight: 28 },
   title3: { ...fontBase, fontSize: 20, fontWeight: "400" as const, letterSpacing: 0, lineHeight: 25 },
@@ -202,12 +204,12 @@ export const typography = {
   subhead: { ...fontBase, fontSize: 15, fontWeight: "400" as const, letterSpacing: 0, lineHeight: 20 },
   footnote: { ...fontBase, fontSize: 13, fontWeight: "400" as const, letterSpacing: 0, lineHeight: 18 },
   caption1: { ...fontBase, fontSize: 12, fontWeight: "400" as const, letterSpacing: 0, lineHeight: 16 },
-  caption2: { ...fontBase, fontSize: 11, fontWeight: "500" as const, letterSpacing: 0.4, lineHeight: 13 },
+  caption2: { ...fontBase, fontSize: 11, fontWeight: "500" as const, letterSpacing: 0, lineHeight: 13 },
   /** Hero money figure — Dribbble fintech dashboards lead with a large tabular numeral. */
-  metric_massive: { ...metricFontBase, fontSize: 34, fontWeight: "700" as const, letterSpacing: -0.9, lineHeight: 40 },
-  metric: { ...metricFontBase, fontSize: 20, fontWeight: "600" as const, letterSpacing: -0.2, lineHeight: 25 },
-  metric_compact: { ...metricFontBase, fontSize: 15, fontWeight: "600" as const, letterSpacing: -0.1, lineHeight: 20 },
-  sectionTitle: { ...fontBase, fontSize: 16, fontWeight: "600" as const, letterSpacing: -0.2, lineHeight: 21 },
+  metric_massive: { ...metricFontBase, fontSize: 34, fontWeight: "700" as const, letterSpacing: 0, lineHeight: 40 },
+  metric: { ...metricFontBase, fontSize: 20, fontWeight: "600" as const, letterSpacing: 0, lineHeight: 25 },
+  metric_compact: { ...metricFontBase, fontSize: 15, fontWeight: "600" as const, letterSpacing: 0, lineHeight: 20 },
+  sectionTitle: { ...fontBase, fontSize: 16, fontWeight: "600" as const, letterSpacing: 0, lineHeight: 21 },
   meta: { ...fontBase, fontSize: 12, fontWeight: "500" as const, letterSpacing: 0, lineHeight: 16 },
 };
 

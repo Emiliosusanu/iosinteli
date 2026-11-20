@@ -71,9 +71,25 @@ test('native bridge preparation cannot hang until iOS expires the whole delivery
 
 // Execute the actual timer callback, including its second lifecycle check.
 const source = readFileSync(new URL('../src/contexts/AppContext.tsx', import.meta.url), 'utf8');
-const start = source.indexOf('const id = setInterval(() => {', source.indexOf('if (!isIosHelperEnabled(kdpRoyaltySource))'));
-const end = source.indexOf('}, 15 * 60_000);', start) + '}, 15 * 60_000);'.length;
-const callbackSource = ts.transpileModule(source.slice(start, end).replace(
+const syntax = ts.createSourceFile('AppContext.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const timers = [];
+function visit(node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(syntax) === 'id'
+    && node.initializer && ts.isCallExpression(node.initializer)
+    && node.initializer.expression.getText(syntax) === 'setInterval'
+    && node.initializer.arguments[1]?.getText(syntax).replace(/[\s_]/g, '') === '15*60000') timers.push(node);
+  ts.forEachChild(node, visit);
+}
+visit(syntax);
+assert.equal(timers.length, 1, 'Expected one actual fifteen-minute KDP interval');
+const effectBody = timers[0].parent.parent.parent;
+assert.ok(ts.isBlock(effectBody), 'KDP interval must be declared inside its effect');
+// Include the timer's actual local guards/closure, whether its callback is
+// inline or delegates to tick. The separate foreground invocation is outside
+// this interval contract and is deliberately not executed by the harness.
+const timerStatements = effectBody.statements.filter(statement => ts.isVariableStatement(statement)
+  && statement.declarationList.declarations.some(declaration => ['active', 'tick', 'id'].includes(declaration.name.getText(syntax))));
+const callbackSource = ts.transpileModule(timerStatements.map(statement => statement.getFullText(syntax)).join('\n').replace(
   /import\("([^"]+)"\)/g, (_, name) => `imports[${JSON.stringify(name)}]()`,
 ), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function timerHarness(state, load) {

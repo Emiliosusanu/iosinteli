@@ -259,6 +259,12 @@ export async function nestApiFetch(path: string, init: NestRequestInit = {}): Pr
     });
   let res = await send(picked?.token);
   if (res.status !== 401) return res;
+  // Only the explicit seller denial is terminal. A genuinely expired admin
+  // token must still follow the ordinary credential recovery path.
+  if (path === "/auth/users" || path.startsWith("/auth/users?")) {
+    const denial = await res.clone().json().catch(() => null);
+    if (denial?.message === "Only admins can view all users") return res;
+  }
   if (shouldRefreshNestToken(picked?.source)) {
     const freshNest = await refreshNestToken(picked?.token);
     if (freshNest) {
@@ -300,7 +306,13 @@ export async function parseNestError(res: Response, fallback: string): Promise<N
     const m = body?.message ?? body?.error;
     if (Array.isArray(m)) message = m.join("\n");
     else if (typeof m === "string" && m.trim()) message = m;
+    if (typeof body?.code === "string") errorCode = body.code;
     if (typeof body?.errorCode === "string") errorCode = body.errorCode;
+    if (m && typeof m === "object" && !Array.isArray(m)) {
+      const nested = m as { message?: unknown; code?: unknown };
+      if (typeof nested.message === "string" && nested.message.trim()) message = nested.message;
+      if (typeof nested.code === "string") errorCode = nested.code;
+    }
   } catch {
     // keep fallback
   }

@@ -14,6 +14,9 @@ import {
   buildNotificationPayload,
   notificationIdentifier,
   parseNotificationPayload,
+  notificationDataFromRequest,
+  shouldRefreshForNotification,
+  shouldPresentNotification,
   preferenceAllowsEvent,
   rollAlertState,
   shouldEvaluateAlerts,
@@ -52,6 +55,7 @@ import {
 import { adsProfileIdsForSelection, filterToEnabledProfileSelection, uniqueProfileIds } from "./notificationScope";
 import { nestApiJson } from "./rulesApi";
 import { resolveApnsEnvironment } from "./apnsEnvironment";
+import { createSingleFlight } from "./kdp/singleFlight";
 
 export const INTELIADS_BACKGROUND_TASK = "io.inteliads.app.background-refresh";
 export const INTELIADS_NOTIFICATION_TASK = "io.inteliads.app.notification-response";
@@ -61,6 +65,18 @@ const PREFS_KEY = "inteliads.notifications";
 const ALERT_STATE_KEY = "inteliads.alertState";
 const ALERT_CHECK_LAST_RUN_KEY = "inteliads.alertCheckLastRun";
 const DEVICE_PUSH_TOKEN_KEY = "inteliads.devicePushToken";
+let notificationIdentityRevision = 0;
+const PUSH_TOKEN_REQUEST_BUDGET_MS = 10_000;
+type PushRegistrationResult = { token: string | null; type: string | null };
+let pushTokenQueue: Promise<void> = Promise.resolve();
+const pushRegistrationFlights = new Map<string, Promise<PushRegistrationResult>>();
+let pendingPushToken: StoredPushToken | null = null;
+
+function withPushTokenQueue<T>(run: () => Promise<T>): Promise<T> {
+  const next = pushTokenQueue.then(run);
+  pushTokenQueue = next.then(() => {}, () => {});
+  return next;
+}
 
 /** Minimum gap between local alert evaluations (AppState resume can fire often). */
 export const ALERT_CHECK_COOLDOWN_MS = 15 * 60_000;
@@ -87,6 +103,7 @@ type StoredPushToken = {
   userId?: string;
   platform?: string;
   updatedAt?: string;
+  retiringToken?: { token: string; userId: string };
 };
 
 const IOS_ALERT_PERMISSIONS = {
@@ -117,14 +134,25 @@ async function scheduleLocalAlert(input: {
   event: (typeof NOTIFICATION_EVENTS)[keyof typeof NOTIFICATION_EVENTS];
   userId: string;
   asin?: string;
+  expiresAtMs?: number;
 }): Promise<void> {
+  const identityRevision = notificationIdentityRevision;
+  const [{ data: { session } }, prefs] = await Promise.all([
+    supabase.auth.getSession(), readJson<NotificationPrefs>(PREFS_KEY, {} as NotificationPrefs),
+  ]);
+  const data = { ...buildNotificationPayload(input.event, input.userId, input.asin), origin: "local" };
+  if (identityRevision !== notificationIdentityRevision ||
+      (input.expiresAtMs != null && Date.now() >= input.expiresAtMs) ||
+      !shouldPresentNotification(data, session?.user.id ?? null, prefs)) {
+    throw new Error("Notification account or preference changed");
+  }
   await Notifications.scheduleNotificationAsync({
     identifier: input.identifier,
     content: {
       title: input.title,
       body: input.body,
       sound: "default",
-      data: buildNotificationPayload(input.event, input.userId, input.asin),
+      data,
     },
     trigger: null,
   });
@@ -140,8 +168,15 @@ async function writeAlertState(state: AlertState): Promise<void> {
  * LOCAL_NEW_ORDER_AUTHORITY is false.
  * Every alert body includes today's spend, orders, and ACoS.
  */
-export async function runAlertCheck(_source: "background" | "foreground" = "background"): Promise<number> {
+const evaluateAlertsOnce = createSingleFlight(evaluateLocalAlerts);
+
+export async function runAlertCheck(source: "background" | "foreground" = "background"): Promise<number> {
+  return evaluateAlertsOnce(source);
+}
+
+async function evaluateLocalAlerts(_source: "background" | "foreground" = "background"): Promise<number> {
   let sent = 0;
+  const identityRevision = notificationIdentityRevision;
   try {
     if (!(await currentPermissionGranted())) return 0;
 
@@ -199,9 +234,8 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     // and a guessed currency — frankensum Spend/ACoS).
     if (!profiles.length) return 0;
 
-    // Spend/orders/ACoS = every activated profile, matching Home's financial
-    // portfolio. The header picker only filters Ads Engine and must never make a
-    // notification look like an account-wide total while showing a subset.
+    // Notifications remain account-wide across enabled profiles, independent of
+    // the shared screen filters. State this scope in the alert body.
     let queryIds = digestMoneyAdsProfileIds(scope.profileIds, profiles);
     if (!queryIds.length) {
       queryIds = adsProfileIdsForSelection(scope.profileIds, profiles);
@@ -212,11 +246,16 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     if (!queryIds.length) return 0;
 
     // Commit cooldown only once we know we will evaluate (not on view-as / empty authority).
+    if (identityRevision !== notificationIdentityRevision) return 0;
     await storage.setItem(ALERT_CHECK_LAST_RUN_KEY, String(now));
 
     const includeKdpNet = !!prefs.includeKdpNet;
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const localHour = new Date().getHours();
+    const localDayEnd = new Date();
+    localDayEnd.setHours(24, 0, 0, 0);
+    const digestHourEnd = new Date();
+    digestHourEnd.setHours(localHour + 1, 0, 0, 0);
     const morningDigest = isMorningDigestHour(localHour);
     const displayCurrency = String(scope.currency || "USD").toUpperCase() || "USD";
 
@@ -352,6 +391,8 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     }
 
     if (!todayLines.length) return 0;
+    // Do not deliver yesterday's totals after a long read crosses midnight.
+    if (toDateString(new Date()) !== today) return 0;
 
     let coverageLine: string | null = null;
     try {
@@ -370,7 +411,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
 
     const mixedNote = mixedCurrencyDigestNote(todayLines.map((line) => line.currency));
     const totalsBody = (headline: string, lines: HonestDigestTotals[]) =>
-      `${headline}\n${formatDigestBody({
+      `All enabled profiles · ${headline}\n${formatDigestBody({
         lines,
         includeKdpNet,
         coverageLine: null,
@@ -391,22 +432,25 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
     if (
       prefs.dailyDigest &&
       preferenceAllowsEvent(prefs, NOTIFICATION_EVENTS.periodCompare) &&
+      new Date().getHours() === localHour &&
       shouldSendDigestHour(localHour, alertState.lastDigestHour, today, alertState.digestDay)
     ) {
       await scheduleLocalAlert({
         identifier: notificationIdentifier(NOTIFICATION_EVENTS.periodCompare, today, String(localHour)),
         event: NOTIFICATION_EVENTS.periodCompare,
         userId,
+        expiresAtMs: Math.min(localDayEnd.getTime(), digestHourEnd.getTime()),
         title: digestTitleForHour(localHour),
-        body: formatDigestBody({
+        body: `All enabled profiles\n${formatDigestBody({
           lines: digestLines,
           includeKdpNet,
           coverageLine,
           mixedCurrencyNote: mixedNote,
-        }),
+        })}`,
       });
       alertState = { ...alertState, digestDay: today, lastDigestHour: localHour };
       sent += 1;
+      if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
     }
 
     // Orders are dimensionless — sum known counts across currency groups.
@@ -435,11 +479,13 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
           identifier: notificationIdentifier(NOTIFICATION_EVENTS.newOrders, today, String(ordersTotal)),
           event: NOTIFICATION_EVENTS.newOrders,
           userId,
+          expiresAtMs: localDayEnd.getTime(),
           title: delta === 1 ? "1 new ad order" : `${delta} new ad orders`,
           body: totalsBody(`Today so far · ${ordersTotal} orders total.`, todayLines),
         });
         alertState = { ...alertState, ordersNotified: ordersTotal };
         sent += 1;
+        if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
       }
     }
 
@@ -462,6 +508,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
             identifier: notificationIdentifier(NOTIFICATION_EVENTS.campaignOverspend, today),
             event: NOTIFICATION_EVENTS.campaignOverspend,
             userId,
+            expiresAtMs: localDayEnd.getTime(),
             title: "Campaign overspending",
             body: totalsBody(
               "Today's ad spend is above your daily budget threshold.",
@@ -474,6 +521,7 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
             spendAlertDays: { ...(alertState.spendAlertDays ?? {}), [today]: true },
           };
           sent += 1;
+          if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
         }
       }
     }
@@ -496,12 +544,14 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
           identifier: notificationIdentifier(NOTIFICATION_EVENTS.bookAttention, today, key),
           event: NOTIFICATION_EVENTS.bookAttention,
           userId,
+          expiresAtMs: localDayEnd.getTime(),
           asin: book.asin ?? undefined,
           title: "Book needs attention",
           body: totalsBody(`${book.title || key} ACoS is above break-even.`, todayLines),
         });
         alertState = markBookNotified(alertState, key);
         sent += 1;
+        if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
       }
     }
 
@@ -522,15 +572,17 @@ export async function runAlertCheck(_source: "background" | "foreground" = "back
           identifier: notificationIdentifier(NOTIFICATION_EVENTS.kdpDataStale, today, row.accountId),
           event: NOTIFICATION_EVENTS.kdpDataStale,
           userId,
+          expiresAtMs: localDayEnd.getTime(),
           title: copy.title,
           body: totalsBody(copy.body, todayLines),
         });
         alertState = markKdpStallNotified(alertState, row.accountId, now);
         sent += 1;
+        if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
       }
     }
 
-    await writeAlertState(alertState);
+    if (identityRevision === notificationIdentityRevision) await writeAlertState(alertState);
   } catch (error) {
     devWarn("runAlertCheck skipped", error);
   }
@@ -545,6 +597,17 @@ export async function runBackgroundSyncWhenReady(): Promise<void> {
 }
 
 let backgroundWakeInstalled = false;
+let pendingPushRefresh = false;
+let pendingSilentRefresh = false;
+
+const drainPushRefresh = createSingleFlight(async () => {
+  while (pendingPushRefresh) {
+    const silent = pendingSilentRefresh;
+    pendingPushRefresh = false;
+    pendingSilentRefresh = false;
+    await refreshAfterPush(silent);
+  }
+});
 
 export type NotificationRefreshReason = "push-visible" | "push-silent";
 type NotificationRefreshListener = (reason: NotificationRefreshReason) => void;
@@ -578,7 +641,8 @@ export function installBackgroundSyncWakeHandlers(): void {
   backgroundWakeInstalled = true;
 
   Notifications.addNotificationReceivedListener((notification) => {
-    const data = (notification.request.content.data ?? {}) as Record<string, unknown>;
+    const identityRevision = notificationIdentityRevision;
+    const data = notificationDataFromRequest(notification.request);
     const payload = parseNotificationPayload(data);
     // Test / transport-test carries no new financial data — don't churn the app.
     if (payload?.event === NOTIFICATION_EVENTS.test) return;
@@ -587,10 +651,33 @@ export function installBackgroundSyncWakeHandlers(): void {
       data.event === "kdp-wake" ||
       data["content-available"] === 1;
     void (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (identityRevision !== notificationIdentityRevision ||
+          !shouldRefreshForNotification(data, session?.user.id ?? null)) return;
+      if (payload?.event === NOTIFICATION_EVENTS.periodCompare && data.origin !== "local") {
+        const today = toDateString(new Date());
+        const hour = new Date().getHours();
+        const state = rollAlertState(await readJson<AlertState>(ALERT_STATE_KEY, {}), today);
+        if (identityRevision !== notificationIdentityRevision) return;
+        if (state.digestDay !== today || state.lastDigestHour !== hour) {
+          await writeAlertState({ ...state, digestDay: today, lastDigestHour: hour });
+        }
+      }
+      if (identityRevision !== notificationIdentityRevision) return;
+      // Revalidate visible reads now, not after KDP replay and alert evaluation.
+      emitNotificationRefresh(silent ? "push-silent" : "push-visible");
       if (silent && AppState.currentState !== "active") {
         await runBudgetedKdpTask("push");
         return;
       }
+      pendingPushRefresh = true;
+      pendingSilentRefresh ||= silent;
+      await drainPushRefresh();
+    })().catch(error => devWarn("push refresh skipped", error));
+  });
+}
+
+async function refreshAfterPush(silent: boolean): Promise<void> {
       try {
         const { runDualSourceBackgroundRefresh } = await import("./backgroundFinancialSync");
         await runDualSourceBackgroundRefresh("push", { force: true });
@@ -617,8 +704,6 @@ export function installBackgroundSyncWakeHandlers(): void {
       }
       // Poke live React Query so an open Overview/Campaigns paints the new data.
       emitNotificationRefresh(silent ? "push-silent" : "push-visible");
-    })();
-  });
 }
 
 export async function refreshHomeCacheOpportunistic(): Promise<void> {
@@ -630,12 +715,21 @@ export async function refreshHomeCacheOpportunistic(): Promise<void> {
 try {
   Notifications.setNotificationHandler({
     handleNotification: async (notification) => {
-      const data = (notification.request.content.data ?? {}) as Record<string, unknown>;
+      const data = notificationDataFromRequest(notification.request);
       const silent =
         data.silent === true ||
         data.event === "kdp-wake" ||
         data["content-available"] === 1;
-      if (silent) {
+      let present = false;
+      if (!silent) {
+        try {
+          const [{ data: { session } }, prefs] = await Promise.all([
+            supabase.auth.getSession(), readJson<NotificationPrefs>(PREFS_KEY, {} as NotificationPrefs),
+          ]);
+          present = shouldPresentNotification(data, session?.user.id ?? null, prefs);
+        } catch { /* Keep an unverifiable account notification private. */ }
+      }
+      if (!present) {
         return {
           shouldShowAlert: false,
           shouldShowBanner: false,
@@ -645,7 +739,7 @@ try {
         } as any;
       }
       return {
-        shouldShowAlert: true,
+        shouldShowAlert: false,
         shouldShowBanner: true,
         shouldShowList: true,
         shouldPlaySound: true,
@@ -699,13 +793,62 @@ defineLaunchSafeTask(INTELIADS_NOTIFICATION_TASK, () => runBudgetedKdpTask("push
 
 export async function registerForPushAsync(opts?: {
   requestPermission?: boolean;
-}): Promise<{ token: string | null; type: string | null }> {
+}): Promise<PushRegistrationResult> {
   if (Platform.OS === "web") return { token: null, type: null };
+  const revision = notificationIdentityRevision;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const owner = session?.user.id;
+    if (!owner || revision !== notificationIdentityRevision) return { token: null, type: null };
+    const key = `${revision}:${owner}:${!!opts?.requestPermission}`;
+    let pending = pushRegistrationFlights.get(key);
+    if (!pending) {
+      pending = registerCurrentPushToken(owner, revision, opts);
+      pushRegistrationFlights.set(key, pending);
+      void pending.finally(() => {
+        if (pushRegistrationFlights.get(key) === pending) pushRegistrationFlights.delete(key);
+      });
+    }
+    return await pending;
+  } catch (error) {
+    devWarn("push registration unavailable", error);
+    return { token: null, type: null };
+  }
+}
+
+async function retirePushToken(stored: StoredPushToken): Promise<boolean> {
+  if (!stored.token || !stored.userId) return true;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PUSH_TOKEN_REQUEST_BUDGET_MS);
+  try {
+    const { error } = await supabase.from("device_push_tokens")
+      .update({ disabled_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("token", stored.token).eq("user_id", stored.userId).abortSignal(controller.signal);
+    if (!error) return true;
+    const { data: { session } } = await supabase.auth.getSession();
+    // Nest derives ownership from its current bearer; never detach an old
+    // account's token using the new account's identity.
+    if (session?.user.id !== stored.userId || controller.signal.aborted) return false;
+    const result = await notificationNestJson<{ success?: boolean }>("/notifications/device-token", {
+      method: "DELETE", body: JSON.stringify({ token: stored.token }), signal: controller.signal,
+    });
+    return result?.success === true;
+  } catch (error) {
+    devWarn("push token detach deferred", error);
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function registerCurrentPushToken(owner: string, revision: number, opts?: {
+  requestPermission?: boolean;
+}): Promise<PushRegistrationResult> {
   try {
     const granted = opts?.requestPermission
       ? await ensureNotificationPermission()
       : await currentPermissionGranted();
-    if (!granted) return { token: null, type: null };
+    if (!granted || revision !== notificationIdentityRevision) return { token: null, type: null };
 
     const device = await Notifications.getDevicePushTokenAsync();
     const token = (device?.data as string) ?? null;
@@ -714,18 +857,7 @@ export async function registerForPushAsync(opts?: {
 
     const { data: { user } } = await supabase.auth.getUser();
     const userId = user?.id ?? null;
-    const previous = await readJson<StoredPushToken>(DEVICE_PUSH_TOKEN_KEY, {});
-
-    await storage.setItem(
-      DEVICE_PUSH_TOKEN_KEY,
-      JSON.stringify({
-        token,
-        type,
-        platform: Platform.OS,
-        userId,
-        updatedAt: new Date().toISOString(),
-      }),
-    );
+    if (!userId || userId !== owner || revision !== notificationIdentityRevision) return { token: null, type: null };
 
     // Prefer explicit env, then the environment in the signed iOS provisioning
     // profile. A locally archived Release build can still be development-signed,
@@ -738,27 +870,29 @@ export async function registerForPushAsync(opts?: {
       isDevelopment: __DEV__,
     });
 
-    if (userId) {
+    return await withPushTokenQueue(async () => {
+      const empty = { token: null, type: null };
+      if (revision !== notificationIdentityRevision) return empty;
+      const previous = await readJson<StoredPushToken>(DEVICE_PUSH_TOKEN_KEY, {});
+      if (revision !== notificationIdentityRevision) return empty;
+      if (previous.retiringToken?.userId === owner) {
+        if (!(await retirePushToken(previous.retiringToken))) return empty;
+      }
+      if (pendingPushToken?.userId === owner && pendingPushToken.token !== token) {
+        if (!(await retirePushToken(pendingPushToken))) return empty;
+        pendingPushToken = null;
+      }
+      if (revision !== notificationIdentityRevision) return empty;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PUSH_TOKEN_REQUEST_BUDGET_MS);
+      const candidate = { token, type, userId, platform: Platform.OS, updatedAt: new Date().toISOString() };
+      const rotating = previous.token && previous.token !== token && previous.userId === owner
+        ? { token: previous.token, userId: owner } : null;
+      pendingPushToken = candidate;
       try {
-        if (previous.token && previous.userId && previous.userId !== userId) {
-          await supabase
-            .from("device_push_tokens")
-            .update({
-              disabled_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            })
-            .eq("token", previous.token)
-            .eq("user_id", previous.userId);
-          try {
-            await notificationNestJson("/notifications/device-token", {
-              method: "DELETE",
-              body: JSON.stringify({ token: previous.token }),
-            });
-          } catch {}
-        }
-        await supabase
-          .from("device_push_tokens")
-          .upsert(
+        let persisted = false;
+        try {
+          const { error } = await supabase.from("device_push_tokens").upsert(
             {
               user_id: userId,
               token,
@@ -767,17 +901,17 @@ export async function registerForPushAsync(opts?: {
               environment,
               bundle_id: "io.inteliads.app",
               last_seen_at: new Date().toISOString(),
-              // A live device re-registering proves the token is deliverable —
-              // clear any prior disable/invalidate so the sender stops skipping it,
-              // even when the Nest PUT below is unreachable.
+              // Registration reactivates this token; it is not proof of APNs receipt.
               disabled_at: null,
               invalidated_at: null,
               updated_at: new Date().toISOString(),
             },
             { onConflict: "token" },
-          );
-        try {
-          await notificationNestJson("/notifications/device-token", {
+          ).abortSignal(controller.signal);
+          persisted = !error;
+        } catch (error) { devWarn("direct push registration deferred", error); }
+        if (!persisted && revision === notificationIdentityRevision && !controller.signal.aborted) {
+          const result = await notificationNestJson<{ success?: boolean }>("/notifications/device-token", {
             method: "PUT",
             body: JSON.stringify({
               token,
@@ -786,16 +920,30 @@ export async function registerForPushAsync(opts?: {
               environment,
               bundleId: "io.inteliads.app",
             }),
+            signal: controller.signal,
           });
-        } catch (e) {
-          devWarn("nest device token persist skipped", e);
+          persisted = result?.success === true;
         }
-      } catch (e) {
-        devWarn("push token persist skipped (table/RLS not set up?)", e);
+        if (!persisted || controller.signal.aborted || revision !== notificationIdentityRevision) return empty;
+        const saved = await storage.setItem(DEVICE_PUSH_TOKEN_KEY, JSON.stringify({
+          ...candidate, ...(rotating ? { retiringToken: rotating } : {}),
+        }));
+        if (!saved || revision !== notificationIdentityRevision) return empty;
+        pendingPushToken = null;
+        // A rotated token belongs to this installation's stored record, not
+        // every device on the account. Keep the old record if replacement fails.
+        if (rotating) {
+          if (!(await retirePushToken(rotating))) {
+            pendingPushToken = rotating;
+            return empty;
+          }
+          if (!(await storage.setItem(DEVICE_PUSH_TOKEN_KEY, JSON.stringify(candidate)))) return empty;
+        }
+        return revision === notificationIdentityRevision ? { token, type } : empty;
+      } finally {
+        clearTimeout(timer);
       }
-    }
-
-    return { token, type };
+    });
   } catch (e) {
     devWarn("registerForPushAsync failed", e);
     return { token: null, type: null };
@@ -803,7 +951,14 @@ export async function registerForPushAsync(opts?: {
 }
 
 export async function clearNotificationIdentity(): Promise<void> {
+  notificationIdentityRevision++;
+  pendingPushRefresh = false;
+  pendingSilentRefresh = false;
   resetSyncedTimeZone();
+  await withPushTokenQueue(clearSavedNotificationIdentity);
+}
+
+async function clearSavedNotificationIdentity(): Promise<void> {
   const stored = await readJson<StoredPushToken>(DEVICE_PUSH_TOKEN_KEY, {});
   try {
     await Notifications.cancelAllScheduledNotificationsAsync();
@@ -814,29 +969,17 @@ export async function clearNotificationIdentity(): Promise<void> {
   try {
     await Notifications.clearLastNotificationResponseAsync();
   } catch {}
-  if (stored.token && stored.userId) {
-    // Soft-disable (Nest parity): keep the row so senders skip it; do not hard-delete.
-    try {
-      await supabase
-        .from("device_push_tokens")
-        .update({
-          disabled_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("token", stored.token)
-        .eq("user_id", stored.userId);
-    } catch (e) {
-      devWarn("push token detach skipped", e);
-    }
-    try {
-      await notificationNestJson("/notifications/device-token", {
-        method: "DELETE",
-        body: JSON.stringify({ token: stored.token }),
-      });
-    } catch {}
+  const pending = pendingPushToken;
+  if (pending && await retirePushToken(pending)) pendingPushToken = null;
+  if (stored.retiringToken && (stored.retiringToken.token !== pending?.token || stored.retiringToken.userId !== pending?.userId)) {
+    await retirePushToken(stored.retiringToken);
+  }
+  if (stored.token && stored.userId && (stored.token !== pending?.token || stored.userId !== pending?.userId)) {
+    await retirePushToken(stored);
   }
   await storage.removeItem(DEVICE_PUSH_TOKEN_KEY);
   await storage.removeItem(ALERT_STATE_KEY);
+  await storage.removeItem(ALERT_CHECK_LAST_RUN_KEY);
 }
 
 export async function ensureBackgroundRefreshRegistered(): Promise<boolean> {
@@ -1012,46 +1155,18 @@ export async function persistNotificationPreferences(prefs: {
   }
 }
 
-export async function requestServerTestPush(userId?: string | null): Promise<boolean> {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    const owner = userId ?? session?.user?.id ?? null;
-    if (!owner) return false;
+type LocalTestResult = "local" | "blocked" | "failed";
+let localTestInFlight: { key: string; promise: Promise<LocalTestResult> } | null = null;
 
-    // Primary: Supabase Edge Function "send-push" delivers a real APNs push.
-    // The user's session token identifies the recipient (RLS-safe).
-    try {
-      const { data, error } = await supabase.functions.invoke("send-push", {
-        body: { test: true },
-      });
-      const sent = (data as { sent?: number } | null)?.sent ?? 0;
-      if (!error && sent > 0) return true;
-    } catch (e) {
-      devWarn("supabase send-push skipped", e);
-    }
-
-    // Fallback: legacy Nest sender, if it is ever deployed.
-    await notificationNestJson("/notifications/test-push", {
-      method: "POST",
-      body: JSON.stringify({ userId: owner }),
-    });
-    return true;
-  } catch (e) {
-    devWarn("requestServerTestPush skipped", e);
-    return false;
-  }
-}
-
-export async function sendTestNotification(userId?: string | null): Promise<"server" | "local" | false> {
+async function sendLocalTest(userId: string, revision: number): Promise<LocalTestResult> {
   try {
     const granted = await ensureNotificationPermission();
-    if (!granted) return false;
+    if (!granted) return "blocked";
     const { data: { session } } = await supabase.auth.getSession();
     const owner = userId ?? session?.user?.id ?? null;
-    if (!owner) return false;
+    if (!owner || owner !== session?.user.id || revision !== notificationIdentityRevision) return "failed";
 
-    // Local first: Nest POST /notifications/test-push is not deployed on production
-    // (404). Still probe the server afterward so a future sender lights up Settings.
+    // A local test must not also broadcast a second alert to every account device.
     const today = toDateString(new Date());
     await scheduleLocalAlert({
       identifier: notificationIdentifier(NOTIFICATION_EVENTS.test, today),
@@ -1061,10 +1176,31 @@ export async function sendTestNotification(userId?: string | null): Promise<"ser
       body: TEST_NOTIFICATION_BODY,
     });
 
-    const serverOk = await requestServerTestPush(owner);
-    return serverOk ? "server" : "local";
+    return "local";
   } catch (e) {
     devWarn("sendTestNotification failed", e);
-    return false;
+    return "failed";
+  }
+}
+
+export async function sendTestNotification(userId?: string | null): Promise<LocalTestResult> {
+  const revision = notificationIdentityRevision;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const owner = userId ?? session?.user.id;
+    if (!owner || owner !== session?.user.id || revision !== notificationIdentityRevision) return "failed";
+    const key = `${revision}:${owner}`;
+    if (!localTestInFlight || localTestInFlight.key !== key) {
+      const promise = sendLocalTest(owner, revision);
+      localTestInFlight = { key, promise };
+      void promise.finally(() => {
+        if (localTestInFlight?.promise === promise) localTestInFlight = null;
+      });
+    }
+    const result = await localTestInFlight.promise;
+    return revision === notificationIdentityRevision ? result : "failed";
+  } catch (error) {
+    devWarn("sendTestNotification unavailable", error);
+    return "failed";
   }
 }

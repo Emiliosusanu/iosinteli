@@ -65,12 +65,14 @@ test("booksMoneyProfileIds never includes Disabled Sebastian-style profiles", ()
   assert.equal(ids.includes("ads-hr"), false);
 });
 
-test("USD book detail covers enabled marketplaces while preserving non-USD selection", () => {
+test("book detail preserves selected markets in every display currency", () => {
   const markets = [
     ...profiles,
     { ...profiles[0], id: "ca", profile_id: "ads-ca", country_code: "CA", currency_code: "CAD" },
   ];
-  assert.deepEqual(bookDetailProfileSelection(markets, ["us"], "USD"), ["us", "ca"]);
+  assert.deepEqual(bookDetailProfileSelection(markets, ["us"], "USD"), ["us"]);
+  assert.deepEqual(bookDetailProfileSelection(markets, ["us", "ca"], "USD"), ["us", "ca"]);
+  assert.deepEqual(bookDetailProfileSelection(markets, ["ads-us", "hr", "foreign"], "USD"), ["ads-us"]);
   assert.deepEqual(bookDetailProfileSelection(markets, ["us"], "CAD"), ["us"]);
 });
 

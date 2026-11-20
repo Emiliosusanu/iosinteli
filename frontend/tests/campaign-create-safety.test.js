@@ -202,7 +202,10 @@ test("targeting segmented control uses pressable fallback so labels are not clip
     /forceFallback[\s\S]{0,220}key: "broad"/,
   );
   assert.match(screen, /uniqueKeywordPhraseCount/);
-  assert.match(screen, /Down only[\s\S]{0,120}forceFallback|forceFallback[\s\S]{0,120}Down only/);
+  assert.match(screen, /testID="campaign-create-strategy-fixed"/);
+  assert.match(screen, /testID="campaign-create-strategy-up-down"/);
+  assert.match(screen, /testID="campaign-create-strategy-down"/);
+  assert.match(screen, /testID="campaign-create-placement-top"/);
 });
 
 test("products targeting loads suggestions without waiting on a second Verify tap", () => {
@@ -246,11 +249,16 @@ test("manual product targets mark pasted ASINs as custom for Nest create", () =>
   assert.doesNotMatch(screen, /softProductsUnavailable/);
 });
 
-test("automatic duplicates are blocked and create defaults paused", () => {
+test("automatic duplicates are blocked and create starts paused", () => {
   assert.match(screen, /Automatic campaign already active/);
   assert.match(screen, /duplicateBlocked/);
-  assert.match(screen, /useState\(false\)/);
-  assert.match(screen, /Starts paused/);
+  assert.match(screen, /setEnableAfterCreate\] = useState\(false\)/);
+  assert.match(screen, /Campaign and ad group start active/);
+  assert.match(
+    screen,
+    /enableAfterCreate\s*\?\s*"Campaign and ad group start active\."\s*:\s*"Starts paused\."/,
+  );
+  assert.match(screen, /buildCampaignCreationBody/);
 });
 
 test("book picker collapses after selection with Change control", () => {

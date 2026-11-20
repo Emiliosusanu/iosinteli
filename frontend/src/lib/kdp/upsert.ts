@@ -1,8 +1,11 @@
 import { supabase } from "../supabase.ts";
 import { nestApiJson } from "../rulesApi.ts";
-import Constants from "expo-constants";
-import { hasVerifiedNativeCoverage, kdpFactSnapshotsMatch, hasTransactionalNativeCoverage } from "./marketplaceCoverage.ts";
+import { hasTransactionalNativeCoverage } from "./marketplaceCoverage.ts";
 import { withKdpTaskRequest } from "./backgroundBudget.ts";
+import {
+  buildCompleteKdpCaptureEvidence, KDP_COMPLETE_REPORT_STORES,
+  type KdpCaptureEvidence, type KdpCaptureSnapshot, type KdpCompleteCapture,
+} from "./vendor/kdp-complete-capture.js";
 
 type AnyRow = Record<string, unknown>;
 
@@ -26,125 +29,86 @@ async function upsert(
 
 export async function writeKdpDay(opts: {
   accountId: string;
-  rowDaily: AnyRow;
-  rowEntry: AnyRow;
-  rowsBookDaily: AnyRow[];
+  built: KdpCaptureSnapshot & { rowsBookDaily: AnyRow[] };
   factRows: AnyRow[];
-  reviewOnly?: boolean;
-  marketplaces?: string[];
   deadlineAtMs?: number;
-}): Promise<void> {
-  const date = String(opts.rowDaily.date || opts.rowEntry.date || "").trim();
+} & (
+  | { reviewOnly: true; completeCapture?: never }
+  | { reviewOnly?: false; completeCapture: KdpCompleteCapture }
+)): Promise<{ date: string; revisionId: string; dailyUpdatedAt: string } | void> {
+  const { accountId, built: { rowDaily, rowEntry, rowsBookDaily }, factRows } = opts;
+  const date = String(rowDaily.date || rowEntry.date || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Atomic KDP day write requires YYYY-MM-DD");
   const randomHex = () => Math.floor(Math.random() * 16).toString(16);
   const revisionId = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (token) => {
     const value = token === "x" ? Number.parseInt(randomHex(), 16) : (Number.parseInt(randomHex(), 16) & 0x3) | 0x8;
     return value.toString(16);
   });
-  const identity = { account_id: opts.accountId, date, revision_id: revisionId };
+  const identity = { account_id: accountId, date, revision_id: revisionId };
+  const marketplaces = opts.completeCapture?.stores.map(store => store.key);
+  let captureEvidence: KdpCaptureEvidence | undefined;
+  if (!opts.reviewOnly) {
+    const scope = KDP_COMPLETE_REPORT_STORES;
+    if (!opts.completeCapture || marketplaces?.length !== scope.length
+      || !scope.every(store => marketplaces.includes(store))) {
+      throw Object.assign(new Error("KDP capture requires all native marketplaces; existing data preserved"),
+        { status: 503, code: "KDP_CAPTURE_INCOMPLETE" });
+    }
+    captureEvidence = buildCompleteKdpCaptureEvidence({
+      ...opts.completeCapture, accountId, date, revisionId, built: opts.built,
+    });
+  }
+
   const result = await withKdpTaskRequest(opts.deadlineAtMs, signal => nestApiJson<{
-    ok?: boolean;
+    ok?: boolean; pending?: boolean;
     factRows?: number;
     submittedBookDailyRows?: number;
     staged?: boolean; quarantined?: boolean; candidateId?: string;
     accountId?: string; date?: string; revisionId?: string;
     coverageVerified?: boolean; coverageVersion?: number; coverageMarketplaces?: string[];
     verifiedFactRows?: number; dailyUpdatedAt?: string;
+    completeCaptureVerified?: boolean; captureVerificationVersion?: number;
   }>(
     opts.reviewOnly ? "/kdp-sync/stage-correction" : "/kdp-sync/replace-day",
     {
       method: "POST",
       signal,
       body: JSON.stringify({
-        accountId: opts.accountId,
+        accountId,
         date,
         revisionId,
         includeAds: false,
-        ...(!opts.reviewOnly && opts.marketplaces?.length === 17 ? { marketplaces: opts.marketplaces } : {}),
-        dailyData: { ...opts.rowDaily, ...identity },
-        entry: { ...opts.rowEntry, ...identity },
-        bookDailyRows: opts.rowsBookDaily.map((row) => ({ ...row, ...identity })),
-        factRows: opts.factRows.map((row) => ({ ...row, ...identity })),
+        ...(captureEvidence ? { marketplaces, captureEvidence } : {}),
+        dailyData: { ...rowDaily, ...identity },
+        entry: { ...rowEntry, ...identity },
+        bookDailyRows: rowsBookDaily.map((row) => ({ ...row, ...identity })),
+        factRows: factRows.map((row) => ({ ...row, ...identity })),
       }),
     },
-    `Atomic KDP write failed for ${date}; existing data was preserved.`,
+    `Atomic KDP write failed for ${date}; retry remains pending.`,
   ));
   if (opts.reviewOnly && result?.staged === true && result?.quarantined === true
     && result?.ok === false && /^[0-9a-f-]{36}$/i.test(String(result.candidateId || ""))
-    && result.accountId === opts.accountId && result.date === date && result.revisionId === revisionId) return;
+    && result.accountId === accountId && result.date === date && result.revisionId === revisionId) return;
   if (opts.reviewOnly) throw new Error(`KDP correction staging was not acknowledged for ${date}; existing data was preserved`);
-  if (
-    result?.ok !== true ||
-    result.accountId !== opts.accountId || result.date !== date || result.revisionId !== revisionId ||
-    Number(result.factRows) !== opts.factRows.length ||
-    Number(result.submittedBookDailyRows) !== opts.rowsBookDaily.length
-  ) {
-    throw new Error(`Atomic KDP write acknowledgement mismatch for ${date}; existing data was preserved`);
+  const unacknowledged = (message: string) => Object.assign(
+    new Error(`${message} for ${date}; retry remains pending`),
+    { status: 503, code: "KDP_ACK_INCOMPLETE" },
+  );
+  if (result?.ok !== true || result.pending === true
+    || result.accountId !== accountId || result.date !== date || result.revisionId !== revisionId
+    || Number(result.factRows) !== factRows.length
+    || Number(result.submittedBookDailyRows) !== rowsBookDaily.length) {
+    throw unacknowledged("Atomic KDP write acknowledgement mismatch");
   }
-  if (result.coverageVerified === true) {
-    if (!hasTransactionalNativeCoverage(result, { accountId: opts.accountId, date, revisionId,
-      factCount: opts.factRows.length, bookCount: opts.rowsBookDaily.length, marketplaces: opts.marketplaces })) {
-      throw new Error(`KDP transaction coverage receipt mismatch for ${date}; retry remains pending`);
-    }
-    return; // SQL verified actual stored metrics + marker atomically; no 85-page mobile readback.
+  if (result.completeCaptureVerified !== true || result.captureVerificationVersion !== 1) {
+    throw unacknowledged("KDP complete-capture receipt missing or invalid");
   }
-  if (opts.marketplaces?.length) {
-    await verifyNativeDayCoverage(opts.accountId, date, revisionId, opts.factRows, opts.marketplaces, opts.deadlineAtMs);
+  if (!result.dailyUpdatedAt || !hasTransactionalNativeCoverage(result, { accountId, date, revisionId,
+    factCount: factRows.length, bookCount: rowsBookDaily.length, marketplaces })) {
+    throw unacknowledged("KDP transaction coverage receipt mismatch");
   }
-}
-
-/** Only a complete source capture and matching cloud readback can seal a day. */
-async function verifyNativeDayCoverage(accountId: string, date: string, revisionId: string,
-  expectedFacts: AnyRow[], marketplaces: string[], deadlineAtMs?: number): Promise<void> {
-  const fail = () => new Error(`KDP native marketplace coverage unverified for ${date}; retry remains pending`);
-  const { data: day, error: dayError } = await withKdpTaskRequest(deadlineAtMs, async signal => {
-    const query = supabase.from("kdp_daily_data")
-      .select("updated_at").eq("account_id", accountId).eq("date", date);
-    return await (signal ? query.abortSignal(signal) : query).maybeSingle();
-  });
-  if (dayError || !day?.updated_at) throw fail();
-  const actual: AnyRow[] = [];
-  for (let offset = 0; ; offset += 1000) {
-    const { data, error } = await withKdpTaskRequest(deadlineAtMs, async signal => {
-      const query = supabase.from("kdp_daily_facts")
-      .select("asin,format,marketplace,currency,units,royalties,kenp,revision_id")
-      .eq("account_id", accountId).eq("date", date)
-      .order("asin").order("format").order("marketplace").order("currency")
-      .range(offset, offset + 999);
-      return await (signal ? query.abortSignal(signal) : query);
-    });
-    if (error || !Array.isArray(data)) throw fail();
-    actual.push(...data);
-    if (data.length < 1000) break;
-  }
-  if (actual.some((row) => row.revision_id !== revisionId) || !kdpFactSnapshotsMatch(expectedFacts, actual)) throw fail();
-  const marker = { account_id: accountId, date, revision_id: revisionId,
-    marketplaces, fact_count: actual.length, daily_updated_at: day.updated_at,
-    producer_version: `ios-${Constants.expoConfig?.version || Constants.nativeAppVersion || "unknown"}+${Constants.expoConfig?.ios?.buildNumber || Constants.nativeBuildVersion || "unknown"}` };
-  if (!hasVerifiedNativeCoverage(day.updated_at, marker)) throw fail();
-  const { error } = await withKdpTaskRequest(deadlineAtMs, async signal => {
-    const query = supabase.from("kdp_marketplace_day_coverage")
-      .upsert(marker, { onConflict: "account_id,date" });
-    return await (signal ? query.abortSignal(signal) : query);
-  });
-  if (error) throw fail();
-  const [covered, current] = await withKdpTaskRequest(deadlineAtMs, async signal => {
-    const coveredRead = supabase.from("kdp_marketplace_day_coverage")
-      .select("revision_id,daily_updated_at,marketplaces,fact_count")
-      .eq("account_id", accountId).eq("date", date);
-    const currentRead = supabase.from("kdp_daily_data").select("updated_at")
-      .eq("account_id", accountId).eq("date", date);
-    const results = await Promise.allSettled([
-      (signal ? coveredRead.abortSignal(signal) : coveredRead).maybeSingle(),
-      (signal ? currentRead.abortSignal(signal) : currentRead).maybeSingle(),
-    ]);
-    if (results[0].status === "rejected") throw results[0].reason;
-    if (results[1].status === "rejected") throw results[1].reason;
-    return [results[0].value, results[1].value] as const;
-  });
-  if (covered.error || current.error || covered.data?.revision_id !== revisionId
-    || covered.data?.fact_count !== actual.length
-    || !hasVerifiedNativeCoverage(current.data?.updated_at, covered.data)) throw fail();
+  return { date, revisionId, dailyUpdatedAt: result.dailyUpdatedAt };
 }
 
 export async function writeKdpCatalog(opts: {

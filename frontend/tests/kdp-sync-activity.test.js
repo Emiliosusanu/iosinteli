@@ -14,6 +14,7 @@ test("Sync screen shows KDP helper overview and activity", () => {
   assert.match(syncScreen, /KDP iPhone helper/);
   assert.match(syncScreen, /kdp-helper-sync-overview/);
   assert.match(syncScreen, /buildKdpHelperOverview/);
+  assert.match(syncScreen, /collectsHere: isIosHelperEnabled\(source\)/);
   assert.match(syncScreen, /staleTime: 30_000/);
 });
 
@@ -54,6 +55,17 @@ test("overview rows surface accepted runs, nightly seal, and currency", () => {
   assert.match(rows.find((r) => r.id === "steady")?.detail || "", /scheduled by iOS/);
   assert.match(rows.find((r) => r.id === "nightly")?.title || "", /Night backfill completed/);
   assert.match(rows.find((r) => r.id === "nightly")?.detail || "", /30 days/);
+});
+
+test("a Chrome-import iPhone does not report its idle helper as a pending backfill", () => {
+  const rows = buildKdpHelperOverview({
+    state: createInitialSyncState(),
+    deferredDays: [],
+    currency: null,
+    collectsHere: false,
+  });
+  assert.equal(rows.find((r) => r.id === "onboarding")?.title, "Royalties import on Chrome");
+  assert.doesNotMatch(rows.map((r) => r.title).join(" "), /pending/);
 });
 
 test("an unrun helper does not promise native background wakes every fifteen minutes", () => {

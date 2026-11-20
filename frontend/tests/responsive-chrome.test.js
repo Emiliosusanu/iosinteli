@@ -6,6 +6,8 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import vm from "node:vm";
+import ts from "typescript";
 import { dockScaleForWidth } from "../src/lib/dockScale.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -14,6 +16,58 @@ const header = readFileSync(
   join(root, "src/components/OverviewHeaderV3.tsx"),
   "utf8",
 );
+
+test("bottom navigation shows one selected inline label and five icons at phone widths", () => {
+  let width = 393;
+  const exports = {};
+  const react = { createElement: (type, props, ...children) => typeof type === "function" ? type({ ...props, children }) : ({ type, props, children }) };
+  const context = { exports, require(name) {
+    if (name === "react") return { default: react, useMemo: fn => fn(), useEffect: fn => fn() };
+    if (name === "react-native") return { Text: "Text", View: "View", StyleSheet: { create: value => value }, useWindowDimensions: () => ({ width }) };
+    if (name === "react-native-reanimated") return { default: { View: "AnimatedView" }, useSharedValue: value => ({ get: () => value, set: next => { value = next; } }), useAnimatedStyle: fn => fn(), withSpring: value => value };
+    if (name === "react-native-safe-area-context") return { useSafeAreaInsets: () => ({ bottom: 34 }) };
+    if (name.endsWith("/Motion")) return { PressableScale: "PressableScale" };
+    if (name.endsWith("/Native")) return { SFSymbol: "SFSymbol" };
+    if (name.endsWith("/dockScale")) return { dockScaleForWidth };
+    if (name.endsWith("/theme")) return { useReduceMotion: () => true, useTheme: () => ({ colors: { tone_primary: "#0A84FF" }, shadow: { floating: {} } }) };
+    return { playHaptic() {} };
+  } };
+  vm.runInNewContext(ts.transpileModule(tabBar, { compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.CommonJS } }).outputText, context);
+  const routes = ["index", "campaigns", "targeting", "products", "more"].map(name => ({ name, key: name }));
+  const labels = ["Home", "Campaigns", "Targets", "Books", "More"];
+  const compactLabels = ["Home", "Ads", "Target", "Books", "More"];
+  const flatten = node => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(flatten) : [node, ...node.children.flatMap(flatten)];
+  for (width of [320, 393, 430]) for (let index = 0; index < routes.length; index++) {
+    const tree = flatten(exports.FloatingTabBar({ state: { index, routes }, descriptors: Object.fromEntries(routes.map(route => [route.key, { options: {} }])), navigation: {} }));
+    const text = tree.filter(node => node.type === "Text");
+    assert.equal(text.length, 1); assert.equal(text[0].children[0], (width < 360 ? compactLabels : labels)[index]);
+    assert.equal(tree.filter(node => node.type === "SFSymbol").length, 5);
+    assert.equal(tree.filter(node => node.type === "PressableScale" && node.props.accessibilityState.selected).length, 1);
+    const slots = tree.filter(node => node.type === "View" && Array.isArray(node.props?.style)
+      && node.props.style.some(style => style?.flexBasis === 44));
+    assert.equal(slots.length, 5);
+    for (let slot = 0; slot < slots.length; slot++) {
+      const layout = Object.assign({}, ...slots[slot].props.style.filter(Boolean));
+      assert.equal(layout.flexGrow, slot === index ? 1 : 0);
+      assert.equal(layout.flexBasis, slot === index ? 0 : 44);
+    }
+  }
+});
+
+test("approved dock treatment keeps inactive icons unframed and touch targets separate", () => {
+  assert.doesNotMatch(tabBar, /idleFill|borderWidth|borderColor/);
+  assert.match(tabBar, /flexBasis: 44/);
+  assert.match(tabBar, /minWidth: 44/);
+  assert.match(tabBar, /hitSlop=\{0\}/);
+  assert.match(tabBar, /fontWeight: "600"/);
+  for (const width of [320, 375, 393, 430, 768]) {
+    const scale = dockScaleForWidth(width);
+    const rail = Math.min(width - scale.sideInset * 2, scale.maxWidth);
+    const selectedWidth = rail - scale.padH * 2 - 4 * 4 - 4 * 44;
+    assert.ok(selectedWidth >= 44, `Selected target fits at ${width}`);
+    assert.ok(scale.segmentMinHeight >= 44);
+  }
+});
 
 test("dockScaleForWidth grows tap targets across sm/md/lg", () => {
   const sm = dockScaleForWidth(350);
@@ -38,11 +92,13 @@ test("FloatingTabBar uses solid theme-synced dock and is adaptive", () => {
   assert.match(tabBar, /shadow\.floating/);
   assert.match(tabBar, /withSpring/);
   assert.match(tabBar, /activePill/);
-  // Mockup: SF Symbols, vertical active capsule, blue selected icon, no primary glow.
+  // Inline selected label and icon, matching the top Targets selector.
   assert.match(tabBar, /house\.fill/);
   assert.match(tabBar, /megaphone\.fill/);
   assert.match(tabBar, /books\.vertical/);
-  assert.match(tabBar, /flexDirection: "column"/);
+  assert.match(tabBar, /flexDirection: "row"/);
+  assert.doesNotMatch(tabBar, /flexDirection: "column"/);
+  assert.match(tabBar, /focused && styles\.segmentSlotActive/);
   assert.match(tabBar, /selectedFg|tabbar_selected_fg/);
   assert.doesNotMatch(tabBar, /shadowOpacity:\s*0\.42/);
   assert.doesNotMatch(tabBar, /InteliAdsIcon/);
